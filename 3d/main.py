@@ -491,7 +491,7 @@ def main() -> int:
     # then kills as a duplicate (the 'it doesn't open' failure). Fail-open:
     # any socket trouble just launches a normal standalone instance.
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
-    _SOCKET = "ingetrazo-single-instance"
+    _SOCKET = "wanicnsurvey-3d-single-instance"
     # File ▸ New Window starts a second IngeTrazo with --new-window: it must
     # NOT hand over to the running one like a double-click does, or the
     # new window never appears (issue #76).

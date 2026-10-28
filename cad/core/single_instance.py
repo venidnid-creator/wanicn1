@@ -47,8 +47,8 @@ def _runtime_dir() -> Path:
 
 def server_name() -> str:
     if sys.platform == "win32":
-        return f"ingecad-{os.environ.get('USERNAME', 'user')}"  # a named pipe
-    return str(_runtime_dir() / "ingecad.sock")
+        return f"wanicnsurvey-cad-{os.environ.get('USERNAME', 'user')}"  # a named pipe
+    return str(_runtime_dir() / "wanicnsurvey-cad.sock")
 
 
 def _connect(name: str) -> QLocalSocket | None:
