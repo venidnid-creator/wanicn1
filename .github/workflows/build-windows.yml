@@ -86,6 +86,16 @@ jobs:
           maturin build --release -m 3d/rust/ingetrazo_core/Cargo.toml -o "$RUNNER_TEMP/wheels"
           pip install "$RUNNER_TEMP"/wheels/ingetrazo_core-*.whl
 
+      - name: Tests of WANIC ถอดปริมาณ
+        shell: bash
+        working-directory: 3d
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pip install pytest
+          python -m pytest -q tests/test_wanic_takeoff.py tests/test_bim.py
+          python -c "from core.extensions import discover_plugins; p, e = discover_plugins(); print([x.stem for x in p], e); assert any(x.stem == 'wanic_takeoff' and x.setup for x in p); assert not [x for x in e if x.stem == 'wanic_takeoff']"
+
       - uses: actions/download-artifact@v4
         with:
           name: libredwg-win64
