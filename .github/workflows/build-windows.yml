@@ -137,15 +137,24 @@ jobs:
 
       - name: Inno Setup 6.5+ (Thai)
         shell: pwsh
-        run: choco install innosetup -y --no-progress
+        # The runner ships an older Inno Setup; Thai.isl needs 6.5 or newer.
+        run: choco upgrade innosetup -y --no-progress
 
       - name: Installer
         shell: pwsh
         run: |
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (-Not (Test-Path $iscc)) { $iscc = (Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1).FullName }
-          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer\wanicnsurvey.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $all = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue |
+                 Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending
+          $all | ForEach-Object { Write-Host "$($_.FullName)  $($_.VersionInfo.FileVersion)" }
+          $iscc = $all[0].FullName
+          $out = & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer\wanicnsurvey.iss 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            # Errors as annotations, so they read without downloading the log.
+            $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::error::$_" }
+            exit $code
+          }
           Get-ChildItem dist\*.exe
 
       - uses: actions/upload-artifact@v4
