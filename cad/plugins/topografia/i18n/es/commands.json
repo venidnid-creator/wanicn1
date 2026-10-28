@@ -1,0 +1,78 @@
+{
+  "_": "Spanish command names of the topography plugin. The English names always keep working.",
+  "PIMPORT": {
+    "name": "IMPORTARPUNTOS"
+  },
+  "PEXPORT": {
+    "name": "EXPORTARPUNTOS"
+  },
+  "PBY": {
+    "name": "PUNTORUMBO"
+  },
+  "PRENUM": {
+    "name": "RENUMERAR"
+  },
+  "PFIND": {
+    "name": "BUSCARPUNTO"
+  },
+  "ANNOT": {
+    "name": "ROTULAR"
+  },
+  "CTABLE": {
+    "name": "CUADRO"
+  },
+  "AREASUM": {
+    "name": "SUMAREAS"
+  },
+  "SUBDIV": {
+    "name": "SUBDIVIDIR"
+  },
+  "UTMGRID": {
+    "name": "RETICULA"
+  },
+  "TIN": {
+    "name": "TRIANGULAR"
+  },
+  "TINEDIT": {
+    "name": "EDITARTIN"
+  },
+  "TINCHECK": {
+    "name": "REVISARTIN"
+  },
+  "CONTOUR": {
+    "name": "CURVAS"
+  },
+  "CONTOURLABEL": {
+    "name": "ROTULARCURVAS"
+  },
+  "SLOPEZONES": {
+    "name": "PENDIENTES"
+  },
+  "PROFILE": {
+    "name": "PERFIL"
+  },
+  "GRADELINE": {
+    "name": "RASANTE"
+  },
+  "SECTIONS": {
+    "name": "SECCIONES"
+  },
+  "VOLUMES": {
+    "name": "VOLUMENES"
+  },
+  "PLATFORM": {
+    "name": "PLATAFORMA"
+  },
+  "DAYLIGHT": {
+    "name": "LINEACERO"
+  },
+  "VOLTIN": {
+    "name": "VOLUMENTIN"
+  },
+  "MEMORIA": {
+    "name": "MEMORIADESCRIPTIVA"
+  },
+  "AREAREPORT": {
+    "name": "AREASLOTES"
+  }
+}

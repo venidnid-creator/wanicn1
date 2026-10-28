@@ -1,0 +1,3304 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Headless command dispatch — every prompt keystroke ends up here.
+
+The dispatcher owns the AutoCAD prompt semantics that the UI must not
+reimplement: alias resolution, Enter-on-empty repeats the last command,
+multi-step prompts (``Z`` then ``E``), Esc cancels. Handlers are plain
+callables registered by the application, so the whole flow is testable
+without a GUI (the AI-native invariant: every command is a headless
+action first).
+
+A handler may return a :class:`Prompt` to ask for more input; the next
+submitted line goes to its callback instead of starting a new command.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+import math
+
+from core import aliases as aliases_mod
+from core import i18n
+from core import ocs
+from core.commands import Command
+from core.i18n import tr
+
+
+@dataclass
+class Prompt:
+    """A continuation: show ``text`` and send the next input line to ``on_input``."""
+
+    text: str
+    on_input: Callable[[str], Optional["Prompt"]]
+
+
+@dataclass
+class _Entry:
+    handler: Callable[..., Optional[Prompt]]
+    phase: int = 0  # 0 = implemented; else "arrives in Phase N"
+
+
+@dataclass
+class Dispatcher:
+    """Parses prompt input and routes it to registered command handlers."""
+
+    aliases: dict[str, str] = field(default_factory=aliases_mod.load_aliases)
+    echo: Callable[[str], None] = lambda text: None
+    #: how a prompt is written, left open for its answer; ``echo`` if unset
+    echo_prompt: Optional[Callable[[str], None]] = None
+
+    def __post_init__(self) -> None:
+        self._commands: dict[str, _Entry] = {}
+        self._pending: Optional[Prompt] = None
+        self.last_command: str = ""
+
+    # -- registration ---------------------------------------------------------
+    def register(self, name: str, handler: Callable[..., Optional[Prompt]]) -> None:
+        self._commands[name.upper()] = _Entry(handler)
+
+    def register_future(self, name: str, phase: int) -> None:
+        """A command in scope but not implemented yet: answer honestly."""
+        self._commands[name.upper()] = _Entry(handler=None, phase=phase)
+
+    def unregister(self, name: str) -> None:
+        """Forget a command (a plugin turning off). Unknown names are fine."""
+        self._commands.pop(name.upper(), None)
+
+    def known_names(self) -> list[str]:
+        """Commands + aliases, for prompt autocompletion.
+
+        Includes the active language's own names, so a Spanish user sees
+        LINEA complete as they type -- without ever losing LINE or L.
+        """
+        names = set(self._commands)
+        names.update(a for a, cmd in self.aliases.items()
+                     if self._alias_target(cmd) in self._commands)
+        names.update(token for token, cmd in i18n.command_names().items()
+                     if cmd in self._commands)
+        return sorted(names)
+
+    # -- prompt state ---------------------------------------------------------
+    @property
+    def pending_prompt(self) -> Optional[str]:
+        return self._pending.text if self._pending else None
+
+    def cancel(self) -> None:
+        """Esc: abandon any pending multi-step prompt."""
+        if self._pending is not None:
+            self._pending = None
+            self.echo(tr("*Cancel*"))
+
+    # -- input ----------------------------------------------------------------
+    def submit(self, raw: str) -> None:
+        """One line from the prompt (Enter or Space already stripped)."""
+        text = raw.strip()
+
+        if self._pending is not None:
+            prompt = self._pending
+            self._pending = None
+            self._continue(prompt.on_input(text))
+            return
+
+        if not text:
+            # AutoCAD: Enter on an empty prompt repeats the last command.
+            if self.last_command:
+                self._run(self.last_command, [])
+            return
+
+        tokens = text.split()
+        self._run(self.resolve_name(tokens[0]), tokens[1:])
+
+    def resolve_name(self, token: str) -> str:
+        """Alias, exact command, localized name, or a prefix completion.
+
+        AutoCAD's AutoComplete finishes the name as you type, so ``OFF`` runs
+        OFFSET and ``REC`` runs RECTANG without spelling either out. Order
+        matters, and English comes first at every step:
+
+        1. a leading ``_`` is AutoCAD's global form — English only, so a
+           script or a LISP-style macro runs whatever the interface language;
+        2. the English alias table, then an exact English command name. An
+           ALIAS always wins, or ``L`` would stop meaning LINE the day a
+           LAYER-ish command sorted ahead of it;
+        3. the active language's own names (``LINEA``), which may only *add*
+           to English, never shadow it — ``core/i18n/commands.py`` rejects a
+           pack that tries;
+        4. prefix completion, English first and among several matches the
+           first alphabetically: the one AutoCAD appends, and the one the
+           prompt has been showing inline while the user typed.
+        """
+        text = token.strip()
+        if text.startswith("_"):
+            return self._english_name(text.lstrip("_"))
+        name = self._english_name(text, complete=False)
+        if name in self._commands:
+            return name
+        if text.upper() in self.aliases:
+            # An alias names its command outright: a Spanish acad.pgp says
+            # "DE, *DESPLAZA". Its target is looked up in every language,
+            # and a target that is no command is reported as such -- never
+            # completed from the letters typed into some other command.
+            return self._alias_target(name)
+        localized = i18n.command_names().get(text.upper())
+        if localized in self._commands:
+            return localized
+        completed = self._complete(text)
+        return completed if completed else name
+
+    def _alias_target(self, target: str) -> str:
+        """An alias's target as a command: English, else any language's."""
+        if target in self._commands:
+            return target
+        english = i18n.every_command_name().get(target)
+        return english if english in self._commands else target
+
+    def _english_name(self, token: str, complete: bool = True) -> str:
+        """Alias or command name, English only — what ``_`` forces."""
+        name = aliases_mod.resolve(token, self.aliases)
+        if name in self._commands or not complete:
+            return name
+        return self._complete(token, english_only=True) or name
+
+    def _complete(self, token: str, english_only: bool = False) -> str:
+        """The command a prefix completes to, English before localized."""
+        prefix = token.strip().upper()
+        if not prefix:
+            return ""
+        matches = sorted(n for n in self._commands if n.startswith(prefix))
+        if matches:
+            return matches[0]
+        if english_only:
+            return ""
+        localized = sorted(name for name in i18n.command_names()
+                           if name.startswith(prefix))
+        return i18n.command_names()[localized[0]] if localized else ""
+
+    def _run(self, name: str, args: list[str]) -> None:
+        entry = self._commands.get(name)
+        if entry is None:
+            self.echo(tr('Unknown command "{name}".', name=name))
+            return
+        self.last_command = name
+        if entry.handler is None:
+            self.echo(tr("{name}: not available yet (arrives in Phase {phase}).",
+                         name=name, phase=entry.phase))
+            return
+        self._continue(entry.handler(*args) if args else entry.handler())
+
+    def _continue(self, result: Optional[Prompt]) -> None:
+        if isinstance(result, Prompt):
+            self._pending = result
+            (self.echo_prompt or self.echo)(result.text)
+
+
+# -- drawing actions (headless, undoable) --------------------------------------
+#
+# Every mutation is a Command: do() creates the entity in modelspace, undo()
+# deletes it. The ezdxf document IS the model — no shadow data structures.
+
+def dress_new_entity(document, entity, layer: str | None = None) -> None:
+    """Give a new entity the CURRENT properties, the ones the Properties
+    bar sets: layer, colour, linetype, lineweight -- and the current object
+    linetype scale (CELTSCALE). They default to ByLayer,
+    so a drawing stays layer-driven unless the user overrides it on purpose
+    -- and a command that already chose (OFFSET keeping the source's layer,
+    a factory that set a colour) keeps what it chose."""
+    from core import layers as layer_ops
+
+    wanted = layer if layer is not None \
+        else document.doc.header.get("$CLAYER", "0")
+    if wanted in document.doc.layers:
+        entity.dxf.layer = wanted
+    for prop in ("color", "linetype", "lineweight"):
+        if entity.dxf.hasattr(prop):
+            continue          # the factory already said what it wanted
+        value = layer_ops.current_property(document, prop)
+        if value != layer_ops.CURRENT_DEFAULTS[prop]:
+            try:
+                entity.dxf.set(prop, value)
+            except Exception:
+                pass
+    # CELTSCALE, the Linetype Manager's "Current object scale": every new
+    # object takes it as its own linetype scale (AutoCAD; 1.0 writes nothing)
+    if not entity.dxf.hasattr("ltscale"):
+        try:
+            celtscale = float(document.doc.header.get("$CELTSCALE", 1.0))
+        except (TypeError, ValueError):
+            celtscale = 1.0
+        if celtscale > 0 and abs(celtscale - 1.0) > 1e-12:
+            try:
+                entity.dxf.ltscale = celtscale
+            except Exception:
+                pass
+
+
+class AddEntityCommand(Command):
+    """Create one entity via a factory(msp) -> entity; undo deletes it.
+
+    ``layer`` overrides the usual "new entities land on the current layer"
+    rule, for the commands that copy an existing object and are asked to
+    keep its layer (OFFSET's Layer > Source, which is AutoCAD's default).
+    """
+
+    def __init__(self, name: str, factory, layer: str | None = None) -> None:
+        self.name = name
+        self._factory = factory
+        self.layer = layer
+        self.entity = None
+
+    def do(self, document) -> None:
+        self.entity = self._factory(self.space(document))
+        dress_new_entity(document, self.entity, self.layer)
+        # A text in an annotative style is born annotative at the current
+        # annotation scale: its typed height was a paper height (A2).
+        if self.entity.dxftype() in ("TEXT", "MTEXT"):
+            from core import annotative
+
+            annotative.annotate_new_entity(document, self.entity)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        if self.entity is not None:
+            # Handles destroyed here are recorded so the UI can hide the
+            # base-scene copies surgically instead of paying a full regen.
+            self.removed_handles = [self.entity.dxf.handle]
+            from core import annotative
+
+            # its scale representations go with it (ezdxf's delete would
+            # leave them orphaned in OBJECTS)
+            annotative.remove_representations(self.entity)
+            self.space(document).delete_entity(self.entity)
+            self.entity = None
+        document.dirty = True
+
+
+def add_line(p1, p2) -> AddEntityCommand:
+    return AddEntityCommand(
+        "LINE", lambda msp: msp.add_line((p1[0], p1[1]), (p2[0], p2[1])))
+
+
+def add_circle(center, radius: float) -> AddEntityCommand:
+    return AddEntityCommand(
+        "CIRCLE", lambda msp: msp.add_circle((center[0], center[1]), radius))
+
+
+def circle_from_2p(p1, p2) -> tuple[tuple[float, float], float]:
+    center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+    return center, math.dist(p1, p2) / 2.0
+
+
+def circle_from_3p(p1, p2, p3) -> tuple[tuple[float, float], float]:
+    """Circumcenter/radius; raises ValueError for collinear points."""
+    ax, ay = p1
+    bx, by = p2
+    cx, cy = p3
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-12:
+        raise ValueError("collinear points")
+    ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay)
+          + (cx * cx + cy * cy) * (ay - by)) / d
+    uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx)
+          + (cx * cx + cy * cy) * (bx - ax)) / d
+    return (ux, uy), math.hypot(ax - ux, ay - uy)
+
+
+def add_arc_3p(p1, p2, p3) -> AddEntityCommand:
+    """Arc from start, a point on the arc, and end (AutoCAD ARC 3P)."""
+    center, radius = circle_from_3p(p1, p2, p3)
+    a1 = math.degrees(math.atan2(p1[1] - center[1], p1[0] - center[0]))
+    a2 = math.degrees(math.atan2(p2[1] - center[1], p2[0] - center[0]))
+    a3 = math.degrees(math.atan2(p3[1] - center[1], p3[0] - center[0]))
+    # DXF arcs run counterclockwise from start to end; flip when the middle
+    # point is not on the ccw sweep.
+    if ((a2 - a1) % 360.0) > ((a3 - a1) % 360.0):
+        a1, a3 = a3, a1
+    return AddEntityCommand(
+        "ARC",
+        lambda msp: msp.add_arc((center[0], center[1]), radius, a1, a3))
+
+
+# -- ARC geometry: AutoCAD's 11 methods reduced to (center, radius, a1, a2) ----
+#
+# DXF arcs always run counterclockwise from start_angle to end_angle; a
+# clockwise construction is stored with the angles swapped. Each function
+# returns (center, radius, start_deg, end_deg, end_point, ccw) where
+# end_point is the USER's end of the drawn arc and ccw is the direction the
+# user travelled (for tangent chaining) — not necessarily the entity's
+# end_angle side.
+
+def _dir_deg(frm, to) -> float:
+    return math.degrees(math.atan2(to[1] - frm[1], to[0] - frm[0]))
+
+
+def _polar(center, radius: float, angle_deg: float):
+    a = math.radians(angle_deg)
+    return (center[0] + radius * math.cos(a), center[1] + radius * math.sin(a))
+
+
+def arc_sca(start, center, angle_deg: float):
+    """Start, Center, included Angle. Positive = CCW; negative = CW."""
+    radius = math.dist(start, center)
+    if radius <= 0.0:
+        raise ValueError("zero radius")
+    a1 = _dir_deg(center, start)
+    end = _polar(center, radius, a1 + angle_deg)
+    if angle_deg >= 0.0:
+        return center, radius, a1, a1 + angle_deg, end, True
+    return center, radius, a1 + angle_deg, a1, end, False
+
+
+def arc_scl(start, center, chord: float):
+    """Start, Center, chord Length. Positive = minor arc CCW; negative =
+    major arc CCW (AutoCAD's rule)."""
+    radius = math.dist(start, center)
+    if radius <= 0.0 or abs(chord) > 2.0 * radius or chord == 0.0:
+        raise ValueError("chord does not fit the radius")
+    included = math.degrees(2.0 * math.asin(abs(chord) / (2.0 * radius)))
+    if chord < 0.0:
+        included = 360.0 - included
+    a1 = _dir_deg(center, start)
+    return (center, radius, a1, a1 + included,
+            _polar(center, radius, a1 + included), True)
+
+
+def arc_sea(start, end, angle_deg: float):
+    """Start, End, included Angle. Positive = CCW; negative = CW."""
+    if angle_deg == 0.0 or abs(angle_deg) >= 360.0:
+        raise ValueError("angle must be in (-360, 0) or (0, 360)")
+    if angle_deg < 0.0:
+        # a CW arc start->end is the CCW arc end->start
+        center, radius, a1, a2, _e, _ccw = arc_sea(end, start, -angle_deg)
+        return center, radius, a1, a2, _polar(center, radius, a1), False
+    chord = math.dist(start, end)
+    if chord <= 0.0:
+        raise ValueError("zero chord")
+    half = math.radians(angle_deg) / 2.0
+    radius = chord / (2.0 * math.sin(half))
+    mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    ux, uy = (end[0] - start[0]) / chord, (end[1] - start[1]) / chord
+    left = (-uy, ux)
+    d = math.sqrt(max(radius * radius - (chord / 2.0) ** 2, 0.0))
+    side = 1.0 if angle_deg < 180.0 else -1.0
+    center = (mid[0] + side * d * left[0], mid[1] + side * d * left[1])
+    return (center, radius, _dir_deg(center, start), _dir_deg(center, end),
+            (end[0], end[1]), True)
+
+
+def arc_sed(start, end, direction_deg: float):
+    """Start, End, start-tangent Direction. Any arc, CW or CCW."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    u = (math.cos(math.radians(direction_deg)),
+         math.sin(math.radians(direction_deg)))
+    n = (-u[1], u[0])                       # left normal of the tangent
+    denom = 2.0 * (dx * n[0] + dy * n[1])
+    if abs(denom) < 1e-12:
+        raise ValueError("direction is collinear with the chord")
+    r_signed = (dx * dx + dy * dy) / denom
+    center = (start[0] + r_signed * n[0], start[1] + r_signed * n[1])
+    radius = abs(r_signed)
+    a_start = _dir_deg(center, start)
+    a_end = _dir_deg(center, end)
+    if r_signed > 0.0:                      # center left of tangent: CCW
+        return center, radius, a_start, a_end, (end[0], end[1]), True
+    return center, radius, a_end, a_start, (end[0], end[1]), False
+
+
+def arc_ser(start, end, radius: float):
+    """Start, End, Radius. Positive = minor arc CCW; negative = major arc
+    CCW (AutoCAD's rule). Chord must fit the radius."""
+    chord = math.dist(start, end)
+    if radius == 0.0 or chord <= 0.0 or chord > 2.0 * abs(radius):
+        raise ValueError("chord does not fit the radius")
+    r = abs(radius)
+    mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    ux, uy = (end[0] - start[0]) / chord, (end[1] - start[1]) / chord
+    left = (-uy, ux)
+    d = math.sqrt(max(r * r - (chord / 2.0) ** 2, 0.0))
+    side = 1.0 if radius > 0.0 else -1.0    # minor: center left of the chord
+    center = (mid[0] + side * d * left[0], mid[1] + side * d * left[1])
+    return (center, r, _dir_deg(center, start), _dir_deg(center, end),
+            (end[0], end[1]), True)
+
+
+def add_arc_geom(geom) -> AddEntityCommand:
+    """Command from an arc geometry tuple (see the section comment)."""
+    center, radius, a1, a2 = geom[0], geom[1], geom[2], geom[3]
+    return AddEntityCommand(
+        "ARC", lambda msp: msp.add_arc((center[0], center[1]), radius, a1, a2))
+
+
+def arc_end_tangent(geom) -> float:
+    """Tangent direction (degrees) at the USER end of a drawn arc, following
+    the drawing direction — what LINE/ARC Continue chains from."""
+    center, end_point, ccw = geom[0], geom[4], geom[5]
+    a_end = _dir_deg(center, end_point)
+    return a_end + (90.0 if ccw else -90.0)
+
+
+# -- CIRCLE TTR: radius-r circle tangent to two objects -------------------------
+#
+# The center of a circle tangent to a LINE lies on one of the two parallels
+# at distance r; tangent to a CIRCLE(R), on one of the concentric circles of
+# radius R+r or |R-r|. Candidate centers are the intersections of those loci;
+# AutoCAD's documented disambiguation picks the candidate whose tangent
+# points are closest to the pick points.
+
+def _tangent_loci(obj, r: float) -> list:
+    kind = obj[0]
+    if kind == "line":
+        p1, p2 = obj[1], obj[2]
+        ux, uy = p2[0] - p1[0], p2[1] - p1[1]
+        length = math.hypot(ux, uy)
+        if length < 1e-12:
+            raise ValueError("degenerate line")
+        n = (-uy / length, ux / length)
+        return [("line", (p1[0] + s * r * n[0], p1[1] + s * r * n[1]),
+                 (ux / length, uy / length)) for s in (1.0, -1.0)]
+    center, big_r = obj[1], obj[2]
+    loci = [("circle", center, big_r + r)]
+    if abs(big_r - r) > 1e-12:
+        loci.append(("circle", center, abs(big_r - r)))
+    return loci
+
+
+def _loci_intersections(a, b) -> list:
+    """Intersection points of two loci (lines given as (point, unit))."""
+    if a[0] == "circle" and b[0] == "line":
+        a, b = b, a
+    if a[0] == "line" and b[0] == "line":
+        (px, py), (ux, uy) = a[1], a[2]
+        (qx, qy), (vx, vy) = b[1], b[2]
+        den = ux * vy - uy * vx
+        if abs(den) < 1e-12:
+            return []
+        t = ((qx - px) * vy - (qy - py) * vx) / den
+        return [(px + t * ux, py + t * uy)]
+    if a[0] == "line":
+        (px, py), (ux, uy) = a[1], a[2]
+        (cx, cy), r = b[1], b[2]
+        t0 = (cx - px) * ux + (cy - py) * uy
+        foot = (px + t0 * ux, py + t0 * uy)
+        d2 = r * r - ((foot[0] - cx) ** 2 + (foot[1] - cy) ** 2)
+        if d2 < -1e-9:
+            return []
+        h = math.sqrt(max(d2, 0.0))
+        return [(foot[0] + s * h * ux, foot[1] + s * h * uy)
+                for s in ((1.0, -1.0) if h > 1e-12 else (0.0,))]
+    (c1, r1), (c2, r2) = (a[1], a[2]), (b[1], b[2])
+    d = math.dist(c1, c2)
+    if d < 1e-12 or d > r1 + r2 + 1e-9 or d < abs(r1 - r2) - 1e-9:
+        return []
+    x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d)
+    h2 = r1 * r1 - x * x
+    h = math.sqrt(max(h2, 0.0))
+    ux, uy = (c2[0] - c1[0]) / d, (c2[1] - c1[1]) / d
+    base = (c1[0] + x * ux, c1[1] + x * uy)
+    if h < 1e-12:
+        return [base]
+    return [(base[0] - s * h * uy, base[1] + s * h * ux) for s in (1.0, -1.0)]
+
+
+def _tangent_point(obj, center) -> tuple[float, float]:
+    if obj[0] == "line":
+        (px, py), p2 = obj[1], obj[2]
+        ux, uy = p2[0] - px, p2[1] - py
+        length = math.hypot(ux, uy)
+        ux, uy = ux / length, uy / length
+        t = (center[0] - px) * ux + (center[1] - py) * uy
+        return (px + t * ux, py + t * uy)
+    c, big_r = obj[1], obj[2]
+    d = math.dist(c, center)
+    if d < 1e-12:
+        return c
+    return (c[0] + (center[0] - c[0]) * big_r / d,
+            c[1] + (center[1] - c[1]) * big_r / d)
+
+
+def ttr_center(obj1, pick1, obj2, pick2, radius: float):
+    """CIRCLE Ttr: center of the radius circle tangent to both objects,
+    choosing the candidate whose tangent points are closest to the pick
+    points (AutoCAD's documented rule). Raises ValueError when no circle
+    of that radius fits ("Circle does not exist.")."""
+    if radius <= 0.0:
+        raise ValueError("radius must be positive")
+    return tangent_circle(obj1, pick1, obj2, pick2, radius)[0]
+
+
+def tangent_circle(obj1, pick1, obj2, pick2, radius: float):
+    """``(center, t1, t2)`` of the radius circle tangent to both objects,
+    the candidate whose tangent points are closest to the picks -- CIRCLE
+    Ttr's rule, and FILLET's ("select the objects close to where you want
+    the endpoints of the fillet"). Radius 0 is where the two meet. Raises
+    ValueError when there is none."""
+    best = None
+    best_score = None
+    for locus1 in _tangent_loci(obj1, radius):
+        for locus2 in _tangent_loci(obj2, radius):
+            for center in _loci_intersections(locus1, locus2):
+                t1 = _tangent_point(obj1, center)
+                t2 = _tangent_point(obj2, center)
+                score = math.dist(t1, pick1) + math.dist(t2, pick2)
+                if best_score is None or score < best_score:
+                    best, best_score = (center, t1, t2), score
+    if best is None:
+        raise ValueError("circle does not exist")
+    return best
+
+
+def ttt_circle(tangents):
+    """CIRCLE Tan, Tan, Tan: ``(center, radius)`` of the circle tangent to
+    three objects -- lines or circles, in ``_tangent_loci``'s form -- each
+    given with the point where it was picked. An object may also be
+    ``("point", p)``: CIRCLE 3P with a tangent snap on only some points.
+
+    Every way of touching is tried (each side of a line; outside, inside or
+    around a circle), each solved by Newton from the circle through the
+    picks. Of the circles found, the one whose tangent points are nearest
+    the picks wins -- TTR's rule. Raises ValueError when there is none.
+    """
+    import itertools
+
+    objs = [obj for obj, _pick in tangents]
+    picks = [pick for _obj, pick in tangents]
+    scale = max(1.0, *(abs(v) for p in picks for v in p))
+
+    def variants(obj):
+        if obj[0] == "point":
+            return ("on",)
+        return (1.0, -1.0) if obj[0] == "line" else ("out", "in", "around")
+
+    def residual(obj, how, cx, cy, r):
+        """(value, d/dcx, d/dcy, d/dr) of one tangency condition."""
+        if obj[0] == "point":          # CIRCLE 3P mixes points and tangents
+            (px, py) = obj[1]
+            d = math.hypot(cx - px, cy - py) or 1e-12
+            return d - r, (cx - px) / d, (cy - py) / d, -1.0
+        if obj[0] == "line":
+            (px, py), (qx, qy) = obj[1], obj[2]
+            length = math.hypot(qx - px, qy - py)
+            nx, ny = -(qy - py) / length, (qx - px) / length
+            return (how * (nx * (cx - px) + ny * (cy - py)) - r,
+                    how * nx, how * ny, -1.0)
+        (ox, oy), big_r = obj[1], obj[2]
+        d = math.hypot(cx - ox, cy - oy) or 1e-12
+        gx, gy = (cx - ox) / d, (cy - oy) / d
+        if how == "out":
+            return d - big_r - r, gx, gy, -1.0
+        if how == "in":
+            return d - big_r + r, gx, gy, 1.0
+        return d - r + big_r, gx, gy, -1.0            # around it
+
+    def tangent_point(obj, how, center):
+        if obj[0] == "point":
+            return obj[1]
+        point = _tangent_point(obj, center)
+        if obj[0] == "circle" and how == "around":
+            (ox, oy) = obj[1]
+            point = (2 * ox - point[0], 2 * oy - point[1])
+        return point
+
+    starts = []
+    try:
+        starts.append(circle_from_3p(*picks))
+    except ValueError:
+        pass
+    mx = sum(p[0] for p in picks) / 3.0
+    my = sum(p[1] for p in picks) / 3.0
+    starts.append(((mx, my),
+                   max(1e-6, sum(math.dist((mx, my), p) for p in picks) / 3.0)))
+
+    best, best_score = None, None
+    for hows in itertools.product(*(variants(o) for o in objs)):
+        for (cx, cy), r in starts:
+            for _ in range(60):
+                rows = [residual(o, h, cx, cy, r) for o, h in zip(objs, hows)]
+                f = [row[0] for row in rows]
+                if max(abs(v) for v in f) < 1e-12 * scale:
+                    break
+                (a, b, c), (d_, e, g), (h_, i, j) = (row[1:] for row in rows)
+                det = (a * (e * j - g * i) - b * (d_ * j - g * h_)
+                       + c * (d_ * i - e * h_))
+                if abs(det) < 1e-18:
+                    break
+                # Cramer on J * step = -f
+                f0, f1, f2 = (-v for v in f)
+                sx = (f0 * (e * j - g * i) - b * (f1 * j - g * f2)
+                      + c * (f1 * i - e * f2)) / det
+                sy = (a * (f1 * j - g * f2) - f0 * (d_ * j - g * h_)
+                      + c * (d_ * f2 - f1 * h_)) / det
+                sr = (a * (e * f2 - f1 * i) - b * (d_ * f2 - f1 * h_)
+                      + f0 * (d_ * i - e * h_)) / det
+                cx, cy, r = cx + sx, cy + sy, r + sr
+            rows = [residual(o, h, cx, cy, r) for o, h in zip(objs, hows)]
+            if r <= 1e-9 or max(abs(row[0]) for row in rows) > 1e-9 * scale:
+                continue
+            score = sum(math.dist(tangent_point(o, h, (cx, cy)), p)
+                        for o, h, p in zip(objs, hows, picks))
+            if best_score is None or score < best_score:
+                best, best_score = ((cx, cy), r), score
+    if best is None:
+        raise ValueError("circle does not exist")
+    return best
+
+
+def add_polyline(points, closed: bool = False) -> AddEntityCommand:
+    """LWPOLYLINE from plain (x, y) pairs or full (x, y, start_width,
+    end_width, bulge) vertices (PLINE arc segments and tapered widths)."""
+    if points and len(points[0]) >= 5:
+        pts = [tuple(p[:5]) for p in points]
+        return AddEntityCommand(
+            "PLINE", lambda msp: msp.add_lwpolyline(
+                pts, format="xyseb", close=closed))
+    pts = [(p[0], p[1]) for p in points]
+    return AddEntityCommand(
+        "PLINE", lambda msp: msp.add_lwpolyline(pts, close=closed))
+
+
+def add_spline(fit_points, closed: bool = False) -> AddEntityCommand:
+    """SPLINE through fit points (AutoCAD's default Fit method, degree 3).
+
+    Close appends the first point as the last fit point — geometrically
+    closed; AutoCAD's tangent-smooth periodic joint is not offered because
+    ezdxf has no periodic FIT interpolation to honor it with.
+    """
+    pts = [tuple(p[:2]) for p in fit_points]
+    if closed and pts and pts[-1] != pts[0]:
+        pts = pts + [pts[0]]
+
+    return AddEntityCommand(
+        "SPLINE", lambda msp: msp.add_spline(fit_points=list(pts)))
+
+
+def add_polyline_ex(points, closed: bool = False, name: str = "PLINE",
+                    dxfattribs: dict | None = None) -> AddEntityCommand:
+    """add_polyline with xyseb vertices plus entity attributes (RECTANG's
+    Elevation -> elevation, Thickness -> thickness)."""
+    pts = [tuple(p[:5]) for p in points]
+    attribs = dict(dxfattribs or {})
+    # fresh dict per call: ezdxf may consume the attribs, and redo re-runs
+    # the factory
+    return AddEntityCommand(
+        name, lambda msp: msp.add_lwpolyline(
+            pts, format="xyseb", close=closed, dxfattribs=dict(attribs)))
+
+
+def rect_vertices(first, length: float, width: float, *,
+                  rotation_deg: float = 0.0, chamfer=(0.0, 0.0),
+                  fillet: float = 0.0, pl_width: float = 0.0) -> list:
+    """RECTANG's closed ring as xyseb vertices, honoring the sticky corner
+    settings: chamfered (8 vertices), filleted (arc corners, bulge
+    tan(90°/4)) or square. ``length``/``width`` are signed offsets from
+    ``first`` in the rotated frame. Corners that don't fit fall back to a
+    square rectangle, like AutoCAD."""
+    x0, x1 = (0.0, length) if length >= 0 else (length, 0.0)
+    y0, y1 = (0.0, width) if width >= 0 else (width, 0.0)
+    w, h = x1 - x0, y1 - y0
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError("zero-size rectangle")
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]     # CCW ring
+    d1, d2 = max(chamfer[0], 0.0), max(chamfer[1], 0.0)
+    r = max(fillet, 0.0)
+    ring: list[tuple] = []                                  # (x, y, bulge)
+    if r > 0.0 and 2.0 * r <= min(w, h) + 1e-12:
+        arc_bulge = math.tan(math.radians(90.0) / 4.0)      # CCW quarter turn
+        for i, c in enumerate(corners):
+            pin = corners[i - 1]
+            pout = corners[(i + 1) % 4]
+            din = _unit(pin, c)
+            dout = _unit(c, pout)
+            a = (c[0] - r * din[0], c[1] - r * din[1])
+            b = (c[0] + r * dout[0], c[1] + r * dout[1])
+            ring.append((a[0], a[1], arc_bulge))            # the corner arc
+            ring.append((b[0], b[1], 0.0))                  # then straight on
+    elif (d1 > 0.0 or d2 > 0.0) and d1 + d2 <= min(w, h) + 1e-12 \
+            and max(d1, d2) * 2.0 <= min(w, h) + 1e-12:
+        for i, c in enumerate(corners):
+            pin = corners[i - 1]
+            pout = corners[(i + 1) % 4]
+            din = _unit(pin, c)
+            dout = _unit(c, pout)
+            a = (c[0] - d1 * din[0], c[1] - d1 * din[1])
+            b = (c[0] + d2 * dout[0], c[1] + d2 * dout[1])
+            ring.append((a[0], a[1], 0.0))
+            ring.append((b[0], b[1], 0.0))
+    else:
+        ring = [(c[0], c[1], 0.0) for c in corners]
+    rot = math.radians(rotation_deg)
+    ca, sa = math.cos(rot), math.sin(rot)
+    out = []
+    for x, y, bulge in ring:
+        wx = first[0] + x * ca - y * sa
+        wy = first[1] + x * sa + y * ca
+        out.append((wx, wy, pl_width, pl_width, bulge))
+    return out
+
+
+def _unit(a, b):
+    d = math.dist(a, b)
+    return ((b[0] - a[0]) / d, (b[1] - a[1]) / d)
+
+
+def polygon_ring(center, sides: int, vertex_radius: float,
+                 first_vertex_deg: float) -> list:
+    """Vertices of a regular polygon, first vertex at the given angle."""
+    pts = []
+    for i in range(sides):
+        a = math.radians(first_vertex_deg + 360.0 * i / sides)
+        pts.append((center[0] + vertex_radius * math.cos(a),
+                    center[1] + vertex_radius * math.sin(a)))
+    return pts
+
+
+def polygon_from_edge(p1, p2, sides: int) -> list:
+    """POLYGON Edge: walk CCW from the first edge (body left of p1->p2)."""
+    s = math.dist(p1, p2)
+    if s <= 0.0:
+        raise ValueError("zero-length edge")
+    pts = [tuple(p1), tuple(p2)]
+    heading = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+    turn = math.tau / sides
+    for _ in range(sides - 2):
+        heading += turn
+        last = pts[-1]
+        pts.append((last[0] + s * math.cos(heading),
+                    last[1] + s * math.sin(heading)))
+    return pts
+
+
+def add_rectangle(p1, p2) -> AddEntityCommand:
+    pts = [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1])]
+    return AddEntityCommand(
+        "RECTANG", lambda msp: msp.add_lwpolyline(pts, close=True))
+
+
+def polygon_points(center, vertex, sides: int) -> list[tuple[float, float]]:
+    """Regular polygon inscribed, one vertex at ``vertex``."""
+    r = math.dist(center, vertex)
+    a0 = math.atan2(vertex[1] - center[1], vertex[0] - center[0])
+    return [
+        (center[0] + r * math.cos(a0 + i * math.tau / sides),
+         center[1] + r * math.sin(a0 + i * math.tau / sides))
+        for i in range(sides)
+    ]
+
+
+def add_polygon(center, vertex, sides: int) -> AddEntityCommand:
+    pts = polygon_points(center, vertex, sides)
+    return AddEntityCommand(
+        "POLYGON", lambda msp: msp.add_lwpolyline(pts, close=True))
+
+
+# -- editing actions (headless, undoable) --------------------------------------
+
+def transform_entity(entity, matrix) -> None:
+    """``entity.transform(matrix)``, with the types ezdxf leaves out.
+
+    ezdxf raises NotImplementedError for VIEWPORT, and a layout viewport is
+    an object a user moves and scales like any other -- especially when
+    refitting a sheet from A1 to A3. The fallback lives in core.layouts,
+    which owns what a viewport means.
+    """
+    try:
+        entity.transform(matrix)
+    except NotImplementedError:
+        if entity.dxftype() != "VIEWPORT":
+            raise
+        from core.layouts import transform_viewport
+
+        transform_viewport(entity, matrix)
+
+
+def _is_translation(matrix) -> bool:
+    """True when ``matrix`` only moves: a MOVE or a COPY."""
+    from ezdxf.math import Vec3
+
+    origin = matrix.transform(Vec3(0, 0, 0))
+    for axis in (Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1)):
+        if not (matrix.transform(axis) - origin).isclose(axis, abs_tol=1e-12):
+            return False
+    return True
+
+
+def redraw_transformed_dimension(document, dim) -> None:
+    """A dimension that was rotated, mirrored or scaled is drawn afresh, as
+    AutoCAD redraws it: transforming its block like a picture left the text
+    upside down after ROTATE 90, the copies of a MIRROR on top of the
+    originals, and the old number after SCALE (0.28 on a 0.56 run, at twice
+    the height). A MOVE keeps the author's block stroke for stroke."""
+    from core.ezdxf_patches import reading_angle, upright_dimension
+
+    upright_dimension(dim)
+    if dim.dxf.hasattr("text_rotation"):
+        # a user text angle turned with the drawing reads the right way up
+        dim.dxf.text_rotation = reading_angle(float(dim.dxf.text_rotation))
+    rerender_dimension(document, dim)
+
+
+def _hatch_direction(entity):
+    """A patterned hatch's pattern before a MIRROR, or None."""
+    if entity.dxftype() not in ("HATCH", "MPOLYGON") \
+            or not getattr(entity, "has_pattern_fill", False):
+        return None
+    import copy as _copy
+
+    return (_copy.deepcopy(entity.pattern),
+            float(entity.dxf.get("pattern_angle", 0.0)))
+
+
+def _keep_hatch_direction(entity, saved) -> None:
+    """MIRRHATCH 0, AutoCAD's initial value, "retains hatch pattern
+    direction" (MIRRHATCH): the boundary is mirrored, the pattern is not.
+    ezdxf turned the pattern by twice the axis angle, so a hatch mirrored
+    about an oblique axis came out rotated (a vertical or horizontal axis
+    happened to cancel out)."""
+    if saved is None:
+        return
+    entity.pattern, entity.dxf.pattern_angle = saved
+
+
+def _with_clip_boundaries(entities) -> list:
+    """``entities`` plus the clipping boundary of every clipped VIEWPORT
+    among them: AutoCAD moves the two together. Moving the viewport alone
+    left its boundary -- the shape the sheet is clipped to -- behind."""
+    seen = {id(e) for e in entities}
+    out = list(entities)
+    for e in entities:
+        if e.dxftype() != "VIEWPORT":
+            continue
+        try:
+            if not e.has_extended_clipping_path or e.doc is None:
+                continue
+            boundary = e.doc.entitydb.get(e.dxf.clipping_boundary_handle)
+        except Exception:  # noqa: BLE001 -- a dangling handle clips nothing
+            continue
+        if boundary is not None and boundary.is_alive \
+                and id(boundary) not in seen:
+            seen.add(id(boundary))
+            out.append(boundary)
+    return out
+
+
+def transformable(entity) -> bool:
+    """Can ezdxf move, rotate or copy this object at all?"""
+    from ezdxf.entities.dxfgfx import DXFGraphic
+
+    return type(entity).transform is not DXFGraphic.transform
+
+
+def _copy_or_none(entity):
+    """A copy of ``entity``, or None for a type ezdxf will not copy."""
+    try:
+        return entity.copy()
+    except Exception:  # noqa: BLE001 -- CopyNotSupported and kin
+        return None
+
+
+def can_transform(entity, matrix) -> bool:
+    """False for the pairs of (object, matrix) that have no answer.
+
+    A VIEWPORT has no angle of its own, so a rotation would have to deform
+    its rectangle. And ezdxf cannot move or copy some objects at all -- a
+    Civil 3D proxy, an OLE object: before this, MOVE over a window that took
+    one raised half-way, leaving what it had moved moved and no undo. Such
+    objects are left where they are and the command says so. Refusing up
+    front keeps every command consistent -- what it transforms, it
+    un-transforms.
+    """
+    if entity.dxftype() != "VIEWPORT":
+        return transformable(entity)
+    from ezdxf.math import Vec3
+
+    origin = matrix.transform(Vec3(0, 0, 0))
+    ex = matrix.transform(Vec3(1, 0, 0)) - origin
+    ey = matrix.transform(Vec3(0, 1, 0)) - origin
+    return abs(ex.y) <= 1e-9 and abs(ey.x) <= 1e-9
+
+
+class TransformCommand(Command):
+    """Apply a Matrix44 to entities in place; undo applies the inverse."""
+
+    def __init__(self, name: str, entities, matrix,
+                 upright: bool = False) -> None:
+        self.name = name
+        entities = list(entities)
+        #: Objects this matrix cannot move (a rotated viewport). Kept so the
+        #: UI can say so instead of the command half-working.
+        self.skipped = [e for e in entities if not can_transform(e, matrix)]
+        self.entities = _with_clip_boundaries(
+            [e for e in entities if can_transform(e, matrix)])
+        self.matrix = matrix
+        #: Flip entities the matrix leaves with a (0, 0, -1) extrusion back
+        #: to +Z (MIRROR). The flip is not part of the matrix, so the OCS
+        #: entities keep their state from before the command and undo puts
+        #: that back instead of running the inverse on them — exact, down to
+        #: an extrusion attribute the original never had.
+        self.upright = upright
+        self._before: list = []
+
+    def do(self, document) -> None:
+        from core import mirrtext
+
+        readable = self.upright and mirrtext.keeps_text_readable(document)
+        self._before = []
+        #: Attributes of mirrored blocks made readable: their INSERT goes
+        #: back through the inverse, then they get their own state back.
+        self._attribs_before = []
+        for e in self.entities:
+            kind = e.dxftype()
+            text = readable and kind in mirrtext.TEXT_TYPES
+            before = None
+            redraw = kind == "DIMENSION" and not _is_translation(self.matrix)
+            if (self.upright and kind in ocs.OCS_TYPES) or text or redraw:
+                before = snapshot_entity(e)
+                self._before.append((e, before))
+            attribs = ([(a, a.copy()) for a in e.attribs]
+                       if readable and kind == "INSERT" else [])
+            hatch = _hatch_direction(e) if self.upright else None
+            transform_entity(e, self.matrix)
+            if self.upright and kind in ocs.OCS_TYPES:
+                ocs.upright(e)
+            _keep_hatch_direction(e, hatch)
+            if redraw:
+                redraw_transformed_dimension(document, e)
+            if text:
+                mirrtext.make_readable(e, before, self.matrix)
+            for attrib, snapshot in attribs:
+                mirrtext.make_readable(attrib, snapshot, self.matrix)
+            self._attribs_before.extend(attribs)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        global _ORPHAN_BLOCKS
+        from ezdxf.math import Matrix44
+
+        restored = set()
+        _ORPHAN_BLOCKS = set()
+        try:
+            for e, before in self._before:
+                _restore_entity(e, before)
+                restored.add(id(e))
+            orphans = _ORPHAN_BLOCKS
+        finally:
+            _ORPHAN_BLOCKS = None
+        drop_unreferenced_dim_blocks(document.doc, orphans)
+        self._before = []
+        inverse = Matrix44(self.matrix)
+        inverse.inverse()
+        for e in self.entities:
+            if id(e) not in restored:
+                transform_entity(e, inverse)
+        for attrib, snapshot in getattr(self, "_attribs_before", []):
+            _restore_entity(attrib, snapshot)
+        self._attribs_before = []
+        document.dirty = True
+
+
+class EraseCommand(Command):
+    """Unlink entities from modelspace (keeps them alive for exact undo)."""
+
+    name = "ERASE"
+
+    def __init__(self, entities) -> None:
+        self.entities = list(entities)
+
+    def do(self, document) -> None:
+        msp = self.space(document)
+        for e in self.entities:
+            msp.unlink_entity(e)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = self.space(document)
+        for e in self.entities:
+            msp.add_entity(e)
+        document.dirty = True
+
+
+class OopsCommand(Command):
+    """OOPS: give back what the last ERASE took, in the space it took it
+    from (OOPS, Command Reference). Undo takes them away again."""
+
+    name = "OOPS"
+
+    def __init__(self, erase: EraseCommand) -> None:
+        self._space = getattr(erase, "_space", None)
+        self.entities = [e for e in erase.entities
+                         if e.is_alive and e.dxf.owner is None]
+
+    def do(self, document) -> None:
+        space = self.space(document)
+        for e in self.entities:
+            space.add_entity(e)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        space = self.space(document)
+        for e in self.entities:
+            space.unlink_entity(e)
+        document.dirty = True
+
+
+class CopyEntitiesCommand(Command):
+    """Copy entities transformed by a Matrix44; undo removes the copies."""
+
+    name = "COPY"
+
+    def __init__(self, entities, matrix, upright: bool = False) -> None:
+        entities = list(entities)
+        #: Objects ezdxf cannot copy or move (see can_transform).
+        self.skipped = [e for e in entities if not can_transform(e, matrix)]
+        self.sources = [e for e in entities if can_transform(e, matrix)]
+        self.matrix = matrix
+        #: See TransformCommand.upright; a copy has no undo state to keep.
+        self.upright = upright
+        self.copies = []
+
+    def do(self, document) -> None:
+        from core import mirrtext
+
+        readable = self.upright and mirrtext.keeps_text_readable(document)
+        msp = self.space(document)
+        self.copies = []
+        for e in self.sources:
+            clone = _copy_or_none(e)
+            if clone is None:
+                continue
+            hatch = _hatch_direction(clone) if self.upright else None
+            transform_entity(clone, self.matrix)
+            if self.upright and clone.dxftype() in ocs.OCS_TYPES:
+                ocs.upright(clone)
+            _keep_hatch_direction(clone, hatch)
+            redraw = clone.dxftype() == "DIMENSION" \
+                and not _is_translation(self.matrix)
+            if readable:
+                mirrtext.make_readable(clone, e, self.matrix)
+                if clone.dxftype() == "INSERT":
+                    for attrib, source in zip(clone.attribs, e.attribs):
+                        mirrtext.make_readable(attrib, source, self.matrix)
+            msp.add_entity(clone)
+            if redraw:
+                redraw_transformed_dimension(document, clone)
+            self.copies.append(clone)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = self.space(document)
+        self.removed_handles = [c.dxf.handle for c in self.copies]
+        delete_with_dim_blocks(document, msp, self.copies)
+        self.copies = []
+        document.dirty = True
+
+
+class ReplaceEntitiesCommand(Command):
+    """Swap old entities for new ones (TRIM/EXTEND/FILLET results).
+
+    Old entities are unlinked (kept alive), new ones created by factories.
+    """
+
+    def __init__(self, name: str, old_entities, factories) -> None:
+        self.name = name
+        self.old_entities = list(old_entities)
+        self._factories = list(factories)
+        self.new_entities = []
+
+    def do(self, document) -> None:
+        msp = self.space(document)
+        for e in self.old_entities:
+            msp.unlink_entity(e)
+        self.new_entities = [factory(msp) for factory in self._factories]
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = self.space(document)
+        self.removed_handles = [e.dxf.handle for e in self.new_entities]
+        delete_with_dim_blocks(document, msp, self.new_entities)
+        self.new_entities = []
+        for e in self.old_entities:
+            msp.add_entity(e)
+        document.dirty = True
+
+
+# -- blocks (Phase 6) ----------------------------------------------------------
+
+class CreateBlockCommand(Command):
+    """BLOCK: define a block from entities and convert them to a reference.
+
+    Matches AutoCAD's default "Convert to block": the selection is packed into
+    a new block definition and replaced in place by one INSERT at the base
+    point. The block's base point is the picked point, so — inserted at that
+    same point — the reference lands exactly over the originals.
+    """
+
+    name = "BLOCK"
+    touches_blocks = True
+
+    def __init__(self, block_name: str, base_point, entities) -> None:
+        self.block_name = block_name
+        self.base = base_point
+        self.sources = list(entities)
+        self.insert = None
+        self._defined = False
+
+    def do(self, document) -> None:
+        doc = document.doc
+        msp = self.space(document)
+        if self.block_name not in doc.blocks:
+            blk = doc.blocks.new(
+                name=self.block_name,
+                base_point=(self.base[0], self.base[1]))
+            for e in self.sources:
+                blk.add_entity(e.copy())
+            self._defined = True
+        for e in self.sources:
+            msp.unlink_entity(e)
+        self.insert = msp.add_blockref(
+            self.block_name, (self.base[0], self.base[1]))
+        # Its attributes, at their defaults: a reference carries its own
+        # ATTRIBs, and without them the definitions just packed vanished
+        # from the drawing -- Rafael's "Rafa" was nowhere to be seen (#88)
+        from core.attributes import attach_attribs
+
+        attach_attribs(self.insert)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        doc = document.doc
+        msp = self.space(document)
+        if self.insert is not None:
+            self.removed_handles = [self.insert.dxf.handle]
+            msp.delete_entity(self.insert)
+            self.insert = None
+        for e in self.sources:
+            msp.add_entity(e)
+        if self._defined and self.block_name in doc.blocks:
+            doc.blocks.delete_block(self.block_name, safe=False)
+            self._defined = False
+        document.dirty = True
+
+
+def create_block(block_name, base_point, entities) -> CreateBlockCommand:
+    return CreateBlockCommand(block_name, base_point, entities)
+
+
+class DefineBlockFromFileCommand(Command):
+    """INSERT ▸ Browse (#70): another drawing becomes a block definition
+    named after its file -- its model space, with every layer, style and
+    nested block it needs, its $INSBASE as the base point (AutoCAD's own
+    rule for inserting a drawing)."""
+
+    name = "INSERT"
+    touches_blocks = True
+
+    def __init__(self, block_name: str, source_document) -> None:
+        self.block_name = block_name
+        self.source = source_document
+        self._defined = False
+
+    def do(self, document) -> None:
+        from ezdxf import xref
+
+        doc = document.doc
+        src = self.source.doc
+        base = src.header.get("$INSBASE", (0, 0, 0))
+        block = doc.blocks.new(name=self.block_name, base_point=base)
+        loader = xref.Loader(src, doc, conflict_policy=xref.ConflictPolicy.KEEP)
+        loader.load_modelspace(target_layout=block)
+        loader.execute()
+        self._defined = True
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        doc = document.doc
+        if self._defined and self.block_name in doc.blocks:
+            doc.blocks.delete_block(self.block_name, safe=False)
+            self._defined = False
+        document.dirty = True
+
+
+class RedefineBlockFromFileCommand(Command):
+    """INSERT ▸ Browse onto a name the drawing already has, answered Yes to
+    "Redefine it?": the block's content becomes the file's model space and
+    every reference to it shows the new one, as AutoCAD's does.
+
+    The old content is unlinked, not destroyed, so undo puts the very same
+    entities back.
+    """
+
+    name = "INSERT"
+    touches_blocks = True
+    needs_regen = True                  # every reference changes at once
+
+    def __init__(self, block_name: str, source_document) -> None:
+        self.block_name = block_name
+        self.source = source_document
+        self._old: list = []
+        self._new: list = []
+        self._old_base = None
+
+    def do(self, document) -> None:
+        from ezdxf import xref
+
+        doc = document.doc
+        block = doc.blocks.get(self.block_name)
+        self._old = list(block)
+        for entity in self._old:
+            block.unlink_entity(entity)
+        self._old_base = block.block.dxf.base_point
+        src = self.source.doc
+        block.block.dxf.base_point = src.header.get("$INSBASE", (0, 0, 0))
+        loader = xref.Loader(src, doc, conflict_policy=xref.ConflictPolicy.KEEP)
+        loader.load_modelspace(target_layout=block)
+        loader.execute()
+        self._new = list(block)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        doc = document.doc
+        block = doc.blocks.get(self.block_name)
+        for entity in self._new:
+            block.unlink_entity(entity)
+            doc.entitydb.delete_entity(entity)
+        self._new = []
+        for entity in self._old:
+            block.add_entity(entity)
+        block.block.dxf.base_point = self._old_base
+        document.dirty = True
+
+
+def insert_block(name, point, xscale=1.0, yscale=None,
+                 rotation=0.0) -> AddEntityCommand:
+    ys = xscale if yscale is None else yscale
+    return AddEntityCommand(
+        "INSERT",
+        lambda msp: msp.add_blockref(
+            name, (point[0], point[1]),
+            dxfattribs={"xscale": xscale, "yscale": ys, "rotation": rotation}))
+
+
+class ExplodeCommand(Command):
+    """EXPLODE: replace INSERT/POLYLINE with their component entities.
+
+    Component entities come from ``virtual_entities`` (already placed in world
+    coordinates); the originals are unlinked (kept alive for exact undo).
+    """
+
+    name = "EXPLODE"
+
+    def __init__(self, entities) -> None:
+        self.sources = list(entities)
+        self.pieces: list = []
+
+    def do(self, document) -> None:
+        msp = self.space(document)
+        self.pieces = []
+        for e in self.sources:
+            if e.dxftype() not in ("INSERT", "LWPOLYLINE", "POLYLINE"):
+                continue
+            parts = []
+            for v in e.virtual_entities():
+                msp.add_entity(v)
+                parts.append(v)
+            if e.dxftype() == "INSERT":
+                # "Exploding a block that contains attributes deletes the
+                # attribute values and redisplays the attribute definitions"
+                # (EXPLODE); virtual_entities() leaves the ATTDEFs out, so
+                # the tags vanished with the values
+                for attdef in _exploded_attdefs(e):
+                    msp.add_entity(attdef)
+                    parts.append(attdef)
+            msp.unlink_entity(e)
+            self.pieces.append((e, parts))
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = self.space(document)
+        self.removed_handles = [v.dxf.handle
+                                for _o, parts in self.pieces for v in parts]
+        delete_with_dim_blocks(
+            document, msp, [v for _o, parts in self.pieces for v in parts])
+        for original, _parts in self.pieces:
+            msp.add_entity(original)
+        self.pieces = []
+        document.dirty = True
+
+
+def _exploded_attdefs(insert) -> list:
+    """The block's attribute definitions where the reference shows them."""
+    doc = insert.doc
+    name = insert.dxf.get("name", None)
+    if doc is None or not name or name not in doc.blocks:
+        return []
+    matrix = insert.matrix44()
+    out = []
+    for e in doc.blocks.get(name):
+        if e.dxftype() != "ATTDEF":
+            continue
+        try:
+            copy = e.copy()
+            copy.transform(matrix)
+        except Exception:  # noqa: BLE001 -- one odd definition stays out
+            continue
+        out.append(copy)
+    return out
+
+
+def explode_entities(entities) -> ExplodeCommand:
+    return ExplodeCommand(entities)
+
+
+# -- hatch (Phase 6) -----------------------------------------------------------
+
+def _std_patterns():
+    """The 172 predefined ACAD/ISO hatch patterns, loaded once."""
+    global _STD_PATTERNS
+    try:
+        return _STD_PATTERNS
+    except NameError:
+        from ezdxf.tools import pattern as _pat
+        _STD_PATTERNS = _pat.load()
+        return _STD_PATTERNS
+
+
+def pattern_definition(name: str):
+    """The line families of a predefined pattern, or None.
+
+    Case-insensitive on purpose: 21 of the 172 predefined names carry a
+    lowercase letter (V_MASONRY200x100, V_MASONRY300x150...), and looking
+    them up as ``name.upper()`` found nothing -- their hatches were created
+    without a definition and their swatches drew the "unknown pattern"
+    diagonal. AutoCAD does not care about the case of a pattern name either.
+    """
+    patterns = _std_patterns()
+    if name in patterns:
+        return patterns[name]
+    upper = str(name).upper()
+    if upper in patterns:
+        return patterns[upper]
+    for key, definition in patterns.items():
+        if key.upper() == upper:
+            return definition
+    return None
+
+
+def canonical_pattern_name(name: str) -> str:
+    """The library's own spelling of a pattern name (case-insensitive)."""
+    patterns = _std_patterns()
+    if name in patterns:
+        return name
+    upper = str(name).upper()
+    if upper in patterns:
+        return upper
+    for key in patterns:
+        if key.upper() == upper:
+            return key
+    return str(name)
+
+
+def hatch_settings(hatch) -> dict:
+    """What the Hatch dialog needs to show an EXISTING hatch (HATCHEDIT).
+
+    The four things the dialog edits, read back from the entity: a solid
+    fill answers "SOLID", which is the name the gallery selects.
+    """
+    solid = bool(int(hatch.dxf.get("solid_fill", 0) or 0))
+    return {
+        "pattern": "SOLID" if solid else str(
+            hatch.dxf.get("pattern_name", "SOLID") or "SOLID").upper(),
+        "angle": float(hatch.dxf.get("pattern_angle", 0.0) or 0.0),
+        "scale": float(hatch.dxf.get("pattern_scale", 1.0) or 1.0),
+        "color": int(hatch.dxf.get("color", 256)),
+    }
+
+
+def apply_hatch_settings(hatch, settings: dict) -> None:
+    """HATCHEDIT: give an existing hatch a new pattern, scale, angle, colour.
+
+    Mutates in place -- the boundaries, the island style and the handle stay
+    exactly as they are, which is what makes it an EDIT of that hatch and
+    not a new one. The caller wraps it in a SnapshotCommand for undo.
+    """
+    name = str(settings.get("pattern", "SOLID") or "SOLID").upper()
+    color = int(settings.get("color", 256))
+    aci = 7 if color in (256, 0) else color
+    style = int(hatch.dxf.get("hatch_style", HATCH_STYLE_NORMAL))
+    if name == "SOLID":
+        hatch.set_solid_fill(color=aci)
+    else:
+        hatch.set_pattern_fill(
+            canonical_pattern_name(name), color=aci,
+            angle=float(settings.get("angle", 0.0)),
+            scale=float(settings.get("scale", 1.0)),
+            definition=pattern_definition(name))
+    # ezdxf's fill helpers reset these two on the way out, exactly as they
+    # do when a hatch is created -- put them back, or an edit would quietly
+    # change the island style and turn ByLayer into colour 7.
+    hatch.dxf.hatch_style = style
+    hatch.dxf.color = color
+
+
+def hatch_pattern_names() -> list:
+    """Sorted predefined pattern names (for the hatch style picker)."""
+    return sorted(_std_patterns().keys())
+
+
+def _add_boundary(hatch, item, flags: int) -> None:
+    """Add one boundary path: an ezdxf entity (closed) or a point list."""
+    if isinstance(item, (list, tuple)) and item and isinstance(item[0], (list, tuple)):
+        pts = [(p[0], p[1]) for p in item]
+        hatch.paths.add_polyline_path(pts, is_closed=True, flags=flags)
+        return
+    t = item.dxftype()
+    if t == "LWPOLYLINE":
+        pts = ocs.bulge_vertices_wcs(
+            item, [(p[0], p[1], p[2]) for p in item.get_points("xyb")])
+        hatch.paths.add_polyline_path(pts, is_closed=True, flags=flags)
+    elif t == "CIRCLE":
+        cx, cy, r = ocs.circle_wcs(item)
+        path = hatch.paths.add_edge_path(flags=flags)
+        path.add_arc((cx, cy), r, 0, 360)
+    elif t == "ELLIPSE":
+        c = item.dxf.center
+        maj = item.dxf.major_axis
+        path = hatch.paths.add_edge_path(flags=flags)
+        path.add_ellipse((c.x, c.y), (maj.x, maj.y), item.dxf.ratio, 0, 360)
+    else:
+        from core.hatch_boundary import boundary_polygon
+
+        poly = boundary_polygon(item)
+        if poly:
+            hatch.paths.add_polyline_path(poly, is_closed=True, flags=flags)
+
+
+#: -HATCH island styles (DXF group 75): what happens inside the outer loop.
+HATCH_STYLE_NORMAL = 0     # alternate fill at nested islands
+HATCH_STYLE_OUTER = 1      # hatch only the outermost level
+HATCH_STYLE_IGNORE = 2     # hatch straight through internal objects
+
+
+def user_pattern_definition(angle_deg: float, spacing: float,
+                            double: bool) -> list:
+    """-HATCH "User defined": continuous parallel lines at ``angle`` with
+    ``spacing`` between them; ``double`` adds a second set at 90 degrees."""
+    def line(a):
+        rad = math.radians(a)
+        offset = (-spacing * math.sin(rad), spacing * math.cos(rad))
+        return [a, (0.0, 0.0), offset, []]
+
+    lines = [line(angle_deg)]
+    if double:
+        lines.append(line(angle_deg + 90.0))
+    return lines
+
+
+def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
+              color=256, islands=None, style=HATCH_STYLE_NORMAL,
+              user_def=None) -> AddEntityCommand:
+    """SOLID, a predefined pattern (ANSI31…) or a user-defined one inside
+    closed boundaries.
+
+    ``boundaries`` and ``islands`` are ezdxf entities or point lists.
+    ``style`` is the AutoCAD island style (Normal/Outer/Ignore): Ignore
+    drops the islands entirely; the style is also recorded in the entity
+    (group 75) for round-trip. ``user_def`` = (angle, spacing, double)
+    builds -HATCH's "User defined" pattern. ``color`` is an ACI; 256 =
+    ByLayer (AutoCAD's default for a new hatch).
+    """
+    from ezdxf.lldxf.const import (
+        BOUNDARY_PATH_EXTERNAL, BOUNDARY_PATH_OUTERMOST)
+
+    name = str(pattern).upper()
+    aci = 7 if color in (256, 0) else color
+
+    def factory(msp):
+        h = msp.add_hatch(color=aci)
+        if user_def is not None:
+            u_angle, u_spacing, u_double = user_def
+            h.set_pattern_fill(
+                "U", color=aci, scale=1.0, angle=0.0,
+                definition=user_pattern_definition(u_angle, u_spacing,
+                                                   bool(u_double)))
+            h.dxf.pattern_type = 0    # user-defined
+            h.dxf.pattern_double = 1 if u_double else 0
+        elif name == "SOLID":
+            h.set_solid_fill(color=aci)
+        else:
+            h.set_pattern_fill(canonical_pattern_name(name), color=aci,
+                               angle=angle, scale=scale,
+                               definition=pattern_definition(name))
+        for b in boundaries:
+            _add_boundary(h, b, BOUNDARY_PATH_EXTERNAL)
+        if style != HATCH_STYLE_IGNORE:
+            for isl in (islands or ()):
+                _add_boundary(h, isl, BOUNDARY_PATH_OUTERMOST)
+        # last: ezdxf's fill/path helpers overwrite hatch_style on the way
+        h.dxf.hatch_style = int(style)
+        h.dxf.color = color   # keep ByLayer sentinel when requested
+        return h
+    return AddEntityCommand("HATCH", factory)
+
+
+# -- dimensions (create) -------------------------------------------------------
+
+class AddDimensionCommand(Command):
+    """Create a dimension: the factory builds it, ``render()`` draws the
+    graphics into an anonymous *D block. Undo removes the dimension and that
+    block; the current dimension style ($DIMSTYLE) is used at render time.
+    """
+
+    name = "DIMENSION"
+
+    def __init__(self, factory) -> None:
+        self._factory = factory
+        self.dim = None
+        self._block_name = None
+        #: DIMLFAC to write on this dimension, or None. A paper-space
+        #: dimension whose points came through one viewport measures the
+        #: MODEL: 1/scale here makes it read the model's length instead of
+        #: the sheet's millimetres (what AutoCAD's DIMLFAC "Viewport" did
+        #: before trans-spatial associativity; any CAD honours it).
+        self.dimlfac: float | None = None
+        #: Asked once, on the first do(), with the dimension's definition
+        #: points: the controller answers from what was snapped through a
+        #: viewport. Redo keeps the answer.
+        self.dimlfac_resolver = None
+        #: DIM's Layer option: the layer the dimension lands on instead of
+        #: the current one. None = $CLAYER, as every other dimension.
+        self.layer: str | None = None
+        #: {bit: dimassoc.Reference}: the object points the definition
+        #: points were snapped to; tied when $DIMASSOC is 2 (core/dimassoc).
+        self.associate: dict | None = None
+
+    def do(self, document) -> None:
+        override = self._factory(self.space(document), document)
+        if self.dimlfac is None and self.dimlfac_resolver is not None:
+            self.dimlfac = self.dimlfac_resolver(
+                definition_points(override.dimension))
+            self.dimlfac_resolver = None
+        if self.dimlfac:
+            override["dimlfac"] = float(self.dimlfac)
+        # An annotative style: DIMSCALE is 0 and CANNOSCALE sizes the
+        # dimension (p. 2249); it is born with that one representation.
+        from core import annotative
+
+        anno_scale = None
+        style_name = override.dimension.dxf.get("dimstyle", "Standard")
+        if annotative.style_is_annotative(document, "dimstyles", style_name):
+            anno_scale = annotative.creation_scale(document)
+            override["dimscale"] = anno_scale.factor
+        override.render()
+        self.dim = override.dimension
+        if anno_scale is not None:
+            annotative.annotate_new_dimension(document, self.dim, anno_scale)
+        self._block_name = self.dim.dxf.get("geometry", None)
+        current = self.layer or document.doc.header.get("$CLAYER", "0")
+        if current in document.doc.layers:
+            self.dim.dxf.layer = current
+        # AFTER the layer lands: the stamp dresses the block in the
+        # dimension's layer.
+        _stamp_dim_block_byblock(document, self.dim)
+        from core import dimassoc
+
+        if self.associate and dimassoc.dimassoc_mode(document) == 2:
+            dimassoc.attach(document, self.dim, self.associate)
+        self._pieces = []
+        if dimassoc.dimassoc_mode(document) == 0:
+            # DIMASSOC 0: "no association between the various elements of
+            # the dimension" -- lines, arrowheads and text, each on its own
+            space = self.space(document)
+            for piece in self.dim.virtual_entities():
+                space.add_entity(piece)
+                self._pieces.append(piece)
+            space.delete_entity(self.dim)
+            if self._block_name and self._block_name in document.doc.blocks:
+                document.doc.blocks.delete_block(self._block_name, safe=False)
+            self.dim = None
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = self.space(document)
+        for piece in getattr(self, "_pieces", []):
+            if piece.is_alive:
+                msp.delete_entity(piece)
+        self._pieces = []
+        block = self._block_name
+        if self.dim is not None and self.dim.is_alive:
+            from core import dimassoc
+
+            dimassoc.detach(document, self.dim)
+            # DIMTEDIT re-renders into a fresh *D block: trust the entity's
+            # current geometry attribute over the name captured at creation.
+            block = self.dim.dxf.get("geometry", block)
+            self.removed_handles = [self.dim.dxf.handle]
+            from core import annotative
+
+            annotative.remove_representations(self.dim)
+            msp.delete_entity(self.dim)
+        if block and block in document.doc.blocks:
+            try:
+                document.doc.blocks.delete_block(block, safe=False)
+            except Exception:
+                pass
+        self.dim = None
+        document.dirty = True
+
+
+def definition_points(dim) -> list[tuple[float, float]]:
+    """The measured points of a DIMENSION: the ones a snap put there.
+
+    Linear/aligned measure defpoint2-3, radial defpoint and defpoint4,
+    angular defpoint2-5 (and defpoint for the 3-point form); the text
+    midpoint and the dimension-line defpoint are placements, not measures.
+    """
+    kind = dim.dimtype & 7 if hasattr(dim, "dimtype") else 0
+    names = {0: ("defpoint2", "defpoint3"), 1: ("defpoint2", "defpoint3"),
+             2: ("defpoint2", "defpoint3", "defpoint4", "defpoint5"),
+             3: ("defpoint", "defpoint4"), 4: ("defpoint", "defpoint4"),
+             5: ("defpoint2", "defpoint3", "defpoint4"),
+             6: ("defpoint2", "defpoint3")}.get(kind, ("defpoint2", "defpoint3"))
+    points = []
+    for name in names:
+        if dim.dxf.hasattr(name):
+            v = dim.dxf.get(name)
+            points.append((float(v.x), float(v.y)))
+    return points
+
+
+def _current_dimstyle(document) -> str:
+    name = document.doc.header.get("$DIMSTYLE", "Standard")
+    return name if name in document.doc.dimstyles else "Standard"
+
+
+def linear_dim_angle(p1, p2, location, frame=None) -> float:
+    """DIMLINEAR's automatic horizontal/vertical choice.
+
+    AutoCAD never auto-picks a zero measurement: origins sharing an X give
+    the vertical dimension wherever the cursor goes (the old midpoint rule
+    picked "horizontal" on a slightly diagonal drag and produced a
+    collapsed dimension reading 0). Diagonal origins follow the side the
+    cursor leaves the points' box on; inside the box, the closer axis.
+    ONE source of truth: the tool's preview and the created entity must
+    never disagree (they used to hold separate copies of the rule).
+
+    ``frame`` is the UCS: horizontal and vertical are its X and Y, and the
+    answer is a world angle (#91).
+    """
+    if frame is not None and not frame.is_world:
+        local = linear_dim_angle(frame.to_ucs(*p1), frame.to_ucs(*p2),
+                                 frame.to_ucs(*location))
+        return local + frame.degrees
+    x1, x2 = sorted((p1[0], p2[0]))
+    y1, y2 = sorted((p1[1], p2[1]))
+    span = max(x2 - x1, y2 - y1, 1e-12)
+    if (x2 - x1) < span * 1e-9:
+        return 90.0
+    if (y2 - y1) < span * 1e-9:
+        return 0.0
+    beyond_x = max(x1 - location[0], location[0] - x2, 0.0)
+    beyond_y = max(y1 - location[1], location[1] - y2, 0.0)
+    if beyond_x > beyond_y:
+        return 90.0
+    if beyond_y > beyond_x:
+        return 0.0
+    mid = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+    horizontal = abs(location[1] - mid[1]) >= abs(location[0] - mid[0])
+    return 0.0 if horizontal else 90.0
+
+
+def dim_linear(p1, p2, location, *, angle: float | None = None,
+               text: str = "<>", text_rotation: float | None = None,
+               dimstyle: str | None = None, frame=None) -> AddDimensionCommand:
+    """DIMLINEAR: horizontal/vertical chosen by the dimension-line pick, or a
+    forced angle (Horizontal=0 / Vertical=90 / Rotated=any). ``text`` follows
+    AutoCAD's Text option: "<>" is the measurement, " " suppresses it, any
+    other string replaces it (an embedded "<>" is substituted by ezdxf).
+    ``text_rotation`` is the Angle option (absolute text angle)."""
+    if angle is None:
+        angle = linear_dim_angle(p1, p2, location, frame)
+
+    def factory(msp, document):
+        return msp.add_linear_dim(
+            base=(location[0], location[1]),
+            p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
+            angle=angle, text=text, text_rotation=text_rotation,
+            dimstyle=_chained_dimstyle(dimstyle, document))
+    return AddDimensionCommand(factory)
+
+
+def _chained_dimstyle(dimstyle: str | None, document) -> str:
+    """DIMCONTINUE/DIMBASELINE inherit the base dimension's style."""
+    if dimstyle and dimstyle in document.doc.dimstyles:
+        return dimstyle
+    return _current_dimstyle(document)
+
+
+def _text_rotation_attribs(text_rotation: float | None) -> dict:
+    # ezdxf's renderer reads the user text angle straight from the DIMENSION
+    # entity (group 53); only add_linear_dim exposes it as a keyword.
+    if text_rotation is None:
+        return {}
+    return {"text_rotation": float(text_rotation)}
+
+
+def dim_aligned(p1, p2, location, *, text: str = "<>",
+                text_rotation: float | None = None,
+                dimstyle: str | None = None) -> AddDimensionCommand:
+    """DIMALIGNED: dimension parallel to p1->p2, offset to the picked side."""
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    length = math.hypot(dx, dy) or 1.0
+    nx, ny = -dy / length, dx / length      # unit normal
+    distance = (location[0] - p1[0]) * nx + (location[1] - p1[1]) * ny
+
+    def factory(msp, document):
+        return msp.add_aligned_dim(
+            p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
+            distance=distance, text=text,
+            dimstyle=_chained_dimstyle(dimstyle, document),
+            dxfattribs=_text_rotation_attribs(text_rotation))
+    return AddDimensionCommand(factory)
+
+
+def _radial_location(center, radius: float, location):
+    """The text location a radial dimension gets from the pick.
+
+    AutoCAD puts the text where the dimension line was placed. ezdxf takes
+    that as ``location`` -- and only that: with ``angle`` alone a diameter
+    dimension lands its text on the FAR side of the circle, because ezdxf
+    measures the angle to the first definition point and puts the text past
+    the second. A pick on the centre (no direction) falls back to 0°.
+    """
+    dx, dy = location[0] - center[0], location[1] - center[1]
+    if math.hypot(dx, dy) < 1e-9:
+        return (center[0] + radius, center[1])
+    return (location[0], location[1])
+
+
+def dim_radius(center, radius: float, location, *, text: str = "<>",
+               text_rotation: float | None = None) -> AddDimensionCommand:
+    where = _radial_location(center, radius, location)
+
+    def factory(msp, document):
+        return msp.add_radius_dim(
+            center=(center[0], center[1]), radius=radius, location=where,
+            text=text, dimstyle=_current_dimstyle(document),
+            dxfattribs=_text_rotation_attribs(text_rotation))
+    return AddDimensionCommand(factory)
+
+
+def dim_diameter(center, radius: float, location, *, text: str = "<>",
+                 text_rotation: float | None = None) -> AddDimensionCommand:
+    where = _radial_location(center, radius, location)
+
+    def factory(msp, document):
+        return msp.add_diameter_dim(
+            center=(center[0], center[1]), radius=radius, location=where,
+            text=text, dimstyle=_current_dimstyle(document),
+            dxfattribs=_text_rotation_attribs(text_rotation))
+    return AddDimensionCommand(factory)
+
+
+_DIM_TYPES = ("DIMENSION", "ARC_DIMENSION")
+
+
+def _dim_block_shared(document, name: str) -> bool:
+    """Is the anonymous *D block still referenced by any dimension -- as its
+    geometry or as the drawing of one of its annotation scales?"""
+    from core.annotative import block_referenced
+
+    return block_referenced(document.doc, name)
+
+
+def _stamp_dim_block_byblock(document, dim) -> None:
+    """Make a freshly rendered *D block wear the dimension's own dress.
+
+    Real AutoCAD files write the block geometry on the DIMENSION'S LAYER
+    (measured on three plans of colleagues: 3991 of 3991 block entities
+    under 593 dimensions, colours ByBlock, ByLayer and explicit mixed).
+    ezdxf's renderer leaves its lines on layer 0. The canvas resolves a
+    dimension's block against the dimension itself, as AutoCAD does (see
+    ``TolerantFrontend.draw_entity``), so this is about the FILE looking
+    the way AutoCAD would have written it, not about what is drawn.
+    Colours are left as the style set them (ByBlock, ByLayer or an ACI:
+    the canvas resolves the first two against the dimension); only the
+    Defpoints markers keep their layer.
+    """
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks:
+        return
+    dim_layer = dim.dxf.get("layer", "0")
+    for entity in document.doc.blocks.get(name):
+        if entity.dxf.get("layer", "0") == "0" and entity.dxftype() != "POINT":
+            entity.dxf.layer = dim_layer
+
+
+def translate_dim_text(document, dim, dx: float, dy: float,
+                       set_user_flag: bool = True) -> bool:
+    """Slide the text entities inside the dimension's block by (dx, dy).
+
+    Used by the text grip: a pure translation keeps every other stroke of
+    the block EXACTLY as its author's CAD rendered it — re-rendering a
+    foreign dimension would replace AutoCAD's block with our
+    approximation. Returns False when there is no block to edit.
+    """
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks:
+        return False
+    moved = False
+    for entity in document.doc.blocks.get(name):
+        if entity.dxftype() in ("MTEXT", "TEXT"):
+            entity.translate(dx, dy, 0)
+            moved = True
+    if not moved:
+        return False
+    mid = dim.dxf.get("text_midpoint", None)
+    if mid is not None:
+        dim.dxf.text_midpoint = (mid.x + dx, mid.y + dy, mid.z)
+    if set_user_flag:
+        # AutoCAD's "user positioned text" flag: its own re-render respects
+        # the moved spot instead of snapping the text back.
+        dim.dxf.dimtype = dim.dxf.dimtype | 128
+    return True
+
+
+class DimTextTranslateCommand(Command):
+    """The text grip: exact-fidelity text move, no block swap."""
+
+    name = "GRIP"
+    # Not a regen: the dimension re-renders its anonymous *D block here, and
+    # the overlay draws that through the same frontend the base scene uses
+    # (v0.1.3 attributed block content to the outermost handle, which is what
+    # makes hiding the stale copy work). Forcing a full regen meant a THREE
+    # SECOND freeze per grip drop on a real plan -- Marco's "lentitud cuando
+    # muevo una cota" -- for a display the surgical path already gives.
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        """The display paths hide the stale copy of these and re-draw them."""
+        return [self.dim]
+
+    def __init__(self, dim, target) -> None:
+        self.dim = dim
+        self.target = (float(target[0]), float(target[1]))
+        self._delta: tuple[float, float] | None = None
+
+    def do(self, document) -> None:
+        mid = self.dim.dxf.get("text_midpoint", None)
+        if self._delta is None:
+            if mid is None:
+                self._delta = (0.0, 0.0)
+            else:
+                self._delta = (self.target[0] - mid.x, self.target[1] - mid.y)
+        translate_dim_text(document, self.dim, *self._delta)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        dx, dy = self._delta or (0.0, 0.0)
+        translate_dim_text(document, self.dim, -dx, -dy)
+        document.dirty = True
+
+
+class DimTextWithLineCommand(Command):
+    """The text grip of a linear dimension under DIMTMOVE 0, AutoCAD's
+    default: "moves the dimension line with dimension text" (DIMTMOVE). The
+    part of the drag across the line carries the line, the text riding with
+    it; the part along the line slides the text on it. Only the text moved,
+    leaving the line behind."""
+
+    name = "GRIP"
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        return [self.dim]
+
+    def __init__(self, dim, target) -> None:
+        self.dim = dim
+        self.target = (float(target[0]), float(target[1]))
+        self._steps: list | None = None
+
+    def do(self, document) -> None:
+        if self._steps is None:
+            import math
+
+            from core.ezdxf_patches import aligned_angle
+
+            d = self.dim
+            mid = d.dxf.get("text_midpoint", None) or d.dxf.defpoint
+            angle = math.radians(aligned_angle(d, float(d.dxf.get("angle", 0.0))))
+            ux, uy = math.cos(angle), math.sin(angle)
+            dx, dy = self.target[0] - mid.x, self.target[1] - mid.y
+            across = -dx * uy + dy * ux
+            along = dx * ux + dy * uy
+            loc = d.dxf.defpoint
+            self._steps = [DimGripCommand(
+                d, "defpoint", (loc.x - uy * across, loc.y + ux * across))]
+            self._along = (ux * along, uy * along)
+        self._steps[0].do(document)
+        if abs(self._along[0]) > 1e-12 or abs(self._along[1]) > 1e-12:
+            translate_dim_text(document, self.dim, *self._along)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        if abs(self._along[0]) > 1e-12 or abs(self._along[1]) > 1e-12:
+            translate_dim_text(document, self.dim,
+                               -self._along[0], -self._along[1],
+                               set_user_flag=False)
+        self._steps[0].undo(document)
+        document.dirty = True
+
+
+def _drop_dim_block(document, name) -> None:
+    if name and name in document.doc.blocks \
+            and not _dim_block_shared(document, name):
+        try:
+            document.doc.blocks.delete_block(name, safe=False)
+        except Exception:
+            pass
+
+
+def delete_with_dim_blocks(document, space, entities) -> None:
+    """Delete ``entities`` from ``space``; their DIMENSIONs take their *D
+    blocks along unless something else still draws them. An undo that
+    deleted copied or exploded dimensions left their blocks for Save to
+    write. One pass over the drawing for all of them: asking per dimension
+    froze the undo of a big COPY for 2.4 s (release bench, Plaza Yanque)."""
+    blocks = set()
+    for entity in entities:
+        if entity.dxftype() == "DIMENSION":
+            name = entity.dxf.get("geometry", None)
+            if name:
+                blocks.add(name)
+        space.delete_entity(entity)
+    drop_unreferenced_dim_blocks(document.doc, blocks)
+
+
+def drop_unreferenced_dim_blocks(doc, blocks) -> None:
+    """Delete the *D blocks among ``blocks`` that nothing draws any more,
+    in one pass over the drawing."""
+    blocks = {b for b in blocks if b and b in doc.blocks}
+    if not blocks:
+        return
+    from core.annotative import _subclass_tags
+
+    used = set()
+    for e in doc.entitydb.values():
+        if not e.is_alive:
+            continue
+        kind = e.dxftype()
+        if kind in ("DIMENSION", "ARC_DIMENSION"):
+            name = e.dxf.get("geometry", None)
+            if name in blocks:
+                used.add(name)
+        elif kind.endswith("DIMOBJECTCONTEXTDATA_CLASS"):
+            for sub in _subclass_tags(e):
+                used.update(v for c, v in sub if c == 2 and v in blocks)
+    for name in blocks - used:
+        try:
+            doc.blocks.delete_block(name, safe=False)
+        except Exception:
+            pass
+
+
+def delete_with_dim_block(document, space, entity) -> None:
+    """One entity: see delete_with_dim_blocks."""
+    delete_with_dim_blocks(document, space, [entity])
+
+
+def rerender_dimension(document, dim) -> None:
+    """Draw a dimension's *D block afresh (a changed style, MATCHPROP, an
+    edited property): render, dress the block as AutoCAD writes it, drop
+    the superseded block unless another dimension still shares it."""
+    old_block = dim.dxf.get("geometry", None)
+    dim.render()
+    _stamp_dim_block_byblock(document, dim)
+    _drop_dim_block(document, old_block)
+
+
+def _redress_dim_block(document, dim, old_layer: str, new_layer: str) -> list:
+    """The dimension moved from ``old_layer`` to ``new_layer``: its block
+    content follows, as AutoCAD's does (it re-renders the block on every
+    change, so the block always sits on the dimension's layer). Returns
+    the entities moved, for undo."""
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks or old_layer == new_layer:
+        return []
+    moved = []
+    for entity in document.doc.blocks.get(name):
+        if entity.dxf.get("layer", "0") == old_layer:
+            entity.dxf.layer = new_layer
+            moved.append(entity)
+    return moved
+
+
+def _block_text_insert(document, block_name):
+    """(x, y) where a dimension block's text sits, or None."""
+    if not block_name or block_name not in document.doc.blocks:
+        return None
+    for e in document.doc.blocks.get(block_name):
+        if e.dxftype() in ("MTEXT", "TEXT"):
+            p = e.dxf.insert
+            return (p.x, p.y)
+    return None
+
+
+def _shift_block_text(document, dim, dx: float, dy: float) -> None:
+    """Slide only the drawn text of ``dim``'s block; group 11 stays on the
+    dimension line, where AutoCAD keeps it (moving it too would make
+    AutoCAD offset the text again on its next regen)."""
+    if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+        return
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks:
+        return
+    for e in document.doc.blocks.get(name):
+        if e.dxftype() in ("MTEXT", "TEXT"):
+            e.translate(dx, dy, 0)
+
+
+def _block_text_rotation(entity) -> float:
+    """The rotation a block's text DISPLAYS at, in degrees.
+
+    An MTEXT can store its orientation either as the rotation attribute
+    or as the text_direction vector — casa bueno's dims use the vector
+    ((0,1,0) = 90°), and reading only the attribute forced every aligned
+    label horizontal on the first grip edit.
+    """
+    import math
+
+    # an older dimension's block may carry a TEXT, which has no
+    # text_direction (asking for it raised and aborted the grip edit)
+    direction = entity.dxf.get("text_direction", None) \
+        if entity.dxf.is_supported("text_direction") else None
+    if direction is not None and (abs(direction.x) > 1e-12
+                                  or abs(direction.y) > 1e-12):
+        return math.degrees(math.atan2(direction.y, direction.x)) % 360.0
+    return float(entity.dxf.get("rotation", 0.0))
+
+
+class DimGripCommand(Command):
+    """A grip moved one of a dimension's definition points.
+
+    Setting the attr re-measures (extension origins) or relocates the
+    dimension line (defpoint); render() rebuilds the *D block and the old
+    one is dropped, so the document never keeps stale blocks. Undo
+    restores every non-geometry attr and re-renders again.
+    """
+
+    name = "GRIP"
+    # Not a regen: the dimension re-renders its anonymous *D block here, and
+    # the overlay draws that through the same frontend the base scene uses
+    # (v0.1.3 attributed block content to the outermost handle, which is what
+    # makes hiding the stale copy work). Forcing a full regen meant a THREE
+    # SECOND freeze per grip drop on a real plan -- Marco's "lentitud cuando
+    # muevo una cota" -- for a display the surgical path already gives.
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        """The display paths hide the stale copy of these and re-draw them."""
+        return [self.dim]
+
+    def __init__(self, dim, attr: str, point) -> None:
+        self.dim = dim
+        self.attr = attr
+        self.point = (float(point[0]), float(point[1]))
+        #: every definition point this edit sets (``many``: an associative
+        #: dimension whose object moved re-measures both origins at once)
+        self.points = {attr: self.point}
+        self._before: dict | None = None
+
+    @classmethod
+    def many(cls, dim, points: dict) -> "DimGripCommand":
+        attr, point = next(iter(points.items()))
+        command = cls(dim, attr, point)
+        command.points = {a: (float(p[0]), float(p[1])) for a, p in points.items()}
+        return command
+
+    def do(self, document) -> None:
+        d = self.dim
+        if self._before is None:
+            self._before = {
+                k: v for k, v in d.dxf.all_existing_dxf_attribs().items()
+                if k not in ("geometry", "handle")}
+            try:
+                self._snapshot = snapshot_entity(d)
+            except Exception:  # noqa: BLE001 -- a never-rendered dimension
+                self._snapshot = None
+        from core.ezdxf_patches import upright_dimension
+
+        # a mirrored dimension (OCS -Z) is measured below in WCS, as it is
+        # drawn after the render: group 11 is OCS and read as -X otherwise
+        flipped = upright_dimension(d)
+        old_block = d.dxf.get("geometry", None)
+        # Preserve the text rotation the author's CAD chose: this file's
+        # style says outside text lies horizontal (dimtoh), which ezdxf's
+        # renderer does not reproduce — without this the label flipped to
+        # line-aligned on every grip edit.
+        if not d.dxf.hasattr("text_rotation") and old_block \
+                and old_block in document.doc.blocks:
+            for e in document.doc.blocks.get(old_block):
+                if e.dxftype() in ("MTEXT", "TEXT"):
+                    d.dxf.text_rotation = _block_text_rotation(e)
+                    break
+        # The author's text sits at a measured offset from the line;
+        # ezdxf's dimtad side convention can land it on the OTHER side
+        # (casa bueno: 0.086 left became 0.085 right — the label read as
+        # "behind the line"). Capture the perpendicular offset and restore
+        # it by translation after the render.
+        import math
+
+        from core.ezdxf_patches import aligned_angle
+
+        old_mid = d.dxf.get("text_midpoint", None)
+        old_loc = d.dxf.get("defpoint", None)
+        # an ALIGNED dimension's direction is its origins, not group 50
+        raw = float(d.dxf.get("angle", 0.0)) if d.dxf.is_supported("angle") \
+            else 0.0                   # ARC_DIMENSION has no group 50
+        angle = math.radians(aligned_angle(d, raw))
+        nx, ny = -math.sin(angle), math.cos(angle)
+        linear = (int(d.dxf.dimtype) & 7) in (0, 1)
+        # Text the user placed (flag 128) stays where the author's CAD drew
+        # it: AutoCAD keeps group 11 on the dimension line and offsets the
+        # text by DIMTAD, ezdxf centres it ON group 11 -- 1664 hand-placed
+        # labels of 116 corpus plans fell onto their line at the first grip.
+        user_text = bool(int(d.dxf.dimtype) & 128)
+        old_text = _block_text_insert(document, old_block) if user_text else None
+        if old_text is not None and flipped:
+            # the author's block still sits in the mirrored OCS
+            old_text = (-old_text[0], old_text[1])
+        perp_old = None
+        if old_text is None and old_mid is not None and old_loc is not None \
+                and linear:
+            perp_old = (old_mid.x - old_loc.x) * nx \
+                + (old_mid.y - old_loc.y) * ny
+        for attr, point in self.points.items():
+            # keep the point's height: a radial dimension with elevation
+            # measured through Z when it was set to 0 (R1.80 read R588.95)
+            old = d.dxf.get(attr, None)
+            z = old.z if old is not None else 0.0
+            setattr(d.dxf, attr, (point[0], point[1], z))
+        d.render()
+        _stamp_dim_block_byblock(document, d)
+        if old_text is not None:
+            target_x, target_y = old_text
+            if "defpoint" in self.points and linear and old_loc is not None:
+                # DIMTMOVE 0: the text travels with its dimension line
+                new_loc = d.dxf.defpoint
+                along = (new_loc.x - old_loc.x) * nx + (new_loc.y - old_loc.y) * ny
+                target_x += nx * along
+                target_y += ny * along
+            new_text = _block_text_insert(document, d.dxf.get("geometry", None))
+            if new_text is not None:
+                _shift_block_text(document, d, target_x - new_text[0],
+                                  target_y - new_text[1])
+        elif perp_old is not None:
+            new_mid = d.dxf.get("text_midpoint", None)
+            new_loc = d.dxf.get("defpoint", None)
+            if new_mid is not None and new_loc is not None:
+                perp_new = (new_mid.x - new_loc.x) * nx \
+                    + (new_mid.y - new_loc.y) * ny
+                shift = perp_old - perp_new
+                if abs(shift) > 1e-9:
+                    translate_dim_text(document, d, nx * shift, ny * shift,
+                                       set_user_flag=False)
+        _drop_dim_block(document, old_block)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        # the author's block comes back as it was, not a re-render of it:
+        # a no-op grip and its undo turned "0.50" into "0.5" (E03, 40 of 40)
+        if self._snapshot is not None:
+            _restore_entity(self.dim, self._snapshot)
+            document.dirty = True
+            return
+        d = self.dim
+        edited_block = d.dxf.get("geometry", None)
+        for key in list(d.dxf.all_existing_dxf_attribs()):
+            if key not in (self._before or {}) \
+                    and key not in ("geometry", "handle"):
+                d.dxf.discard(key)
+        for key, value in (self._before or {}).items():
+            d.dxf.set(key, value)
+        d.render()
+        _drop_dim_block(document, edited_block)
+        document.dirty = True
+
+
+class DimTextEditCommand(Command):
+    """DIMTEDIT: reposition the text of an existing dimension and re-render
+    its geometry block. Exactly one operation per invocation: a new text
+    location, a horizontal alignment (left/center/right), Home (back to the
+    style's default position) or a text angle. Undo restores the snapshot
+    and re-renders, so the document never keeps stale *D blocks."""
+
+    name = "DIMTEDIT"
+    # Not a regen: the dimension re-renders its anonymous *D block here, and
+    # the overlay draws that through the same frontend the base scene uses
+    # (v0.1.3 attributed block content to the outermost handle, which is what
+    # makes hiding the stale copy work). Forcing a full regen meant a THREE
+    # SECOND freeze per grip drop on a real plan -- Marco's "lentitud cuando
+    # muevo una cota" -- for a display the surgical path already gives.
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        """The display paths hide the stale copy of these and re-draw them."""
+        return [self.dim]
+
+    def __init__(self, dim, *, location=None, halign: str | None = None,
+                 home: bool = False, angle: float | None = None,
+                 turn: bool = False) -> None:
+        self.dim = dim
+        self.location = location
+        self.halign = halign
+        self.home = home
+        self.angle = angle
+        #: a radius/diameter turns to point at its new text location (the
+        #: text grip), as AutoCAD's does: the arrow walks around the circle
+        self.turn = turn
+        self._snapshot = None
+
+    def do(self, document) -> None:
+        d = self.dim
+        if self._snapshot is None:
+            self._snapshot = (
+                d.dxf.dimtype,
+                d.dxf.get("text_midpoint", None),
+                d.dxf.get("text_rotation", None),
+                list(d.get_xdata("ACAD")) if d.has_xdata("ACAD") else None,
+                d.dxf.get("defpoint", None),
+                d.dxf.get("defpoint4", None))
+        old_block = d.dxf.get("geometry", None)
+        if self.location is not None and self.turn:
+            _turn_radial(d, self.location)
+        if self.location is not None:
+            override = d.override()
+            override.set_location(
+                (self.location[0], self.location[1]),
+                leader=False, relative=False)
+            override.render()
+        elif self.halign is not None:
+            override = d.override()
+            override.set_text_align(halign=self.halign)
+            override.render()
+        elif self.home:
+            d.dxf.dimtype = d.dxf.dimtype & ~128    # drop user text position
+            d.dxf.discard("text_midpoint")
+            d.render()
+        elif self.angle is not None:
+            d.dxf.text_rotation = float(self.angle)
+            d.render()
+        _drop_dim_block(document, old_block)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        d = self.dim
+        (dimtype, midpoint, text_rotation, xdata,
+         defpoint, defpoint4) = self._snapshot
+        edited_block = d.dxf.get("geometry", None)
+        d.dxf.dimtype = dimtype
+        if defpoint is not None:
+            d.dxf.defpoint = defpoint
+        if defpoint4 is not None:
+            d.dxf.defpoint4 = defpoint4
+        if midpoint is None:
+            d.dxf.discard("text_midpoint")
+        else:
+            d.dxf.text_midpoint = midpoint
+        if text_rotation is None:
+            d.dxf.discard("text_rotation")
+        else:
+            d.dxf.text_rotation = text_rotation
+        d.discard_xdata("ACAD")
+        if xdata is not None:
+            d.set_xdata("ACAD", xdata)
+        d.render()
+        _drop_dim_block(document, edited_block)
+        document.dirty = True
+
+
+def _turn_radial(dim, toward) -> None:
+    """Turn a radius or diameter dimension about its centre so that it
+    points at ``toward``. Radius: defpoint is the centre, defpoint4 the
+    point on the circle. Diameter: defpoint and defpoint4 are the two ends,
+    the centre between them."""
+    import math
+
+    kind = int(dim.dxf.get("dimtype", 0)) & 7
+    p = dim.dxf.get("defpoint", None)
+    q = dim.dxf.get("defpoint4", None)
+    if kind not in (3, 4) or p is None or q is None:
+        return
+    if kind == 4:
+        cx, cy, radius = p.x, p.y, math.hypot(q.x - p.x, q.y - p.y)
+    else:
+        cx, cy = (p.x + q.x) / 2.0, (p.y + q.y) / 2.0
+        radius = math.hypot(q.x - p.x, q.y - p.y) / 2.0
+    dx, dy = toward[0] - cx, toward[1] - cy
+    length = math.hypot(dx, dy)
+    if length <= 1e-12 or radius <= 0.0:
+        return
+    ux, uy = dx / length, dy / length
+    dim.dxf.defpoint4 = (cx + ux * radius, cy + uy * radius, q.z)
+    if kind == 3:
+        dim.dxf.defpoint = (cx - ux * radius, cy - uy * radius, p.z)
+
+
+def dim_text_edit(dim, **kwargs) -> DimTextEditCommand:
+    return DimTextEditCommand(dim, **kwargs)
+
+
+# -- angular / arc-length / ordinate / center mark (v0.2 wave C) ---------------
+
+def _ccw_contains(a_from: float, a_to: float, a: float) -> bool:
+    """Is angle ``a`` inside the CCW sweep a_from -> a_to (radians)?"""
+    two_pi = 2.0 * math.pi
+    return (a - a_from) % two_pi <= (a_to - a_from) % two_pi
+
+
+def angular_points(vertex, p1, p2, region):
+    """Order (p1, p2) so the CCW angle from p1 to p2 contains ``region`` —
+    AutoCAD's rule: the location (or Quadrant) pick chooses WHICH of the two
+    possible angles is dimensioned."""
+    a1 = math.atan2(p1[1] - vertex[1], p1[0] - vertex[0])
+    a2 = math.atan2(p2[1] - vertex[1], p2[0] - vertex[0])
+    ar = math.atan2(region[1] - vertex[1], region[0] - vertex[0])
+    if _ccw_contains(a1, a2, ar):
+        return p1, p2
+    return p2, p1
+
+
+def angular_measurement(vertex, p1, p2) -> float:
+    """CCW sweep p1 -> p2 around vertex, in degrees."""
+    a1 = math.atan2(p1[1] - vertex[1], p1[0] - vertex[0])
+    a2 = math.atan2(p2[1] - vertex[1], p2[0] - vertex[0])
+    return math.degrees((a2 - a1) % (2.0 * math.pi))
+
+
+def line_intersection(l1, l2):
+    """Intersection of two infinite lines ((p, q) tuples), or None."""
+    (x1, y1), (x2, y2) = l1
+    (x3, y3), (x4, y4) = l2
+    d1 = (x2 - x1, y2 - y1)
+    d2 = (x4 - x3, y4 - y3)
+    denom = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(denom) < 1e-12:
+        return None
+    t = ((x3 - x1) * d2[1] - (y3 - y1) * d2[0]) / denom
+    return (x1 + t * d1[0], y1 + t * d1[1])
+
+
+def angular_from_lines(l1, l2, region):
+    """(vertex, p1, p2) for DIMANGULAR between two lines, or None if
+    parallel. Of the four regions the two lines form, the one containing
+    ``region`` is dimensioned (official behavior).
+
+    p1/p2 sit on the bounding rays where AutoCAD's extension lines start:
+    at the line's tip when the line stops short of the dimension arc (the
+    extension then runs from the tip to past the arc), on the arc when the
+    line reaches it (no extension line). They used to sit on the arc
+    always, so a line ending short of it had no extension line at all."""
+    vertex = line_intersection(l1, l2)
+    if vertex is None:
+        return None
+    radius = math.dist(region, vertex) or 1.0
+    ang1 = math.atan2(l1[1][1] - l1[0][1], l1[1][0] - l1[0][0])
+    ang2 = math.atan2(l2[1][1] - l2[0][1], l2[1][0] - l2[0][0])
+    ar = math.atan2(region[1] - vertex[1], region[0] - vertex[0])
+
+    def defpoint(angle, line):
+        ux, uy = math.cos(angle), math.sin(angle)
+        reach = max((p[0] - vertex[0]) * ux + (p[1] - vertex[1]) * uy
+                    for p in line)
+        at = min(radius, reach) if reach > 1e-9 else radius
+        return (vertex[0] + at * ux, vertex[1] + at * uy)
+
+    for a in (ang1, ang1 + math.pi):
+        for b in (ang2, ang2 + math.pi):
+            if _ccw_contains(a, b, ar):
+                (lo, lo_line), (hi, hi_line) = (a, l1), (b, l2)
+            else:
+                (lo, lo_line), (hi, hi_line) = (b, l2), (a, l1)
+            if not _ccw_contains(lo, hi, ar):
+                continue
+            if (hi - lo) % (2.0 * math.pi) <= math.pi + 1e-9:
+                return (vertex, defpoint(lo, lo_line), defpoint(hi, hi_line))
+    return None
+
+
+def dim_angular(vertex, p1, p2, location, *, region=None, text: str = "<>",
+                text_rotation: float | None = None) -> AddDimensionCommand:
+    """DIMANGULAR: the CCW angle p1 -> p2 around ``vertex``. When ``region``
+    is given (the location or the Quadrant pick), the points are reordered so
+    the dimensioned angle is the one containing it; None keeps the order
+    (the arc path always dimensions the arc's own included angle)."""
+    if region is not None:
+        p1, p2 = angular_points(vertex, p1, p2, region)
+    q1, q2 = p1, p2
+
+    def factory(msp, document):
+        return msp.add_angular_dim_3p(
+            base=(location[0], location[1]), center=(vertex[0], vertex[1]),
+            p1=(q1[0], q1[1]), p2=(q2[0], q2[1]),
+            text=text, text_rotation=text_rotation,
+            dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def dim_arc(center, radius: float, start_angle: float, end_angle: float,
+            location, *, text: str = "<>",
+            text_rotation: float | None = None) -> AddDimensionCommand:
+    """DIMARC: arc-length dimension (angles in degrees, CCW start->end).
+    The dimension arc sits at the location pick's distance from the arc."""
+    distance = max(math.dist(location, center) - radius, 0.1 * radius)
+
+    def factory(msp, document):
+        return msp.add_arc_dim_cra(
+            center=(center[0], center[1]), radius=radius,
+            start_angle=start_angle, end_angle=end_angle, distance=distance,
+            text=text, text_rotation=text_rotation,
+            dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def clamp_angle_to_arc(pick, center, start_angle: float,
+                       end_angle: float) -> float:
+    """The pick's angle (degrees) clamped into the arc's CCW sweep — the
+    Partial option accepts points anywhere and uses the nearest arc point."""
+    two_pi = 360.0
+    a = math.degrees(math.atan2(pick[1] - center[1], pick[0] - center[0]))
+    sweep = (end_angle - start_angle) % two_pi or two_pi
+    rel = (a - start_angle) % two_pi
+    if rel <= sweep:
+        return start_angle + rel
+    # outside: clamp to the nearer endpoint
+    past_end = rel - sweep
+    before_start = two_pi - rel
+    return end_angle if past_end <= before_start else start_angle
+
+
+def dim_ordinate(feature, leader_end, *, dtype: str | None = None,
+                 text: str = "<>",
+                 text_rotation: float | None = None,
+                 frame=None) -> AddDimensionCommand:
+    """DIMORDINATE: X or Y datum from the UCS origin. Auto choice (official
+    convention): a mostly-vertical leader writes the X datum, a mostly-
+    horizontal one the Y datum. ``dtype`` = "X"/"Y" forces it.
+
+    ``frame`` is that UCS (core/ucs.py, #91): the datum is measured from
+    its origin along its axes, and "vertical" is its Y."""
+    from ezdxf.math import Vec3
+
+    if frame is None or frame.is_world:
+        dx, dy = leader_end[0] - feature[0], leader_end[1] - feature[1]
+        if dtype is None:
+            dtype = "X" if abs(dy) >= abs(dx) else "Y"
+
+        def factory(msp, document):
+            fn = msp.add_ordinate_x_dim if dtype == "X" else msp.add_ordinate_y_dim
+            return fn(feature_location=(feature[0], feature[1]), offset=(dx, dy),
+                      text=text, dimstyle=_current_dimstyle(document),
+                      dxfattribs=_text_rotation_attribs(text_rotation))
+        return AddDimensionCommand(factory)
+
+    fu, lu = frame.to_ucs(*feature), frame.to_ucs(*leader_end)
+    if dtype is None:
+        dtype = "X" if abs(lu[1] - fu[1]) >= abs(lu[0] - fu[0]) else "Y"
+    # ezdxf takes the feature in the UCS (from the origin) and turns the
+    # leader end about the WORLD origin: hand it what lands both points
+    # where they are -- checked, 10/13/14 come out as the world points
+    origin = Vec3(frame.ox, frame.oy)
+    feature_arg = origin + Vec3(fu[0], fu[1])
+    end_arg = Vec3(leader_end[0], leader_end[1]).rotate_deg(-frame.degrees)
+
+    def factory(msp, document):
+        fn = msp.add_ordinate_x_dim if dtype == "X" else msp.add_ordinate_y_dim
+        return fn(feature_location=feature_arg, offset=end_arg - feature_arg,
+                  origin=origin, rotation=frame.degrees,
+                  text=text, dimstyle=_current_dimstyle(document),
+                  dxfattribs=_text_rotation_attribs(text_rotation))
+    return AddDimensionCommand(factory)
+
+
+def center_mark(entity):
+    """DIMCENTER: center mark / center lines for an arc or circle, per the
+    current style's DIMCEN (0 = nothing -> None, >0 = mark of that size,
+    <0 = mark plus center lines extending |DIMCEN| outside — the exact
+    geometry AutoCAD and ezdxf's radius renderer draw). Plain LINEs."""
+    from core.commands import CompositeCommand
+
+    doc = entity.doc
+    name = doc.header.get("$DIMSTYLE", "Standard")
+    size = 2.5
+    if name in doc.dimstyles:
+        size = doc.dimstyles.get(name).dxf.get("dimcen", 2.5)
+    if not size:
+        return None
+    s = abs(size)
+    cx, cy, r = ocs.circle_wcs(entity)
+    lines = [((cx - s, cy), (cx + s, cy)), ((cx, cy - s), (cx, cy + s))]
+    if size < 0 and r + s >= 2.0 * s:
+        far = r + s
+        lines += [((cx + 2 * s, cy), (cx + far, cy)),
+                  ((cx - 2 * s, cy), (cx - far, cy)),
+                  ((cx, cy + 2 * s), (cx, cy + far)),
+                  ((cx, cy - 2 * s), (cx, cy - far))]
+    return CompositeCommand("DIMCENTER", [add_line(a, b) for a, b in lines])
+
+
+class PasteCommand(Command):
+    """Paste clipboard entities, translated so the base point lands on the
+    target. Each paste makes fresh copies, so the clipboard stays reusable."""
+
+    name = "PASTE"
+
+    def __init__(self, sources, dx: float, dy: float, originals=None) -> None:
+        sources = list(sources)
+        self.skipped = [e for e in sources if not transformable(e)]
+        self.sources = [e for e in sources if transformable(e)]
+        #: The copied entities themselves, aligned with ``sources``: what a
+        #: paste into another drawing loads, resources and all.
+        self.originals = None
+        if originals is not None and len(originals) == len(sources):
+            self.originals = [o for o, e in zip(originals, sources)
+                              if transformable(e)]
+        self.dx = dx
+        self.dy = dy
+        self.copies: list = []
+
+    #: True when the clipboard came from another drawing (set by ``do``).
+    foreign = False
+
+    def do(self, document) -> None:
+        from ezdxf.math import Matrix44
+
+        msp = self.space(document)
+        m = Matrix44.translate(self.dx, self.dy, 0.0)
+        source_doc = self.sources[0].doc if self.sources else None
+        self.foreign = source_doc is not None and source_doc is not document.doc
+        if self.foreign and self.originals and all(
+                o.is_alive and o.doc is source_doc for o in self.originals):
+            self.copies = self._load_foreign(document, msp)
+            for clone in self.copies:
+                transform_entity(clone, m)
+            document.dirty = True
+            return
+        self.copies = []
+        for e in self.sources:
+            clone = _copy_or_none(e)
+            if clone is None:
+                continue
+            transform_entity(clone, m)
+            msp.add_entity(clone)
+            self.copies.append(clone)
+        document.dirty = True
+
+    def _load_foreign(self, document, space) -> list:
+        """Copied in one drawing, pasted in another (#75): an entity copy
+        still names its own drawing's layers, blocks, text and dimension
+        styles, linetypes -- none of which exist here, so a pasted block
+        reference drew nothing. ezdxf's xref module carries every resource
+        along (an existing name wins, as AutoCAD's paste keeps the
+        target's definition)."""
+        from ezdxf import xref
+
+        before = {e.dxf.handle for e in space}
+        loader = xref.Loader(self.sources[0].doc, document.doc,
+                             conflict_policy=xref.ConflictPolicy.KEEP)
+        loader.add_command(xref.LoadEntities(self.originals, space))
+        loader.execute()
+        return [e for e in space if e.dxf.handle not in before]
+
+    def undo(self, document) -> None:
+        msp = self.space(document)
+        self.removed_handles = [c.dxf.handle for c in self.copies]
+        for clone in self.copies:
+            msp.delete_entity(clone)
+        self.copies = []
+        document.dirty = True
+
+
+def move_entities(entities, dx: float, dy: float) -> TransformCommand:
+    from ezdxf.math import Matrix44
+
+    return TransformCommand("MOVE", entities, Matrix44.translate(dx, dy, 0.0))
+
+
+def _transform_or_copy(name: str, entities, matrix, copy: bool) -> Command:
+    """ROTATE and SCALE's Copy option keeps the originals and transforms a
+    copy of them (ROTATE, Command Reference)."""
+    if copy:
+        command = CopyEntitiesCommand(entities, matrix)
+        command.name = name
+        return command
+    return TransformCommand(name, entities, matrix)
+
+
+def rotate_entities(entities, base, angle_deg: float,
+                    copy: bool = False) -> Command:
+    import math as _math
+
+    from ezdxf.math import Matrix44
+
+    m = (Matrix44.translate(-base[0], -base[1], 0.0)
+         @ Matrix44.z_rotate(_math.radians(angle_deg))
+         @ Matrix44.translate(base[0], base[1], 0.0))
+    return _transform_or_copy("ROTATE", entities, m, copy)
+
+
+def scale_entities(entities, base, factor: float,
+                   copy: bool = False) -> Command:
+    from ezdxf.math import Matrix44
+
+    m = (Matrix44.translate(-base[0], -base[1], 0.0)
+         @ Matrix44.scale(factor, factor, factor)
+         @ Matrix44.translate(base[0], base[1], 0.0))
+    return _transform_or_copy("SCALE", entities, m, copy)
+
+
+def _mirror_matrix(p1, p2):
+    import math as _math
+
+    from ezdxf.math import Matrix44
+
+    ang = _math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+    return (Matrix44.translate(-p1[0], -p1[1], 0.0)
+            @ Matrix44.z_rotate(-ang)
+            @ Matrix44.scale(1.0, -1.0, 1.0)
+            @ Matrix44.z_rotate(ang)
+            @ Matrix44.translate(p1[0], p1[1], 0.0))
+
+
+def mirror_entities(entities, p1, p2, keep_source: bool = True) -> Command:
+    """MIRROR. A mirror matrix leaves ezdxf's arcs, circles and polylines
+    with a (0, 0, -1) extrusion; AutoCAD's MIRROR keeps the normal up, and
+    so does this — an inverted OCS is legal, but every reader that forgets
+    it (issue #10) sees the entity somewhere it isn't drawn."""
+    m = _mirror_matrix(p1, p2)
+    if keep_source:
+        cmd = CopyEntitiesCommand(entities, m, upright=True)
+        cmd.name = "MIRROR"
+        return cmd
+    return TransformCommand("MIRROR", entities, m, upright=True)
+
+
+def copy_entities(entities, dx: float, dy: float) -> CopyEntitiesCommand:
+    from ezdxf.math import Matrix44
+
+    return CopyEntitiesCommand(entities, Matrix44.translate(dx, dy, 0.0))
+
+
+def attach_image(path: str, size_px: tuple[int, int],
+                 insert, scale: float) -> AddEntityCommand:
+    """IMAGEATTACH: an IMAGE entity referencing ``path`` (never embedded).
+
+    AutoCAD's base size with no resolution info: one drawing unit per
+    pixel, times the scale factor. The IMAGEDEF object is created by the
+    factory; undo removes the entity and leaves the def, which is inert.
+    """
+    width, height = size_px
+
+    def factory(msp):
+        image_def = msp.doc.add_image_def(filename=str(path),
+                                          size_in_pixel=(width, height))
+        return msp.add_image(image_def, insert=insert,
+                             size_in_units=(width * scale, height * scale))
+
+    command = AddEntityCommand("IMAGEATTACH", factory)
+    # The incremental-display overlay only tessellates vectors: it would
+    # show the frame and never the pixels, and below the merge threshold
+    # no regen is ever scheduled — the image simply never appeared. Like
+    # a dimension's block, an image needs the real regen.
+    command.needs_regen = True
+    return command
+
+
+class SnapshotCommand(Command):
+    """Undo via full DXF-tag snapshots of the edited entities.
+
+    Grip edits mutate entities in place through many small setters; capturing
+    a before/after tag copy is the simplest exact-undo route (the entity keeps
+    its handle, so the round-trip stays conservative).
+    """
+
+    name = "GRIP"
+
+    def __init__(self, entities) -> None:
+        self.entities = list(entities)
+        self._before = [snapshot_entity(e) for e in entities]
+        self._after = None
+
+    def commit(self, document) -> None:
+        """Call after the in-place edit; captures the 'after' state."""
+        self._after = [snapshot_entity(e) for e in self.entities]
+        document.dirty = True
+
+    def do(self, document) -> None:
+        if self._after is None:
+            return  # first application already happened in place
+        for e, snap in zip(self.entities, self._after):
+            _restore_entity(e, snap)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        for e, snap in zip(self.entities, self._before):
+            _restore_entity(e, snap)
+        document.dirty = True
+
+
+def snapshot_entity(entity):
+    """A copy of ``entity`` that :func:`_restore_entity` can put back whole.
+
+    An ezdxf copy leaves out what ties the entity to the drawing: a
+    DIMENSION's block (``geometry``) and an IMAGE's reactor. Restoring such
+    a copy discarded them -- a dimension drew nothing after the undo of a
+    STRETCH, a property edit or MATCHPROP. They ride along here, the
+    dimension's block with its content, so the undo gives back the author's
+    own drawing of it, not a re-render.
+    """
+    snap = entity.copy()
+    kind = entity.dxftype()
+    if kind == "DIMENSION":
+        name = entity.dxf.get("geometry", None)
+        doc = entity.doc
+        if name and doc is not None and name in doc.blocks:
+            snap._ingecad_block = (
+                name, [e.copy() for e in doc.blocks.get(name)])
+    elif kind == "IMAGE":
+        snap._ingecad_reactor = entity.dxf.get("image_def_reactor_handle", None)
+    return snap
+
+
+#: While a command restores many dimensions, the blocks they let go of are
+#: gathered here and checked in one pass (see TransformCommand.undo): one
+#: pass per dimension made undoing ROTATE over a plan quadratic.
+_ORPHAN_BLOCKS: set | None = None
+
+
+def _restore_dimension_block(entity, snapshot) -> None:
+    """Give a restored DIMENSION its snapshot's block, content and all."""
+    doc = entity.doc
+    saved = getattr(snapshot, "_ingecad_block", None)
+    current = entity.dxf.get("geometry", None)
+    if doc is None:
+        return
+    if saved is None:
+        if current is None or current not in doc.blocks:
+            entity.render()             # an old-style snapshot: redraw
+        return
+    name, content = saved
+    if name in doc.blocks:
+        block = doc.blocks.get(name)
+        for e in list(block):
+            block.delete_entity(e)
+    else:
+        block = doc.blocks.new(name)
+        block.block.dxf.flags = 1        # anonymous, as *D blocks are
+    for e in content:
+        block.add_entity(e.copy())
+    entity.dxf.geometry = name
+    from core.annotative import refresh_scale_blocks
+
+    # an annotative dimension's other scales follow its restored state
+    refresh_scale_blocks(entity)
+    if current and current != name:
+        if _ORPHAN_BLOCKS is not None:
+            _ORPHAN_BLOCKS.add(current)      # checked once, by the caller
+        else:
+            drop_unreferenced_dim_blocks(doc, {current})
+
+
+def _restore_entity(entity, snapshot) -> None:
+    """Copy snapshot's DXF attributes back onto entity (keeps its handle)."""
+    wanted = snapshot.dxf.all_existing_dxf_attribs()
+    # Identity, not edited state: a snapshot is an ezdxf copy, which carries
+    # neither. Discarding owner along with the rest left the restored entity
+    # parentless, and the surgical post-undo path skips those -- the object
+    # went on hiding until a full regen caught up (the same trap the IMAGE
+    # quad hit). The layout still holds it, so only the screen suffered.
+    keep = ("handle", "owner", "geometry", "image_def_reactor_handle")
+    # Attributes the edit ADDED have no entry in the snapshot; copying alone
+    # would leave them behind (setting style on an entity that used the
+    # default survived its own undo this way).
+    for key in list(entity.dxf.all_existing_dxf_attribs()):
+        if key not in wanted and key not in keep:
+            entity.dxf.discard(key)
+    for key, value in wanted.items():
+        if key in keep:
+            continue
+        entity.dxf.set(key, value)
+    # Geometry that is NOT a DXF attribute has to be restored by hand, or
+    # the undo silently keeps the new shape. Each of these was a real bug:
+    # the first two found by using them, the last three by sweeping every
+    # grip-editable type at once and comparing a real fingerprint before
+    # and after -- worth redoing whenever a type gains grips.
+    kind = entity.dxftype()
+    if kind == "DIMENSION":
+        _restore_dimension_block(entity, snapshot)
+    elif kind == "IMAGE":
+        reactor = getattr(snapshot, "_ingecad_reactor", None)
+        if reactor:
+            entity.dxf.image_def_reactor_handle = reactor
+    elif kind == "POLYLINE":
+        # its vertices are entities of their own: a MIRROR or STRETCH undo
+        # put the POLYLINE back and left every vertex where the edit sent it
+        if len(entity.vertices) == len(snapshot.vertices):
+            for vertex, saved in zip(entity.vertices, snapshot.vertices):
+                _restore_entity(vertex, saved)
+    elif kind == "INSERT":
+        # and the attributes of a block reference drifted by every drag
+        if len(entity.attribs) == len(snapshot.attribs):
+            for attrib, saved in zip(entity.attribs, snapshot.attribs):
+                _restore_entity(attrib, saved)
+    if kind == "LWPOLYLINE":
+        entity.set_points(snapshot.get_points("xyseb"), format="xyseb")
+    elif kind == "MTEXT":
+        # The content lives in the entity's text stream, not in a DXF
+        # attribute — without this, undoing an MTEXT edit restored the
+        # position and silently kept the new words. The column layout is
+        # object state too, not a DXF attribute.
+        entity.text = snapshot.text
+        entity._columns = snapshot._columns
+    elif kind == "LEADER":
+        try:
+            entity.set_vertices([tuple(v) for v in snapshot.vertices])
+        except Exception:
+            pass
+    elif kind == "SPLINE":
+        try:
+            entity.fit_points = list(snapshot.fit_points)
+            entity.control_points = list(snapshot.control_points)
+            entity.knots = list(snapshot.knots)
+            entity.weights = list(snapshot.weights)
+        except Exception:
+            pass
+    elif kind in ("MULTILEADER", "MLEADER"):
+        try:
+            import copy as _copy
+
+            entity.context = _copy.deepcopy(snapshot.context)
+        except Exception:
+            pass
+    elif kind == "HATCH":
+        # The boundary paths ARE the hatch's geometry; a moved hatch stayed
+        # moved through its own undo. Deep-copied so a later edit cannot
+        # reach back into the snapshot.
+        try:
+            import copy as _copy
+
+            entity.paths = _copy.deepcopy(snapshot.paths)
+            # and its pattern lines are object state too: a MIRROR's undo
+            # left them turned while pattern_angle read restored
+            entity.pattern = _copy.deepcopy(snapshot.pattern)
+        except Exception:
+            pass
+
+
+def apply_in_place(history, entities, mutate) -> None:
+    """Run an in-place mutation on ``entities`` with exact snapshot undo.
+
+    For edits that ezdxf performs through many small setters (a Vec3 component,
+    text contents) a before/after tag snapshot is the simplest reversible route
+    — same mechanism the grip drag uses. Records straight onto the history so
+    the change joins the normal undo stack.
+    """
+    snap = SnapshotCommand(entities)
+    state = history.dimassoc_state()
+    mutate()
+    snap.commit(history.document)
+    history.record(snap, state)
+
+
+class SetPropertyCommand(Command):
+    """Set a DXF property (layer/color/linetype/lineweight) on entities.
+
+    Color/linetype/lineweight take AutoCAD's ByLayer sentinels: color 256 =
+    ByLayer, linetype "ByLayer", lineweight -1 = ByLayer. Undo restores each
+    entity's previous value individually.
+    """
+
+    name = "properties"
+
+    def __init__(self, entities, prop: str, value) -> None:
+        self.entities = list(entities)
+        self.prop = prop
+        self.value = value
+        self._old = []
+        # (dimension block entity, its layer before) -- a dimension's block
+        # follows the dimension onto its new layer, as AutoCAD's does; a
+        # tester who moved his dimensions to a red layer "cotas" saw them
+        # stay white because the block content had stayed on layer 0.
+        self._redressed: list = []
+        self._true_colors: list = []    # (entity, true_color, color_name)
+
+    def do(self, document) -> None:
+        self._old = []
+        self._redressed = []
+        self._true_colors = []
+        for e in self.entities:
+            old = e.dxf.get(self.prop, None)
+            self._old.append(old)
+            if self.prop == "color":
+                # A true colour (group 420) wins over the ACI, so picking
+                # red on a polygon that came from QGIS changed nothing on
+                # screen. AutoCAD's colour pick replaces both.
+                self._true_colors.append(
+                    (e, e.dxf.get("true_color", None),
+                     e.dxf.get("color_name", None)))
+                e.dxf.discard("true_color")
+                e.dxf.discard("color_name")
+            e.dxf.set(self.prop, self.value)
+            if self.prop == "layer" and e.dxftype() in _DIM_TYPES:
+                self._redressed.extend(
+                    (blk_entity, old or "0") for blk_entity in
+                    _redress_dim_block(document, e, old or "0", self.value))
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        for e, old in zip(self.entities, self._old):
+            if old is None:
+                e.dxf.discard(self.prop)
+            else:
+                e.dxf.set(self.prop, old)
+        for e, true_color, color_name in self._true_colors:
+            if true_color is not None:
+                e.dxf.true_color = true_color
+            if color_name is not None:
+                e.dxf.color_name = color_name
+        for blk_entity, layer in self._redressed:
+            if blk_entity.is_alive:
+                blk_entity.dxf.layer = layer
+        document.dirty = True
+
+
+def add_ellipse(center, major_axis, ratio: float,
+                start_param: float = 0.0,
+                end_param: float = math.tau) -> AddEntityCommand:
+    """major_axis: vector from center to the major-axis endpoint. ratio =
+    minor/major in (0, 1]. Non-default params make an elliptical arc."""
+    return AddEntityCommand(
+        "ELLIPSE",
+        lambda msp: msp.add_ellipse((center[0], center[1]),
+                                    major_axis=(major_axis[0], major_axis[1]),
+                                    ratio=ratio, start_param=start_param,
+                                    end_param=end_param))
+
+
+def _ellipse_normalize(center, first_axis, other_dist: float):
+    """The FIRST axis may be the minor one (official ELLIPSE rule): when the
+    other half-axis is longer, the axes swap — never clamp the ratio."""
+    first_len = math.hypot(*first_axis)
+    if first_len <= 1e-12:
+        return center, first_axis, 1.0
+    if other_dist <= first_len:
+        return center, first_axis, other_dist / first_len
+    # perpendicular (CCW) axis becomes the major one
+    scale = other_dist / first_len
+    major = (-first_axis[1] * scale, first_axis[0] * scale)
+    return center, major, first_len / other_dist
+
+
+def ellipse_from_axis(p1, p2, other_dist: float):
+    """Axis endpoints p1,p2 + distance to the other axis -> (center, major, ratio)."""
+    center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+    first = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
+    return _ellipse_normalize(center, first, other_dist)
+
+
+def ellipse_from_center(center, axis_end, other_dist: float):
+    """Center + first-axis endpoint + distance to the other axis."""
+    first = (axis_end[0] - center[0], axis_end[1] - center[1])
+    return _ellipse_normalize(center, first, other_dist)
+
+
+def ellipse_param_from_angle(ratio: float, angle_deg: float) -> float:
+    """True angle from the center (relative to the major axis) -> the DXF
+    parametric angle t of p(t) = c + a·cos(t) + b·sin(t)."""
+    a = math.radians(angle_deg)
+    return math.atan2(math.sin(a), max(ratio, 1e-12) * math.cos(a)) % math.tau
+
+
+def add_point(pos) -> AddEntityCommand:
+    return AddEntityCommand(
+        "POINT", lambda msp: msp.add_point((pos[0], pos[1])))
+
+
+# -- construction lines (XLINE / RAY) ------------------------------------------
+
+def add_xline(point, direction_deg: float) -> AddEntityCommand:
+    """Infinite construction line through ``point`` at ``direction_deg``."""
+    rad = math.radians(direction_deg)
+    unit = (math.cos(rad), math.sin(rad))
+    return AddEntityCommand(
+        "XLINE", lambda msp: msp.add_xline((point[0], point[1], 0.0),
+                                           (unit[0], unit[1], 0.0)))
+
+
+def add_ray(point, direction_deg: float) -> AddEntityCommand:
+    """Semi-infinite RAY from ``point`` toward ``direction_deg``."""
+    rad = math.radians(direction_deg)
+    unit = (math.cos(rad), math.sin(rad))
+    return AddEntityCommand(
+        "RAY", lambda msp: msp.add_ray((point[0], point[1], 0.0),
+                                       (unit[0], unit[1], 0.0)))
+
+
+# -- DIVIDE / MEASURE: arc-length sampling along an entity ----------------------
+
+def _entity_polyline(entity):
+    """(points, closed) — the entity flattened to a fine 2D polyline."""
+    from ezdxf import path as ezpath
+
+    p = ezpath.make_path(entity)
+    # tolerance relative to size so splines and arcs sample smoothly
+    box_pts = list(p.flattening(1.0))
+    if len(box_pts) < 2:
+        raise ValueError("degenerate entity")
+    xs = [v.x for v in box_pts]
+    ys = [v.y for v in box_pts]
+    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) or 1.0
+    pts = [(v.x, v.y) for v in p.flattening(diag / 4000.0)]
+    return pts, p.is_closed
+
+
+def _resample(points, positions):
+    """[(x, y, tangent_deg)] at the given arc-length positions."""
+    lengths = [0.0]
+    for a, b in zip(points, points[1:]):
+        lengths.append(lengths[-1] + math.dist(a, b))
+    total = lengths[-1]
+    out = []
+    seg = 1
+    for s in positions:
+        s = min(max(s, 0.0), total)
+        while seg < len(lengths) - 1 and lengths[seg] < s:
+            seg += 1
+        a, b = points[seg - 1], points[seg]
+        span = lengths[seg] - lengths[seg - 1] or 1.0
+        t = (s - lengths[seg - 1]) / span
+        out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+                    math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))))
+    return out
+
+
+def divide_samples(entity, segments: int):
+    """DIVIDE: sample points along the entity — (n-1) for open objects,
+    n for closed ones (no point coincides with an endpoint)."""
+    if not 2 <= segments <= 32767:
+        raise ValueError("between 2 and 32767 segments")
+    points, closed = _entity_polyline(entity)
+    total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    if total <= 0.0:
+        raise ValueError("zero-length entity")
+    if closed:
+        positions = [total * i / segments for i in range(segments)]
+    else:
+        positions = [total * i / segments for i in range(1, segments)]
+    return _resample(points, positions)
+
+
+def measure_samples(entity, step: float, pick):
+    """MEASURE: points every ``step`` starting at the end nearest ``pick``;
+    the remainder stays at the far end (AutoCAD)."""
+    if step <= 0.0:
+        raise ValueError("segment length must be positive")
+    points, closed = _entity_polyline(entity)
+    if not closed and pick is not None:
+        if math.dist(pick, points[-1]) < math.dist(pick, points[0]):
+            points = points[::-1]
+    total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    if total <= 0.0:
+        raise ValueError("zero-length entity")
+    positions = []
+    s = step
+    while s < total - 1e-9:
+        positions.append(s)
+        s += step
+    return _resample(points, positions)
+
+
+# -- REVCLOUD -------------------------------------------------------------------
+
+def _loop_is_ccw(points) -> bool:
+    area = 0.0
+    for a, b in zip(points, points[1:] + points[:1]):
+        area += a[0] * b[1] - b[0] * a[1]
+    return area > 0.0
+
+
+def revcloud_vertices(loop, arc_chord: float, reverse: bool = False,
+                      calligraphy: bool = False) -> list:
+    """A revision cloud as closed xyseb vertices: the loop resampled at the
+    chord length, every chord bulged OUTWARD (~110 degrees); Reverse flips
+    the convexity; Calligraphy tapers each arc's width."""
+    if arc_chord <= 0.0:
+        raise ValueError("arc length must be positive")
+    pts = [(p[0], p[1]) for p in loop]
+    if len(pts) < 3:
+        raise ValueError("need at least 3 points")
+    if math.dist(pts[0], pts[-1]) > 1e-9:
+        pts.append(pts[0])
+    total = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+    count = max(int(round(total / arc_chord)), 3)
+    samples = _resample(pts, [total * i / count for i in range(count)])
+    ring = [(x, y) for x, y, _t in samples]
+    # DXF bulge: positive sweeps CCW from vertex to vertex, and its apex
+    # falls LEFT of the chord. Traveling a CCW loop the exterior lies to
+    # the RIGHT... yet the rendered ink proved the old "-1 for CCW" sign
+    # bulged every arc INWARD (Marco's saw-blade capture; the box test
+    # showed no ink beyond the loop). The apex convention argues one way,
+    # the pixels the other — the pixels win.
+    outward_sign = 1.0 if _loop_is_ccw(ring) else -1.0
+    if reverse:
+        outward_sign = -outward_sign
+    bulge = outward_sign * math.tan(math.radians(110.0) / 4.0)
+    ew = arc_chord * 0.18 if calligraphy else 0.0
+    return [(x, y, 0.0, ew, bulge) for x, y in ring]
+
+
+def _current_text_style(msp) -> str:
+    """The document's current text style ($TEXTSTYLE), AutoCAD-style."""
+    name = msp.doc.header.get("$TEXTSTYLE", "Standard")
+    return name if name in msp.doc.styles else "Standard"
+
+
+def add_text(pos, text: str, height: float, rotation: float = 0.0,
+             align: str = "LEFT", p2=None,
+             style: str | None = None) -> AddEntityCommand:
+    """TEXT with an AutoCAD justification (TextEntityAlignment name).
+    ALIGNED/FIT take ``p2`` as the second baseline point."""
+    def make(msp):
+        from ezdxf.enums import TextEntityAlignment
+
+        chosen = style if style and style in msp.doc.styles \
+            else _current_text_style(msp)
+        entity = msp.add_text(
+            text, height=height,
+            dxfattribs={"rotation": rotation, "style": chosen})
+        anchor = getattr(TextEntityAlignment, align, TextEntityAlignment.LEFT)
+        if align in ("ALIGNED", "FIT") and p2 is not None:
+            entity.set_placement((pos[0], pos[1]), (p2[0], p2[1]),
+                                 align=anchor)
+        elif align == "LEFT":
+            entity.set_placement((pos[0], pos[1]))
+        else:
+            entity.set_placement((pos[0], pos[1]), align=anchor)
+        return entity
+    return AddEntityCommand("TEXT", make)
+
+
+def apply_mtext_bg(entity, bg) -> None:
+    """("off",) removes the mask; (aci | "canvas", scale) sets it."""
+    if bg is None:
+        return
+    if bg[0] == "off":
+        entity.set_bg_color(None)
+    else:
+        colour, scale = bg
+        entity.set_bg_color("canvas" if colour == "canvas" else int(colour),
+                            scale=float(scale))
+
+
+def apply_mtext_columns(entity, columns) -> None:
+    """("off",) clears the layout; (count, height, gutter) sets static ones."""
+    if columns is None:
+        return
+    if columns[0] == "off":
+        entity._columns = None
+        return
+    from ezdxf.entities.mtext import MTextColumns
+
+    count, height, gutter = columns
+    count = int(count)
+    # The user's box width is the TOTAL width, as in AutoCAD's Column
+    # Settings; each column gets its share after the gutters.
+    total = float(entity.dxf.width or 10.0)
+    column_width = max((total - (count - 1) * float(gutter)) / count,
+                       total / (count * 4.0))
+    entity.setup_columns(
+        MTextColumns.new_static_columns(
+            count, column_width, float(gutter), float(height)),
+        linked=False)
+
+
+def add_mtext(p1, p2, text: str, char_height: float,
+              style: str | None = None,
+              attachment: int = 1,
+              line_spacing: float | None = None,
+              bg=None, columns=None, frame=None) -> AddEntityCommand:
+    """MTEXT in the box the two corners define.
+
+    ``attachment`` is the MText Justification (1..9, TL..BR): the insert
+    point is the matching point OF THE BOX, which is how AutoCAD keeps the
+    text inside the rectangle the user dragged whatever the justification.
+    ``frame`` is the UCS (core/ucs.py) the box is square to: the text runs
+    along its X, as AutoCAD's does (#91).
+    """
+    if frame is not None and not frame.is_world:
+        p1, p2 = frame.to_ucs(*p1), frame.to_ucs(*p2)
+    width = abs(p2[0] - p1[0])
+    x0, x1 = min(p1[0], p2[0]), max(p1[0], p2[0])
+    y0, y1 = min(p1[1], p2[1]), max(p1[1], p2[1])
+    column = (attachment - 1) % 3          # 0 left, 1 center, 2 right
+    row = (attachment - 1) // 3            # 0 top, 1 middle, 2 bottom
+    insert = ((x0, (x0 + x1) / 2.0, x1)[column],
+              (y1, (y0 + y1) / 2.0, y0)[row])
+    rotation = 0.0
+    if frame is not None and not frame.is_world:
+        insert = frame.to_world(*insert)
+        rotation = frame.degrees
+
+    def make(msp):
+        attribs = {"char_height": char_height,
+                   "width": width,
+                   "style": style or _current_text_style(msp)}
+        if line_spacing and abs(line_spacing - 1.0) > 1e-9:
+            # Group 44 + style 1 ("At least"), AutoCAD's own default style.
+            attribs["line_spacing_factor"] = float(line_spacing)
+            attribs["line_spacing_style"] = 1
+        m = msp.add_mtext(text, dxfattribs=attribs)
+        m.set_location(insert, attachment_point=attachment)
+        if rotation:
+            m.dxf.rotation = rotation
+        apply_mtext_bg(m, bg)
+        apply_mtext_columns(m, columns)
+        return m
+    return AddEntityCommand("MTEXT", make)
+
+
+def add_arc_sce(start, center, end) -> AddEntityCommand:
+    """Arc by Start, Center, End (AutoCAD's second arc method).
+
+    Radius from center->start; ccw from start angle to end angle (the end
+    point sets the direction; its distance is ignored, AutoCAD does the same).
+    """
+    radius = math.hypot(start[0] - center[0], start[1] - center[1])
+    a_start = math.degrees(math.atan2(start[1] - center[1], start[0] - center[0]))
+    a_end = math.degrees(math.atan2(end[1] - center[1], end[0] - center[0]))
+    return AddEntityCommand(
+        "ARC", lambda msp: msp.add_arc((center[0], center[1]), radius,
+                                       a_start, a_end))
+
+
+# -- DONUT ---------------------------------------------------------------------
+
+def donut_vertices(center, inside: float, outside: float):
+    """The xyseb rows of a DONUT: "two arc polylines joined end-to-end"
+    (DONUT, p. 656) -- a closed polyline of two half circles whose constant
+    width spans the ring; an inside diameter of 0 is a filled circle."""
+    inside, outside = abs(float(inside)), abs(float(outside))
+    if outside < inside:
+        inside, outside = outside, inside
+    width = outside - inside
+    radius = (outside + inside) / 4.0
+    cx, cy = float(center[0]), float(center[1])
+    return [(cx - radius, cy, width / 2.0, width / 2.0, 1.0),
+            (cx + radius, cy, width / 2.0, width / 2.0, 1.0)]
+
+
+def add_donut(center, inside: float, outside: float) -> AddEntityCommand:
+    rows = donut_vertices(center, inside, outside)
+    return AddEntityCommand(
+        "DONUT", lambda msp: msp.add_lwpolyline(rows, format="xyseb", close=True))

@@ -1,0 +1,6 @@
+build/
+dist/
+.venv/
+__pycache__/
+*.pyc
+cad/vendor/libredwg/win64/

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<circle cx="100" cy="100" r="96" fill="#0F2A44"/>
+<circle cx="100" cy="100" r="89" fill="none" stroke="#C9A14A" stroke-width="2.5"/>
+<circle cx="100" cy="100" r="82" fill="none" stroke="#F6F3EC" stroke-opacity="0.55" stroke-width="5" stroke-dasharray="0.9 6.256" transform="rotate(-90.3 100 100)"/>
+<circle cx="100" cy="100" r="82" fill="none" stroke="#C9A14A" stroke-width="9" stroke-dasharray="1.8 62.6" transform="rotate(-90.6 100 100)"/>
+<polygon points="136.8,63.2 100,100 103,86" fill="#C9A14A"/><polygon points="136.8,63.2 100,100 114,97" fill="#8E6E2A"/>
+<polygon points="136.8,136.8 100,100 114,103" fill="#C9A14A"/><polygon points="136.8,136.8 100,100 103,114" fill="#8E6E2A"/>
+<polygon points="63.2,136.8 100,100 97,114" fill="#C9A14A"/><polygon points="63.2,136.8 100,100 86,103" fill="#8E6E2A"/>
+<polygon points="63.2,63.2 100,100 86,97" fill="#C9A14A"/><polygon points="63.2,63.2 100,100 97,86" fill="#8E6E2A"/>
+<polygon points="178,100 111,89 100,100" fill="#F6F3EC"/><polygon points="178,100 111,111 100,100" fill="#B9C3CE"/>
+<polygon points="100,178 111,111 100,100" fill="#F6F3EC"/><polygon points="100,178 89,111 100,100" fill="#B9C3CE"/>
+<polygon points="22,100 89,111 100,100" fill="#F6F3EC"/><polygon points="22,100 89,89 100,100" fill="#B9C3CE"/>
+<polygon points="100,22 89,89 100,100" fill="#B01E33"/><polygon points="100,22 111,89 100,100" fill="#E5394D"/>
+<circle cx="100" cy="100" r="7" fill="#C9A14A"/><circle cx="100" cy="100" r="2.6" fill="#0F2A44"/>
+</svg>

@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# WANICNSURVEY for Windows: one Thai installer with the start screen,
+# WANICNSURVEY CAD (IngeCAD) and WANICNSURVEY 3D (IngeTrazo).
+#
+# Mirrors the upstream build-windows.yml of both projects:
+#  1. converters: IngeCAD's patched LibreDWG, cross-built on Linux with mingw
+#  2. windows:    PyInstaller bundles of cad/, 3d/ and launcher/, smoke-tested,
+#                 then wrapped by Inno Setup (Thai).
+# Run it from the Actions tab ("Run workflow"), or push a tag v2026.10.28.
+name: build-windows
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version shown by the installer (e.g. 2026.10.28)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  converters:
+    name: LibreDWG for win64 (IngeCAD patch)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: mingw-w64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 make curl
+      - name: Cross-build the patched converters
+        working-directory: cad
+        run: tools/libredwg-patches/build-vendor-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libredwg-win64
+          path: cad/vendor/libredwg/win64/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows installer
+    needs: converters
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Python dependencies (both programs)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.11.2 numpy "ezdxf>=1.4.4" "manifold3d>=3.5.3" Pillow pyproj
+          pip install "openskp @ git+https://github.com/iamahsanmehmood/openskp@291700bc213655a00461838de71e5f206311e619#subdirectory=packages/python"
+          # PyInstaller with a bootloader compiled here (fewer antivirus
+          # false alarms), exactly as upstream does it.
+          pip download --no-binary pyinstaller --no-deps pyinstaller -d "$RUNNER_TEMP/pyi"
+          PYI_SRC="$(python -c "import glob, os, tarfile; d = os.path.join(os.environ['RUNNER_TEMP'], 'pyi'); t = tarfile.open(glob.glob(os.path.join(d, 'pyinstaller-*.tar.gz'))[0]); t.extractall(d, filter='data'); print(os.path.join(d, t.getnames()[0].split('/')[0]))")"
+          PYI_SRC="$(cygpath -u "$PYI_SRC")"
+          rm -f "$PYI_SRC"/PyInstaller/bootloader/Windows-64bit-intel/*.exe
+          (cd "$PYI_SRC/bootloader" && python ./waf all --target-arch=64bit)
+          pip install "$PYI_SRC"
+          python -c "import PyInstaller, openskp; print('PyInstaller', PyInstaller.__version__)"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 3D native engine (Rust)
+        shell: bash
+        run: |
+          pip install maturin
+          maturin build --release -m 3d/rust/ingetrazo_core/Cargo.toml -o "$RUNNER_TEMP/wheels"
+          pip install "$RUNNER_TEMP"/wheels/ingetrazo_core-*.whl
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libredwg-win64
+          path: cad/vendor/libredwg/bin
+
+      - name: DWG reader for 3D (LibreDWG win64 release)
+        shell: bash
+        run: |
+          set -e
+          V=0.14.8597
+          SHA=7fee5c67c4f451f0542c0d6a3b12e91e99b15faf363fbf8b98ad84bac17ddfa2
+          curl -fsSL -o "$RUNNER_TEMP/ldwg.zip" \
+            "https://github.com/LibreDWG/libredwg/releases/download/$V/libredwg-$V-win64.zip"
+          echo "$SHA  $RUNNER_TEMP/ldwg.zip" | sha256sum -c -
+          mkdir -p 3d/vendor/libredwg/bin
+          unzip -j -o "$RUNNER_TEMP/ldwg.zip" dwg2dxf.exe libredwg-0.dll libiconv-2.dll -d 3d/vendor/libredwg/bin
+
+      - name: Freeze WANICNSURVEY CAD
+        shell: bash
+        working-directory: cad
+        run: pyinstaller --noconfirm --distpath ../dist --workpath ../build/cad packaging/ingecad.spec
+
+      - name: Freeze WANICNSURVEY 3D
+        shell: bash
+        working-directory: 3d
+        run: pyinstaller --noconfirm --distpath ../dist --workpath ../build/3d ingetrazo.spec
+
+      - name: Freeze the start screen
+        shell: bash
+        run: pyinstaller --noconfirm --distpath dist --workpath build/launcher launcher/launcher.spec
+
+      - name: Smoke test of the bundles
+        shell: bash
+        run: |
+          test -f dist/launcher/wanicnsurvey.exe
+          test -f dist/ingecad/ingecad.exe
+          test -f dist/ingetrazo/ingetrazo.exe
+          test -f dist/ingecad/_internal/i18n/th/ui.json
+          test -f dist/ingetrazo/_internal/i18n/th.json
+          find dist/ingecad -name dwg2dxf.exe | grep -q .
+          ./dist/ingecad/ingecad.exe --check
+          ./dist/ingetrazo/ingetrazo.exe --check
+          du -sh dist/*
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF#refs/tags/v}"
+          elif [ -n "${{ inputs.version }}" ]; then V="${{ inputs.version }}"
+          else V="$(date +%Y.%m.%d)"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Inno Setup 6.5+ (Thai)
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-Not (Test-Path $iscc)) { $iscc = (Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1).FullName }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer\wanicnsurvey.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist\*.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wanicnsurvey-setup-${{ steps.ver.outputs.version }}
+          path: dist/wanicnsurvey-setup-*.exe
+          if-no-files-found: error
+
+      - name: Attach to the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/wanicnsurvey-setup-*.exe

@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.ingecad.IngeCAD</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>IngeCAD</name>
+  <summary>View and edit DWG/DXF drawings</summary>
+  <summary xml:lang="es">Ver y editar planos DWG/DXF</summary>
+  <developer id="org.ingecad">
+    <name>Marco Sumari Tellez</name>
+  </developer>
+  <description>
+    <p>
+      Free 2D CAD for Linux in the spirit of classic AutoCAD: the same
+      keyboard commands (L, TR, M, Z...), the classic pre-ribbon interface,
+      and faithful opening of the DWG files colleagues send — everything the
+      drawing carries that IngeCAD does not understand is preserved intact
+      when saving.
+    </p>
+    <p xml:lang="es">
+      CAD 2D libre para Linux al estilo del AutoCAD clásico: los mismos
+      comandos de teclado (L, TR, M, Z…), la interfaz clásica sin ribbon, y
+      apertura fiel de los DWG que mandan los colegas — todo lo que el plano
+      lleva y que IngeCAD no entiende se conserva intacto al guardar.
+    </p>
+    <p>
+      The Terrain plugin can fetch ground elevations from a public global
+      DEM (AWS Terrain Tiles) when you ask for them; that is the only use
+      IngeCAD makes of the network.
+    </p>
+    <p xml:lang="es">
+      El complemento Terreno puede obtener cotas del terreno de un DEM
+      global público (AWS Terrain Tiles) cuando se le pide; es el único uso
+      que IngeCAD hace de la red.
+    </p>
+    <p>
+      Draw and edit with AutoCAD's muscle memory, blocks with a full Block
+      Editor, layers, hatches, dimensions, layouts and printing to scale.
+      Reads and writes DWG through LibreDWG, bundled.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.ingecad.IngeCAD.desktop</launchable>
+  <url type="homepage">https://ingecad.org</url>
+  <url type="bugtracker">https://github.com/ingelibre/ingecad/issues</url>
+  <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
+  <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://ingecad.org/images/screenshots/principal.jpeg</image>
+      <caption>A truss detail: layers manager, classic toolbars, properties bar and the Model/layout tabs</caption>
+      <caption xml:lang="es">El detalle de un tijeral: administrador de capas, barras clásicas, barra de propiedades y pestañas Modelo/presentación</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/dwg-colega.jpeg</image>
+      <caption>A colleague's DWG opened as sent: a house plan with furniture, dimensions and room names</caption>
+      <caption xml:lang="es">El DWG de un colega abierto tal cual: la planta de una vivienda con mobiliario, cotas y los nombres de cada ambiente</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/planos-grandes.jpeg</image>
+      <caption>A 10 847-entity survey plan with its contour and profile sheets</caption>
+      <caption xml:lang="es">Un plano topográfico de 10 847 entidades con sus láminas de curvas de nivel y perfiles</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/comandos.jpeg</image>
+      <caption>A 200-layer structural plan: the command window at the bottom, dockable toolbars and the status bar</caption>
+      <caption xml:lang="es">Un plano de estructuras de 200 capas: la ventana de comandos abajo, las barras acoplables y la barra de estado</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/presentacion.jpeg</image>
+      <caption>A layout: the A3 sheet with the plan inside a viewport at scale, Model and layout tabs below</caption>
+      <caption xml:lang="es">Una presentación: la hoja A3 con la planta dentro de una ventana gráfica a escala, y las pestañas Modelo y presentación abajo</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/topografia.jpeg</image>
+      <caption>Topography: a lot with bearings and distances, its construction chart and contours</caption>
+      <caption xml:lang="es">Topografía: un lote con rumbos y distancias, su cuadro de construcción y curvas de nivel</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/terreno.jpeg</image>
+      <caption>Terrain: the satellite image under a survey, with the source's attribution on the plan</caption>
+      <caption xml:lang="es">Terreno: la imagen satelital bajo un levantamiento, con la atribución de la fuente en el plano</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.6.8.2" date="2026-10-21">
+      <description>
+        <p>Plot opens again in a layout whose page setup uses a scale outside the list.</p>
+        <p xml:lang="es">Trazar vuelve a abrirse en una presentación cuya configuración de página usa una escala que no está en la lista.</p>
+      </description>
+    </release>
+    <release version="0.6.8.1" date="2026-10-20">
+      <description>
+        <p>A drawing opened from the file manager while IngeCAD runs becomes a tab of its window instead of a second window.</p>
+        <p xml:lang="es">Un plano abierto desde el gestor de archivos con IngeCAD ya abierto se abre como pestaña de su ventana, no en una segunda ventana.</p>
+      </description>
+    </release>
+    <release version="0.6.8" date="2026-10-20">
+      <description>
+        <p>PEDIT Join turns lines and arcs into one polyline, and a user coordinate system (UCS) that typed points, the grid and the drawing commands follow. Narrow dimensions set their text beside them, status-bar toggles are remembered, justified text survives Save as DWG, dotted linetypes and hatch edits draw right, objects on hidden layers are no longer selected, and plots from a layout use its page setup.</p>
+        <p xml:lang="es">PEDIT Juntar convierte líneas y arcos en una sola polilínea, y un sistema de coordenadas personal (SCP) que siguen los puntos tecleados, la rejilla y las órdenes de dibujo. Las cotas estrechas ponen el texto al costado, la barra de estado recuerda sus botones, el texto justificado sobrevive a Guardar como DWG, los tipos de línea punteados y la edición de sombreados se dibujan bien, los objetos en capas ocultas ya no se seleccionan, y el trazado de una lámina usa su configuración de página.</p>
+      </description>
+    </release>
+    <release version="0.6.7" date="2026-10-11">
+      <description>
+        <p>Drawing tabs and associative dimensions. A colleague's dimensions keep their author's text, number and position when edited, rotated, scaled or mirrored; AutoCAD's command options (MOVE Displacement, ROTATE and SCALE Copy, TRIM Fence, UNDO with a count, OOPS); locked layers that protect their objects; an undo that gives back the whole object; dashed linetypes and lineweights that plot right in drawings in metres; polyline widths that survive DWG.</p>
+        <p xml:lang="es">Pestañas de dibujo y cotas asociativas. Las cotas de un colega conservan el texto, el número y la posición de su autor al editarlas, girarlas, escalarlas o reflejarlas; las opciones de comando de AutoCAD (Desplazamiento en DESPLAZA, Copia en GIRA y ESCALA, Borde en RECORTA, DESHACER con número, UY); capas bloqueadas que protegen sus objetos; un deshacer que devuelve el objeto completo; tipos de línea y grosores que se trazan bien en dibujos en metros; anchos de polilínea que sobreviven al DWG.</p>
+      </description>
+    </release>
+    <release version="0.6.6" date="2026-10-09">
+      <description>
+        <p>External references that survive Save as DWG, INSERT of another drawing, copy and paste between drawings with their blocks and styles, model plots on white paper and at 1:1, 1:2, 2:1, radius and diameter dimensions to the standard, annotative scales for existing objects, point styles, grips that obey ORTHO and object snaps, a polyline that snaps to its own points, TEXT height and angle by mouse, a selection filter by type, and saving without freezing the window. First Windows version.</p>
+        <p xml:lang="es">Referencias externas que sobreviven a Guardar como DWG, INSERT de otro dibujo, copiar y pegar entre dibujos con sus bloques y estilos, trazado del modelo en hoja blanca y a 1:1, 1:2, 2:1, cotas de radio y diámetro según norma, escalas anotativas para objetos existentes, estilos de punto, pinzamientos que respetan ORTO y las referencias, una polilínea que engancha sus propios puntos, altura y ángulo de TEXT con el mouse, un filtro de selección por tipo, y guardar sin congelar la ventana. Primera versión para Windows.</p>
+      </description>
+    </release>
+    <release version="0.6.5" date="2026-09-28">
+      <description>
+        <p>External references (XATTACH, XREF), block attributes for title blocks, leaders (MLEADER, QLEADER), DIM and QDIM, PURGE, OVERKILL and WBLOCK, annotative text and dimensions, .ctb plot style tables, PUBLISH to one PDF, a Window plot area, DXF export, Python scripts with APPLOAD, a status bar you arrange yourself, and viewports that are fast to enter and switch.</p>
+        <p xml:lang="es">Referencias externas (XATTACH, XREF), atributos de bloque para rótulos, directrices (MLEADER, QLEADER), DIM y QDIM, PURGE, OVERKILL y WBLOCK, textos y cotas anotativos, tablas de estilos de trazado .ctb, PUBLISH a un solo PDF, área de trazado Ventana, exportar a DXF, scripts de Python con APPLOAD, una barra de estado que uno mismo ordena, y ventanas gráficas rápidas al entrar y al cambiar de lámina.</p>
+      </description>
+    </release>
+    <release version="0.6.4" date="2026-09-27">
+      <description>
+        <p>Save as DWG holds on real drawings (Civil 3D proxies keep their graphics; 116 to 185 of 213 test drawings reopen cleanly), FILLET, object snaps and CIRCLE follow AutoCAD's own flow, a Spanish AutoCAD acad.pgp works, classroom defaults, and no more multi-second freezes when undoing big edits.</p>
+        <p xml:lang="es">Guardar como DWG resiste planos reales (los proxies de Civil 3D conservan sus gráficos; de 213 planos de prueba, 185 se reabren bien, antes 116), EMPALME, las referencias a objetos y CÍRCULO siguen el flujo de AutoCAD, funciona el acad.pgp de un AutoCAD en español, configuración común para aulas, y deshacer ediciones grandes ya no congela la ventana varios segundos.</p>
+      </description>
+    </release>
+    <release version="0.6.3" date="2026-09-22">
+      <description>
+        <p>What two testers found in 0.6.2: importing survey points died
+        before the options dialog opened (and a re-imported file came back
+        with east and north swapped); dimensions moved to a coloured layer
+        stayed white, on screen and on paper; a linear dimension picked
+        right-to-left drew mirrored; hatching found no boundary in what is
+        drawn with lines and arcs. Also: the dimension being placed is
+        previewed as the dimension it will be, File &gt; New no longer shows
+        the previous drawing's last dimensions, and the Topography plugin
+        has a user manual at ingecad.org/manual-topografia.</p>
+        <p xml:lang="es">Lo que dos probadores encontraron en la 0.6.2:
+        importar puntos topográficos moría antes de abrir el diálogo de
+        opciones (y un archivo reimportado volvía con Este y Norte
+        cambiados); las cotas movidas a una capa de color seguían blancas,
+        en pantalla y en papel; una cota lineal picada de derecha a
+        izquierda salía espejada; el sombreado no encontraba contorno en lo
+        dibujado con líneas y arcos. Además: la cota que se está colocando
+        se previsualiza como la cota que va a quedar, Archivo &gt; Nuevo ya
+        no muestra las últimas cotas del dibujo anterior, y el complemento
+        Topografía tiene manual en ingecad.org/manual-topografia.</p>
+      </description>
+    </release>
+    <release version="0.6.2" date="2026-09-16">
+      <description>
+        <p>What a second tester found drawing to the norm: ISO linetypes
+        that loaded wrong, diameter dimensions off the norm, centre marks
+        as chain-line axes (CENTERMARK), panning inside a viewport that
+        blanked it, object snap from the sheet through its viewports with
+        dimensions reading the model, a Drafting Settings dialog with polar
+        tracking that locks near a path and a nested adaptive grid, the
+        origin as an object snap, and pan cursors that cannot flicker.</p>
+        <p xml:lang="es">Lo que un segundo probador encontró dibujando a
+        norma: tipos de línea ISO que cargaban mal, cotas de diámetro fuera
+        de norma, marcas de centro como ejes trazo-punto (CENTERMARK), el
+        paneo dentro de una ventana que la dejaba en blanco, referencia a
+        objetos desde la hoja a través de sus ventanas con cotas que leen
+        el modelo, un diálogo de Parámetros de dibujo con rastreo polar que
+        se engancha cerca de la ruta y una rejilla adaptativa anidada, el
+        origen como referencia a objetos, y cursores de paneo que no pueden
+        parpadear.</p>
+      </description>
+    </release>
+    <release version="0.6.1" date="2026-09-09">
+      <description>
+        <p>Starts on machines whose graphics driver refuses the OpenGL
+        context the canvas asks for. On an NVIDIA card under Wayland the
+        application did not open at all; it now asks for a leaner format,
+        or comes back under X11, by itself.</p>
+        <p xml:lang="es">Arranca en equipos cuyo driver gráfico rechaza el
+        contexto OpenGL que pide el lienzo. Con una tarjeta NVIDIA sobre
+        Wayland la aplicación no abría siquiera; ahora pide un formato más
+        modesto, o vuelve bajo X11, ella sola.</p>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-09-06">
+      <description>
+        <p>Two discipline plugins on a new plugin system: Topography (survey
+        points, construction chart, descriptive report, TIN, contours,
+        profiles, earthworks, platforms) and Terrain (georeferencing, ground
+        elevations from a global DEM, the satellite image under the plan,
+        Google Earth by KML/KMZ — the only use IngeCAD makes of the network).
+        AutoCAD's keyboard key by key, with SNAP, object snap tracking and
+        dynamic input. A crash in a worker thread fixed.</p>
+        <p xml:lang="es">Dos complementos de disciplina sobre un sistema de
+        complementos nuevo: Topografía (puntos del levantamiento, cuadro de
+        construcción, memoria descriptiva, TIN, curvas de nivel, perfiles,
+        movimiento de tierras, plataformas) y Terreno (georreferenciación,
+        cotas de un DEM global, la imagen satelital bajo el plano, Google
+        Earth por KML/KMZ — el único uso que IngeCAD hace de la red). El
+        teclado de AutoCAD tecla por tecla, con FORZC, rastreo de referencia
+        y entrada dinámica. Arreglado un cierre inesperado en un hilo de
+        trabajo.</p>
+      </description>
+    </release>
+    <release version="0.4.7" date="2026-08-29">
+      <description>
+        <p>Edit the model through a viewport (MSPACE), automatic save with
+        drawing recovery, hatch editing and a linetype library read from
+        real plans.</p>
+        <p xml:lang="es">Editar el modelo a través de una ventana gráfica
+        (MSPACE), guardado automático con recuperación de dibujos, edición de
+        sombreados y una biblioteca de tipos de línea leída de planos reales.</p>
+      </description>
+    </release>
+    <release version="0.4.6" date="2026-08-27">
+      <description>
+        <p>A layout tab now edits its own sheet: select, move, erase, trim,
+        scale and edit the text of a title block in paper millimetres, and
+        move or scale a viewport like any other object.</p>
+        <p xml:lang="es">Una pestaña de lámina ahora edita su propia hoja:
+        seleccione, mueva, borre, recorte, escale y edite el texto de un
+        cajetín en milímetros de papel, y mueva o escale una ventana gráfica
+        como cualquier otro objeto.</p>
+      </description>
+    </release>
+    <release version="0.4.5" date="2026-08-24">
+      <description>
+        <p>Pick your model background — white, cream, or any tone — with
+        colors that flip to stay readable; paragraphs survive Save as DWG;
+        images move and resize instantly; clean exits.</p>
+        <p xml:lang="es">Elige el fondo del modelo — blanco, crema o el tono
+        que quieras — con colores que se adaptan para seguir legibles; los
+        párrafos sobreviven al guardar como DWG; las imágenes se mueven y
+        redimensionan al instante; cierres limpios.</p>
+      </description>
+    </release>
+    <release version="0.4.4" date="2026-08-24">
+      <description>
+        <p>Leader labels draw their text instead of a white box, title-block
+        text is no longer erased by its own mask, and switching Model/Layout
+        tabs is instant.</p>
+        <p xml:lang="es">Las directrices dibujan su texto en vez de una caja
+        blanca, el texto del cajetín ya no lo borra su propia máscara, y
+        cambiar entre Modelo y Presentación es instantáneo.</p>
+      </description>
+    </release>
+    <release version="0.4.3" date="2026-08-24">
+      <description>
+        <p>Opening a drawing no longer shows an error first: file dialogs
+        start where you last were, not inside the sandbox.</p>
+        <p xml:lang="es">Abrir un plano ya no muestra un error antes: los
+        diálogos empiezan donde estuviste la última vez, no dentro del
+        sandbox.</p>
+      </description>
+    </release>
+    <release version="0.4.2" date="2026-08-23">
+      <description>
+        <p>The drawing keeps up with the hand: six measured stalls gone,
+        antialiased lines, VIEWRES, and a crosshair you can size and
+        colour.</p>
+        <p xml:lang="es">El dibujo sigue el ritmo de la mano: seis tirones
+        medidos y eliminados, líneas suavizadas, VIEWRES, y un cursor que
+        puede cambiar de tamaño y de color.</p>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-08-23">
+      <description>
+        <p>The Block Editor, instant dimensions, and the interface complete
+        in Spanish — commands included.</p>
+      </description>
+    </release>
+  </releases>
+</component>

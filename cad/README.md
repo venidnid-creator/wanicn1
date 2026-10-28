@@ -1,0 +1,337 @@
+# IngeCAD
+
+**[ingecad.org](https://ingecad.org)** · CAD 2D libre para Linux, con DWG de fábrica.
+
+**Free 2D CAD for Linux, in the spirit of classic CAD.**
+
+IngeCAD is a lightweight 2D drafting program for civil engineers and architects
+coming from other CAD programs: the usual command aliases (`M` ⏎ moves, `TR` ⏎ trims), the
+classic pre-ribbon interface (menus + toolbars + a real command line), and
+faithful round-tripping of the DWG/DXF files your colleagues send you.
+
+Part of the **Inge** ecosystem, alongside
+[IngeTrazo](https://github.com/ingelibre/ingetrazo) (free 3D modeling / BIM)
+and IngePresupuestos (construction budgeting).
+
+![IngeCAD viewport](docs/images/viewport.png)
+
+> *A real cadastral DWG open in IngeCAD 0.1 on Linux — layers panel, classic
+> command line, Model/Layout tabs, and status-bar toggles.*
+
+## Design pillars
+
+- **Faithful files first.** The document model *is* the DXF database (via
+  [ezdxf](https://ezdxf.mozman.at/)); everything IngeCAD does not understand is
+  preserved untouched when saving. DWG is handled by external converters
+  (GNU LibreDWG bundled; ODA File Converter optional) — never parsed in-app.
+- **CAD muscle memory.** Command line at the bottom, the usual command
+  aliases (`.pgp` alias files), window/crossing selection, object snaps with the classic markers.
+- **Linux/Wayland first.** Native, fast, no ribbon — ever.
+- **Deliberately small.** Lines, circles, polylines, blocks, layers, hatches,
+  trim/offset/extend, survey points with elevations, and printing to scale.
+  Not a feature-for-feature clone of any other CAD.
+
+## Status — v0.6.8.2
+
+What works today:
+
+- **Topography plugin** (menu *Topography*): survey points from the total
+  station's CSV, bearings and distances, the construction chart, areas and
+  subdivision, the descriptive report, an own Delaunay TIN with contours,
+  profiles, cross sections, earthworks, platforms with slopes to daylight
+  and exact volumes — all plain DXF that any CAD opens.
+- **Terrain plugin** (menu *Terrain*): georeference the drawing (UTM zone,
+  WGS84 or PSAD56, or any projected coordinate system by its EPSG code —
+  the British National Grid is `EPSG:27700` — through PROJ), read or type
+  latitude and longitude, ground elevations
+  from a global DEM, the satellite image under the plan, and Google Earth
+  both ways by KML/KMZ. Plugins are managed in Tools ▸ Plugins; the
+  contract for writing one is in `docs/plugins.md`.
+
+  ![Topography: the construction chart and contours](docs/images/topografia.jpeg)
+
+  > *A survey's points, the boundary drawn on them with its bearings and
+  > distances, the construction chart IngeCAD computed from it (1 523.77 m²,
+  > 156.70 m) and contours every 0.25 m. Everything on the drawing is plain
+  > DXF — POINT, TEXT, LWPOLYLINE, 3DFACE — that any CAD opens.*
+
+  ![Terrain: the satellite image under the survey](docs/images/terreno.jpeg)
+
+  > *The same survey with Esri World Imagery underneath at 0.29 m/pixel,
+  > fetched for the polygon asked for and resampled into the drawing's own
+  > UTM grid, saved beside the drawing with the attribution its licence
+  > requires written on the plan.*
+- **Faithful viewer** for real-world DWG/DXF: nested blocks, MTEXT, hatches
+  (patterns + solids), linetypes, dimensions, OCS, paperspace layouts —
+  smooth pan/zoom even on cadastre-scale drawings (90k+ entities).
+- **DWG in and out**: open `.dwg` transparently via GNU LibreDWG; save as
+  DWG r2000 (LibreDWG, bundled), with a silent verified-save check.
+- **Classic interface**: command line at the bottom with the usual aliases
+  (`L`, `C`, `M`, `TR`, `Z`+`E` …), dark model space, dockable Layers /
+  Properties / Styles panels, **drawing tabs** to keep several drawings open
+  in one window, and copy/paste between IngeCAD windows. Your own aliases go in the standard `.pgp`
+  alias file (*Tools ▸ Customize ▸ Edit Program Parameters*, then
+  `REINIT`); a Spanish alias file works as it is (`DE, *DESPLAZA`).
+- **Paper space, the classic way**: Model/Layout tabs and **the sheet itself is
+  editable** — draw, move, erase, trim, scale and edit the text of a title
+  block with the commands you already know, in paper millimetres. Plus MVIEW
+  floating viewports (objects you select by their frame, with grips), exact
+  scales via `ZOOM nXP` or the scale dropdown, MSPACE / PSPACE, viewport
+  lock, PAGESETUP per layout, and PLOT of the sheet at 1:1.
+- **Drawing with the real prompt trees**: lines, circles (2P/3P/TTR), the
+  full 11-way ARC matrix, polylines with arcs and width, rectangles
+  (chamfer/fillet/area/rotation), polygons, ellipses and elliptical arcs,
+  text with all 14 justifications, hatches that find their boundary among
+  lines and arcs (islands included, like BPOLY); construction lines (XLINE/RAY),
+  DIVIDE/MEASURE with aligned blocks, REVCLOUD.
+- **Dimensions, complete**: linear, aligned, angular, arc length, ordinate,
+  radius and diameter to the norm (arrowheads inside the circle), center
+  marks and the chain-line axes of CENTERMARK / CENTERLINE,
+  continue/baseline chains and DIMTEDIT —
+  every command with its standard options (`Text` with `<>`, `Angle`,
+  `Rotated`, `Quadrant`, `Partial`…) and the official prompts, plus the
+  **Dimension Style Manager** with its five tabs and a live preview.
+  **Associative dimensions** (`DIMASSOC` 2) follow the object they measure,
+  and a colleague's dimensions keep their author's text, number and
+  position when edited, moved, rotated or mirrored.
+- **Layers, the classic way**: the properties table (status, on, freeze, lock,
+  colour, linetype, lineweight, plot, description) with live search, and the
+  `-LAYER` command line with wildcards for the keyboard-only flow.
+- **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET
+  (polylines and arcs included, distance by mouse) / TRIM / EXTEND / FILLET /
+  CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT (Join turns
+  lines and arcs into one polyline) / EXPLODE,
+  grips, window/crossing selection, clipboard copy/paste, and ROTATE/SCALE
+  show the result turning live under the cursor — with the standard options
+  (MOVE/COPY Displacement, ROTATE/SCALE Copy, TRIM Fence, UNDO with a count,
+  OOPS), locked layers that protect their objects, and an undo that gives
+  back the whole object. Linetypes through a Linetype Manager.
+- **The MTEXT in-place editor**: text edits on the canvas at its real size
+  with the classic Text Formatting toolbar (style, font, height, bold,
+  italic, underline, overline, colour), the ruler with indents, tab stops
+  and the width arrow, line spacing, bullets and numbered lists, background
+  mask and static columns — all stored as the standard MTEXT inline codes.
+- **The classic CAD feel**: object snaps with their markers (END, MID, CEN,
+  NOD, INT, PER, TAN, QUA, INS, GCE — on curves too, and through a layout's
+  viewports to the model they show, with paper-space dimensions reading the
+  model's length) with the status-bar running-snap list, ORTHO / POLAR
+  (tracking that locks near a path, the increment and additional angles in
+  Drafting Settings), a user coordinate system (UCS: moved and turned
+  origin, named, Previous, Object) that typed points, the grid and the
+  commands follow, the nested adaptive grid with GRIDUNIT / SNAPUNIT
+  saved in the drawing, absolute / relative / polar coordinate input and
+  LASTPOINT, command prefix autocomplete (`OFF` runs OFFSET), inquiry
+  commands (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup
+  window with template units and recent drawings with thumbnails, and
+  undo/redo of everything.
+- **Output**: print / export PDF and PNG to exact scale, from model or
+  layout, the extents, the view or a window picked on the drawing, with
+  `.ctb` plot style tables; **PUBLISH** several layouts into one PDF;
+  File ▸ Export ▸ DXF for Blender or QGIS.
+- **External references** (XATTACH, -XREF and an Xrefs panel): a
+  colleague's drawings shown in place, snapped to, kept on save.
+- **Block attributes** (ATTDEF, the attribute editor on double-click,
+  ATTSYNC, BATTMAN) for title blocks; **leaders** (MLEADER, QLEADER,
+  LEADER); **DIM**, **QDIM**, DIMBREAK, DIMJOGGED, DIMSPACE; **PURGE**,
+  **OVERKILL**, **WBLOCK**; LENGTHEN, ALIGN, BOUNDARY, DONUT, SCALETEXT;
+  **annotative** text and dimensions at the annotation scale of each view.
+- **Scripts**: APPLOAD runs a Python file over IngeCAD's commands as one
+  undo step, SCRIPT runs a `.scr` script.
+- **Raster images and PDF underlays**: attach PNG/JPEG/BMP/GIF/TIFF or a
+  PDF page (rasterized) to trace over, with corner grips, brightness /
+  contrast / fade and a transparency degree.
+- **Tables** (plain-geometry grids), **splines**, **revision clouds**,
+  **DRAWORDER** and the layer tools (LAYISO/LAYOFF/LAYON/LAYUNISO).
+- **Grips on every selectable type**, dimensions included: drag an
+  extension origin to re-measure, the line to relocate, the text to move
+  the label — with alignment snapping to neighbouring dimensions.
+- **The classic shortcut menu**, with the commands behind it: object isolation, Select
+  Similar, Add Selected, Quick Select, Group, Find and Replace, QuickCalc
+  and Draw Order.
+- **A settings window** (`OPTIONS`) under the familiar tab names, including
+  right-click customization.
+- **The Block Editor** (`BEDIT`, alias `BE`): open a definition in its own
+  environment — only the block, base point at the origin, the classic
+  Block Editor toolbar — edit it with every ordinary command, and on
+  `BCLOSE` ▸ Save **every insert on the plan updates**. Save/discard
+  semantics, undo floor and recursion guard as the reference specifies.
+- **Selection cycling**: click the same spot again and the next overlapping
+  object answers — the dimension under the text somebody typed over it.
+- **Spanish, complete — commands included**: the whole interface, prompts
+  whose option keys always work (`Suprimir`, `D` and `_D` all delete a
+  layout), and commands with their usual Spanish names (`LINEA`,
+  `BORRA`, `RECORTA`…) with English never stopping to work underneath.
+  **A language is a folder** under `i18n/` — adding one needs no Python.
+  Czech (community, by Michal Josef Špaček, 64 % of the strings) ships too.
+- **Fast on real drawings**: dimensions appear the instant you place them
+  (was seconds on big plans), regeneration ~2× on the heaviest surveys,
+  layout tabs up to 2.5× with per-viewport culling, and the editing stalls
+  measured away — a dimension grip drops in 100 ms instead of 3.1 s,
+  MATCHPROP paints its second target in 37 ms instead of 2.76 s.
+- **The display is yours**: line smoothing (on by default), `VIEWRES` for
+  arc and circle smoothness, crosshair size and colour (`CURSORSIZE`) and
+  pickbox size (`PICKBOX`) — under their standard names, typable at the
+  prompt or set in **Options ▸ Display / Selection**.
+- **Report a Problem** under Help: guided issue forms, Spanish welcome.
+
+Planned next (v0.5): survey-point import with elevations, coordinate
+tables, elevation profiles — as the first discipline plug-in. See
+`CLAUDE.md` for the roadmap.
+
+## Keyboard — the classic one
+
+| Key | Does |
+|---|---|
+| F1 | Help (ingecad.org) |
+| F2 | Text window |
+| F3 / Ctrl+F | Object snap (OSNAP) |
+| F7 / Ctrl+G | Grid |
+| F8 / Ctrl+L | Ortho — and **Shift held** flips it for the moment |
+| F9 / Ctrl+B | Snap to grid (SNAP) |
+| F10 / Ctrl+U | Polar tracking |
+| F11 | Object snap tracking: pause on a snap point to acquire it, ride the alignment paths from it, lock on where two meet |
+| F12 | Dynamic input: the prompt and the live coordinates beside the cursor; a bare `x,y` is relative after a first point, `#x,y` absolute |
+| Ctrl+0 | Clean screen |
+| Ctrl+1 | Properties palette |
+| Ctrl+9 | Command line on / off |
+| Ctrl+A | Select all |
+| Ctrl+C / Ctrl+X / Ctrl+V, Delete | Clipboard and erase |
+| Ctrl+Shift+C / Ctrl+Shift+V | Copy with base point / paste as block |
+| Ctrl+Z / Ctrl+Y, U | Undo / redo |
+| Ctrl+J, Ctrl+M, Enter, Space | Repeat the last command |
+| Ctrl+[ , Ctrl+\ , Esc | Cancel |
+| Ctrl+W | Selection cycling |
+| Ctrl+I | Coordinate display |
+| Ctrl+R | Next viewport in a layout |
+| Ctrl+PgUp / Ctrl+PgDn | Previous / next layout tab |
+| Ctrl+Tab | Next drawing window |
+| Ctrl+N / O / S / Shift+S / P / Q | New, open, save, save as, plot, quit |
+
+
+## Install (Windows, 64-bit)
+
+From the [latest release](https://github.com/ingelibre/ingecad/releases/latest):
+`ingecad-setup-v*.exe` installs it (Start menu, "Open with" for `.dwg` and
+`.dxf`); `IngeCAD-*-windows-x64.zip` runs without installing. The installer
+is not signed yet, so the first time Windows SmartScreen says it protected
+your PC: *More info* ▸ *Run anyway*.
+
+## Install (Linux, x86_64)
+
+**Flatpak (recommended)** — one click, updates arrive on their own:
+[downloads.ingecad.org/flatpak/ingecad.flatpakref](https://downloads.ingecad.org/flatpak/ingecad.flatpakref)
+opens in your software center; or from a terminal:
+
+```sh
+flatpak install --from https://downloads.ingecad.org/flatpak/ingecad.flatpakref
+```
+
+**AppImage** — download from the
+[latest release](https://github.com/ingelibre/ingecad/releases/latest), make it
+executable, run it. Nothing else to install — Python, Qt and the DWG converters
+are inside:
+
+```bash
+chmod +x IngeCAD-*-x86_64.AppImage
+./IngeCAD-*-x86_64.AppImage            # or double-click it
+./IngeCAD-*-x86_64.AppImage --check    # if something misbehaves
+```
+
+If your distro lacks FUSE (the one thing an AppImage needs), each release
+also ships the same build as a plain tarball — extract and run:
+
+```bash
+tar -xzf IngeCAD-*-linux-x86_64.tar.gz
+IngeCAD-*/ingecad
+```
+
+`--check` prints where the app found its shaders, translations and converters,
+and exits non-zero if any of them is missing.
+
+## Classroom and office defaults
+
+To give every account on a machine the same starting setup -- a class, an
+office -- put a folder at `/etc/ingecad/` (or point `INGECAD_SITE_DIR` at
+one). It plays the part of a CAD deployment's shared support folder and
+profile, and each user's own choices still win over it:
+
+```
+/etc/ingecad/
+├── defaults.ini    default value of any setting
+└── acad.pgp        aliases, under each user's own acad.pgp
+```
+
+A secondary-school class: Spanish interface, right-click = Enter, and the
+survey plugins switched off:
+
+```ini
+; /etc/ingecad/defaults.ini
+language=es
+
+[input]
+right_click=enter
+
+[plugins]
+topografia\enabled=false
+terreno\enabled=false
+
+[autosave]
+savetime=5
+```
+
+`acad.pgp` there uses the standard `.pgp` syntax; a Spanish alias file works
+as it is. `ingecad --check` shows whether the folder was found. With the Flatpak,
+let the app read the host's `/etc` once, as root:
+
+```bash
+sudo flatpak override --system --filesystem=host-etc:ro org.ingecad.IngeCAD
+```
+
+## Running from source
+
+```bash
+git clone https://github.com/ingelibre/ingecad.git
+cd ingecad
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/python main.py
+```
+
+**DWG support** needs the LibreDWG converters (`dwg2dxf` / `dxf2dwg`). The
+release AppImage carries them already; from a source checkout, either put them
+on your `PATH` (most distros package `libredwg-tools`) or build the patched ones
+IngeCAD ships:
+
+```bash
+tools/libredwg-patches/build-vendor.sh    # downloads, patches, builds into vendor/
+```
+
+That build is not stock: it is a LibreDWG release plus our own fixes, sent
+upstream as pull requests, without which many real-world drawings do not open
+or do not save. See `tools/libredwg-patches/README.md`. DXF works out of the
+box either way. LibreDWG is IngeCAD's only DWG engine: what it cannot do yet
+we fix in LibreDWG itself. `ingecad --check` shows where the converters were
+found.
+
+## Building the AppImage yourself
+
+```bash
+tools/libredwg-patches/build-vendor.sh   # once, for the converters
+packaging/build-appimage.sh              # -> dist/IngeCAD-<version>-x86_64.AppImage
+```
+
+An AppImage links against the glibc of the machine that built it, so one built
+on a current distro will not start on an older one. The release workflow
+(`.github/workflows/release.yml`) builds on Ubuntu 22.04 for that reason.
+
+To get the launcher entry, app icon and `.dwg`/`.dxf` double-click
+association on Linux:
+
+```bash
+./scripts/install-desktop.sh   # then log out/in once
+```
+
+## License
+
+GPL-3.0-or-later. Copyright (C) 2026 Marco Sumari Tellez and IngeCAD
+contributors. See `LICENSE` and `AUTHORS`.

@@ -1,0 +1,495 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Context-sensitive Properties: row schema + edit/undo paths (headless)."""
+from __future__ import annotations
+
+import ezdxf
+import pytest
+
+from core import actions
+from core.commands import History
+from core.document import Document
+from views import properties_panel as pp
+
+
+class StubPanel:
+    """Enough of PropertiesPanel for the module-level row builders."""
+
+    def __init__(self, doc, entity):
+        self._doc = Document(doc)
+        self.history = History(self._doc)
+        self._ent = [entity]
+
+    @property
+    def _document(self):
+        return self._doc
+
+    def _active(self):
+        return self._ent
+
+    def _set_prop(self, prop, value):
+        self.history.execute(
+            actions.SetPropertyCommand(self._active(), prop, value))
+
+    def _in_place(self, mutate):
+        actions.apply_in_place(self.history, self._active(), mutate)
+
+    def _set_comp(self, attr, axis, value):
+        def mutate():
+            for e in self._active():
+                v = e.dxf.get(attr)
+                c = [v.x, v.y, v.z]
+                c[axis] = value
+                e.dxf.set(attr, tuple(c))
+        self._in_place(mutate)
+
+
+def _row(rows, label):
+    for r in rows:
+        if r.label == label:
+            return r
+    raise KeyError(label)
+
+
+def test_circle_rows_read_and_edit():
+    doc = ezdxf.new("R2018", setup=True)
+    c = doc.modelspace().add_circle((3, 4), radius=10)
+    panel = StubPanel(doc, c)
+    _title, rows = pp._circle_rows(panel, c)
+
+    assert _row(rows, "Radius").get(c) == pytest.approx(10)
+    assert _row(rows, "Diameter").get(c) == pytest.approx(20)
+    assert _row(rows, "Area").get(c) == pytest.approx(3.14159265 * 100, rel=1e-6)
+
+    # editing diameter sets radius to half
+    _row(rows, "Diameter").apply(50)
+    assert c.dxf.radius == pytest.approx(25)
+    # undo restores it
+    panel.history.undo()
+    assert c.dxf.radius == pytest.approx(10)
+
+
+def test_center_component_edit_and_undo():
+    doc = ezdxf.new("R2018", setup=True)
+    c = doc.modelspace().add_circle((3, 4), radius=1)
+    panel = StubPanel(doc, c)
+    _title, rows = pp._circle_rows(panel, c)
+
+    _row(rows, "Center X").apply(99)
+    assert c.dxf.center.x == pytest.approx(99)
+    assert c.dxf.center.y == pytest.approx(4)   # untouched
+    panel.history.undo()
+    assert c.dxf.center.x == pytest.approx(3)
+
+
+def test_text_rows_edit_contents_and_style():
+    doc = ezdxf.new("R2018", setup=True)
+    t = doc.modelspace().add_text("A", height=2.5)
+    panel = StubPanel(doc, t)
+    _title, rows = pp._text_rows(panel, t)
+
+    _row(rows, "Contents").apply("PLANO")
+    assert t.dxf.text == "PLANO"
+    _row(rows, "Height").apply(3.0)
+    assert t.dxf.height == pytest.approx(3.0)
+    # style combo is populated from the STYLE table
+    assert ("Standard", "Standard") in _row(rows, "Style").items
+
+
+def test_line_geometry_readouts():
+    doc = ezdxf.new("R2018", setup=True)
+    ln = doc.modelspace().add_line((0, 0), (3, 4))
+    panel = StubPanel(doc, ln)
+    _title, rows = pp._line_rows(panel, ln)
+    assert _row(rows, "Length").get(ln) == pytest.approx(5.0)
+    assert _row(rows, "Angle").get(ln) == pytest.approx(53.13010, rel=1e-4)
+
+
+def test_polyline_area_only_when_closed():
+    doc = ezdxf.new("R2018", setup=True)
+    pl = doc.modelspace().add_lwpolyline([(0, 0), (10, 0), (10, 10), (0, 10)])
+    panel = StubPanel(doc, pl)
+    labels_open = [r.label for r in pp._lwpolyline_rows(panel, pl)[1]]
+    assert "Area" not in labels_open
+    pl.close(True)
+    rows = pp._lwpolyline_rows(panel, pl)[1]
+    assert "Area" in [r.label for r in rows]
+    assert _row(rows, "Area").get(pl) == pytest.approx(100.0)
+
+
+# -- the Properties bar: current settings vs the selection ---------------------
+
+def _fresh_window(qapp, linetypes=("DASHED", "CENTER")):
+    """A new drawing with ``linetypes`` loaded, as a user loads them: a new
+    drawing carries only Continuous, as acadiso.dwt's does."""
+    from core import linetypes as lt_ops
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document("mm")
+    if linetypes:
+        win.tools._execute(lt_ops.LoadLinetypesCommand(list(linetypes)))
+        win._props_combo_key = None
+        win._refresh_props_toolbar()
+    return win
+
+
+def test_with_nothing_selected_the_bar_sets_what_comes_next(qapp):
+    from core import layers as layer_ops
+
+    win = _fresh_window(qapp)
+    try:
+        win._apply_property("linetype", "DASHED")
+        win._apply_property("lineweight", 50)
+        win._apply_property("color", 1)
+        assert layer_ops.current_property(win.document, "linetype") == "DASHED"
+        assert layer_ops.current_property(win.document, "lineweight") == 50
+        assert layer_ops.current_property(win.document, "color") == 1
+
+        win._on_command_submitted("LINE")
+        win.tools.tool.on_point((0, 0))
+        win.tools.tool.on_point((10, 0))
+        win.tools.tool.on_enter()
+        drawn = list(win.document.modelspace())[-1]
+        assert drawn.dxf.linetype == "DASHED"
+        assert drawn.dxf.lineweight == 50
+        assert drawn.dxf.color == 1
+    finally:
+        win.close()
+
+
+def test_a_fresh_drawing_draws_bylayer(qapp):
+    """The defaults must stay ByLayer, or a layer stops controlling anything."""
+    win = _fresh_window(qapp)
+    try:
+        win._on_command_submitted("LINE")
+        win.tools.tool.on_point((0, 0))
+        win.tools.tool.on_point((10, 0))
+        win.tools.tool.on_enter()
+        drawn = list(win.document.modelspace())[-1]
+        assert drawn.dxf.get("color", 256) == 256
+        assert drawn.dxf.get("linetype", "ByLayer") == "ByLayer"
+        assert drawn.dxf.get("lineweight", -1) == -1
+    finally:
+        win.close()
+
+
+def test_with_a_selection_the_bar_edits_it_and_leaves_the_default_alone(qapp):
+    from core import layers as layer_ops
+
+    win = _fresh_window(qapp)
+    try:
+        line = win.document.modelspace().add_line((0, 0), (10, 0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.tools.selection = {line.dxf.handle}
+
+        win._apply_property("color", 3)
+        assert line.dxf.color == 3
+        # The current setting is untouched: this was an edit, not a default.
+        assert layer_ops.current_property(win.document, "color") == 256
+        # And it undoes.
+        win.history.undo()
+        assert line.dxf.get("color", 256) == 256
+    finally:
+        win.close()
+
+
+def test_the_bar_shows_the_selection_and_falls_back_to_the_defaults(qapp):
+    win = _fresh_window(qapp)
+    try:
+        line = win.document.modelspace().add_line(
+            (0, 0), (10, 0), dxfattribs={"linetype": "DASHED", "color": 5})
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.tools.selection = {line.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._linetype_combo.currentData() == "DASHED"
+        assert win._color_combo.currentData() == 5
+
+        win.tools.selection = set()
+        win._refresh_props_toolbar()
+        assert win._linetype_combo.currentData() == "ByLayer"
+        assert win._color_combo.currentData() == 256
+    finally:
+        win.close()
+
+
+def test_a_mixed_selection_shows_nothing_rather_than_a_lie(qapp):
+    win = _fresh_window(qapp)
+    try:
+        msp = win.document.modelspace()
+        a = msp.add_line((0, 0), (1, 0), dxfattribs={"color": 1})
+        b = msp.add_line((0, 1), (1, 1), dxfattribs={"color": 3})
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.tools.selection = {a.dxf.handle, b.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._color_combo.currentIndex() == -1
+    finally:
+        win.close()
+
+
+def test_the_linetype_list_offers_what_the_drawing_carries(qapp):
+    from core import layers as layer_ops
+
+    win = _fresh_window(qapp)
+    try:
+        names = [win._linetype_combo.itemData(i)
+                 for i in range(win._linetype_combo.count())]
+        assert names[:2] == ["ByLayer", "ByBlock"]
+        for name in layer_ops.available_linetypes(win.document):
+            assert name in names
+        assert "DASHED" in names and "CENTER" in names
+    finally:
+        win.close()
+
+
+def test_matchprop_copies_text_height_and_style_across_text_types(qapp):
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext("GRANDE", dxfattribs={"char_height": 5.0, "color": 1})
+    src.set_location((0, 0))
+    dst = msp.add_mtext("normal", dxfattribs={"char_height": 2.5})
+    dst.set_location((0, 20))
+    plain = msp.add_text("suelto", dxfattribs={"height": 2.0})
+    history = History(doc)
+    history.execute(match_properties(src, [dst, plain]))
+    assert dst.dxf.char_height == 5.0
+    assert plain.dxf.height == 5.0            # crosses MTEXT -> TEXT
+    assert dst.dxf.get("color") == 1
+    history.undo()
+    assert dst.dxf.char_height == 2.5 and plain.dxf.height == 2.0
+
+
+def test_matchprop_command_exposes_entities_for_the_display_paths(qapp):
+    """MATCHPROP looked like it did nothing: the display refresh collects
+    touched entities from .entities, which the command never exposed."""
+    from core.document import Document
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    a = msp.add_line((0, 0), (1, 1))
+    b = msp.add_line((2, 0), (3, 1))
+    command = match_properties(a, [b])
+    assert command.entities == [b]
+
+
+def test_the_color_combo_offers_the_full_palette(qapp):
+    from PySide6.QtWidgets import QComboBox
+
+    from views.layers_panel import _PICK_COLOR, fill_color_combo
+
+    combo = QComboBox()
+    fill_color_combo(combo)
+    assert combo.itemData(combo.count() - 1) == _PICK_COLOR
+
+
+def test_select_color_dialog_returns_any_aci(qapp):
+    from views.color_dialog import SelectColorDialog
+
+    dialog = SelectColorDialog(None, current=7)
+    dialog._pick(142)
+    assert dialog.result_aci() == 142
+    dialog._pick(256)
+    assert dialog.result_aci() == 256
+
+
+def test_matchprop_uses_the_effective_mtext_height(qapp):
+    """AutoCAD MTEXTs often carry the real height as an inline \\H code
+    while char_height holds a residue; copying the raw attribute shrank
+    the destination to 0.0019 (the reported bug)."""
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext(r"\H0.15;NPT +2.50",
+                        dxfattribs={"char_height": 0.0019})
+    src.set_location((0, 0))
+    dst = msp.add_mtext("nivel", dxfattribs={"char_height": 2.5})
+    dst.set_location((0, 20))
+    plain = msp.add_text("suelto", dxfattribs={"height": 2.5})
+    History(doc).execute(match_properties(src, [dst, plain]))
+    assert dst.dxf.char_height == pytest.approx(0.15)
+    assert plain.dxf.height == pytest.approx(0.15)
+
+
+def test_matchprop_copies_the_effective_text_color(qapp):
+    """The color often lives in an inline \\C code (our editor writes
+    them) while the entity stays ByLayer — matching looked like it did
+    not copy the color. The destination's own inline codes are stripped
+    so the new color governs."""
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext(r"{\C1;ROJO}", dxfattribs={"char_height": 2.5})
+    src.set_location((0, 0))
+    dst = msp.add_mtext(r"{\C3;verde} destino",
+                        dxfattribs={"char_height": 2.5})
+    dst.set_location((0, 10))
+    plain = msp.add_text("suelto", dxfattribs={"height": 2.5})
+    history = History(doc)
+    history.execute(match_properties(src, [dst, plain]))
+    assert dst.dxf.get("color") == 1
+    assert "\\C3;" not in dst.text            # old inline color gone
+    assert plain.dxf.get("color") == 1        # TEXT gets it too
+    history.undo()
+    assert dst.dxf.get("color", 256) == 256
+    assert "\\C3;" in dst.text                # snapshot restored the content
+
+
+def test_matchprop_copies_bylayer_itself(qapp):
+    """A ByLayer source has NO color attribute; the old .get with no
+    default skipped it and a ByBlock destination stayed ByBlock (Marco's
+    report). AutoCAD copies "ByLayer" as the value."""
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext("fuente", dxfattribs={"char_height": 2.5})
+    src.set_location((0, 0))                     # color ByLayer (unset)
+    dst = msp.add_mtext("destino", dxfattribs={"char_height": 2.5,
+                                               "color": 0})   # ByBlock
+    dst.set_location((0, 10))
+    from ezdxf.colors import rgb2int
+    dst.dxf.true_color = rgb2int((10, 20, 30))   # stale override too
+    history = History(doc)
+    history.execute(match_properties(src, [dst]))
+    assert dst.dxf.get("color", 256) == 256      # ByLayer now
+    assert not dst.dxf.hasattr("true_color")     # override gone
+    history.undo()
+    assert dst.dxf.get("color") == 0
+    assert dst.dxf.hasattr("true_color")
+
+
+def test_the_layer_combo_reflects_the_selection(qapp):
+    """AutoCAD's Layer control: select an object and the control shows
+    ITS layer; mixed selection shows blank; empty selection shows the
+    current layer (Marco: 'selecciono un dibujo y veo qué capa es')."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.doc.layers.add("MUROS", color=1)
+        doc.doc.layers.add("EJES", color=5)
+        a = doc.modelspace().add_line((0, 0), (1, 1),
+                                      dxfattribs={"layer": "MUROS"})
+        b = doc.modelspace().add_line((2, 0), (3, 1),
+                                      dxfattribs={"layer": "EJES"})
+        win.tools._invalidate_geometry()
+
+        win.tools.selection = {a.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._layer_combo.currentText() == "MUROS"
+
+        win.tools.selection = {a.dxf.handle, b.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._layer_combo.currentIndex() == -1        # mixed: blank
+
+        win.tools.selection = set()
+        win._refresh_props_toolbar()
+        assert win._layer_combo.currentText() == "0"        # current layer
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_the_color_combo_offers_byblock_too(qapp):
+    """BricsCAD's Properties color dropdown lists ByLayer AND ByBlock."""
+    from PySide6.QtWidgets import QComboBox
+
+    from views.layers_panel import fill_color_combo
+
+    combo = QComboBox()
+    fill_color_combo(combo)
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    assert "ByLayer" in texts and "ByBlock" in texts
+    assert combo.itemData(texts.index("ByBlock")) == 0
+
+
+def test_picking_a_layer_snaps_the_color_back_to_bylayer(qapp):
+    """Marco's rule: choosing a layer in the Properties bar means 'let the
+    layer drive the look' — the color override (ByBlock, explicit) clears
+    to ByLayer in the same gesture, for the selection or for the current
+    drawing defaults. One undo step reverts both."""
+    from core import layers as layer_ops
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.doc.layers.add("MUROS", color=1)
+        line = doc.modelspace().add_line((0, 0), (1, 1),
+                                         dxfattribs={"color": 0})  # ByBlock
+        win.tools._invalidate_geometry()
+
+        # selection: layer change + color ByLayer, one undo step
+        win.tools.selection = {line.dxf.handle}
+        win._refresh_props_toolbar()
+        win._on_layer_combo(win._layer_combo.findText("MUROS"))
+        assert line.dxf.layer == "MUROS"
+        assert line.dxf.color == 256
+        win.history.undo()
+        assert line.dxf.layer == "0" and line.dxf.color == 0
+
+        # no selection: current layer + current color ByLayer
+        win.tools.selection = set()
+        doc.doc.header["$CECOLOR"] = 0                        # casa bueno's
+        win._refresh_props_toolbar()
+        win._on_layer_combo(win._layer_combo.findText("MUROS"))
+        assert doc.doc.header["$CLAYER"] == "MUROS"
+        assert layer_ops.current_property(doc, "color") == 256
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_properties_shows_the_style_of_every_styled_object(qapp):
+    """Marco: selecting a dimension must show which style it has, and that
+    goes for any object with a style. DIMENSION had no section at all, so
+    only General appeared."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        msp = doc.modelspace()
+        doc.doc.styles.add("TITULOS", font="txt.shx")
+        dim = msp.add_linear_dim(base=(0, -5), p1=(0, 0), p2=(10, 0),
+                                 dimstyle="ISO-25")
+        dim.render()
+        text = msp.add_text("A", dxfattribs={"height": 2, "style": "TITULOS"})
+        panel = win._properties_panel
+        assert panel is not None
+
+        def rows_of(entity):
+            return {r.label: r for _t, rs in panel._schema([entity]) for r in rs}
+
+        drow = rows_of(dim.dimension)["Dim style"]
+        assert drow.get(dim.dimension) == "ISO-25"
+        assert ("ISO-25", "ISO-25") in drow.items      # every style offered
+        assert rows_of(text)["Style"].get(text) == "TITULOS"
+
+        # a dimension has no group 39: AutoCAD leaves Thickness out rather
+        # than showing it as varying, which is what our getter would produce
+        assert "Thickness" not in rows_of(dim.dimension)
+        assert "Thickness" in rows_of(msp.add_line((0, 0), (1, 1)))
+    finally:
+        win.document.dirty = False
+        win.close()

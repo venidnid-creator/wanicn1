@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+#
+# PyInstaller spec for IngeCAD. Build it through packaging/build-appimage.sh,
+# which sets the working directory and the output paths this expects.
+#
+#     pyinstaller --noconfirm packaging/ingecad.spec
+#
+# onedir, not onefile: onefile unpacks ~250 MB to /tmp on every launch, which
+# on a tmpfs desktop means a quarter gigabyte of RAM and a visible delay each
+# time. The AppImage already gives the single-file experience.
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(os.environ.get("INGECAD_ROOT", os.getcwd())).resolve()
+
+# Data the app reads at runtime, kept at the same relative paths the repo uses
+# so core.paths.app_root() resolves them identically frozen or not.
+datas = [
+    (str(ROOT / "resources"), "resources"),
+    (str(ROOT / "i18n"), "i18n"),
+    # Plugins are loaded by path from app_root()/plugins, never imported as
+    # a package, so they travel as data like the language packs do.
+    (str(ROOT / "plugins"), "plugins"),
+]
+
+# The two LibreDWG converters, as binaries so the executable bit survives.
+# They are statically linked against libredwg (ldd shows only libc and libm),
+# so nothing else has to come along. The other ten programs in vendor/bin are
+# never invoked by IngeCAD and would add ~118 MB.
+# Windows (#28): the same two, cross-built with mingw and linked statically
+# (libiconv included), so they too come alone -- see .github/workflows/
+# build-windows.yml.
+WINDOWS = sys.platform == "win32"
+binaries = []
+for tool in ("dwg2dxf", "dxf2dwg"):
+    path = ROOT / "vendor" / "libredwg" / "bin" / (tool + (".exe" if WINDOWS else ""))
+    if not path.is_file():
+        raise SystemExit(
+            f"missing {path}\n"
+            "Build vendor/libredwg first — see tools/libredwg-patches/README.md."
+        )
+    binaries.append((str(path), "vendor/libredwg/bin"))
+
+# ezdxf finds these through its own registry rather than a plain import, so
+# PyInstaller's static analysis does not see them.
+hiddenimports = [
+    "ezdxf.addons.drawing.pyqt",
+    "ezdxf.addons.drawing.frontend",
+    "ezdxf.addons.drawing.text_renderer",
+    "ezdxf.addons.drawing.unified_text_renderer",
+    "ezdxf.render.hatching",
+]
+# The bundled plugins ship as DATA (loaded by path at run time), so nothing
+# they import is seen by the analysis either. v0.6.0's first tag build
+# shipped both plugins UNAVAILABLE -- "No module named core.georef" -- and
+# only `--check` caught it. Every core module is frozen, whether or not
+# the core itself imports it, plus the standard-library pieces only the
+# plugins touch; tests/test_plugins.py holds this list to plugins/.
+from PyInstaller.utils.hooks import collect_submodules
+
+hiddenimports += collect_submodules("core")
+# ...and by the files themselves: collect_submodules IMPORTS each module to
+# find it, and on the Windows runner core.georef did not make the list
+# (the Windows build's --check: "plugin terreno: No module named
+# core.georef"). The file list cannot miss one.
+for module in sorted((ROOT / "core").rglob("*.py")):
+    parts = module.relative_to(ROOT).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    hiddenimports.append(".".join(parts))
+hiddenimports += ["xml.etree.ElementTree", "zipfile", "urllib.request", "urllib.error", "secrets"]
+
+# Qt ships far more than a 2D CAD viewport needs. Everything here is verified
+# absent from the source: grep for "from PySide6." lists only QtCore, QtGui,
+# QtOpenGL, QtOpenGLWidgets, QtPrintSupport, QtTest and QtWidgets.
+excludes = [
+    "PySide6.Qt3DAnimation", "PySide6.Qt3DCore", "PySide6.Qt3DExtras",
+    "PySide6.Qt3DInput", "PySide6.Qt3DLogic", "PySide6.Qt3DRender",
+    "PySide6.QtBluetooth", "PySide6.QtCharts", "PySide6.QtDataVisualization",
+    "PySide6.QtDesigner", "PySide6.QtHelp", "PySide6.QtLocation",
+    "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "PySide6.QtNfc",
+    "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtPositioning",
+    "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuick3D",
+    "PySide6.QtQuickControls2", "PySide6.QtQuickWidgets", "PySide6.QtRemoteObjects",
+    "PySide6.QtScxml", "PySide6.QtSensors", "PySide6.QtSerialBus",
+    "PySide6.QtSerialPort", "PySide6.QtSpatialAudio", "PySide6.QtSql",
+    "PySide6.QtStateMachine", "PySide6.QtTextToSpeech", "PySide6.QtUiTools",
+    "PySide6.QtWebChannel", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick",
+    "PySide6.QtWebEngineWidgets", "PySide6.QtWebSockets",
+    # not Qt: pulled in transitively and unused here
+    "matplotlib", "tkinter", "PyQt5", "PyQt6", "pytest", "PIL.ImageQt",
+]
+
+a = Analysis(
+    [str(ROOT / "main.py")],
+    pathex=[str(ROOT)],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    excludes=excludes,
+    noarchive=False,
+)
+pyz = PYZ(a.pure)
+
+# Libraries the HOST must provide, never the bundle (issues #20, #21). The
+# bundle is built on Ubuntu 22.04 on purpose, so every system it starts on
+# has these at least as new. Bundling them is what broke 0.6.3 on Arch and
+# Debian testing: Qt loads the host's Mesa to make a GL context, Mesa pulls
+# in libSPIRV-Tools, and that needs GLIBCXX_3.4.32 -- which our older
+# libstdc++, loaded first, does not have. The driver failed to load, there
+# was no OpenGL under Wayland or X11, and the app never opened. The old
+# fontconfig could not parse those systems' configuration either (the
+# "invalid attribute 'xsi:nil'" lines of the report), and it drags the old
+# freetype with it. Measured on the 0.6.3 binaries in containers: without
+# these four, Arch and Debian testing open under Wayland and Ubuntu 22.04
+# still does. (PIL's own freetype has a hashed name and is not touched.)
+HOST_LIBRARIES = ("libstdc++.so.6", "libgcc_s.so.1",
+                  "libfontconfig.so.1", "libfreetype.so.6")
+a.binaries = [entry for entry in a.binaries
+              if Path(entry[0]).name not in HOST_LIBRARIES]
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="ingecad",
+    debug=False,
+    strip=False,
+    upx=False,          # upx breaks Qt plugin loading often enough not to risk it
+    console=False,      # a GUI app; errors go to the terminal when run from one
+    # Windows wants an .ico for the executable; elsewhere it is ignored
+    icon=str(ROOT / "resources" / "icons" / ("ingecad.ico" if WINDOWS else "ingecad.png")),
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="ingecad",
+)

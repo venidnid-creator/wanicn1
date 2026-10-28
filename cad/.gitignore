@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environment (local, recreate with requirements.txt)
+venv/
+
+# Test caches
+.pytest_cache/
+
+# Satellite binaries built/downloaded locally (LibreDWG, ODA)
+vendor/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Real-world DWG/DXF test files from colleagues stay untracked
+# (private data; the fidelity bench reads them from capturas/ locally)
+capturas/
+*.dwg
+# a synthetic test drawing, written by ODA from our own DXF (no real plan)
+!tests/data/angular_2l_oda.dwg
+*.dxf
+!tests/data/*.dxf
+
+# El sitio web vive en su propio repo (ingelibre/ingecad-web), como en los
+# hermanos: un cambio de copy no debe disparar el CI del producto.
+/web/
+docs/reference/
+crash_report.txt
+packaging/flatpak/.staging/
+packaging/flatpak/.flatpak-builder/
+.wrangler/
+
+# Private working notes for Claude Code: kept on the maintainer's machine only
+CLAUDE.md
+docs/bitacora.md

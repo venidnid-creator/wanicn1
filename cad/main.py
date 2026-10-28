@@ -1,0 +1,447 @@
+"""IngeCAD entry point.
+
+Free 2D CAD for Linux in the spirit of classic AutoCAD. Part of the Inge
+ecosystem (IngeTrazo 3D modeling, IngePresupuestos budgeting).
+
+Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+Licensed under GPL-3.0-or-later. See LICENSE.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QCoreApplication
+from PySide6.QtGui import QColor, QPalette, QSurfaceFormat
+from PySide6.QtWidgets import QApplication
+
+from core import i18n
+from core.version import __version__
+
+
+def _configure_surface_format() -> None:
+    """Request an OpenGL 3.3 Core context (matches the GLSL 330 shaders).
+
+    No depth buffer request: the canvas is 2D and draws back-to-front.
+
+    Line smoothing IS multisampling, but not on the window surface -- the
+    IngeTrazo lesson (multisampled surfaces interleave stale frames on
+    Wayland) is about that surface, and QOpenGLWidget never draws to it: it
+    renders into its own framebuffer and Qt resolves the samples there,
+    which is exactly the "MSAA in the scene FBO" the gotcha list prescribes.
+    Measured on a real 10 000-entity sheet: edge pixels went from 0.1% of
+    the ink to 31%, and the frame from 1.6 ms to 2.3 ms.
+    """
+    fmt = QSurfaceFormat()
+    fmt.setVersion(3, 3)
+    fmt.setProfile(QSurfaceFormat.CoreProfile)
+    # Waiting for the vertical refresh costs a frame of latency: measured on
+    # this canvas, a mouse move takes 16.7 ms with the wait and 2.9 ms
+    # without, and the drawing itself is 0.6 ms of that even at 4.5 million
+    # vertices. The wait is what keeps the image from tearing, so it stays on
+    # unless Options > Display asks for the lower lag instead. The format is
+    # fixed when the canvas is created, which is why this reads the setting
+    # here and why the dialog says it applies on restart.
+    try:
+        from PySide6.QtCore import QSettings
+
+        if str(QSettings().value("display/vsync", "true")).lower() in (
+                "false", "0"):
+            fmt.setSwapInterval(0)
+    except Exception:
+        pass
+    # Line smoothing (Options > Display). Fixed when the canvas is created,
+    # hence the restart note in the dialog, same as the vsync setting above.
+    try:
+        from PySide6.QtCore import QSettings
+
+        samples = int(QSettings().value("display/msaa", 4))
+        if samples in (0, 2, 4, 8, 16):
+            fmt.setSamples(samples)
+    except Exception:
+        fmt.setSamples(4)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
+
+def _apply_dark_theme(app: QApplication) -> None:
+    """Force dark UI chrome regardless of the desktop theme.
+
+    Model space is dark by design; light menus and title bar clash with it.
+    ``setColorScheme`` drives the platform pieces (Wayland client-side title
+    bar, native menus); the Fusion style + palette cover every widget so the
+    look does not depend on whatever desktop theme is installed.
+    """
+    app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+    app.setStyle("Fusion")
+
+    window = QColor(45, 45, 48)
+    base = QColor(37, 37, 40)
+    text = QColor(224, 224, 224)
+    disabled = QColor(128, 128, 128)
+    highlight = QColor(42, 93, 143)
+
+    p = QPalette()
+    p.setColor(QPalette.Window, window)
+    p.setColor(QPalette.WindowText, text)
+    p.setColor(QPalette.Base, base)
+    p.setColor(QPalette.AlternateBase, window)
+    p.setColor(QPalette.Text, text)
+    p.setColor(QPalette.PlaceholderText, disabled)
+    p.setColor(QPalette.Button, window)
+    p.setColor(QPalette.ButtonText, text)
+    p.setColor(QPalette.BrightText, QColor(255, 96, 96))
+    p.setColor(QPalette.ToolTipBase, QColor(58, 58, 61))
+    p.setColor(QPalette.ToolTipText, text)
+    p.setColor(QPalette.Highlight, highlight)
+    p.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+    p.setColor(QPalette.Link, QColor(74, 163, 224))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText, QPalette.HighlightedText):
+        p.setColor(QPalette.Disabled, role, disabled)
+    app.setPalette(p)
+
+
+def _init_language() -> None:
+    """Load the saved UI language; English by default.
+
+    Engineers learned AutoCAD in English — commands, menus, muscle memory —
+    so English is the default regardless of the system locale. Spanish is a
+    deliberate opt-in via Tools > Language.
+    """
+    from core import branding
+    i18n.set_language(str(QSettings().value("language", branding.DEFAULT_LANGUAGE)))
+    from views import qt_translations
+
+    qt_translations.install(i18n.current_language())
+
+
+def _self_check() -> int:
+    """Report whether this install can find everything it needs; --check.
+
+    A packaged build can be missing a shader, a translation or a converter and
+    still start, then fail the first time the user opens a drawing. This is what
+    CI asserts on after building the AppImage, and what to run when an install
+    misbehaves.
+    """
+    from core.paths import app_root, is_frozen
+    from formats.dwg_bridge import converters_status, find_dwg2dxf, find_dxf2dwg
+
+    root = app_root()
+    print(f"IngeCAD {__version__}")
+    print(f"  packaged   : {'yes' if is_frozen() else 'no (running from the repo)'}")
+    print(f"  app root   : {root}")
+    from core import site
+    folder = site.site_dir()
+    if folder is None:
+        print(f"  site folder: none ({', '.join(str(d) for d in site.site_dirs())})")
+    else:
+        files = [n for n in (site.DEFAULTS, site.PGP) if (folder / n).is_file()]
+        print(f"  site folder: {folder}  ({', '.join(files) or 'empty'})")
+    for label, found in converters_status():
+        print(f"  {label:16}: {found or 'not found'}")
+
+    problems: list[str] = []
+    # Only files something actually reads. resources/linetypes and
+    # resources/hatch are empty placeholders from the Phase 0 layout: the
+    # standard linetypes come from ezdxf (core/document.py loads them) and the
+    # hatch patterns from ezdxf.addons.drawing, so there is nothing to ship.
+    for label, path in (
+        ("vertex shader", root / "resources" / "shaders" / "line.vert"),
+        ("fragment shader", root / "resources" / "shaders" / "line.frag"),
+        ("thick shader", root / "resources" / "shaders" / "thick.vert"),
+        ("app icon", root / "resources" / "ingecad.svg"),
+    ):
+        ok = path.is_file()
+        print(f"  {label:<14}: {'found' if ok else 'MISSING'}  {path}")
+        if not ok:
+            problems.append(label)
+
+    # Languages are folders under i18n/, so a bundle that forgot to ship them
+    # starts fine and is simply English-only -- exactly the kind of silent
+    # packaging loss this self-check exists to name out loud.
+    from core import i18n
+    packs = i18n.language_packs()
+    translated = [p for p in packs.values() if p.catalog is not None]
+    print(f"  languages     : {len(packs)} "
+          f"({', '.join(sorted(p.code for p in packs.values()))})")
+    if not translated:
+        print(f"  {'translations':<14}: MISSING  no language pack has a catalog "
+              f"under {i18n.i18n_dir()}")
+        problems.append("translations")
+    # Qt's own strings (OK, Cancel, Save...) come from PySide6's catalogs.
+    from PySide6.QtCore import QLibraryInfo
+
+    qt_dir = Path(QLibraryInfo.path(QLibraryInfo.TranslationsPath))
+    qt_ok = (qt_dir / "qtbase_es.qm").is_file()
+    print(f"  {'Qt catalogs':<14}: {'found' if qt_ok else 'MISSING'}  {qt_dir}")
+    if not qt_ok:
+        problems.append("Qt catalogs")
+
+    # Plugins ship as folders under plugins/ (docs/plugins.md); a bundle
+    # that forgot them, or the module one of them needs, starts fine and
+    # simply has no Topography menu -- the same silent loss as a language.
+    from core.plugins import PluginManager
+
+    plugins_dir = root / "plugins"
+    manager = PluginManager()
+    found = manager.discover()
+    print(f"  plugins       : {len(found)} ({', '.join(found) or 'none'})  {plugins_dir}")
+    if not plugins_dir.is_dir():
+        print(f"  {'plugins dir':<14}: MISSING  {plugins_dir}")
+        problems.append("plugins dir")
+    for pid, reason in manager.problems():
+        print(f"  plugin {pid:<7}: UNAVAILABLE  {reason}")
+        if manager.loaded[pid].bundled:
+            problems.append(f"plugin {pid}")
+
+    # The drawing frontend resolves hatch patterns and text through these; a
+    # missing hidden import shows up here rather than on the first HATCH.
+    for label, module in (
+        ("ezdxf render", "ezdxf.addons.drawing.frontend"),
+        ("ezdxf hatch", "ezdxf.render.hatching"),
+        ("ezdxf text", "ezdxf.addons.drawing.text_renderer"),
+    ):
+        try:
+            __import__(module)
+            print(f"  {label:<14}: import ok  ({module})")
+        except Exception as exc:  # noqa: BLE001 - report whatever it is
+            print(f"  {label:<14}: MISSING  {module}: {exc}")
+            problems.append(label)
+
+    # PROJ answers for any coordinate system a drawing declares (#27):
+    # its database has to have travelled with the package, not just the
+    # module -- a conversion is the only proof.
+    try:
+        import pyproj
+
+        east, _north = pyproj.Transformer.from_crs(
+            "EPSG:4326", "EPSG:32719", always_xy=True).transform(-69.0, -16.0)
+        if abs(east - 500000.0) > 1.0:
+            raise ValueError(f"UTM 19 S central meridian at {east:.1f}")
+        print(f"  {'PROJ':<14}: ok  (PROJ {pyproj.proj_version_str}, "
+              f"pyproj {pyproj.__version__})")
+    except Exception as exc:  # noqa: BLE001 - report whatever it is
+        print(f"  {'PROJ':<14}: MISSING  {exc}")
+        problems.append("PROJ")
+
+    for label, finder in (("dwg2dxf", find_dwg2dxf), ("dxf2dwg", find_dxf2dwg)):
+        tool = finder()
+        where = "bundled" if tool and str(tool).startswith(str(root)) else "system PATH"
+        print(f"  {label:<14}: {f'{tool} ({where})' if tool else 'MISSING'}")
+        if tool is None:
+            problems.append(label)
+
+    if problems:
+        print(f"\nNOT OK — missing: {', '.join(problems)}")
+        return 1
+    print("\nOK")
+    return 0
+
+
+def main() -> int:
+    # Background regens are pure-Python tessellation: with CPython's default
+    # 5 ms GIL switch interval the UI thread starves in 5 ms chunks and the
+    # crosshair stutters while a big drawing rebuilds. 1 ms keeps input smooth
+    # for a barely measurable regen slowdown.
+    if "--check" in sys.argv[1:]:
+        return _self_check()
+    sys.setswitchinterval(0.001)
+    # Name the application BEFORE anything reads QSettings. The surface
+    # format has to be fixed before QApplication exists, and it reads the
+    # display settings -- so with the names set afterwards it was reading an
+    # empty config in "Unknown Organization" and every choice there was
+    # silently ignored. These two setters are static for exactly this case.
+    from core import branding
+    QCoreApplication.setApplicationName(branding.APP_NAME)
+    QCoreApplication.setOrganizationName(branding.ORG_NAME)
+    # A classroom's or an office's defaults (/etc/ingecad), under the
+    # user's own settings -- also before the first read.
+    from core import site
+    site.install_defaults("IngeCAD", "IngeCAD")
+    _configure_surface_format()
+    app = QApplication(sys.argv)
+    # A driver that cannot serve the format we just asked for takes the
+    # whole app down with it, window included — and Qt's own "wayland;xcb"
+    # list never retries, because it is spent before the first context.
+    # Ask for less, or come back under XCB; the call does not return when
+    # it restarts us. See core/gl_fallback.py.
+    from core.gl_fallback import ensure_gl_context
+    gl_fallback = ensure_gl_context(app)
+    app.setProperty("gl_fallback", gl_fallback)
+    if gl_fallback == "failed":
+        print("IngeCAD: no OpenGL 3.3 context on this machine — the canvas "
+              "will not draw.", file=sys.stderr)
+    # Wayland matches the running window to its .desktop entry by this name
+    # -- and so does the dock icon. Inside the Flatpak the entry is the app
+    # id: a window claiming "ingecad" there matched nothing, so the shell
+    # showed it with a generic icon and GNOME Software's Open button, which
+    # waits for the launched app to appear, never saw it (Rafael's review,
+    # 2026-09-10: "el flatpak no tenía icono").
+    app.setDesktopFileName(os.environ.get("FLATPAK_ID") or "ingecad")
+    from PySide6.QtGui import QIcon
+
+    from core.paths import app_root
+
+    icon_path = app_root() / "resources" / "ingecad.svg"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    _apply_dark_theme(app)
+    _init_language()
+
+    # A drawing double-clicked while IngeCAD runs opens as a tab of the
+    # running window: this one hands it over and quits.
+    from core import single_instance
+
+    drawings = _drawing_args(sys.argv[1:])
+    instance = single_instance.claim([str(d) for d in drawings])
+    if instance is None:
+        return 0
+
+    from views.main_window import MainWindow
+
+    window = MainWindow()
+    window.restore_window_geometry()    # as it was last closed (#72)
+    # Show before opening, not after. A double-clicked drawing can take
+    # seconds, and the window must already be on screen for that wait to be
+    # visible at all. It also keeps the status bar honest: QStatusBar only
+    # hides the coordinate readout for a message if the readout is visible
+    # when the message arrives, so opening first painted the "Opening..."
+    # text underneath the coordinates, both illegible.
+    window.show()
+    # Documents passed on the command line (the OS file association's
+    # double-click hands them as arguments) open right away, a tab each;
+    # otherwise start with a blank drawing, like AutoCAD's Drawing1, so the
+    # panels and commands work from the first click instead of waiting for
+    # File > New.
+    opened = False
+    if drawings:
+        window.open_paths(drawings)
+        opened = True
+    if not opened:
+        # A crash left work behind: that is what the user came back for, so
+        # it is offered before anything else (AutoCAD shows its Drawing
+        # Recovery Manager at the next start too).
+        from views.recovery_dialog import offer_recovery
+
+        opened = offer_recovery(window)
+    if not opened:
+        # No file to open: ask which unit this drawing is in, and offer the
+        # recent ones — the two things BricsCAD asks at startup. A drawing
+        # double-clicked in the file manager never sees this window, and the
+        # user can retire it with its own checkbox.
+        opened = _startup_choice(window)
+    import shiboken6
+
+    if not shiboken6.isValid(window):
+        # closed during the start-up dialogs: a closed window is destroyed
+        # (WA_DeleteOnClose), and there is nothing left to run
+        return 0
+    if not opened:
+        window.new_document()
+    _offer_appimage_integration(window)
+    # drawings handed over during the start-up dialogs open now
+    instance.set_target(_open_handed_over)
+    try:
+        return app.exec()
+    finally:
+        instance.close()
+
+
+def _drawing_args(args: list[str]) -> list[Path]:
+    """The DXF/DWG files among the arguments, as absolute paths: a second
+    IngeCAD hands them to the first, which runs in another directory."""
+    found = []
+    for arg in args:
+        if arg.startswith("-"):
+            continue
+        path = Path(arg)
+        if path.suffix.lower() in (".dxf", ".dwg") and path.exists():
+            found.append(path.resolve())
+    return found
+
+
+def _open_handed_over(paths: list[str]) -> None:
+    """Drawings a second IngeCAD handed over: tabs of the window in front
+    (an IngeCAD can have several windows), which comes forward."""
+    from PySide6.QtWidgets import QApplication
+
+    from views.main_window import MainWindow
+
+    window = QApplication.activeWindow()
+    if not isinstance(window, MainWindow):
+        windows = [w for w in QApplication.topLevelWidgets()
+                   if isinstance(w, MainWindow) and w.isVisible()]
+        if not windows:
+            window = MainWindow()
+            window.show()
+        else:
+            window = windows[-1]
+    window.open_paths(paths)
+    if window.isMinimized():
+        window.showNormal()
+    window.raise_()
+    window.activateWindow()
+
+
+def _offer_appimage_integration(window) -> None:
+    """Running as an AppImage that is not in the applications menu yet:
+    offer to add it, once (Help > Add to the applications menu stays
+    available). The answer "not now" is remembered per AppImage path."""
+    from core.appimage import appimage_path, is_integrated
+
+    img = appimage_path()
+    if img is None or is_integrated(img):
+        return
+    from PySide6.QtCore import QSettings, QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    settings = QSettings()
+    if str(settings.value("appimage/declined", "")) == str(img):
+        return
+
+    def ask() -> None:
+        from core.i18n import tr
+
+        box = QMessageBox(window)
+        box.setWindowTitle(tr("Add IngeCAD to the applications menu?"))
+        box.setText(tr(
+            "You are running IngeCAD as an AppImage. Add a launcher with its "
+            "icon to your applications menu, and associate .dwg and .dxf "
+            "files with it? Nothing is copied: the launcher points at this "
+            "file, so keep it where it is."))
+        yes = box.addButton(tr("Add to menu"), QMessageBox.AcceptRole)
+        box.addButton(tr("Not now"), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is yes:
+            window.add_appimage_to_menu()
+        else:
+            settings.setValue("appimage/declined", str(img))
+
+    QTimer.singleShot(600, ask)
+
+
+def _startup_choice(window) -> bool:
+    """Show the startup window. True if it already produced a document."""
+    from views.startup_dialog import StartupDialog, should_show
+
+    if not should_show():
+        window.new_document(window.startup_template())
+        return True
+    dialog = StartupDialog(window)
+    dialog.exec()
+    choice = dialog.choice()
+    if choice is None:
+        return False
+    action, value = choice
+    if action == "open":
+        window.open_path(Path(value))
+    elif action == "template":
+        window.new_from_drawing(Path(value))
+    else:
+        window.new_document(value)
+    return True
+
+
+if __name__ == "__main__":
+    sys.exit(main())

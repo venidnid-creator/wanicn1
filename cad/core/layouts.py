@@ -1,0 +1,1469 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Layout (paper space) operations: tabs, active layout, the paper sheet.
+
+Everything here is headless (AI-native invariant): the tab bar, the LAYOUT
+command and the tests all drive the same functions. The DXF conventions this
+codes against are documented in docs/reference/layout/ (gitignored research
+notes); the two that bite:
+
+- ``doc.layouts.set_active_layout()`` does NOT touch ``$TILEMODE`` — without
+  setting the header variable ourselves, AutoCAD reopens the file on the
+  wrong tab. :func:`switch_active` does both together.
+- Paper size, margins and plot offset are stored in **mm always**, whatever
+  ``plot_paper_units`` says; and the paperspace coordinate origin sits at the
+  lower-left corner of the *printable* area (+ plot offset), not the sheet
+  corner. :func:`paper_frame` owns that math.
+"""
+from __future__ import annotations
+
+import math
+from typing import Callable, Optional
+
+from ezdxf.lldxf.const import DXFValueError
+
+from core.actions import Prompt
+from core.commands import Command
+from core.i18n import keywords, tr
+
+# AcDbPlotSettings defaults (A3 paper, mm): used when a file carries no
+# usable page setup — AutoCAD also shows *some* sheet in every layout tab.
+_DEFAULT_PAPER = (420.0, 297.0)             # width, height
+_DEFAULT_MARGINS = (20.0, 7.5, 20.0, 7.5)   # top, right, bottom, left
+# Paper dimensions beyond this are corrupt, not a real sheet (20 m of paper).
+_MAX_PAPER = 20000.0
+
+
+# -- tab names ------------------------------------------------------------------
+
+def layout_names(document) -> list[str]:
+    """Tab names in taborder, with "Model" always first (AutoCAD behavior:
+    the Model tab is fixed regardless of its stored taborder)."""
+    try:
+        names = document.doc.layouts.names_in_taborder()
+    except Exception:
+        names = list(document.doc.layouts.names())
+    return ["Model"] + [n for n in names if n.lower() != "model"]
+
+
+def default_new_name(document) -> str:
+    """First free ``LayoutN`` name, AutoCAD-style (case-insensitive)."""
+    taken = {n.lower() for n in layout_names(document)}
+    i = 1
+    while f"layout{i}" in taken:
+        i += 1
+    return f"Layout{i}"
+
+
+def startup_tab(document) -> Optional[str]:
+    """The tab the file says is current, or None for the Model tab.
+
+    ``$TILEMODE`` = 0 means a paperspace tab was active when the file was
+    saved; AutoCAD reopens there and so do we.
+    """
+    doc = document.doc
+    try:
+        if int(doc.header.get("$TILEMODE", 1)) != 0:
+            return None
+        return doc.layouts.active_layout().name
+    except Exception:
+        return None
+
+
+# -- switching ------------------------------------------------------------------
+
+def switch_active(document, name: str) -> None:
+    """Make ``name`` the current tab in the document itself.
+
+    Not a Command on purpose: AutoCAD does not put tab switches on the undo
+    stack either. The document still changes (block-rename dance + header),
+    so the file reopens on the same tab everywhere.
+    """
+    doc = document.doc
+    if name.lower() == "model":
+        doc.header["$TILEMODE"] = 1
+    else:
+        active = doc.layouts.active_layout()
+        if active.name.lower() != name.lower():
+            doc.layouts.set_active_layout(name)   # raises on unknown name
+        doc.header["$TILEMODE"] = 0
+    # Dirty, but not a new revision: nothing drawable changed, and a bump
+    # here would defeat the per-tab scene cache the switch relies on.
+    document.mark_dirty_no_revision()
+
+
+# -- create / rename / delete ---------------------------------------------------
+
+class NewLayoutCommand(Command):
+    """LAYOUT New — undo deletes the (still empty) layout again."""
+
+    def __init__(self, layout_name: str) -> None:
+        self.name = "LAYOUT New"
+        self.layout_name = layout_name
+
+    def do(self, document) -> None:
+        document.doc.layouts.new(self.layout_name)
+        # LAYOUTCREATEVIEWPORT: its first visit adds a viewport
+        document.uninitialized_layouts.add(self.layout_name)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        document.doc.layouts.delete(self.layout_name)
+        document.uninitialized_layouts.discard(self.layout_name)
+        document.dirty = True
+
+
+class RenameLayoutCommand(Command):
+    """LAYOUT Rename — fully reversible."""
+
+    def __init__(self, old: str, new: str) -> None:
+        self.name = "LAYOUT Rename"
+        self.old = old
+        self.new = new
+
+    def do(self, document) -> None:
+        document.doc.layouts.rename(self.old, self.new)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        document.doc.layouts.rename(self.new, self.old)
+        document.dirty = True
+
+
+def copy_name(document, source: str) -> str:
+    """AutoCAD's name for an unnamed copy: the source's name with an
+    incremental number in parentheses -- "Layout1 (2)", "Layout1 (3)"."""
+    taken = {n.lower() for n in layout_names(document)}
+    i = 2
+    while f"{source} ({i})".lower() in taken:
+        i += 1
+    return f"{source} ({i})"
+
+
+def _taborders(doc) -> dict:
+    return {layout.name: layout.dxf_layout.dxf.taborder
+            for layout in doc.layouts if layout.name != "Model"}
+
+
+def _place_before(doc, name: str, before: Optional[str]) -> None:
+    """Renumber the tab order so ``name`` sits before ``before`` (None:
+    last), the others keeping their order."""
+    order = [n for n in doc.layouts.names_in_taborder()
+             if n != "Model" and n != name]
+    index = order.index(before) if before in order else len(order)
+    order.insert(index, name)
+    for number, tab in enumerate(order, start=1):
+        doc.layouts.get(tab).dxf_layout.dxf.taborder = number
+
+
+class CopyLayoutCommand(Command):
+    """LAYOUT Copy / Move or Copy: a new layout with the source's page setup
+    and everything on its sheet, viewports included (each keeps its number,
+    view and scale). "The new tab is inserted before the copied layout tab"
+    unless a place is given. One undo removes it and restores the order."""
+
+    #: Layout attributes that are the layout's identity, not its settings.
+    _IDENTITY = ("handle", "owner", "taborder", "name",
+                 "block_record_handle", "viewport_handle")
+
+    def __init__(self, source: str, copy: str,
+                 before: Optional[str] = "") -> None:
+        self.name = "LAYOUT Copy"
+        self.source = source
+        self.copy = copy
+        # "" = before the source (the LAYOUT command); None = at the end
+        self.before = source if before == "" else before
+        self._orders: dict = {}
+
+    def do(self, document) -> None:
+        doc = document.doc
+        self._orders = _taborders(doc)
+        src = doc.layouts.get(self.source)
+        new = doc.layouts.new(self.copy)
+        for key, value in src.dxf_layout.dxf.all_existing_dxf_attribs().items():
+            if key not in self._IDENTITY:
+                new.dxf_layout.dxf.set(key, value)
+        main = src.dxf_layout.dxf.get("viewport_handle")
+        for entity in src:
+            try:
+                clone = entity.copy()
+            except Exception:  # noqa: BLE001 -- a type ezdxf cannot copy
+                continue
+            new.add_entity(clone)
+            if main and entity.dxf.handle == main:
+                new.dxf_layout.dxf.viewport_handle = clone.dxf.handle
+        _place_before(doc, self.copy, self.before)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        doc = document.doc
+        doc.layouts.delete(self.copy)
+        for tab, order in self._orders.items():
+            if tab in doc.layouts:
+                doc.layouts.get(tab).dxf_layout.dxf.taborder = order
+        document.dirty = True
+
+
+class MoveLayoutCommand(Command):
+    """Move or Copy without the copy: the tab goes before another (None:
+    to the end). Undo restores the previous order."""
+
+    def __init__(self, layout_name: str, before: Optional[str]) -> None:
+        self.name = "LAYOUT Move"
+        self.layout_name = layout_name
+        self.before = before
+        self._orders: dict = {}
+
+    def do(self, document) -> None:
+        self._orders = _taborders(document.doc)
+        _place_before(document.doc, self.layout_name, self.before)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        for tab, order in self._orders.items():
+            document.doc.layouts.get(tab).dxf_layout.dxf.taborder = order
+        document.dirty = True
+
+
+def delete_layout(document, name: str) -> None:
+    """Delete a layout and everything on it. Permanent, like AutoCAD warns
+    ("The selected layout will be permanently deleted") — deliberately NOT a
+    Command: a faithful undo would need to snapshot every entity of the
+    layout, and a half-faithful one would lie. Callers confirm first.
+
+    Raises ``DXFValueError`` for "Model" and for the last paperspace layout
+    (same rules as AutoCAD).
+    """
+    document.doc.layouts.delete(name)
+    document.dirty = True
+
+
+def validate_new_name(document, name: str) -> Optional[str]:
+    """None if ``name`` can be used for a new/renamed layout, else why not."""
+    name = name.strip()
+    if not name:
+        return tr("Layout name cannot be empty.")
+    if len(name) > 255:
+        return tr("Layout name is too long (255 characters maximum).")
+    if any(ch in name for ch in '<>/\\":;?*|=`'):
+        return tr("Layout name contains invalid characters.")
+    if name.lower() in (n.lower() for n in layout_names(document)):
+        return tr('Layout "{name}" already exists.', name=name)
+    return None
+
+
+# -- floating viewports (MVIEW) -------------------------------------------------
+
+class AddViewportCommand(Command):
+    """MVIEW — create one floating viewport in a paperspace layout.
+
+    ``needs_regen`` tells the display layer that only a full regen can show
+    the result (the viewport's content is the whole model re-projected —
+    there is no cheap overlay for that, same as dimension blocks).
+    """
+
+    needs_regen = True
+
+    def __init__(self, layout_name: str, center, size,
+                 view_center, view_height: float) -> None:
+        self.name = "MVIEW"
+        self.layout_name = layout_name
+        self.center = center
+        self.size = size
+        self.view_center = view_center
+        self.view_height = view_height
+        self.entity = None
+
+    def do(self, document) -> None:
+        psp = document.doc.layouts.get(self.layout_name)
+        # the sheet's own main viewport first, as AutoCAD has on every layout
+        self._main = ensure_main_viewport(psp)
+        self.entity = psp.add_viewport(
+            center=self.center, size=self.size,
+            view_center_point=self.view_center, view_height=self.view_height)
+        # AutoCAD puts the viewport on the current layer (ezdxf's default is
+        # its own "VIEWPORTS" convention layer, which real files don't have).
+        current = document.doc.header.get("$CLAYER", "0")
+        if current in document.doc.layers:
+            self.entity.dxf.layer = current
+        # its own annotation scale, as AutoCAD writes it on every viewport
+        # (only in drawings that already speak annotative scales: a plain
+        # drawing is not given a scale list it never asked for)
+        from core import annotative
+
+        if annotative.scale_list(document.doc):
+            annotative.set_viewport_scale(
+                self.entity, annotative.scale_or_default(document.doc))
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        if self.entity is not None:
+            self.removed_handles = [self.entity.dxf.handle]
+            psp = document.doc.layouts.get(self.layout_name)
+            psp.delete_entity(self.entity)
+            self.entity = None
+            main = getattr(self, "_main", None)
+            if main is not None and main.is_alive:
+                psp.delete_entity(main)
+            self._main = None
+        document.dirty = True
+
+
+def model_fit_view(document, width: float, height: float,
+                   twist_degrees: float = 0.0):
+    """(view_center, view_height) that fits the whole model in a viewport
+    of the given paper aspect — MVIEW's default view, like AutoCAD's Fit.
+
+    A twisted viewport shows the model turned: what has to fit is the
+    extents' box turned by the twist, which is wider (a 331° twist on
+    Plaza Yanque's sheet needed a third more height, and the plain box
+    left the model spilling out of the frame).
+
+    Falls back to the origin at 1:1 when the model is empty.
+    """
+    ext = _model_extents(document)
+    if ext is None:
+        return (0.0, 0.0), max(height, 1.0)
+    x0, y0, x1, y1 = ext
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    mw, mh = max(x1 - x0, 1e-9), max(y1 - y0, 1e-9)
+    if twist_degrees:
+        angle = math.radians(twist_degrees)
+        cos_a, sin_a = abs(math.cos(angle)), abs(math.sin(angle))
+        mw, mh = mw * cos_a + mh * sin_a, mw * sin_a + mh * cos_a
+    aspect = width / height if height > 0 else 1.0
+    # both model dimensions must fit: height-limited or width-limited
+    view_height = max(mh, mw / aspect) * 1.02      # small breathing margin
+    return (cx, cy), view_height
+
+
+def _model_extents(document):
+    """Model extents from the header, or measured; None when empty."""
+    try:
+        lo = document.doc.header["$EXTMIN"]
+        hi = document.doc.header["$EXTMAX"]
+        box = (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1]))
+        if all(math.isfinite(v) for v in box) and abs(box[0]) < 1e19 \
+                and box[2] > box[0] and box[3] > box[1]:
+            return box
+    except Exception:
+        pass
+    try:
+        from ezdxf import bbox
+
+        ext = bbox.extents(document.doc.modelspace(), fast=True)
+        if ext.has_data:
+            return (ext.extmin.x, ext.extmin.y, ext.extmax.x, ext.extmax.y)
+    except Exception:
+        pass
+    return None
+
+
+def viewport_from_corners(document, layout_name: str,
+                          c1, c2) -> Optional[AddViewportCommand]:
+    """MVIEW's corner-point default: a viewport spanning the picked rect,
+    showing the whole model fitted (AutoCAD then lets the user zoom it)."""
+    x0, x1 = sorted((c1[0], c2[0]))
+    y0, y1 = sorted((c1[1], c2[1]))
+    w, h = x1 - x0, y1 - y0
+    if w <= 0.0 or h <= 0.0:
+        return None
+    center = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    view_center, view_height = model_fit_view(document, w, h)
+    return AddViewportCommand(layout_name, center, (w, h),
+                              view_center, view_height)
+
+
+def first_visit_viewport(document, layout_name: str) -> Optional[AddViewportCommand]:
+    """The viewport a layout born in this session gets when first opened
+    (AutoCAD's LAYOUTCREATEVIEWPORT): one filling the printable area and
+    showing the whole model. None when the layout was visited before, came
+    with the drawing, or already has a viewport of its own (Rafael's review
+    6: a new drawing's Layout1 was a blank sheet, the model nowhere)."""
+    if layout_name not in document.uninitialized_layouts:
+        return None
+    document.uninitialized_layouts.discard(layout_name)
+    layout = document.doc.layouts.get(layout_name)
+    if layout is None or visible_viewports(layout):
+        return None
+    return viewport_fit_printable(document, layout_name)
+
+
+def viewport_fit_printable(document, layout_name: str) -> AddViewportCommand:
+    """MVIEW Fit: one viewport filling the printable area of the sheet."""
+    layout = document.doc.layouts.get(layout_name)
+    frame = paper_frame(layout)
+    rect = frame["printable"] or frame["sheet"]
+    return viewport_from_corners(document, layout_name,
+                                 (rect[0], rect[1]), (rect[2], rect[3]))
+
+
+# -- viewport as a selectable paper-space entity --------------------------------
+
+def viewport_border_hit(layout, x: float, y: float, tol: float):
+    """The topmost visible viewport whose BORDER passes within ``tol`` of
+    (x, y) — AutoCAD selects viewports by their frame, not their interior."""
+    hit = None
+    for vp in visible_viewports(layout):        # stacking order: last on top
+        x0, y0, x1, y1 = viewport_rect(vp)
+        inside_outer = (x0 - tol <= x <= x1 + tol
+                        and y0 - tol <= y <= y1 + tol)
+        inside_inner = (x0 + tol < x < x1 - tol
+                        and y0 + tol < y < y1 - tol)
+        if inside_outer and not inside_inner:
+            hit = vp
+    return hit
+
+
+def viewport_grips(vp) -> list:
+    """Grip points of a viewport: 4 corners (resize) + center (move).
+
+    AutoCAD shows the 4 corner grips; the center grip is our concession so
+    a viewport can be moved without a MOVE-through-paper-space tool yet.
+    """
+    x0, y0, x1, y1 = viewport_rect(vp)
+    return [(x0, y0, "end"), (x1, y0, "end"), (x1, y1, "end"), (x0, y1, "end"),
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0, "center")]
+
+
+def viewport_drag_rect(vp, index: int, role: str, point) -> tuple:
+    """The rubber rectangle while a viewport grip follows the cursor."""
+    x0, y0, x1, y1 = viewport_rect(vp)
+    if role == "center":
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        dx, dy = point[0] - cx, point[1] - cy
+        return (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    ox, oy = corners[(index + 2) % 4]           # opposite corner stays put
+    return (min(ox, point[0]), min(oy, point[1]),
+            max(ox, point[0]), max(oy, point[1]))
+
+
+class SetViewportGeometryCommand(Command):
+    """Move/resize a floating viewport (grip edit). Undoable.
+
+    A resize keeps the SCALE and keeps the model pinned to the paper
+    (AutoCAD: the window reveals more model, nothing slides): the view
+    height scales with the paper height, and the view center shifts by the
+    paper-center displacement converted to model units.
+    """
+
+    needs_regen = True
+
+    def __init__(self, vp, center, size, view_center, view_height,
+                 name: str = "Viewport edit") -> None:
+        self.name = name
+        self.entity = vp
+        self._new = (center, size, view_center, view_height)
+        self._old = ((vp.dxf.center.x, vp.dxf.center.y),
+                     (float(vp.dxf.width), float(vp.dxf.height)),
+                     (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y),
+                     float(vp.dxf.view_height))
+
+    def _apply(self, state, document) -> None:
+        center, size, view_center, view_height = state
+        self.entity.dxf.center = center
+        self.entity.dxf.width, self.entity.dxf.height = size
+        self.entity.dxf.view_center_point = view_center
+        self.entity.dxf.view_height = view_height
+        document.dirty = True
+
+    def do(self, document) -> None:
+        self._apply(self._new, document)
+
+    def undo(self, document) -> None:
+        self._apply(self._old, document)
+
+
+def viewport_grip_command(vp, index: int, role: str, point):
+    """The Command a finished grip drag executes, or None for a no-op."""
+    x0, y0, x1, y1 = viewport_drag_rect(vp, index, role, point)
+    w, h = x1 - x0, y1 - y0
+    if w <= 1e-6 or h <= 1e-6:
+        return None
+    old_cx, old_cy = vp.dxf.center.x, vp.dxf.center.y
+    new_center = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    if role == "center":
+        # move: the model travels with its window (view unchanged)
+        if abs(new_center[0] - old_cx) < 1e-9 \
+                and abs(new_center[1] - old_cy) < 1e-9:
+            return None
+        return SetViewportGeometryCommand(
+            vp, new_center, (float(vp.dxf.width), float(vp.dxf.height)),
+            (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y),
+            float(vp.dxf.view_height), name="MOVE viewport")
+    # resize: keep scale, keep model pinned to paper
+    scale = viewport_scale(vp)
+    view_center = (vp.dxf.view_center_point.x + (new_center[0] - old_cx) / scale,
+                   vp.dxf.view_center_point.y + (new_center[1] - old_cy) / scale)
+    return SetViewportGeometryCommand(
+        vp, new_center, (w, h), view_center, h / scale,
+        name="Resize viewport")
+
+
+def transform_viewport(vp, matrix) -> None:
+    """Apply a transform to a VIEWPORT, which ezdxf refuses to transform.
+
+    A viewport is a rectangle on the sheet plus a view into the model. The
+    honest reading of "transform this object" moves and scales the
+    RECTANGLE and leaves the view alone: the same model area stays on
+    display, so a viewport moved travels with its picture and one scaled by
+    a half draws that picture at half size -- which is exactly what halving
+    an A1 sheet into an A3 has to do. (Its own grip resize means something
+    different on purpose -- there the scale is held and the window reveals
+    more model, as AutoCAD does when you drag a corner.)
+
+    Rotation has nowhere to go: a VIEWPORT has no angle, only a view twist,
+    which is not the same thing. Raise rather than silently deform it.
+    """
+    from ezdxf.math import Vec3
+
+    cx, cy = float(vp.dxf.center.x), float(vp.dxf.center.y)
+    w, h = float(vp.dxf.width), float(vp.dxf.height)
+    origin = matrix.transform(Vec3(0, 0, 0))
+    ex = matrix.transform(Vec3(1, 0, 0)) - origin
+    ey = matrix.transform(Vec3(0, 1, 0)) - origin
+    if abs(ex.y) > 1e-9 or abs(ey.x) > 1e-9:
+        raise NotImplementedError("a viewport cannot be rotated or sheared")
+    centre = matrix.transform(Vec3(cx, cy, 0))
+    vp.dxf.center = (centre.x, centre.y, float(vp.dxf.center.z))
+    vp.dxf.width = abs(w * ex.x)
+    vp.dxf.height = abs(h * ey.y)
+
+
+class RemoveViewportCommand(Command):
+    """ERASE of a floating viewport; undo recreates it (same view, layer)."""
+
+    needs_regen = True
+
+    def __init__(self, vp, layout_name: str) -> None:
+        self.name = "ERASE viewport"
+        self.entity = vp
+        self.layout_name = layout_name
+
+    def do(self, document) -> None:
+        vp = self.entity
+        self._params = dict(
+            center=(vp.dxf.center.x, vp.dxf.center.y),
+            size=(float(vp.dxf.width), float(vp.dxf.height)),
+            view_center_point=(vp.dxf.view_center_point.x,
+                               vp.dxf.view_center_point.y),
+            view_height=float(vp.dxf.view_height),
+            layer=vp.dxf.layer,
+        )
+        self.removed_handles = [vp.dxf.handle]
+        psp = document.doc.layouts.get(self.layout_name)
+        psp.delete_entity(vp)
+        self.entity = None
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        psp = document.doc.layouts.get(self.layout_name)
+        p = self._params
+        self.entity = psp.add_viewport(
+            center=p["center"], size=p["size"],
+            view_center_point=p["view_center_point"],
+            view_height=p["view_height"])
+        self.entity.dxf.layer = p["layer"]
+        document.dirty = True
+
+
+# -- viewport scale (MSPACE + ZOOM nXP, the AutoCAD way) ------------------------
+
+def visible_viewports(layout) -> list:
+    """The floating viewports a CAD app shows, in stacking order.
+
+    Mirrors the ezdxf frontend's _draw_viewports heuristic exactly (id and
+    status are unreliable in real files): sort by status, drop invisible
+    ones, and pop the first iff it claims to be the "main" viewport — the
+    one that represents the paper view itself, never a window.
+    """
+    viewports = [e for e in layout if e.dxftype() == "VIEWPORT"]
+    viewports.sort(key=lambda e: e.dxf.status)
+    viewports = [vp for vp in viewports if vp.dxf.status > 0]
+    if viewports and viewports[0].dxf.get("status", 1) == 1:
+        viewports.pop(0)
+    return viewports
+
+
+def repair_viewport_status(doc) -> int:
+    """Renumber viewports a converter left with no status at all.
+
+    DXF group 68 is not stored in a DWG -- a reader has to derive it -- and
+    LibreDWG derives it from ``entmode``, which only says whether the entity
+    carries an explicit owner handle. Every layout except the one current
+    when the file was saved stores its entities that way, so ALL of their
+    viewports came out "off" and the sheet rendered blank: four of the five
+    layouts of a real plan, measured against ODA, which writes 1..N per
+    layout and turns none off.
+
+    The artifact is exact: status 0 AND id 0 together. AutoCAD turns a
+    viewport off by zeroing the status while KEEPING its id, and ODA never
+    writes the pair at all -- so a genuinely hidden viewport is never
+    touched. Only a layout whose viewports are ALL unnumbered is renumbered,
+    1..N in file order, the convention ODA writes: the first one is the
+    paper view itself, which :func:`visible_viewports` then drops.
+
+    Returns how many viewports changed, for the tests.
+    """
+    changed = 0
+    for layout in doc.layouts:
+        if layout.name == "Model":
+            continue
+        viewports = [e for e in layout if e.dxftype() == "VIEWPORT"]
+        if not viewports:
+            continue
+        if not all(int(vp.dxf.get("status", 0) or 0) == 0
+                   and int(vp.dxf.get("id", 0) or 0) == 0
+                   for vp in viewports):
+            continue            # some carry real numbers: trust the file
+        for number, vp in enumerate(viewports, start=1):
+            vp.dxf.status = number
+            vp.dxf.id = number
+            changed += 1
+    return changed
+
+
+def ensure_main_viewport(layout):
+    """Give a sheet the main viewport AutoCAD gives every layout -- id 1,
+    status 1, the paper view itself -- when it has none. Returns the one
+    added, or None.
+
+    Without it the first floating viewport was taken for the paper view by
+    AutoCAD and ODA when they renumbered on opening: an IngeCAD sheet sent
+    to a colleague lost its first viewport (found checking annotative
+    scales through ODA, 2026-10-10).
+    """
+    if layout is None or getattr(layout, "name", "Model") == "Model":
+        return None
+    if any(int(vp.dxf.get("id", 0) or 0) == 1
+           for vp in layout if vp.dxftype() == "VIEWPORT"):
+        return None
+    return layout.add_new_main_viewport()
+
+
+def repair_missing_main_viewports(doc) -> int:
+    """On opening: a sheet that has floating viewports but no viewport
+    numbered 1 -- what IngeCAD wrote before 0.6.7 -- gets its main viewport.
+    A DWG renumbered on reading (repair_viewport_status) already has a 1;
+    a sheet with no viewport at all is left for AutoCAD to complete."""
+    added = 0
+    for layout in doc.layouts:
+        if layout.name == "Model":
+            continue
+        if not any(e.dxftype() == "VIEWPORT" for e in layout):
+            continue
+        if ensure_main_viewport(layout) is not None:
+            added += 1
+    return added
+
+
+def viewport_hit(layout, x: float, y: float):
+    """Topmost visible viewport whose paper rectangle contains (x, y)."""
+    hit = None
+    for vp in visible_viewports(layout):        # stacking order: last on top
+        cx, cy = vp.dxf.center.x, vp.dxf.center.y
+        if (abs(x - cx) <= vp.dxf.width / 2.0
+                and abs(y - cy) <= vp.dxf.height / 2.0):
+            hit = vp
+    return hit
+
+
+def viewport_rect(vp) -> tuple[float, float, float, float]:
+    cx, cy = vp.dxf.center.x, vp.dxf.center.y
+    hw, hh = vp.dxf.width / 2.0, vp.dxf.height / 2.0
+    return (cx - hw, cy - hh, cx + hw, cy + hh)
+
+
+def viewport_clip(vp):
+    """What clips this viewport's content, as ezdxf draws it.
+
+    ``None``: the frame (no clipping, or a boundary handle that points at
+    nothing -- LibreDWG leaves those dangling on most real sheets, and
+    ezdxf falls back to the frame for them, so the live navigation must
+    too: it used to take the handle at its word and re-bake the sheet on
+    every mouse move). A ``(x0, y0, x1, y1)`` rectangle: the boundary is an
+    axis-aligned rectangle, and clipping to it is a scissor like the
+    frame's. ``False``: a real shape, which only the baked path renders.
+    """
+    try:
+        if not vp.has_extended_clipping_path:
+            return None
+        boundary = vp.doc.entitydb.get(vp.dxf.clipping_boundary_handle) if vp.doc else None
+    except Exception:
+        return None
+    if boundary is None:
+        return None
+    if boundary.dxftype() != "LWPOLYLINE":
+        return False
+    try:
+        points = [(float(x), float(y)) for x, y in boundary.get_points("xy")]
+        if any(abs(float(b[0])) > 1e-12 for b in boundary.get_points("b")):
+            return False             # an arc segment: not a rectangle
+    except Exception:
+        return False
+    if len(points) == 5 and points[0] == points[-1]:
+        points = points[:-1]
+    if len(points) != 4:
+        return False
+    xs, ys = sorted({round(x, 9) for x, _y in points}), sorted({round(y, 9) for _x, y in points})
+    if len(xs) != 2 or len(ys) != 2:
+        return False
+    return (xs[0], ys[0], xs[1], ys[1])
+
+
+# -- the projection: paper <-> model through a viewport --------------------------
+#
+# A floating viewport shows the model at a scale, around a view centre, and
+# optionally turned by a twist angle. Editing through it (MSPACE) means every
+# point the mouse gives is paper and every point a tool answers is model, so
+# the two directions live here, in ONE place, and everything else -- picking,
+# snapping, grips, the overlay matrices -- goes through them.
+#
+#     paper = R(twist) * (model - view_centre) * scale + centre
+#     model = R(-twist) * (paper - centre) / scale + view_centre
+
+
+def viewport_twist(vp) -> float:
+    """The view twist in degrees, normalised to (-180, 180]: a real sheet
+    carried 720, a full turn that is no turn -- and had the live
+    navigation refuse the whole sheet for it."""
+    twist = float(vp.dxf.get("view_twist_angle", 0.0) or 0.0) % 360.0
+    if twist > 180.0:
+        twist -= 360.0
+    return 0.0 if abs(twist) < 1e-9 else twist
+
+
+def _twist_radians(vp) -> float:
+    return math.radians(viewport_twist(vp))
+
+
+def _target_xy(vp) -> tuple[float, float]:
+    try:
+        target = vp.dxf.get("view_target_point", None)
+        if target is None:
+            return (0.0, 0.0)
+        return (float(target.x), float(target.y))
+    except Exception:
+        return (0.0, 0.0)
+
+
+def view_centre_wcs(vp) -> tuple[float, float]:
+    """The MODEL point a viewport shows at its centre, in WCS.
+
+    The DXF does not store it as such. Group 12/22 (view_center_point) is
+    the centre in the *display* coordinate system -- the model frame turned
+    by the view twist -- and relative to the view target (17/27), which is
+    a WCS point. Read as a WCS point it is only right for a viewport with
+    no twist and a zero target; a colleague's plan had eight of thirty
+    viewports with a UTM target of (529 876, 8 573 039) and a view centre of
+    (-528 160, -8 572 730), which read raw put the "model under the window"
+    half a million units off -- picking, snapping and editing through them
+    reached nothing. This is ezdxf's own transformation matrix, inverted:
+    ``target + R(-twist) * view_center``.
+    """
+    centre = vp.dxf.view_center_point          # a Vec3, or a plain pair
+    vcx, vcy = float(centre[0]), float(centre[1])
+    tx, ty = _target_xy(vp)
+    twist = _twist_radians(vp)
+    if twist:
+        cos_a, sin_a = math.cos(-twist), math.sin(-twist)
+        vcx, vcy = vcx * cos_a - vcy * sin_a, vcx * sin_a + vcy * cos_a
+    return (tx + vcx, ty + vcy)
+
+
+def dcs_view_center(vp, wcs_point) -> tuple[float, float]:
+    """The group 12/22 value that puts ``wcs_point`` at the viewport's
+    centre: the inverse of :func:`view_centre_wcs`, for the writers that
+    compute a centre from model geometry (fit, ZOOM Window)."""
+    tx, ty = _target_xy(vp)
+    dx, dy = float(wcs_point[0]) - tx, float(wcs_point[1]) - ty
+    twist = _twist_radians(vp)
+    if twist:
+        cos_a, sin_a = math.cos(twist), math.sin(twist)
+        dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+    return (dx, dy)
+
+
+def viewport_view(vp) -> Optional[tuple]:
+    """(centre, view_centre, scale, twist_radians) of a viewport, or None.
+
+    ``view_centre`` is the WCS model point under the viewport's centre (see
+    :func:`view_centre_wcs`), not the raw DXF value. None means "this
+    viewport cannot state a projection" -- a missing or degenerate view, a
+    non-finite number -- and every caller then refuses rather than
+    inventing coordinates.
+    """
+    try:
+        centre = (float(vp.dxf.center.x), float(vp.dxf.center.y))
+        view_centre = view_centre_wcs(vp)
+        height = float(vp.dxf.height)
+        view_height = float(vp.dxf.view_height)
+        twist = _twist_radians(vp)
+    except Exception:
+        return None
+    if not (math.isfinite(view_height) and view_height > 0.0):
+        return None
+    scale = height / view_height
+    values = (*centre, *view_centre, scale, twist)
+    if not all(math.isfinite(v) for v in values) or scale <= 0.0:
+        return None
+    return centre, view_centre, scale, twist
+
+
+def paper_to_model(vp, x: float, y: float) -> Optional[tuple[float, float]]:
+    """A point on the sheet -> the model point the viewport shows there."""
+    view = viewport_view(vp)
+    if view is None:
+        return None
+    (cx, cy), (vcx, vcy), scale, twist = view
+    dx, dy = (x - cx) / scale, (y - cy) / scale
+    if twist:
+        cos_a, sin_a = math.cos(-twist), math.sin(-twist)
+        dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+    return (vcx + dx, vcy + dy)
+
+
+def model_to_paper(vp, x: float, y: float) -> Optional[tuple[float, float]]:
+    """A model point -> where this viewport draws it on the sheet."""
+    view = viewport_view(vp)
+    if view is None:
+        return None
+    (cx, cy), (vcx, vcy), scale, twist = view
+    dx, dy = x - vcx, y - vcy
+    if twist:
+        cos_a, sin_a = math.cos(twist), math.sin(twist)
+        dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+    return (cx + dx * scale, cy + dy * scale)
+
+
+def viewport_placement(vp) -> Optional[dict]:
+    """How a renderer places the model scene inside this viewport.
+
+    The same numbers as :func:`model_to_paper`, in the form the GL matrix
+    helper wants: turn and scale about ``base``, then shift by ``offset``.
+    """
+    view = viewport_view(vp)
+    if view is None:
+        return None
+    (cx, cy), (vcx, vcy), scale, twist = view
+    return {"rect": viewport_rect(vp),
+            "base": (vcx, vcy),
+            "factor": scale,
+            "angle": math.degrees(twist),
+            "offset": (cx - vcx, cy - vcy)}
+
+
+def parse_xp_factor(token: str) -> Optional[float]:
+    """AutoCAD's ZOOM nXP syntax: "1/100XP", "0.5XP", "2XP" → the paper/model
+    scale factor, or None when the token is not an XP scale."""
+    t = token.strip().upper()
+    if not t.endswith("XP"):
+        return None
+    body = t[:-2]
+    try:
+        if "/" in body:
+            num, den = body.split("/", 1)
+            factor = float(num) / float(den)
+        else:
+            factor = float(body)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return factor if math.isfinite(factor) and factor > 0.0 else None
+
+
+def viewport_scale(vp) -> float:
+    """paper units per model unit = dxf.height / view_height."""
+    view_height = float(vp.dxf.view_height) or 1.0
+    return float(vp.dxf.height) / view_height
+
+
+def scale_label(factor: float) -> str:
+    """Human form of a viewport scale: 0.01 → "1:100", 2.0 → "2:1"."""
+    if factor <= 0.0:
+        return "?"
+    if factor >= 1.0:
+        n = factor
+        return f"{n:g}:1"
+    return f"1:{1.0 / factor:g}"
+
+
+class SetViewportViewCommand(Command):
+    """Change what a viewport looks at (ZOOM nXP / fit / wheel gesture).
+    Undoable — the view lives in the DXF entity, so it is a document
+    mutation. ``old_center``/``old_height`` override the captured "before"
+    state for gestures that already mutated the entity live (wheel/pan
+    bursts commit ONE command at the end, like AutoCAD groups zooms).
+
+    ``view_center`` is the DXF value (group 12/22, display coordinates
+    relative to the view target), not a WCS point: a caller holding a
+    model point converts it with :func:`dcs_view_center` first."""
+
+    needs_regen = True
+
+    def __init__(self, vp, view_center=None, view_height=None,
+                 name: str = "ZOOM XP",
+                 old_center=None, old_height=None) -> None:
+        self.name = name
+        self.entity = vp
+        self._new_center = view_center
+        self._new_height = view_height
+        self._old_center = old_center if old_center is not None else (
+            vp.dxf.view_center_point.x, vp.dxf.view_center_point.y)
+        self._old_height = (old_height if old_height is not None
+                            else float(vp.dxf.view_height))
+
+    def do(self, document) -> None:
+        if self._new_center is not None:
+            self.entity.dxf.view_center_point = self._new_center
+        if self._new_height is not None:
+            self.entity.dxf.view_height = self._new_height
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        self.entity.dxf.view_center_point = self._old_center
+        self.entity.dxf.view_height = self._old_height
+        document.dirty = True
+
+
+def xp_zoom_command(vp, factor: float) -> SetViewportViewCommand:
+    """ZOOM nXP: model shown at ``factor`` paper units per model unit,
+    keeping the view center (AutoCAD keeps it too)."""
+    return SetViewportViewCommand(
+        vp, view_height=float(vp.dxf.height) / factor)
+
+
+def zoom_window_command(vp, x0: float, y0: float, x1: float, y1: float):
+    """ZOOM Window inside an active viewport: the paper rectangle dragged on
+    the sheet becomes what that viewport shows.
+
+    The wheel already zooms the viewport's view rather than the sheet, so
+    ZOOM Window has to do the same or the two gestures would disagree about
+    what "zoom" means while a viewport is current. A twisted viewport gets
+    the model rectangle that circumscribes the dragged one -- never less
+    than what was asked for. None when the projection cannot be stated.
+    """
+    corners = [paper_to_model(vp, x, y)
+               for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    if any(c is None for c in corners):
+        return None
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    try:
+        aspect = float(vp.dxf.width) / float(vp.dxf.height)
+    except (ZeroDivisionError, ValueError, TypeError):
+        aspect = 1.0
+    if not (math.isfinite(aspect) and aspect > 0.0):
+        aspect = 1.0
+    view_height = max(height, width / aspect)
+    if not (math.isfinite(view_height) and view_height > 0.0):
+        return None
+    centre = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
+    return SetViewportViewCommand(
+        vp, dcs_view_center(vp, centre), view_height, name="ZOOM Window")
+
+
+def is_viewport_locked(vp) -> bool:
+    """AutoCAD's display lock (flag 0x4000): the VIEW is frozen — wheel,
+    pan and nXP must not touch it. Moving/resizing/erasing the viewport
+    entity itself stays allowed (the lock protects the scale, not the
+    window)."""
+    from ezdxf.lldxf.const import VSF_LOCK_ZOOM
+
+    try:
+        return bool(int(vp.dxf.get("flags", 0)) & VSF_LOCK_ZOOM)
+    except (TypeError, ValueError):
+        return False
+
+
+class SetViewportLockCommand(Command):
+    """VPLOCK — toggle the display lock. Undoable; nothing rendered
+    changes, so no regen is needed."""
+
+    def __init__(self, vp, locked: bool) -> None:
+        self.name = "VPLOCK"
+        self.entity = vp
+        self.locked = locked
+
+    def _set(self, locked: bool, document) -> None:
+        from ezdxf.lldxf.const import VSF_LOCK_ZOOM
+
+        flags = int(self.entity.dxf.get("flags", 0))
+        self.entity.dxf.flags = (flags | VSF_LOCK_ZOOM) if locked \
+            else (flags & ~VSF_LOCK_ZOOM)
+        document.dirty = True
+
+    def do(self, document) -> None:
+        self._set(self.locked, document)
+
+    def undo(self, document) -> None:
+        self._set(not self.locked, document)
+
+
+def zoom_viewport_view(vp, factor: float, anchor=None) -> None:
+    """Wheel zoom inside an active viewport (live, no Command): scale the
+    view about the model point under ``anchor`` (paper coords), so the
+    geometry under the cursor stays under the cursor — same feel as the
+    paper-space wheel.
+
+    All in display coordinates on purpose: the DCS axes are the paper's
+    (turned with the view), so a paper offset over the scale IS a DCS
+    offset, twist or no twist, and the raw group 12/22 value can be moved
+    directly. The same holds for :func:`pan_viewport_view`."""
+    scale = viewport_scale(vp)
+    cx, cy = vp.dxf.center.x, vp.dxf.center.y
+    vcx, vcy = vp.dxf.view_center_point.x, vp.dxf.view_center_point.y
+    new_height = float(vp.dxf.view_height) / factor
+    if new_height <= 0.0 or not math.isfinite(new_height):
+        return
+    if anchor is not None:
+        mx = vcx + (anchor[0] - cx) / scale       # model point under cursor
+        my = vcy + (anchor[1] - cy) / scale
+        new_scale = float(vp.dxf.height) / new_height
+        vcx = mx - (anchor[0] - cx) / new_scale
+        vcy = my - (anchor[1] - cy) / new_scale
+    vp.dxf.view_height = new_height
+    vp.dxf.view_center_point = (vcx, vcy)
+
+
+def pan_viewport_view(vp, dx_paper: float, dy_paper: float) -> None:
+    """Middle-drag pan inside an active viewport (live, no Command): the
+    model follows the cursor, so the view center moves the other way."""
+    scale = viewport_scale(vp)
+    vp.dxf.view_center_point = (
+        vp.dxf.view_center_point.x - dx_paper / scale,
+        vp.dxf.view_center_point.y - dy_paper / scale)
+
+
+def viewport_fit_command(document, vp) -> SetViewportViewCommand:
+    """ZOOM Extents inside an active viewport: fit the whole model."""
+    center, view_height = model_fit_view(
+        document, float(vp.dxf.width), float(vp.dxf.height),
+        viewport_twist(vp))
+    return SetViewportViewCommand(vp, view_center=dcs_view_center(vp, center),
+                                  view_height=view_height, name="ZOOM Extents")
+
+
+# -- page setup (PAGESETUP) -----------------------------------------------------
+#
+# ⚠️ Written as direct DXF field updates ON PURPOSE: ezdxf's
+# Paperspace.page_setup() ends with reset_viewports(), which destroys every
+# floating viewport in the layout — calling it on a colleague's file would
+# break the conservative round-trip promise. See docs/reference/layout/.
+
+# Standard paper sizes in mm, portrait (width < height). The dialog offers
+# these; anything else is "Custom".
+PAPER_SIZES: list[tuple[str, float, float]] = [
+    ("ISO A0", 841.0, 1189.0),
+    ("ISO A1", 594.0, 841.0),
+    ("ISO A2", 420.0, 594.0),
+    ("ISO A3", 297.0, 420.0),
+    ("ISO A4", 210.0, 297.0),
+    ("ANSI Letter", 215.9, 279.4),
+    ("ANSI Legal", 215.9, 355.6),
+    ("ANSI B (11x17)", 279.4, 431.8),
+]
+
+
+def effective_page(layout) -> dict:
+    """Current sheet as the user sees it: effective (rotation-applied) size
+    and margins in mm, derived from the same math the renderer uses."""
+    frame = paper_frame(layout)
+    x0, y0, x1, y1 = frame["sheet"]
+    width, height = x1 - x0, y1 - y0
+    printable = frame["printable"]
+    if printable is None:
+        printable = frame["sheet"]
+    px0, py0, px1, py1 = printable
+    return {
+        "width": width,
+        "height": height,
+        "margins": (y1 - py1, x1 - px1, py0 - y0, px0 - x0),  # t, r, b, l
+    }
+
+
+class PageSetupCommand(Command):
+    """Apply a page setup to one layout by writing its PLOTSETTINGS fields.
+    Undoable; the floating viewports are never touched."""
+
+    needs_regen = True
+
+    def __init__(self, layout, fields: dict) -> None:
+        self.name = "PAGESETUP"
+        self.layout = layout
+        self._fields = fields
+        # get_default, not get: unset attributes fall back to the schema
+        # default (a fresh Layout1 stores nothing and means A3) — capturing
+        # None here would make undo skip the field.
+        self._old = {}
+        for key in fields:
+            try:
+                self._old[key] = layout.dxf.get_default(key)
+            except Exception:
+                self._old[key] = layout.dxf.get(key, None)
+
+    def _apply(self, values: dict, document) -> None:
+        for key, value in values.items():
+            if value is not None:
+                setattr(self.layout.dxf, key, value)
+        document.dirty = True
+
+    def do(self, document) -> None:
+        self._apply(self._fields, document)
+
+    def undo(self, document) -> None:
+        self._apply(self._old, document)
+
+
+# plot_layout_flags bits (AcDbPlotSettings group 70) used by the dialog.
+FLAG_PLOT_CENTERED = 4
+FLAG_PLOT_HIDDEN = 8               # "Hide paperspace objects"
+FLAG_USE_STANDARD_SCALE = 16
+FLAG_PLOT_PLOTSTYLES = 32          # "Plot with plot styles"
+FLAG_SCALE_LINEWEIGHTS = 64
+FLAG_PRINT_LINEWEIGHTS = 128       # "Plot object lineweights"
+FLAG_DRAW_VIEWPORTS_FIRST = 512    # = "Plot paperspace last"
+
+# AutoCAD's standard-scale list (code 75). Ratios missing here (1:5, 1:25,
+# 1:200...) are stored as a custom numerator/denominator, like AutoCAD does.
+STD_SCALE_CODES = {
+    (1, 1): 16, (1, 2): 17, (1, 4): 18, (1, 8): 19, (1, 10): 20,
+    (1, 16): 21, (1, 20): 22, (1, 30): 23, (1, 40): 24, (1, 50): 25,
+    (1, 100): 26, (2, 1): 27, (4, 1): 28, (8, 1): 29, (10, 1): 30,
+    (100, 1): 31, (1000, 1): 32,
+}
+
+# Plot area (plot_type, code 74) choices shown on a layout tab.
+PLOT_TYPE_DISPLAY = 0
+PLOT_TYPE_EXTENTS = 1
+PLOT_TYPE_LAYOUT = 5
+
+
+def page_setup_command(layout, width: float, height: float,
+                       margins, size_name: str = "", *,
+                       upside_down: bool = False,
+                       device=None, plot_type=None,
+                       offset=None, centered=None,
+                       fit_to_paper=None, scale=None,
+                       scale_lineweights=None, style_sheet=None,
+                       plot_lineweights=None, plot_styles=None,
+                       paperspace_last=None, hide_paperspace=None,
+                       shade_plot=None, shade_quality=None,
+                       shade_dpi=None) -> PageSetupCommand:
+    """PAGESETUP: the full AutoCAD page-setup surface as one Command.
+
+    ``width``/``height``/``margins`` are what the user SEES (orientation
+    already applied; margins = top/right/bottom/left). "Plot upside-down"
+    stores rotation 2 with the margins inverse-rotated so the display math
+    (paper_frame) shows them back where the user put them. Every keyword
+    left as None keeps the layout's current value for that field.
+
+    Recomputes the paper limits the way AutoCAD stores them (sheet rect
+    relative to the printable-area corner) — the equivalent of ezdxf's
+    reset_paper_limits, minus its viewport destruction.
+    """
+    m_top, m_right, m_bottom, m_left = (float(m) for m in margins)
+    if offset is not None:
+        ox, oy = float(offset[0]), float(offset[1])
+    else:
+        try:
+            ox = float(layout.dxf.get("plot_origin_x_offset", 0.0)) or 0.0
+            oy = float(layout.dxf.get("plot_origin_y_offset", 0.0)) or 0.0
+        except (TypeError, ValueError):
+            ox = oy = 0.0
+    label = size_name.replace(" ", "_") if size_name else "User"
+    if upside_down:
+        # rotation 2 (180°): stored margins = displayed rotated back
+        rotation = 2
+        s_top, s_right, s_bottom, s_left = m_bottom, m_left, m_top, m_right
+    else:
+        rotation = 0
+        s_top, s_right, s_bottom, s_left = m_top, m_right, m_bottom, m_left
+    fields = {
+        "paper_width": float(width),
+        "paper_height": float(height),
+        "top_margin": s_top,
+        "right_margin": s_right,
+        "bottom_margin": s_bottom,
+        "left_margin": s_left,
+        "plot_rotation": rotation,
+        "plot_paper_units": 1,          # mm (all lengths stored in mm anyway)
+        "unit_factor": 1.0,
+        "paper_size": f"{label}_({width:.2f}_x_{height:.2f}_MM)",
+        "limmin": (-(s_left + ox), -(s_bottom + oy)),
+        "limmax": (width - s_left - ox, height - s_bottom - oy),
+    }
+    if getattr(layout, "is_modelspace", False):
+        # the Model tab's limits are the drawing's, in drawing units, not
+        # a sheet: its page setup only says how the model plots
+        del fields["limmin"], fields["limmax"]
+    if device is not None:
+        fields["plot_configuration_file"] = device
+    if plot_type is not None:
+        fields["plot_type"] = int(plot_type)
+    if offset is not None:
+        fields["plot_origin_x_offset"] = ox
+        fields["plot_origin_y_offset"] = oy
+    if style_sheet is not None:
+        fields["current_style_sheet"] = style_sheet
+    if shade_plot is not None:
+        fields["shade_plot_mode"] = int(shade_plot)
+    if shade_quality is not None:
+        fields["shade_plot_resolution_level"] = int(shade_quality)
+    if shade_dpi is not None:
+        fields["shade_plot_custom_dpi"] = int(shade_dpi)
+
+    # -- plot scale (fit / standard list / custom ratio) ---------------------
+    flag_bits: dict[int, bool] = {}
+    if fit_to_paper:
+        fields["standard_scale_type"] = 0       # "scaled to fit"
+        flag_bits[FLAG_USE_STANDARD_SCALE] = True
+    elif scale is not None:
+        num, den = float(scale[0]), float(scale[1])
+        fields["scale_numerator"] = num
+        fields["scale_denominator"] = den
+        fields["standard_scale_type"] = STD_SCALE_CODES.get(
+            (int(num), int(den)), 16)
+        # AutoCAD honors 142/143 when the standard-scale flag is off
+        # (and ezdxf's own page_setup does the same: "works best").
+        flag_bits[FLAG_USE_STANDARD_SCALE] = False
+
+    for bit, value in ((FLAG_PLOT_CENTERED, centered),
+                       (FLAG_SCALE_LINEWEIGHTS, scale_lineweights),
+                       (FLAG_PRINT_LINEWEIGHTS, plot_lineweights),
+                       (FLAG_PLOT_PLOTSTYLES, plot_styles),
+                       (FLAG_DRAW_VIEWPORTS_FIRST, paperspace_last),
+                       (FLAG_PLOT_HIDDEN, hide_paperspace)):
+        if value is not None:
+            flag_bits[bit] = bool(value)
+    if flag_bits:
+        try:
+            flags = int(layout.dxf.get_default("plot_layout_flags"))
+        except Exception:
+            flags = int(layout.dxf.get("plot_layout_flags", 0) or 0)
+        for bit, value in flag_bits.items():
+            flags = (flags | bit) if value else (flags & ~bit)
+        fields["plot_layout_flags"] = flags
+
+    return PageSetupCommand(layout, fields)
+
+
+# -- the paper sheet ------------------------------------------------------------
+
+def paper_frame(layout) -> dict:
+    """Sheet + printable rectangles of a paperspace layout, in paperspace
+    drawing units, ready for the viewport to draw.
+
+    Convention (verified against ezdxf's ``reset_paper_limits`` and the
+    drawing add-on's ``Page.from_dxf_layout``): paperspace (0, 0) is the
+    lower-left corner of the printable area plus the plot-origin offset;
+    everything is stored in mm and divided by 25.4 when the layout plots in
+    inches; ``plot_rotation`` 1/3 swaps the sheet dimensions and rotates the
+    margins with them.
+
+    Returns ``{"sheet": (x0, y0, x1, y1), "printable": (...) | None}``.
+    """
+    dxf = layout.dxf
+
+    def num(field, default=0.0):
+        # dxf.get(), not getattr(): an unset optional attribute raises
+        # DXFValueError, which getattr's default would not catch.
+        try:
+            v = float(dxf.get(field, default))
+        except (TypeError, ValueError):
+            return default
+        return v if math.isfinite(v) else default
+
+    unit = 25.4 if int(num("plot_paper_units", 1)) == 0 else 1.0
+    w = num("paper_width") / unit
+    h = num("paper_height") / unit
+    m_top = num("top_margin") / unit
+    m_right = num("right_margin") / unit
+    m_bottom = num("bottom_margin") / unit
+    m_left = num("left_margin") / unit
+    if not (0.0 < w < _MAX_PAPER and 0.0 < h < _MAX_PAPER):
+        w, h = _DEFAULT_PAPER
+        m_top, m_right, m_bottom, m_left = _DEFAULT_MARGINS
+        unit = 1.0
+
+    rotation = int(num("plot_rotation", 0)) % 4
+    if rotation == 1:    # 90° CCW
+        w, h = h, w
+        m_top, m_right, m_bottom, m_left = m_right, m_bottom, m_left, m_top
+    elif rotation == 2:  # 180°
+        m_top, m_right, m_bottom, m_left = m_bottom, m_left, m_top, m_right
+    elif rotation == 3:  # 90° CW
+        w, h = h, w
+        m_top, m_right, m_bottom, m_left = m_left, m_top, m_right, m_bottom
+
+    ox = num("plot_origin_x_offset") / unit
+    oy = num("plot_origin_y_offset") / unit
+
+    sheet = (-(m_left + ox), -(m_bottom + oy),
+             -(m_left + ox) + w, -(m_bottom + oy) + h)
+    printable = None
+    pw = w - m_left - m_right
+    ph = h - m_top - m_bottom
+    if pw > 0.0 and ph > 0.0:
+        printable = (-ox, -oy, -ox + pw, -oy + ph)
+    return {"sheet": sheet, "printable": printable}
+
+
+# -- the LAYOUT command (headless prompt flow) ----------------------------------
+
+LAYOUT_PROMPT = "Enter layout option [Copy/Delete/New/Template/Rename/SAveas/Set/?] <set>:"
+
+
+def layout_command(
+    document,
+    history,
+    *,
+    switch: Callable[[str], None],
+    echo: Callable[[str], None],
+    refresh: Callable[[], None],
+    current: Callable[[], str],
+    args: tuple = (),
+) -> Optional[Prompt]:
+    """The AutoCAD LAYOUT command: same keywords, same prompt strings.
+
+    ``switch``/``refresh`` are UI callbacks (tab switch, tab-bar rebuild);
+    ``current`` returns the current tab name for the prompt defaults. Extra
+    ``args`` typed on the command line ("LAYOUT N Sheet2") are consumed as
+    the answers to the successive prompts.
+    """
+    def paper_default() -> str:
+        # Default layout for Delete/Rename/Set: the current tab if it is a
+        # paperspace layout, else the first one.
+        name = current()
+        if name.lower() != "model":
+            return name
+        names = [n for n in layout_names(document) if n.lower() != "model"]
+        return names[0] if names else ""
+
+    def find(name: str) -> Optional[str]:
+        for n in layout_names(document):
+            if n.lower() == name.lower():
+                return n
+        return None
+
+    def on_new(text: str) -> None:
+        name = text.strip() or default_new_name(document)
+        problem = validate_new_name(document, name)
+        if problem:
+            echo(problem)
+            return
+        history.execute(NewLayoutCommand(name))
+        refresh()
+        echo(tr('Layout "{name}" created.', name=name))
+
+    def on_delete(text: str) -> None:
+        name = find(text.strip() or paper_default())
+        if name is None:
+            echo(tr('Layout "{name}" does not exist.', name=text.strip()))
+            return
+        if name.lower() == "model":
+            echo(tr("The Model tab cannot be deleted."))
+            return
+        try:
+            delete_layout(document, name)
+        except DXFValueError:
+            echo(tr("The last layout cannot be deleted."))
+            return
+        refresh()
+        echo(tr('Layout "{name}" deleted.', name=name))
+
+    def on_rename_old(text: str) -> Optional[Prompt]:
+        old = find(text.strip() or paper_default())
+        if old is None:
+            echo(tr('Layout "{name}" does not exist.', name=text.strip()))
+            return None
+        if old.lower() == "model":
+            echo(tr("The Model tab cannot be renamed."))
+            return None
+
+        def on_rename_new(text: str) -> None:
+            new = text.strip()
+            problem = validate_new_name(document, new)
+            if problem:
+                echo(problem)
+                return
+            history.execute(RenameLayoutCommand(old, new))
+            refresh()
+            echo(tr('Layout "{old}" renamed to "{new}".', old=old, new=new))
+
+        return Prompt(tr("Enter new layout name:"), on_rename_new)
+
+    def on_copy_source(text: str) -> Optional[Prompt]:
+        source = find(text.strip() or paper_default())
+        if source is None:
+            echo(tr('Layout "{name}" does not exist.', name=text.strip()))
+            return None
+        if source.lower() == "model":
+            echo(tr("The Model tab cannot be copied."))
+            return None
+        default = copy_name(document, source)
+
+        def on_copy_name(text: str) -> None:
+            name = text.strip() or default
+            problem = validate_new_name(document, name)
+            if problem:
+                echo(problem)
+                return
+            history.execute(CopyLayoutCommand(source, name))
+            refresh()
+            echo(tr('Layout "{source}" copied to "{name}".',
+                    source=source, name=name))
+
+        return Prompt(tr("Enter layout name for copy <{name}>:",
+                         name=default), on_copy_name)
+
+    def on_set(text: str) -> None:
+        name = find(text.strip() or paper_default())
+        if name is None:
+            echo(tr('Layout "{name}" does not exist.', name=text.strip()))
+            return
+        switch(name)
+
+    def on_option(text: str) -> Optional[Prompt]:
+        # The resolver turns the localized keyword ("Suprimir") and the
+        # _global form into the English key the branches below compare.
+        opt = keywords.match(text, LAYOUT_PROMPT) or text.strip().upper()
+        if opt in ("", "S", "SET"):
+            return Prompt(
+                tr("Enter layout to make current <{name}>:",
+                   name=paper_default()), on_set)
+        if opt in ("N", "NEW"):
+            return Prompt(
+                tr("Enter new layout name <{name}>:",
+                   name=default_new_name(document)), on_new)
+        if opt in ("D", "DELETE"):
+            return Prompt(
+                tr("Enter name of layout to delete <{name}>:",
+                   name=paper_default()), on_delete)
+        if opt in ("R", "RENAME"):
+            return Prompt(
+                tr("Enter layout to rename <{name}>:",
+                   name=paper_default()), on_rename_old)
+        if opt == "?":
+            names = [n for n in layout_names(document) if n.lower() != "model"]
+            echo(tr("Active layouts: {names}.",
+                    names=", ".join(f'"{n}"' for n in names)))
+            return None
+        if opt in ("C", "COPY"):
+            return Prompt(
+                tr("Enter name of layout to copy <{name}>:",
+                   name=paper_default()), on_copy_source)
+        if opt in ("T", "TEMPLATE", "SA", "SAVEAS"):
+            echo(tr("LAYOUT {option}: not available yet.", option=opt))
+            return None
+        echo(tr('Unknown LAYOUT option "{name}".', name=text.strip()))
+        return None
+
+    # Args typed inline answer the prompts in order (AutoCAD behavior).
+    result: Optional[Prompt] = Prompt(tr(LAYOUT_PROMPT), on_option)
+    for arg in args:
+        if result is None:
+            return None
+        result = result.on_input(arg)
+    return result

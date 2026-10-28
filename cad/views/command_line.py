@@ -1,0 +1,248 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Classic AutoCAD command window: history above, prompt below.
+
+Muscle-memory semantics live here: Space and Enter both execute, Enter on
+an empty prompt repeats the last command (the dispatcher handles that),
+Esc cancels, Up/Down walk the input history. Autocompletion offers command
+names and aliases.
+"""
+from __future__ import annotations
+
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtWidgets import (
+    QCompleter,
+    QLineEdit,
+    QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core.i18n import tr
+
+_STYLE = """
+CommandLine QPlainTextEdit, CommandLine QLineEdit {
+    background: #1e1e22;
+    color: #d8d8d8;
+    border: 1px solid #3a3940;
+    font-family: monospace;
+}
+CommandLine QLineEdit {
+    padding: 3px 6px;
+}
+"""
+
+
+class _PromptEdit(QLineEdit):
+    """Input line with AutoCAD keys: Space executes, Esc cancels."""
+
+    submitted = Signal(str)
+    cancelled = Signal()
+    #: Ctrl+Z / Ctrl+Y here mean the drawing, not the typed text.
+    undo_requested = Signal()
+    redo_requested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._history: list[str] = []
+        self._cursor = 0
+        # True while the active tool takes literal text (dimension text
+        # override): Space inserts a space instead of executing.
+        self.raw_text_check = lambda: False
+
+    def _typed_text(self) -> str:
+        """The text the user actually typed, without the inline suggestion.
+
+        Muscle memory rules: "l" must run LINE (via the alias), not whatever
+        completion happens to be highlighted. The inline suggestion sits as
+        a trailing selection; strip it on execute (Tab/Right accept it).
+        """
+        text = self.text()
+        if self.hasSelectedText():
+            start = self.selectionStart()
+            if start + len(self.selectedText()) == len(text):
+                return text[:start]
+        return text
+
+    def event(self, event) -> bool:
+        """Let the window's Undo/Redo shortcuts through.
+
+        A QLineEdit claims Ctrl+Z for its own text undo by accepting the
+        shortcut-override event, and the focus sits here the moment a command
+        is typed — so pressing Ctrl+Z right after a TRIM undid nothing at
+        all, which is not what that key means in a CAD. Declining the
+        override hands it to the window, where it undoes the drawing.
+        """
+        if event.type() == QEvent.ShortcutOverride:
+            mods = event.modifiers() & ~Qt.KeypadModifier
+            if (mods, event.key()) in (
+                    (Qt.ControlModifier, Qt.Key_Z),
+                    (Qt.ControlModifier, Qt.Key_Y),
+                    (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_Z)):
+                event.ignore()
+                return False
+        return super().event(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        key = event.key()
+        # A belt for the platforms where the override never arrives: the
+        # drawing's undo, never the line edit's.
+        if event.modifiers() & Qt.ControlModifier and key in (Qt.Key_Z,
+                                                              Qt.Key_Y):
+            if key == Qt.Key_Y or event.modifiers() & Qt.ShiftModifier:
+                self.redo_requested.emit()
+            else:
+                self.undo_requested.emit()
+            return
+        if key in (Qt.Key_Return, Qt.Key_Enter) or (
+            key == Qt.Key_Space and not self.text().endswith(" ")
+            and self._space_executes()
+        ):
+            text = self._typed_text()
+            stripped = text.strip()
+            # adjacent duplicates collapse, like AutoCAD's recall list
+            if stripped and (not self._history
+                             or self._history[-1] != stripped):
+                self._history.append(stripped)
+            self._cursor = len(self._history)
+            self.clear()
+            self.submitted.emit(text)
+            return
+        if key == Qt.Key_Escape:
+            self.clear()
+            self.cancelled.emit()
+            return
+        if key == Qt.Key_Up and self._history:
+            self._cursor = max(0, self._cursor - 1)
+            self.setText(self._history[self._cursor])
+            return
+        if key == Qt.Key_Down and self._history:
+            self._cursor = min(len(self._history), self._cursor + 1)
+            self.setText(self._history[self._cursor]
+                         if self._cursor < len(self._history) else "")
+            return
+        super().keyPressEvent(event)
+
+    def _space_executes(self) -> bool:
+        # Space acts as Enter — except while the active tool takes literal
+        # text ("Enter dimension text <>:"), where it must stay a space.
+        return not self.raw_text_check()
+
+
+class CommandLine(QWidget):
+    """History + prompt, docked at the bottom of the main window."""
+
+    submitted = Signal(str)
+    cancelled = Signal()
+    undo_requested = Signal()
+    redo_requested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("CommandLine")
+        self.setStyleSheet(_STYLE)
+
+        self.history = QPlainTextEdit(self)
+        self.history.setReadOnly(True)
+        self.history.setMaximumBlockCount(500)
+        self.history.setFixedHeight(72)
+        self.history.setFocusPolicy(Qt.NoFocus)
+
+        self.input = _PromptEdit(self)
+        self.input.setPlaceholderText(tr("Type a command"))
+        self.input.submitted.connect(self.submitted)
+        self.input.cancelled.connect(self.cancelled)
+        self.input.undo_requested.connect(self.undo_requested)
+        self.input.redo_requested.connect(self.redo_requested)
+
+        # Classic command-line shortcut menu: Recent Commands / Copy /
+        # Copy History / Paste (AutoCAD's own entries).
+        for widget in (self.input, self.history):
+            widget.setContextMenuPolicy(Qt.CustomContextMenu)
+            widget.customContextMenuRequested.connect(
+                lambda pos, w=widget: self._context_menu(w, pos))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        layout.addWidget(self.history)
+        layout.addWidget(self.input)
+
+    def set_completions(self, names: list[str]) -> None:
+        completer = QCompleter(names, self.input)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        # Inline, not popup: a popup steals the first Enter (and can hijack
+        # "l" into "LA"), breaking the type-alias-hit-Enter muscle memory.
+        completer.setCompletionMode(QCompleter.InlineCompletion)
+        self.input.setCompleter(completer)
+
+    def echo(self, text: str) -> None:
+        self.history.appendPlainText(text)
+        self._prompt_open = False
+        scrollbar = self.history.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def echo_prompt(self, text: str) -> None:
+        """A command's prompt: written, and left open for its answer."""
+        self.echo(text)
+        self._prompt_open = True
+        self._last_prompt = text
+
+    def echo_input(self, text: str) -> None:
+        prompt = text.strip() or ""
+        self.echo(f"{tr('Command')}: {prompt}")
+
+    def echo_answer(self, text: str) -> None:
+        """The answer to a command's prompt goes at the end of the prompt's
+        own line, as AutoCAD's history reads ("Specify first point: 0,0").
+        It was written as "Command: 0,0", as if a new command had been
+        typed -- a number looked like a command name (Rafael's seventh
+        review). A message printed after the prompt gets the prompt repeated
+        with the answer."""
+        answer = text.strip()
+        if getattr(self, "_prompt_open", False):
+            if answer:
+                cursor = self.history.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText(" " + answer)
+                self.history.setTextCursor(cursor)
+            self._prompt_open = False
+            return
+        prompt = getattr(self, "_last_prompt", "")
+        self.echo(f"{prompt} {answer}".strip() if prompt else answer)
+
+    def type_ahead(self, event: QKeyEvent) -> None:
+        """Forward a keystroke typed over the viewport (AutoCAD feel)."""
+        self.input.setFocus()
+        self.input.keyPressEvent(event)
+
+    def recent_commands(self, count: int = 6) -> list[str]:
+        """Most recent distinct command lines, newest first."""
+        seen: list[str] = []
+        for text in reversed(self.input._history):
+            token = text.split()[0].upper() if text.split() else ""
+            if token and token not in seen:
+                seen.append(token)
+            if len(seen) >= count:
+                break
+        return seen
+
+    def _context_menu(self, widget, pos) -> None:
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        recent = self.recent_commands()
+        if recent:
+            sub = menu.addMenu(tr("Recent Commands"))
+            for name in recent:
+                sub.addAction(name, lambda n=name: self.submitted.emit(n))
+            menu.addSeparator()
+        menu.addAction(tr("Copy"), lambda: (
+            self.history.copy() if widget is self.history else self.input.copy()))
+        menu.addAction(tr("Copy History"), lambda:
+                       QGuiApplication.clipboard().setText(
+                           self.history.toPlainText()))
+        menu.addAction(tr("Paste"), self.input.paste)
+        menu.exec(widget.mapToGlobal(pos))

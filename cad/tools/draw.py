@@ -1,0 +1,2607 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Drawing tools: LINE, CIRCLE, ARC, PLINE, RECTANG, POLYGON.
+
+Prompt wording mirrors AutoCAD so the muscle memory transfers; every
+mutation goes through core.actions Commands (exact undo).
+"""
+from __future__ import annotations
+
+import math
+
+from core import actions, editmath, ocs
+from core.i18n import tr
+from tools.base import Point, Tool
+
+
+def _circle_preview(center: Point, radius: float, n: int = 48):
+    pts = [
+        (center[0] + radius * math.cos(i * math.tau / n),
+         center[1] + radius * math.sin(i * math.tau / n))
+        for i in range(n + 1)
+    ]
+    return list(zip(pts, pts[1:]))
+
+
+# -- Continue chain (LINE/ARC/PLINE Enter-at-first-prompt) ----------------------
+#
+# AutoCAD: Enter at the first prompt continues from the endpoint of the most
+# recently created line, polyline or arc; when that end belongs to an arc,
+# the new segment is tangent to it (direction locked). Session state, like
+# AutoCAD's — not persisted.
+_CHAIN = {"point": None, "dir": None, "kind": None}
+
+
+def set_chain(point, direction, kind: str) -> None:
+    _CHAIN.update(point=point, dir=direction, kind=kind)
+
+
+def chain_end():
+    return _CHAIN["point"], _CHAIN["dir"], _CHAIN["kind"]
+
+
+def reset_chain() -> None:
+    _CHAIN.update(point=None, dir=None, kind=None)
+
+
+def _arc_preview(geom, n: int = 48):
+    """Segment list along an arc geometry tuple (ccw a1 -> a2)."""
+    center, radius, a1, a2 = geom[0], geom[1], geom[2], geom[3]
+    sweep = (a2 - a1) % 360.0 or 360.0
+    steps = max(2, int(n * sweep / 360.0) + 1)
+    pts = []
+    for i in range(steps + 1):
+        a = math.radians(a1 + sweep * i / steps)
+        pts.append((center[0] + radius * math.cos(a),
+                    center[1] + radius * math.sin(a)))
+    return list(zip(pts, pts[1:]))
+
+
+def _parse_number(text: str):
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+class LineTool(Tool):
+    def start(self) -> None:
+        self.name = "LINE"
+        self._points: list[Point] = []
+        self._locked_dir = None       # tangent lock after Continue-from-arc
+        #: A first point picked with a deferred tangent: (circle, pick). The
+        #: point on the circle is solved when the next point is known.
+        self._deferred = None
+        self.prompt("Specify first point:")
+
+    def on_deferred_tangent(self, circle, pick: Point) -> None:
+        """TAN with no previous point (AutoCAD's deferred tangent)."""
+        if self._points:
+            self.on_point(pick)        # there is a point: an ordinary tangent
+            return
+        if self._deferred is None:
+            self._deferred = (circle, pick)
+            self._next_prompt()
+            return
+        # tangent to two round objects: the common tangent nearest the picks
+        first, first_pick = self._deferred
+        lines = editmath.common_tangents(first, circle)
+        if not lines:
+            self.ctx.echo(tr("No tangent line between those objects."))
+            return
+        a, b = min(lines, key=lambda ab: math.dist(ab[0], first_pick)
+                   + math.dist(ab[1], pick))
+        self._deferred = None
+        self._start_at(a)
+        self.on_point(b)
+
+    def _resolve_deferred(self, point: Point) -> bool:
+        """The first point was a deferred tangent: put it where the line
+        from ``point`` touches that circle, the touch point nearest the
+        pick. False if ``point`` is inside the circle."""
+        circle, pick = self._deferred
+        touches = editmath.tangent_points_from(circle, point)
+        if not touches:
+            self.ctx.echo(tr("No tangent from a point inside the circle."))
+            return False
+        self._deferred = None
+        self._start_at(min(touches, key=lambda t: math.dist(t, pick)))
+        return True
+
+    def _start_at(self, point: Point) -> None:
+        self._points.append(point)
+        self.last_point = point
+
+    def _segment(self, a: Point, b: Point) -> None:
+        self.ctx.execute(actions.add_line(a, b))
+        set_chain(b, math.degrees(math.atan2(b[1] - a[1], b[0] - a[0])), "line")
+
+    def _next_prompt(self) -> None:
+        if len(self._points) >= 3:
+            self.prompt("Specify next point or [Close/Undo]:")
+        else:
+            self.prompt("Specify next point or [Undo]:")
+
+    def on_point(self, point: Point) -> None:
+        if self._deferred is not None and not self._points:
+            if not self._resolve_deferred(point):
+                return
+        if self._locked_dir is not None and self._points:
+            # tangent continuation from an arc: direction is locked, the
+            # pick only supplies the length (projection onto the tangent)
+            a = self._points[-1]
+            d = math.radians(self._locked_dir)
+            length = ((point[0] - a[0]) * math.cos(d)
+                      + (point[1] - a[1]) * math.sin(d))
+            point = (a[0] + length * math.cos(d), a[1] + length * math.sin(d))
+            self._locked_dir = None
+        if self._points:
+            self._segment(self._points[-1], point)
+        self._points.append(point)
+        self.last_point = point
+        self._next_prompt()
+
+    def on_enter(self) -> None:
+        if not self._points:
+            # Continue: chain from the last line/polyline/arc endpoint;
+            # an arc end locks the direction to its tangent (length only)
+            point, direction, kind = chain_end()
+            if point is None:
+                self.ctx.finish()
+                return
+            self._points.append(point)
+            self.last_point = point
+            if kind == "arc" and direction is not None:
+                self._locked_dir = direction
+                self.prompt("Length of line:")
+            else:
+                self._next_prompt()
+            return
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        if t in ("C", "CLOSE") and len(self._points) >= 3:
+            self._segment(self._points[-1], self._points[0])
+            self.ctx.finish()
+            return True
+        if t in ("U", "UNDO") and self._points:
+            # AutoCAD: U inside LINE erases the last segment for real.
+            if len(self._points) >= 2:
+                self.ctx.undo_last()
+            self._points.pop()
+            self.last_point = self._points[-1] if self._points else None
+            if self._points:
+                self._next_prompt()     # Close is back once 3 points stand
+            else:
+                self.prompt("Specify first point:")
+            return True
+        if self._locked_dir is not None and self._points:
+            # tangent continuation accepts a typed length
+            length = _parse_number(text)
+            if length is None:
+                return False
+            a = self._points[-1]
+            d = math.radians(self._locked_dir)
+            self.on_point((a[0] + length * math.cos(d),
+                           a[1] + length * math.sin(d)))
+            return True
+        return False
+
+    def preview_segments(self, cursor: Point):
+        if self._deferred is not None and not self._points:
+            circle, pick = self._deferred
+            touches = editmath.tangent_points_from(circle, cursor)
+            if not touches:
+                return []
+            return [(min(touches, key=lambda t: math.dist(t, pick)), cursor)]
+        if not self._points:
+            return []
+        if self._locked_dir is not None:
+            a = self._points[-1]
+            d = math.radians(self._locked_dir)
+            length = ((cursor[0] - a[0]) * math.cos(d)
+                      + (cursor[1] - a[1]) * math.sin(d))
+            return [(a, (a[0] + length * math.cos(d),
+                         a[1] + length * math.sin(d)))]
+        return [(self._points[-1], cursor)]
+
+
+class CircleTool(Tool):
+    # AutoCAD's CIRCLERAD: the last radius used, session-only. None = no
+    # default shown in the prompt.
+    last_radius = None
+    #: Set by Draw > Circle > Center, Diameter: after the centre, ask the
+    #: diameter instead of the radius.
+    diameter_after_center = False
+    #: Set by Draw > Circle > Tan, Tan, Tan: 3P with a tangent snap on
+    #: every point, as AutoCAD's menu macro does.
+    tan_each_point = False
+
+    def start(self) -> None:
+        self.name = "CIRCLE"
+        self._mode = "CR"
+        self._pts: list[Point] = []
+        self._tangents: list = []      # TTR: [(object, pick_point), ...]
+        self._items: list = []         # 3P: [(point or object, pick), ...]
+        self.prompt("Specify center point for circle or [3P/2P/Ttr (tan tan radius)]:")
+
+    def _radius_prompt(self) -> None:
+        r = type(self).last_radius
+        if r is not None:
+            self.prompt("Specify radius of circle or [Diameter] <{r:g}>:", r=r)
+        else:
+            self.prompt("Specify radius of circle or [Diameter]:")
+
+    def _make(self, center: Point, radius: float) -> None:
+        if radius > 0:
+            self.ctx.execute(actions.add_circle(center, radius))
+            type(self).last_radius = radius
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        if not self._pts and not self._tangents:
+            if t == "2P":
+                self._mode = "2P"
+                self.prompt("Specify first end point of circle's diameter:")
+                return True
+            if t == "3P":
+                self._mode = "3P"
+                self.prompt("Specify first point on circle:")
+                return True
+            if t in ("T", "TTR"):
+                self._mode = "TTR"
+                self.entity_picker = True   # raw picks: tangency is deferred
+                self.prompt("Specify point on object for first tangent of circle:")
+                return True
+            if t == "TTT":
+                # Draw > Circle > Tan, Tan, Tan is AutoCAD's macro
+                # "_circle _3p _tan \_tan \_tan \": 3P, TAN on each point.
+                self._mode = "3P"
+                self.tan_each_point = True
+                self.prompt("Specify first point on circle:")
+                self._ask_tangent()
+                return True
+        if self._mode == "CR" and self._pts:
+            if t in ("D", "DIAMETER"):
+                self._mode = "CD"
+                r = type(self).last_radius
+                if r is not None:
+                    self.prompt("Specify diameter of circle <{d:g}>:", d=2 * r)
+                else:
+                    self.prompt("Specify diameter of circle:")
+                return True
+            radius = _parse_number(text)
+            if radius is not None and radius > 0:
+                self._make(self._pts[0], radius)
+                return True
+        if self._mode == "CD" and self._pts:
+            diameter = _parse_number(text)
+            if diameter is not None and diameter > 0:
+                self._make(self._pts[0], diameter / 2.0)
+                return True
+        if self._mode == "TTR" and len(self._tangents) == 2:
+            radius = _parse_number(text)
+            if radius is not None and radius > 0:
+                self._ttr_build(radius)
+                return True
+        return False
+
+    def on_enter(self) -> None:
+        # Enter accepts the <last> radius/diameter default (CIRCLERAD).
+        r = type(self).last_radius
+        if r is not None:
+            if self._mode == "CR" and self._pts:
+                self._make(self._pts[0], r)
+                return
+            if self._mode == "CD" and self._pts:
+                self._make(self._pts[0], r)      # <2r> default = same circle
+                return
+            if self._mode == "TTR" and len(self._tangents) == 2:
+                self._ttr_build(r)
+                return
+        self.ctx.finish()
+
+    # -- TTR ------------------------------------------------------------------
+    def _pick_tangent_object(self, point: Point):
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services is not None else None
+        if entity is None:
+            self.ctx.echo(tr("No object under the pick."))
+            return None
+        kind = entity.dxftype()
+        if kind == "LINE":
+            s, e = entity.dxf.start, entity.dxf.end
+            return ("line", (s.x, s.y), (e.x, e.y))
+        if kind in ("CIRCLE", "ARC"):
+            cx, cy, r = ocs.circle_wcs(entity)
+            return ("circle", (cx, cy), r)
+        self.ctx.echo(tr("Tangent picks support lines, circles and arcs."))
+        return None
+
+    def _ttr_build(self, radius: float) -> None:
+        (o1, p1), (o2, p2) = self._tangents
+        try:
+            center = actions.ttr_center(o1, p1, o2, p2, radius)
+        except ValueError:
+            self.ctx.echo(tr("Circle does not exist."))
+            self.ctx.finish()
+            return
+        self._make(center, radius)
+
+    def on_point(self, point: Point) -> None:
+        if self._mode == "TTR":
+            obj = self._pick_tangent_object(point)
+            if obj is None:
+                return
+            self._tangents.append((obj, point))
+            if len(self._tangents) == 1:
+                self.prompt("Specify point on object for second tangent of circle:")
+            else:
+                r = type(self).last_radius
+                if r is not None:
+                    self.prompt("Specify radius of circle <{r:g}>:", r=r)
+                else:
+                    self.prompt("Specify radius of circle:")
+            return
+        self._pts.append(point)
+        self.last_point = point
+        if self._mode == "CR":
+            if len(self._pts) == 1 and self.diameter_after_center:
+                # Draw > Circle > Center, Diameter
+                self._mode = "CD"
+                r = type(self).last_radius
+                if r is not None:
+                    self.prompt("Specify diameter of circle <{d:g}>:", d=2 * r)
+                else:
+                    self.prompt("Specify diameter of circle:")
+            elif len(self._pts) == 1:
+                self._radius_prompt()
+            else:
+                self._make(self._pts[0], math.dist(self._pts[0], self._pts[1]))
+        elif self._mode == "CD":
+            # a picked point measures the DIAMETER (AutoCAD)
+            self._make(self._pts[0], math.dist(self._pts[0], point) / 2.0)
+        elif self._mode == "2P":
+            if len(self._pts) == 1:
+                self.prompt("Specify second end point of circle's diameter:")
+            else:
+                center, radius = actions.circle_from_2p(*self._pts)
+                self._make(center, radius)
+        else:  # 3P
+            self._items.append((("point", point), point))
+            self._next_3p()
+
+    # -- 3P with tangent points (Tan, Tan, Tan) ---------------------------
+    def on_tangent_pick(self, point: Point) -> None:
+        """A 3P point picked with the Tangent snap: the object, not a point
+        on it -- the circle is solved when all three are known."""
+        if self._mode != "3P":
+            self.on_point(point)
+            return
+        obj = self._pick_tangent_object(point)
+        if obj is None:
+            self._ask_tangent()
+            return
+        self._items.append((obj, point))
+        self._next_3p()
+
+    def on_deferred_tangent(self, circle, pick: Point) -> None:
+        if self._mode != "3P":
+            self.on_point(pick)
+            return
+        self._items.append((("circle", circle[:2], circle[2]), pick))
+        self._next_3p()
+
+    def _ask_tangent(self) -> None:
+        if self.tan_each_point:
+            request = getattr(self.ctx.services, "set_osnap_override", None)
+            if request is not None:
+                request({"TAN"})
+
+    def _next_3p(self) -> None:
+        items = self._items
+        if len(items) < 3:
+            self.prompt("Specify second point on circle:" if len(items) == 1
+                        else "Specify third point on circle:")
+            self._ask_tangent()
+            return
+        try:
+            if all(obj[0] == "point" for obj, _pick in items):
+                center, radius = actions.circle_from_3p(
+                    *(obj[1] for obj, _pick in items))
+            else:
+                center, radius = actions.ttt_circle(items)
+        except ValueError:
+            self.ctx.echo(tr("Collinear points — no circle.")
+                          if all(o[0] == "point" for o, _p in items)
+                          else tr("Circle does not exist."))
+            self.ctx.finish()
+            return
+        self._make(center, radius)
+
+    def preview_segments(self, cursor: Point):
+        if self._mode == "CR" and self._pts:
+            r = math.dist(self._pts[0], cursor)
+            return _circle_preview(self._pts[0], r) + [(self._pts[0], cursor)]
+        if self._mode == "CD" and self._pts:
+            r = math.dist(self._pts[0], cursor) / 2.0
+            return _circle_preview(self._pts[0], r) + [(self._pts[0], cursor)]
+        if self._mode == "2P" and self._pts:
+            center, r = actions.circle_from_2p(self._pts[0], cursor)
+            return _circle_preview(center, r)
+        if (self._mode == "3P" and len(self._items) == 2
+                and all(o[0] == "point" for o, _p in self._items)):
+            try:
+                center, r = actions.circle_from_3p(self._pts[0], self._pts[1], cursor)
+            except ValueError:
+                return []
+            return _circle_preview(center, r)
+        return []
+
+
+class ArcTool(Tool):
+    """ARC with AutoCAD's full method tree (11 methods + Continue).
+
+    State names mirror the official prompt tree: S0 (start or Center or
+    Enter=Continue), SECOND (second point or Center/End), SC_END (end or
+    Angle/chord Length), SE_KEY (center or Angle/Direction/Radius), and the
+    numeric sub-states awaiting one typed value.
+    """
+
+    def start(self) -> None:
+        self.name = "ARC"
+        self._state = "S0"
+        self._start: Point | None = None
+        self._center: Point | None = None
+        self._end: Point | None = None
+        self._continue_dir = None
+        self.prompt("Specify start point of arc or [Center]:")
+
+    # -- building --------------------------------------------------------------
+    def _emit(self, geom) -> None:
+        self.ctx.execute(actions.add_arc_geom(geom))
+        set_chain(geom[4], actions.arc_end_tangent(geom), "arc")
+        self.ctx.finish()
+
+    def _try(self, build) -> None:
+        try:
+            geom = build()
+        except ValueError:
+            self.ctx.echo(tr("Invalid arc geometry."))
+            self.ctx.finish()
+            return
+        self._emit(geom)
+
+    def _sce_geom(self, end: Point):
+        # end pick fixes the end ANGLE only (ray rule); sweep is CCW
+        a1 = math.degrees(math.atan2(self._start[1] - self._center[1],
+                                     self._start[0] - self._center[0]))
+        a2 = math.degrees(math.atan2(end[1] - self._center[1],
+                                     end[0] - self._center[0]))
+        return actions.arc_sca(self._start, self._center, (a2 - a1) % 360.0)
+
+    # -- input -----------------------------------------------------------------
+    def on_point(self, point: Point) -> None:
+        self.last_point = point
+        state = self._state
+        if state == "S0":
+            self._start = point
+            self._state = "SECOND"
+            self.prompt("Specify second point of arc or [Center/End]:")
+        elif state == "CONTINUE":
+            self._try(lambda: actions.arc_sed(
+                self._start, point, self._continue_dir))
+        elif state == "SECOND":
+            self._second = point
+            self._state = "THIRD"
+            self.prompt("Specify end point of arc:")
+        elif state == "THIRD":
+            try:
+                geom_cmd = actions.add_arc_3p(self._start, self._second, point)
+            except ValueError:
+                self.ctx.echo(tr("Collinear points — no arc."))
+                self.ctx.finish()
+                return
+            self.ctx.execute(geom_cmd)
+            # chain: travel direction at the user's end of the 3-point arc
+            center, radius = actions.circle_from_3p(
+                self._start, self._second, point)
+            a_end = math.degrees(math.atan2(point[1] - center[1],
+                                            point[0] - center[0]))
+            a1 = math.degrees(math.atan2(self._start[1] - center[1],
+                                         self._start[0] - center[0]))
+            a2 = math.degrees(math.atan2(self._second[1] - center[1],
+                                         self._second[0] - center[0]))
+            ccw = ((a2 - a1) % 360.0) <= ((a_end - a1) % 360.0)
+            set_chain(point, a_end + (90.0 if ccw else -90.0), "arc")
+            self.ctx.finish()
+        elif state == "C_FIRST":
+            self._center = point
+            self._state = "C_START"
+            self.prompt("Specify start point of arc:")
+        elif state == "C_START":
+            self._start = point
+            self._state = "SC_END"
+            self.prompt("Specify end point of arc or [Angle/chord Length]:")
+        elif state == "S_CENTER":
+            self._center = point
+            self._state = "SC_END"
+            self.prompt("Specify end point of arc or [Angle/chord Length]:")
+        elif state == "SC_END":
+            self._try(lambda: self._sce_geom(point))
+        elif state == "S_END":
+            self._end = point
+            self._state = "SE_KEY"
+            self.prompt("Specify center point of arc or [Angle/Direction/Radius]:")
+        elif state == "SE_KEY":
+            # Start, End, Center: same ray rule, inputs reordered
+            self._center = point
+            self._try(lambda: self._sce_geom(self._end))
+        elif state == "SE_DIR":
+            # direction picked as a point: direction = start -> point
+            direction = math.degrees(math.atan2(point[1] - self._start[1],
+                                                point[0] - self._start[0]))
+            self._try(lambda: actions.arc_sed(self._start, self._end, direction))
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        state = self._state
+        if state == "S0" and t in ("C", "CENTER"):
+            self._state = "C_FIRST"
+            self.prompt("Specify center point of arc:")
+            return True
+        if state == "SECOND":
+            if t in ("C", "CENTER"):
+                self._state = "S_CENTER"
+                self.prompt("Specify center point of arc:")
+                return True
+            if t in ("E", "END"):
+                self._state = "S_END"
+                self.prompt("Specify end point of arc:")
+                return True
+        if state == "SC_END":
+            if t in ("A", "ANGLE"):
+                self._state = "SC_ANGLE"
+                self.prompt("Specify included angle:")
+                return True
+            if t in ("L", "LENGTH"):
+                self._state = "SC_LENGTH"
+                self.prompt("Specify length of chord:")
+                return True
+        if state == "SC_ANGLE":
+            angle = _parse_number(text)
+            if angle is not None:
+                self._try(lambda: actions.arc_sca(self._start, self._center, angle))
+                return True
+        if state == "SC_LENGTH":
+            chord = _parse_number(text)
+            if chord is not None:
+                self._try(lambda: actions.arc_scl(self._start, self._center, chord))
+                return True
+        if state == "SE_KEY":
+            if t in ("A", "ANGLE"):
+                self._state = "SE_ANGLE"
+                self.prompt("Specify included angle:")
+                return True
+            if t in ("D", "DIRECTION"):
+                self._state = "SE_DIR"
+                self.prompt("Specify tangent direction for the start point of arc:")
+                return True
+            if t in ("R", "RADIUS"):
+                self._state = "SE_RADIUS"
+                self.prompt("Specify radius of arc:")
+                return True
+        if state == "SE_ANGLE":
+            angle = _parse_number(text)
+            if angle is not None:
+                self._try(lambda: actions.arc_sea(self._start, self._end, angle))
+                return True
+        if state == "SE_RADIUS":
+            radius = _parse_number(text)
+            if radius is not None:
+                self._try(lambda: actions.arc_ser(self._start, self._end, radius))
+                return True
+        if state == "SE_DIR":
+            direction = _parse_number(text)
+            if direction is not None:
+                self._try(lambda: actions.arc_sed(self._start, self._end, direction))
+                return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._state == "S0":
+            # Continue: tangent from the last line/polyline/arc endpoint
+            point, direction, _kind = chain_end()
+            if point is None or direction is None:
+                self.ctx.finish()
+                return
+            self._start = point
+            self._continue_dir = direction
+            self._state = "CONTINUE"
+            self.prompt("Specify end point of arc:")
+            return
+        self.ctx.finish()
+
+    def preview_segments(self, cursor: Point):
+        state = self._state
+        try:
+            if state == "THIRD":
+                try:
+                    center, r = actions.circle_from_3p(
+                        self._start, self._second, cursor)
+                except ValueError:
+                    return [(self._start, self._second), (self._second, cursor)]
+                return _circle_preview(center, r)
+            if state == "SC_END":
+                return _arc_preview(self._sce_geom(cursor))
+            if state == "CONTINUE":
+                return _arc_preview(actions.arc_sed(
+                    self._start, cursor, self._continue_dir))
+            if state == "SE_DIR":
+                direction = math.degrees(math.atan2(
+                    cursor[1] - self._start[1], cursor[0] - self._start[0]))
+                return _arc_preview(actions.arc_sed(
+                    self._start, self._end, direction))
+            if state == "SE_KEY":
+                return _arc_preview(self._sce_geom_from(cursor, self._end))
+        except ValueError:
+            pass
+        anchor = self._start or self._center
+        return [(anchor, cursor)] if anchor is not None else []
+
+    def _sce_geom_from(self, center: Point, end: Point):
+        a1 = math.degrees(math.atan2(self._start[1] - center[1],
+                                     self._start[0] - center[0]))
+        a2 = math.degrees(math.atan2(end[1] - center[1], end[0] - center[0]))
+        return actions.arc_sca(self._start, center, (a2 - a1) % 360.0)
+
+
+class EllipseTool(Tool):
+    """ELLIPSE with AutoCAD's full tree: axis-endpoint (the first axis may
+    be the minor one), Center, Rotation (projected circle, invalid between
+    89.4 and 90.6 degrees), and Arc — elliptical arcs with start/end in
+    Angle or Parameter mode plus Included angle."""
+
+    def start(self) -> None:
+        self.name = "ELLIPSE"
+        self._mode = "AXIS"
+        self._arc = False
+        self._pts: list[Point] = []
+        self._geom = None            # (center, major, ratio) once known
+        self._await = None
+        self._start_deg = None
+        self._param_mode = False
+        self.prompt("Specify axis endpoint of ellipse or [Arc/Center]:")
+
+    # -- shared geometry -------------------------------------------------------
+    def _resolve(self, other: float):
+        if self._mode == "AXIS":
+            return actions.ellipse_from_axis(self._pts[0], self._pts[1], other)
+        return actions.ellipse_from_center(self._pts[0], self._pts[1], other)
+
+    def _axis_center(self) -> Point:
+        if self._mode == "AXIS":
+            return ((self._pts[0][0] + self._pts[1][0]) / 2.0,
+                    (self._pts[0][1] + self._pts[1][1]) / 2.0)
+        return self._pts[0]
+
+    def _finish_full(self, other: float) -> None:
+        center, major, ratio = self._resolve(other)
+        if ratio > 1e-9:
+            if self._arc:
+                self._geom = (center, major, ratio)
+                self._await = "start_angle"
+                self.prompt("Specify start angle or [Parameter]:")
+                return
+            self.ctx.execute(actions.add_ellipse(center, major, ratio))
+        self.ctx.finish()
+
+    def _param_of(self, value_deg: float) -> float:
+        _center, _major, ratio = self._geom
+        if self._param_mode:
+            return math.radians(value_deg) % math.tau
+        return actions.ellipse_param_from_angle(ratio, value_deg)
+
+    def _angle_of_point(self, point: Point) -> float:
+        """True angle of a picked point, measured from the major axis."""
+        center, major, _ratio = self._geom
+        axis = math.degrees(math.atan2(major[1], major[0]))
+        raw = math.degrees(math.atan2(point[1] - center[1],
+                                      point[0] - center[0]))
+        return raw - axis
+
+    def _finish_arc(self, end_deg: float) -> None:
+        center, major, ratio = self._geom
+        start = self._param_of(self._start_deg)
+        end = self._param_of(end_deg)
+        if abs((end - start) % math.tau) < 1e-9:
+            end = start + math.tau
+        self.ctx.execute(actions.add_ellipse(
+            center, major, ratio, start_param=start, end_param=end))
+        self.ctx.finish()
+
+    # -- input -----------------------------------------------------------------
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        value = _parse_number(text)
+        if not self._pts and self._await is None:
+            if t in ("C", "CENTER"):
+                self._mode = "CENTER"
+                self.prompt("Specify center of ellipse:")
+                return True
+            if t in ("A", "ARC") and not self._arc:
+                self._arc = True
+                self.prompt(
+                    "Specify axis endpoint of elliptical arc or [Center]:")
+                return True
+        if self._await == "distance":
+            if t in ("R", "ROTATION"):
+                self._await = "rotation"
+                self.prompt("Specify rotation around major axis:")
+                return True
+            if value is not None and value > 0:
+                self._await = None
+                self._finish_full(value)
+                return True
+            return False
+        if self._await == "rotation":
+            if value is None:
+                return False
+            folded = abs(value) % 180.0
+            if 89.4 <= folded <= 90.6:
+                self.ctx.echo(tr("Invalid rotation angle."))
+                return True
+            first_len = math.dist(self._axis_center(), self._pts[1]) \
+                if self._mode == "CENTER" else \
+                math.dist(self._pts[0], self._pts[1]) / 2.0
+            other = first_len * abs(math.cos(math.radians(value)))
+            self._await = None
+            self._finish_full(max(other, first_len * 1e-6))
+            return True
+        if self._await == "start_angle":
+            if t in ("P", "PARAMETER"):
+                self._param_mode = not self._param_mode
+                self.prompt("Specify start parameter or [Angle]:"
+                            if self._param_mode
+                            else "Specify start angle or [Parameter]:")
+                return True
+            if t in ("A", "ANGLE") and self._param_mode:
+                self._param_mode = False
+                self.prompt("Specify start angle or [Parameter]:")
+                return True
+            if value is None:
+                return False
+            self._start_deg = value
+            self._await = "end_angle"
+            self.prompt("Specify end angle or [Parameter/Included angle]:")
+            return True
+        if self._await == "end_angle":
+            if t in ("P", "PARAMETER"):
+                self._param_mode = not self._param_mode
+                self.prompt("Specify end parameter or [Angle/Included angle]:"
+                            if self._param_mode
+                            else "Specify end angle or "
+                                 "[Parameter/Included angle]:")
+                return True
+            if t in ("I", "INCLUDED"):
+                self._await = "included"
+                self.prompt("Specify included angle for arc <180>:")
+                return True
+            if value is None:
+                return False
+            self._finish_arc(value)
+            return True
+        if self._await == "included":
+            if value is None:
+                return False
+            # included is measured in the same mode as the start value
+            self._finish_arc(self._start_deg + value)
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._await == "included":
+            self._finish_arc(self._start_deg + 180.0)
+            return
+        self.ctx.finish()
+
+    def on_point(self, point: Point) -> None:
+        if self._await == "distance":
+            self._await = None
+            self._finish_full(math.dist(self._axis_center(), point))
+            return
+        if self._await == "start_angle":
+            self._param_mode = False
+            self._start_deg = self._angle_of_point(point)
+            self._await = "end_angle"
+            self.prompt("Specify end angle or [Parameter/Included angle]:")
+            return
+        if self._await == "end_angle":
+            self._param_mode = False
+            self._finish_arc(self._angle_of_point(point))
+            return
+        if self._await is not None:
+            return
+        self._pts.append(point)
+        self.last_point = point
+        if len(self._pts) < 2:
+            self.prompt("Specify other endpoint of axis:"
+                        if self._mode == "AXIS"
+                        else "Specify endpoint of axis:")
+        else:
+            self._await = "distance"
+            self.prompt("Specify distance to other axis or [Rotation]:")
+
+    def preview_segments(self, cursor: Point):
+        if self._await == "distance" and len(self._pts) == 2:
+            other = math.dist(self._axis_center(), cursor)
+            return _ellipse_preview(self._pts[0], self._pts[1], other,
+                                    self._mode)
+        if self._pts and self._await is None:
+            return [(self._pts[0], cursor)]
+        return []
+
+
+class PointTool(Tool):
+    def start(self) -> None:
+        self.name = "POINT"
+        # AutoCAD's first line (POINT, p. 1556): the point style in force
+        services = self.ctx.services
+        document = getattr(getattr(services, "window", None), "document", None)
+        if document is not None:
+            from core import points
+
+            self.ctx.echo(tr("Current point modes:  PDMODE={mode}  PDSIZE={size:.4f}",
+                             mode=points.pdmode(document.doc),
+                             size=points.pdsize(document.doc)))
+        self.prompt("Specify a point (Enter ends):")
+
+    def on_point(self, point: Point) -> None:
+        self.ctx.execute(actions.add_point(point))
+        self.last_point = point
+        # POINT repeats until Enter/Esc (AutoCAD behavior).
+        self.prompt("Specify a point (Enter ends):")
+
+
+_JUSTIFY_KEYS = {
+    "L": "LEFT", "LEFT": "LEFT", "C": "CENTER", "CENTER": "CENTER",
+    "R": "RIGHT", "RIGHT": "RIGHT", "A": "ALIGNED", "ALIGN": "ALIGNED",
+    "M": "MIDDLE", "MIDDLE": "MIDDLE", "F": "FIT", "FIT": "FIT",
+    "TL": "TOP_LEFT", "TC": "TOP_CENTER", "TR": "TOP_RIGHT",
+    "ML": "MIDDLE_LEFT", "MC": "MIDDLE_CENTER", "MR": "MIDDLE_RIGHT",
+    "BL": "BOTTOM_LEFT", "BC": "BOTTOM_CENTER", "BR": "BOTTOM_RIGHT",
+}
+
+
+class TextTool(Tool):
+    """Single-line TEXT (DTEXT): type in place on the canvas, AutoCAD-style.
+
+    First prompt takes [Justify/Style] (justification keywords also work
+    directly); Align/Fit take two baseline points; the height prompt is
+    skipped for fixed-height styles; Enter at the start prompt repeats
+    below the previous text. After the prompts a caret appears and typed
+    characters show live; Enter commits the line and starts a new one
+    below; a new pick restarts there; Esc finishes.
+    """
+
+    default_height = 2.5     # TEXTSIZE when there is no drawing to ask
+    last_rotation = 0.0
+    _last_final = None       # (pos, height, rotation) of the last session
+
+    def start(self) -> None:
+        self.name = "TEXT"
+        self._pos = None
+        self._height = None
+        self.typing = False
+        self._buffer = ""
+        self._rotation = None
+        self._align = "LEFT"
+        self._p2 = None
+        self._await = None
+        self._style = None
+        style, fixed = self._style_info()
+        self.ctx.echo(tr('Current text style: "{s}"  Text height: {h:g}',
+                         s=style, h=fixed or self._textsize()))
+        self.prompt("Specify start point of text or [Justify/Style]:")
+
+    # -- TEXTSIZE: the drawing's own, as AutoCAD keeps it ----------------------
+    def _textsize(self) -> float:
+        """The default height: the drawing's $TEXTSIZE. A session-wide 2.5
+        made every first TEXT 2.5 m tall in a drawing in metres."""
+        return _drawing_textsize(self._document(), type(self).default_height)
+
+    def _set_textsize(self, value: float) -> None:
+        type(self).default_height = value
+        document = self._document()
+        if document is not None:
+            document.doc.header["$TEXTSIZE"] = float(value)
+
+    # -- style plumbing --------------------------------------------------------
+    def _document(self):
+        services = self.ctx.services
+        window = getattr(services, "window", None) if services else None
+        return getattr(window, "document", None)
+
+    def _style_info(self) -> tuple[str, float]:
+        """(current style name, fixed height or 0)."""
+        document = self._document()
+        name = self._style
+        if document is not None:
+            doc = document.doc
+            if name is None:
+                name = doc.header.get("$TEXTSTYLE", "Standard")
+            if name in doc.styles:
+                try:
+                    return name, float(doc.styles.get(name).dxf.height or 0.0)
+                except Exception:
+                    return name, 0.0
+        return name or "Standard", 0.0
+
+    # -- prompts ---------------------------------------------------------------
+    def _annotative(self) -> bool:
+        document = self._document()
+        if document is None:
+            return False
+        from core import annotative
+
+        style, _fixed = self._style_info()
+        return annotative.style_is_annotative(document, "styles", style)
+
+    def _after_point(self) -> None:
+        _style, fixed = self._style_info()
+        if fixed > 0.0:
+            self._height = fixed
+            self._rotation_prompt()
+        elif self._annotative():
+            # "The Specify Paper Text Height prompt is displayed only if the
+            # current text style is annotative" (p. 1933): the model height
+            # follows from the annotation scale when the text is created
+            self.prompt("Specify paper text height <{h:g}>:",
+                        h=self._textsize())
+        else:
+            self.prompt("Specify height <{h:g}>:",
+                        h=self._textsize())
+
+    def _rotation_prompt(self) -> None:
+        self.prompt("Specify rotation angle of text <{r:g}>:",
+                    r=type(self).last_rotation)
+
+    def on_point(self, point: Point) -> None:
+        if self.typing:
+            self._commit_line()      # picking a new point restarts text there
+            self._pos = point
+            self._buffer = ""
+            return
+        if self._await == "align_p1":
+            self._pos = point
+            self.last_point = point
+            self._await = "align_p2"
+            self.prompt("Specify second endpoint of text baseline:")
+            return
+        if self._await == "align_p2":
+            self._p2 = point
+            self._rotation = math.degrees(math.atan2(
+                point[1] - self._pos[1], point[0] - self._pos[0]))
+            self._await = None
+            if self._align == "FIT":
+                self.prompt("Specify height <{h:g}>:",
+                            h=self._textsize())
+                return
+            # ALIGNED: height derives from the fit; nominal for the entity
+            span = max(math.dist(self._pos, self._p2), 1e-9)
+            self._height = span / 4.0
+            self._begin_typing()
+            return
+        if self._pos is None:
+            self._pos = point
+            self.last_point = point
+            self._after_point()
+            return
+        if self._asking_by_point():
+            dx, dy = point[0] - self._pos[0], point[1] - self._pos[1]
+            if self._height is None:
+                if math.hypot(dx, dy) > 1e-9:
+                    self._take_height(math.hypot(dx, dy))
+            else:
+                self._take_rotation(math.degrees(math.atan2(dy, dx))
+                                    - self.ucs().degrees)
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        if self.typing:
+            return False
+        if self._await == "justify":
+            align = _JUSTIFY_KEYS.get(t)
+            if align is None:
+                return False
+            self._await = None
+            self._set_align(align)
+            return True
+        if self._await == "style":
+            self._await = None
+            if t == "?":
+                document = self._document()
+                if document is not None:
+                    names = ", ".join(s.dxf.name for s in document.doc.styles)
+                    self.ctx.echo(tr("Text styles: {names}", names=names))
+                self.prompt("Specify start point of text or [Justify/Style]:")
+                return True
+            if text.strip():
+                document = self._document()
+                if document is not None \
+                        and text.strip() not in document.doc.styles:
+                    self.ctx.echo(tr('Unknown text style "{name}".',
+                                     name=text.strip()))
+                else:
+                    self._style = text.strip()
+                    if document is not None:
+                        document.doc.header["$TEXTSTYLE"] = self._style
+                        document.dirty = True
+            self.prompt("Specify start point of text or [Justify/Style]:")
+            return True
+        if self._pos is None and self._await is None:
+            if t in ("J", "JUSTIFY"):
+                self._await = "justify"
+                self.prompt(
+                    "Enter an option [Left/Center/Right/Align/Middle/Fit/"
+                    "TL/TC/TR/ML/MC/MR/BL/BC/BR]:")
+                return True
+            if t in ("S", "STYLE"):
+                self._await = "style"
+                style, _f = self._style_info()
+                self.prompt("Enter style name or [?] <{s}>:", s=style)
+                return True
+            align = _JUSTIFY_KEYS.get(t)
+            if align is not None and t not in ("L", "LEFT"):
+                # justification keywords work directly at the first prompt
+                self._set_align(align)
+                return True
+            return False
+        if self._pos is None:
+            return False
+        if self._height is None:
+            value = _parse_number(text) if text else self._textsize()
+            if value is None or value <= 0:
+                return False
+            self._take_height(value)
+            return True
+        if self._rotation is None:
+            value = _parse_number(text) if text else type(self).last_rotation
+            if value is None:
+                return False
+            self._take_rotation(value)
+            return True
+        return False
+
+    # Typed or picked, a height and an angle land here. A pick measures
+    # from the start point: its distance is the height, its direction the
+    # angle (AutoCAD's "Specify height" / "Specify rotation angle").
+    def _take_height(self, value: float) -> None:
+        self._height = value
+        self._set_textsize(value)
+        if self._align == "FIT":
+            self._begin_typing()   # rotation comes from the two points
+        else:
+            self._rotation_prompt()
+
+    def _take_rotation(self, value: float) -> None:
+        """``value`` is measured from the UCS's X, as AutoCAD's prompt
+        means it (#91); the text keeps the world angle."""
+        self._rotation = value + self.ucs().degrees
+        type(self).last_rotation = value
+        self._begin_typing()
+
+    def _asking_by_point(self) -> bool:
+        """At the height or the rotation prompt, where a pick answers."""
+        return (not self.typing and self._pos is not None and self._await is None
+                and (self._height is None or self._rotation is None))
+
+    def preview_segments(self, cursor: Point):
+        # the rubber band from the start point, as AutoCAD draws it
+        if self._asking_by_point():
+            return [(tuple(self._pos), tuple(cursor))]
+        return []
+
+    def _set_align(self, align: str) -> None:
+        self._align = align
+        if align in ("ALIGNED", "FIT"):
+            self._await = "align_p1"
+            self.prompt("Specify first endpoint of text baseline:")
+        else:
+            self.prompt("Specify start point of text or [Justify/Style]:")
+
+    def on_enter(self) -> None:
+        if self.typing and not self._buffer:
+            # Enter on an empty line ends the command, as AutoCAD's TEXT
+            # does (docs/reference/draw/autocad-text-mtext.md); the tool
+            # used to stay open, waiting for a next line forever
+            self.finish_typing()
+            return
+        if self.typing:
+            self._commit_line()      # Enter: commit and drop to a new line
+            self._pos = self._next_line_pos()
+            self._buffer = ""
+            return
+        if self._pos is None and self._await is None:
+            last = type(self)._last_final
+            if last is not None:
+                # documented: Enter repeats directly beneath the previous
+                # text, skipping the height and rotation prompts
+                pos, height, rotation = last
+                self._pos, self._height, self._rotation = pos, height, rotation
+                self._pos = self._next_line_pos()
+                self._begin_typing()
+                return
+            self.ctx.finish()
+            return
+        if self._await == "style":
+            self.on_option("")       # keep the current style
+            return
+        if self._pos is None:
+            self.ctx.finish()
+        elif self._height is None:
+            self.on_option("")
+        elif self._rotation is None:
+            self.on_option("")
+        else:
+            self._begin_typing()
+
+    def _begin_typing(self) -> None:
+        if self._rotation is None:
+            self._rotation = type(self).last_rotation + self.ucs().degrees
+        self.typing = True
+        self._buffer = ""
+        self.prompt("Enter text (Enter for new line, Esc to finish):")
+
+    # -- live in-place typing --------------------------------------------------
+    def on_char(self, ch: str) -> None:
+        self._buffer += ch
+
+    def on_backspace(self) -> None:
+        self._buffer = self._buffer[:-1]
+
+    def finish_typing(self) -> None:
+        self._commit_line()
+        self.typing = False
+        self.ctx.finish()
+
+    def live_text(self):
+        if self.typing and self._pos is not None:
+            return (self._pos, self._buffer, self._height, self._rotation)
+        return None
+
+    def _commit_line(self) -> None:
+        if self._buffer.strip():
+            self.ctx.execute(actions.add_text(
+                self._pos, self._buffer, self._height, self._rotation,
+                align=self._align, p2=self._p2, style=self._style))
+            type(self)._last_final = (self._pos, self._height, self._rotation)
+
+    def _next_line_pos(self) -> Point:
+        # baseline drops by 1.5x the height, in the text's local -Y direction
+        d = 1.5 * self._height
+        r = math.radians(self._rotation)
+        if self._p2 is not None:      # ALIGNED/FIT: the whole baseline drops
+            self._p2 = (self._p2[0] + d * math.sin(r),
+                        self._p2[1] - d * math.cos(r))
+        return (self._pos[0] + d * math.sin(r), self._pos[1] - d * math.cos(r))
+
+
+def _drawing_textsize(document, fallback: float) -> float:
+    try:
+        value = float(document.doc.header.get("$TEXTSIZE", fallback))
+    except Exception:  # noqa: BLE001 -- no drawing, or a broken header
+        return fallback
+    return value if value > 0 else fallback
+
+
+class MTextTool(Tool):
+    default_height = 2.5
+
+    def _height(self) -> float:
+        services = self.ctx.services
+        window = getattr(services, "window", None) if services else None
+        return _drawing_textsize(getattr(window, "document", None),
+                                 type(self).default_height)
+
+    def start(self) -> None:
+        self.name = "MTEXT"
+        self._first = None
+        self.prompt("MTEXT Specify first corner:")
+
+    def on_point(self, point: Point) -> None:
+        if self._first is None:
+            self._first = point
+            self.last_point = point
+            self.prompt("Specify opposite corner:")
+        else:
+            # The in-place editor when the GUI provides one; the plain text
+            # prompt keeps the tool testable headless.
+            services = self.ctx.services
+            opener = getattr(services, "open_mtext_editor", None)
+            if opener is not None:
+                opener(self._first, point, self._height())
+                self.ctx.finish()
+                return
+            content = self.ctx.ask_text(tr("Enter text:"), "")
+            if content:
+                self.ctx.execute(actions.add_mtext(
+                    self._first, point, content, self._height(),
+                    frame=self.ucs()))
+            self.ctx.finish()
+
+    def preview_segments(self, cursor: Point):
+        if self._first is None:
+            return []
+        frame = self.ucs()                 # the box is square to the UCS
+        p1, p2 = frame.to_ucs(*self._first), frame.to_ucs(*cursor)
+        c = [frame.to_world(*q) for q in
+             ((p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1]))]
+        return list(zip(c, c[1:] + c[:1]))
+
+
+def _ellipse_preview(p1: Point, p2: Point, other: float, mode: str, n: int = 64):
+    if mode == "AXIS":
+        center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        ax = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
+    else:
+        center = p1
+        ax = (p2[0] - p1[0], p2[1] - p1[1])
+    major = math.hypot(*ax)
+    if major < 1e-9:
+        return []
+    ang = math.atan2(ax[1], ax[0])
+    ca, sa = math.cos(ang), math.sin(ang)
+    pts = []
+    for i in range(n + 1):
+        t = i * math.tau / n
+        ex, ey = major * math.cos(t), other * math.sin(t)
+        pts.append((center[0] + ex * ca - ey * sa,
+                    center[1] + ex * sa + ey * ca))
+    return list(zip(pts, pts[1:]))
+
+
+class PlineTool(Tool):
+    """PLINE with AutoCAD's two-mode state machine: line mode
+    [Arc/Close/Halfwidth/Length/Undo/Width] and arc mode
+    [Angle/CEnter/CLose/Direction/Line/Radius/Second pt/...]. One
+    LWPOLYLINE with per-segment widths and bulges comes out at the end.
+    """
+
+    # PLINEWID: the current width persists across PLINE invocations.
+    current_width = 0.0
+
+    def start(self) -> None:
+        self.name = "PLINE"
+        self._verts: list[Point] = []       # committed vertices
+        self._segs: list[dict] = []         # {"bulge","sw","ew"} per segment
+        self._arc_mode = False
+        self._await = None                  # pending numeric sub-prompt
+        self._pending = {}                  # partial data for arc sub-flows
+        self._sw = type(self).current_width
+        self._ew = type(self).current_width
+        self.prompt("Specify start point:")
+
+    # -- prompts ---------------------------------------------------------------
+    def _line_prompt(self) -> None:
+        if self._segs:
+            self.prompt(
+                "Specify next point or [Arc/Close/Halfwidth/Length/Undo/Width]:")
+        else:
+            self.prompt(
+                "Specify next point or [Arc/Halfwidth/Length/Undo/Width]:")
+
+    def _arc_prompt(self) -> None:
+        self.prompt(
+            "Specify endpoint of arc or "
+            "[Angle/CEnter/CLose/Direction/Halfwidth/Line/Radius/Second pt/Undo/Width]:")
+
+    def _mode_prompt(self) -> None:
+        self._arc_prompt() if self._arc_mode else self._line_prompt()
+
+    # -- geometry helpers ------------------------------------------------------
+    def _prev_dir(self):
+        """Tangent direction (deg) at the current vertex, from the previous
+        segment — the arc-mode tangent-continuation rule."""
+        if not self._segs:
+            _p, direction, _k = chain_end()
+            return direction
+        seg = self._segs[-1]
+        a, b = self._verts[-2], self._verts[-1]
+        if seg["bulge"] == 0.0:
+            return math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+        # tangent at b: chord direction turned by the half included angle
+        included = 4.0 * math.degrees(math.atan(seg["bulge"]))
+        chord = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+        return chord + included / 2.0
+
+    def _push(self, point: Point, bulge: float) -> None:
+        self._verts.append(point)
+        self._segs.append({"bulge": bulge, "sw": self._sw, "ew": self._ew})
+        self._sw = self._ew                 # ending width becomes uniform
+        type(self).current_width = self._ew
+        self.last_point = point
+
+    def drawn_segments(self) -> list:
+        # A straight segment snaps whole (END, MID, NEA, INT, PER); an arc
+        # segment offers its two ends only, as zero-length segments --
+        # its chord is not on the arc.
+        out = []
+        for (a, b), seg in zip(zip(self._verts, self._verts[1:]), self._segs):
+            if seg["bulge"] == 0.0:
+                out.append((a[0], a[1], b[0], b[1]))
+            else:
+                out.extend([(a[0], a[1], a[0], a[1]), (b[0], b[1], b[0], b[1])])
+        return out
+
+    def _bulge_from_geom(self, geom, start: Point, end: Point) -> float:
+        # entity angles are stored CCW, so the entity sweep equals the user's
+        # travel magnitude; the travel direction gives the bulge its sign
+        sweep = (geom[3] - geom[2]) % 360.0
+        bulge = math.tan(math.radians(sweep) / 4.0)
+        return bulge if geom[5] else -bulge
+
+    def _add_arc_to(self, point: Point, geom) -> None:
+        self._push(point, self._bulge_from_geom(geom, self._verts[-1], point))
+        self._arc_prompt()
+
+    def _tangent_arc(self, point: Point):
+        direction = self._prev_dir()
+        if direction is None:
+            # no previous segment: AutoCAD uses the last known direction;
+            # fall back to the chord (a straight-ish arc pick)
+            raise ValueError("no tangent direction")
+        return actions.arc_sed(self._verts[-1], point, direction)
+
+    def _arc_from_angle_radius(self, angle: float, radius: float) -> None:
+        """Included angle + radius: the chord direction defaults to the
+        tangent continuation (AutoCAD asks and offers it as <current>)."""
+        direction = self._prev_dir() or 0.0
+        chord_dir = direction + angle / 2.0
+        chord = 2.0 * abs(radius) * math.sin(math.radians(abs(angle)) / 2.0)
+        a = self._verts[-1]
+        d = math.radians(chord_dir)
+        end = (a[0] + chord * math.cos(d), a[1] + chord * math.sin(d))
+        try:
+            geom = actions.arc_sea(a, end, angle)
+        except ValueError:
+            self.ctx.echo(tr("Invalid arc geometry."))
+            self._await = None
+            self._arc_prompt()
+            return
+        self._await = None
+        self._add_arc_to(end, geom)
+
+    # -- finishing -------------------------------------------------------------
+    def _vertices_xyseb(self):
+        out = []
+        for i, v in enumerate(self._verts):
+            seg = self._segs[i] if i < len(self._segs) else \
+                {"bulge": 0.0, "sw": 0.0, "ew": 0.0}
+            out.append((v[0], v[1], seg["sw"], seg["ew"], seg["bulge"]))
+        return out
+
+    def _build(self, closed: bool) -> None:
+        if self._segs:
+            self.ctx.execute(actions.add_polyline(
+                self._vertices_xyseb(), closed=closed))
+            direction = self._prev_dir()
+            last_arc = self._segs[-1]["bulge"] != 0.0
+            if direction is not None:
+                set_chain(self._verts[0] if closed else self._verts[-1],
+                          direction, "arc" if last_arc else "line")
+        self._verts, self._segs = [], []
+        self.ctx.finish()
+
+    def on_enter(self) -> None:
+        if self._await in ("width_start", "width_end",
+                           "halfwidth_start", "halfwidth_end"):
+            self.on_option("")              # Enter accepts the <default>
+            return
+        if self._await is not None:
+            self._await = None              # abandon the sub-prompt
+            self._mode_prompt()
+            return
+        if self._verts and not self._segs:
+            self._verts = []                # start point only: nothing made
+        self._build(False)
+
+    def on_cancel(self) -> None:
+        # AutoCAD keeps the committed segments on Esc too.
+        self._build(False)
+
+    # -- input -----------------------------------------------------------------
+    def on_point(self, point: Point) -> None:
+        if not self._verts:
+            self._verts.append(point)
+            self.last_point = point
+            self.ctx.echo(tr("Current line-width is {w:g}",
+                             w=type(self).current_width))
+            self._line_prompt()
+            return
+        if self._await == "arc_second":
+            self._pending["second"] = point
+            self._await = "arc_second_end"
+            self.prompt("Specify end point of arc:")
+            return
+        if self._await == "arc_second_end":
+            start = self._verts[-1]
+            try:
+                geom_cmd_center, radius = actions.circle_from_3p(
+                    start, self._pending["second"], point)
+            except ValueError:
+                self.ctx.echo(tr("Collinear points — no arc."))
+                self._await = None
+                self._arc_prompt()
+                return
+            # 3-point arc as bulge: direction from the middle point side
+            a1 = math.degrees(math.atan2(start[1] - geom_cmd_center[1],
+                                         start[0] - geom_cmd_center[0]))
+            am = math.degrees(math.atan2(
+                self._pending["second"][1] - geom_cmd_center[1],
+                self._pending["second"][0] - geom_cmd_center[0]))
+            a2 = math.degrees(math.atan2(point[1] - geom_cmd_center[1],
+                                         point[0] - geom_cmd_center[0]))
+            ccw = ((am - a1) % 360.0) <= ((a2 - a1) % 360.0)
+            sweep = ((a2 - a1) % 360.0) if ccw else ((a1 - a2) % 360.0)
+            bulge = math.tan(math.radians(sweep) / 4.0)
+            self._await = None
+            self._push(point, bulge if ccw else -bulge)
+            self._arc_prompt()
+            return
+        if self._await == "arc_center":
+            self._pending["center"] = point
+            self._await = "arc_center_end"
+            self.prompt("Specify endpoint of arc or [Angle/Length]:")
+            return
+        if self._await == "arc_center_end":
+            start, center = self._verts[-1], self._pending["center"]
+            a1 = math.degrees(math.atan2(start[1] - center[1], start[0] - center[0]))
+            a2 = math.degrees(math.atan2(point[1] - center[1], point[0] - center[0]))
+            try:
+                geom = actions.arc_sca(start, center, (a2 - a1) % 360.0)
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return
+            self._await = None
+            self._add_arc_to(geom[4], geom)
+            return
+        if self._await == "arc_angle_center":
+            start = self._verts[-1]
+            try:
+                geom = actions.arc_sca(start, point, self._pending["angle"])
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return
+            self._await = None
+            self._add_arc_to(geom[4], geom)
+            return
+        if self._await == "arc_direction":
+            direction = math.degrees(math.atan2(point[1] - self._verts[-1][1],
+                                                point[0] - self._verts[-1][0]))
+            self._pending["direction"] = direction
+            self._await = "arc_direction_end"
+            self.prompt("Specify endpoint of arc:")
+            return
+        if self._await == "arc_direction_end":
+            try:
+                geom = actions.arc_sed(self._verts[-1], point,
+                                       self._pending["direction"])
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return
+            self._await = None
+            self._add_arc_to(point, geom)
+            return
+        if self._await == "arc_radius_end":
+            try:
+                geom = actions.arc_ser(self._verts[-1], point,
+                                       self._pending["radius"])
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return
+            self._await = None
+            self._add_arc_to(point, geom)
+            return
+        if self._await == "arc_angle_end":
+            try:
+                geom = actions.arc_sea(self._verts[-1], point,
+                                       self._pending["angle"])
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return
+            self._await = None
+            self._add_arc_to(point, geom)
+            return
+        if self._await is not None:
+            return                          # numeric sub-prompt: ignore picks
+        if self._arc_mode:
+            try:
+                geom = self._tangent_arc(point)
+            except ValueError:
+                # no tangent known yet: fall back to a straight segment
+                self._push(point, 0.0)
+                self._arc_prompt()
+                return
+            self._add_arc_to(point, geom)
+            return
+        self._push(point, 0.0)
+        self._line_prompt()
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        # numeric sub-prompts first
+        if self._await in ("width_start", "halfwidth_start"):
+            value = _parse_number(text) if text else self._sw
+            if value is None or value < 0:
+                return False
+            factor = 2.0 if self._await == "halfwidth_start" else 1.0
+            self._pending["sw"] = value * factor
+            key = "halfwidth_end" if factor == 2.0 else "width_end"
+            self._await = key
+            if factor == 2.0:
+                self.prompt("Specify ending half-width <{w:g}>:",
+                            w=self._pending["sw"] / 2.0)
+            else:
+                self.prompt("Specify ending width <{w:g}>:",
+                            w=self._pending["sw"])
+            return True
+        if self._await in ("width_end", "halfwidth_end"):
+            factor = 2.0 if self._await == "halfwidth_end" else 1.0
+            value = _parse_number(text) if text else self._pending["sw"] / factor
+            if value is None or value < 0:
+                return False
+            self._sw = self._pending["sw"]
+            self._ew = value * factor
+            self._await = None
+            self._mode_prompt()
+            return True
+        if self._await == "length":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            direction = self._prev_dir()
+            if direction is None:
+                self.ctx.echo(tr("No previous segment to continue."))
+            else:
+                a = self._verts[-1]
+                d = math.radians(direction)
+                self._push((a[0] + value * math.cos(d),
+                            a[1] + value * math.sin(d)), 0.0)
+            self._await = None
+            self._line_prompt()
+            return True
+        if self._await == "arc_angle":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            self._pending["angle"] = value
+            self._await = "arc_angle_end"
+            self.prompt("Specify endpoint of arc or [CEnter/Radius]:")
+            return True
+        if self._await == "arc_angle_end" and t in ("CE", "CENTER"):
+            # angle + center: sweep the stored angle around the picked center
+            self._await = "arc_angle_center"
+            self.prompt("Specify center point of arc:")
+            return True
+        if self._await == "arc_angle_end" and t in ("R", "RADIUS"):
+            self._await = "arc_angle_radius"
+            self.prompt("Specify radius of arc:")
+            return True
+        if self._await == "arc_angle_radius":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            self._arc_from_angle_radius(self._pending["angle"], value)
+            return True
+        if self._await == "arc_center_end" and t in ("A", "ANGLE"):
+            self._await = "arc_center_angle"
+            self.prompt("Specify included angle:")
+            return True
+        if self._await == "arc_center_end" and t in ("L", "LENGTH"):
+            self._await = "arc_center_length"
+            self.prompt("Specify length of chord:")
+            return True
+        if self._await == "arc_center_angle":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            try:
+                geom = actions.arc_sca(self._verts[-1],
+                                       self._pending["center"], value)
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return True
+            self._await = None
+            self._add_arc_to(geom[4], geom)
+            return True
+        if self._await == "arc_center_length":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            try:
+                geom = actions.arc_scl(self._verts[-1],
+                                       self._pending["center"], value)
+            except ValueError:
+                self.ctx.echo(tr("Invalid arc geometry."))
+                self._await = None
+                self._arc_prompt()
+                return True
+            self._await = None
+            self._add_arc_to(geom[4], geom)
+            return True
+        if self._await == "arc_direction":
+            value = _parse_number(text)
+            if value is not None:
+                self._pending["direction"] = value
+                self._await = "arc_direction_end"
+                self.prompt("Specify endpoint of arc:")
+                return True
+            return False
+        if self._await == "arc_radius":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            self._pending["radius"] = value
+            self._await = "arc_radius_end"
+            self.prompt("Specify endpoint of arc or [Angle]:")
+            return True
+        if self._await == "arc_radius_end" and t in ("A", "ANGLE"):
+            self._await = "arc_radius_angle"
+            self.prompt("Specify included angle:")
+            return True
+        if self._await == "arc_radius_angle":
+            value = _parse_number(text)
+            if value is None:
+                return False
+            self._arc_from_angle_radius(value, self._pending["radius"])
+            return True
+        if self._await == "arc_angle_center":
+            return False                    # awaiting a point, not text
+        if self._await is not None:
+            return False
+        if not self._verts:
+            return False
+
+        # -- mode keywords ----------------------------------------------------
+        if not self._arc_mode:
+            if t in ("A", "ARC"):
+                self._arc_mode = True
+                self._arc_prompt()
+                return True
+            if t in ("C", "CLOSE") and len(self._segs) >= 1 and len(self._verts) >= 2:
+                self._push(self._verts[0], 0.0)
+                self._verts.pop()           # closing flag supplies the segment
+                self._build(True)
+                return True
+            if t in ("W", "WIDTH"):
+                self._await = "width_start"
+                self.prompt("Specify starting width <{w:g}>:", w=self._sw)
+                return True
+            if t in ("H", "HALFWIDTH"):
+                self._await = "halfwidth_start"
+                self.prompt("Specify starting half-width <{w:g}>:",
+                            w=self._sw / 2.0)
+                return True
+            if t in ("L", "LENGTH"):
+                self._await = "length"
+                self.prompt("Specify length of line:")
+                return True
+            if t in ("U", "UNDO") and self._segs:
+                self._segs.pop()
+                self._verts.pop()
+                self.last_point = self._verts[-1]
+                self._line_prompt()
+                return True
+            return False
+        # arc mode
+        if t in ("L", "LINE"):
+            self._arc_mode = False
+            self._line_prompt()
+            return True
+        if t in ("CL", "CLOSE"):
+            if len(self._segs) >= 1:
+                direction = self._prev_dir()
+                try:
+                    geom = actions.arc_sed(self._verts[-1], self._verts[0],
+                                           direction if direction is not None else 0.0)
+                    bulge = self._bulge_from_geom(geom, self._verts[-1],
+                                                  self._verts[0])
+                except ValueError:
+                    # start point dead behind the tangent: no tangent arc
+                    # exists — AutoCAD closes with a semicircle (bulge 1)
+                    bulge = 1.0
+                self._segs.append({"bulge": bulge, "sw": self._sw,
+                                   "ew": self._ew})
+                self._build(True)
+                return True
+            return False
+        if t in ("A", "ANGLE"):
+            self._await = "arc_angle"
+            self.prompt("Specify included angle:")
+            return True
+        if t == "CE":
+            self._await = "arc_center"
+            self.prompt("Specify center point of arc:")
+            return True
+        if t in ("D", "DIRECTION"):
+            self._await = "arc_direction"
+            self.prompt("Specify the tangent direction from the start point of arc:")
+            return True
+        if t in ("R", "RADIUS"):
+            self._await = "arc_radius"
+            self.prompt("Specify radius of arc:")
+            return True
+        if t in ("S", "SECOND"):
+            self._await = "arc_second"
+            self.prompt("Specify second point on arc:")
+            return True
+        if t in ("W", "WIDTH"):
+            self._await = "width_start"
+            self.prompt("Specify starting width <{w:g}>:", w=self._sw)
+            return True
+        if t in ("H", "HALFWIDTH"):
+            self._await = "halfwidth_start"
+            self.prompt("Specify starting half-width <{w:g}>:",
+                        w=self._sw / 2.0)
+            return True
+        if t in ("U", "UNDO") and self._segs:
+            self._segs.pop()
+            self._verts.pop()
+            self.last_point = self._verts[-1]
+            self._arc_prompt()
+            return True
+        return False
+
+    def preview_segments(self, cursor: Point):
+        segs = []
+        for i, seg in enumerate(self._segs):
+            a, b = self._verts[i], self._verts[i + 1]
+            if seg["bulge"] == 0.0:
+                segs.append((a, b))
+            else:
+                included = 4.0 * math.atan(seg["bulge"])
+                chord = math.dist(a, b)
+                if chord > 1e-12:
+                    radius = abs(chord / (2.0 * math.sin(included / 2.0)))
+                    try:
+                        geom = actions.arc_sea(a, b, math.degrees(included))
+                        segs.extend(_arc_preview(geom, n=24))
+                        continue
+                    except ValueError:
+                        pass
+                segs.append((a, b))
+        if self._verts and self._await is None:
+            if self._arc_mode:
+                try:
+                    segs.extend(_arc_preview(self._tangent_arc(cursor), n=24))
+                except ValueError:
+                    segs.append((self._verts[-1], cursor))
+            else:
+                segs.append((self._verts[-1], cursor))
+        return segs
+
+
+class RectangTool(Tool):
+    """RECTANG with AutoCAD's sticky corner settings and placement options:
+    [Chamfer/Elevation/Fillet/Thickness/Width] before the first corner,
+    [Area/Dimensions/Rotation] after it. All settings persist per session
+    and the non-default state is announced at command start."""
+
+    chamfer = (0.0, 0.0)
+    fillet = 0.0
+    elevation = 0.0
+    thickness = 0.0
+    pl_width = 0.0
+    rotation = 0.0
+    last_area = 100.0
+    last_length = 10.0
+    last_width = 10.0
+
+    def start(self) -> None:
+        self.name = "RECTANG"
+        self._first: Point | None = None
+        self._await = None
+        self._pending = {}
+        self._dims = None            # (length, width) from Dimensions
+        cls = type(self)
+        if (cls.chamfer != (0.0, 0.0) or cls.fillet or cls.elevation
+                or cls.thickness or cls.pl_width or cls.rotation):
+            self.ctx.echo(tr(
+                "Current rectangle modes: Chamfer={c1:g} x {c2:g} "
+                "Elevation={e:g} Fillet={f:g} Thickness={t:g} Width={w:g} "
+                "Rotation={r:g}",
+                c1=cls.chamfer[0], c2=cls.chamfer[1], e=cls.elevation,
+                f=cls.fillet, t=cls.thickness, w=cls.pl_width,
+                r=cls.rotation))
+        self._first_prompt()
+
+    def _first_prompt(self) -> None:
+        self.prompt(
+            "Specify first corner point or "
+            "[Chamfer/Elevation/Fillet/Thickness/Width]:")
+
+    def _corner_prompt(self) -> None:
+        self.prompt(
+            "Specify other corner point or [Area/Dimensions/Rotation]:")
+
+    def ortho_applies(self) -> bool:
+        # the opposite corner is free; a Rotation picked by point is not
+        return not (self._first is not None and self._await is None)
+
+    # -- geometry --------------------------------------------------------------
+    def _rotation(self) -> float:
+        """The rectangle's turn in the world: its Rotation option, which
+        AutoCAD measures from the UCS's X axis (#91)."""
+        return type(self).rotation + self.ucs().degrees
+
+    def _to_local(self, point: Point) -> tuple[float, float]:
+        rot = math.radians(self._rotation())
+        dx, dy = point[0] - self._first[0], point[1] - self._first[1]
+        return (dx * math.cos(rot) + dy * math.sin(rot),
+                -dx * math.sin(rot) + dy * math.cos(rot))
+
+    def _build(self, length: float, width: float) -> None:
+        cls = type(self)
+        try:
+            points = actions.rect_vertices(
+                self._first, length, width, rotation_deg=self._rotation(),
+                chamfer=cls.chamfer, fillet=cls.fillet,
+                pl_width=cls.pl_width)
+        except ValueError:
+            self.ctx.echo(tr("Zero-size rectangle — nothing created."))
+            self.ctx.finish()
+            return
+        attribs = {}
+        if cls.elevation:
+            attribs["elevation"] = cls.elevation
+        if cls.thickness:
+            attribs["thickness"] = cls.thickness
+        self.ctx.execute(actions.add_polyline_ex(
+            points, closed=True, name="RECTANG", dxfattribs=attribs))
+        self.ctx.finish()
+
+    def _corner_loss(self) -> float:
+        """Area removed by the active chamfers or fillets (4 corners)."""
+        cls = type(self)
+        if cls.fillet > 0.0:
+            return (4.0 - math.pi) * cls.fillet * cls.fillet
+        d1, d2 = cls.chamfer
+        return 2.0 * d1 * d2
+
+    # -- input -----------------------------------------------------------------
+    def on_point(self, point: Point) -> None:
+        if self._await in ("rot_p1", "rot_p2"):
+            if self._await == "rot_p1":
+                self._pending["rp1"] = point
+                self._await = "rot_p2"
+                self.prompt("Specify second point:")
+            else:
+                p1 = self._pending["rp1"]
+                type(self).rotation = math.degrees(
+                    math.atan2(point[1] - p1[1], point[0] - p1[0])) \
+                    - self.ucs().degrees
+                self._await = None
+                self._first_prompt() if self._first is None \
+                    else self._corner_prompt()
+            return
+        if self._await is not None:
+            return                    # numeric sub-prompt: ignore picks
+        if self._first is None:
+            self._first = point
+            self.last_point = point
+            self._corner_prompt()
+            return
+        if self._dims is not None:
+            # Dimensions placement: the pick chooses the quadrant
+            lx, ly = self._to_local(point)
+            length = self._dims[0] if lx >= 0 else -self._dims[0]
+            width = self._dims[1] if ly >= 0 else -self._dims[1]
+            self._build(length, width)
+            return
+        lx, ly = self._to_local(point)
+        self._build(lx, ly)
+
+    def on_enter(self) -> None:
+        defaults = {
+            "chamfer1": type(self).chamfer[0],
+            "chamfer2": None,        # filled when reached (defaults to d1)
+            "elevation": type(self).elevation,
+            "fillet": type(self).fillet,
+            "thickness": type(self).thickness,
+            "plwidth": type(self).pl_width,
+            "area": type(self).last_area,
+            "area_len": type(self).last_length,
+            "area_wid": type(self).last_width,
+            "dim_len": type(self).last_length,
+            "dim_wid": type(self).last_width,
+            "rot": type(self).rotation,
+        }
+        if self._await == "area_lw":
+            self.on_option("L")
+            return
+        if self._await in defaults:
+            value = defaults[self._await]
+            if value is None:
+                value = self._pending.get("d1", 0.0)
+            self.on_option(f"{value:g}")
+            return
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        value = _parse_number(text)
+        cls = type(self)
+        # numeric sub-prompts
+        if self._await == "chamfer1":
+            if value is None or value < 0:
+                return False
+            self._pending["d1"] = value
+            self._await = "chamfer2"
+            self.prompt(
+                "Specify second chamfer distance for rectangles <{d:g}>:",
+                d=value)
+            return True
+        if self._await == "chamfer2":
+            if value is None or value < 0:
+                return False
+            cls.chamfer = (self._pending["d1"], value)
+            cls.fillet = 0.0          # chamfer and fillet are exclusive
+            self._await = None
+            self._first_prompt()
+            return True
+        if self._await == "fillet":
+            if value is None or value < 0:
+                return False
+            cls.fillet = value
+            cls.chamfer = (0.0, 0.0)
+            self._await = None
+            self._first_prompt()
+            return True
+        if self._await in ("elevation", "thickness", "plwidth"):
+            if value is None:
+                return False
+            setattr(cls, {"elevation": "elevation", "thickness": "thickness",
+                          "plwidth": "pl_width"}[self._await], value)
+            self._await = None
+            self._first_prompt()
+            return True
+        if self._await == "area":
+            if value is None or value <= 0:
+                return False
+            cls.last_area = value
+            self._await = "area_lw"
+            self.prompt(
+                "Calculate rectangle dimensions based on [Length/Width] "
+                "<Length>:")
+            return True
+        if self._await == "area_lw":
+            if t in ("L", "LENGTH"):
+                self._await = "area_len"
+                self.prompt("Enter rectangle length <{v:g}>:",
+                            v=cls.last_length)
+                return True
+            if t in ("W", "WIDTH"):
+                self._await = "area_wid"
+                self.prompt("Enter rectangle width <{v:g}>:",
+                            v=cls.last_width)
+                return True
+            return False
+        if self._await in ("area_len", "area_wid"):
+            if value is None or value <= 0:
+                return False
+            # the target area includes the corner cut (official rule)
+            total = cls.last_area + self._corner_loss()
+            other = total / value
+            if self._await == "area_len":
+                cls.last_length = value
+                self._build(value, other)
+            else:
+                cls.last_width = value
+                self._build(other, value)
+            self._await = None
+            return True
+        if self._await == "dim_len":
+            if value is None or value <= 0:
+                return False
+            cls.last_length = value
+            self._await = "dim_wid"
+            self.prompt("Specify width for rectangles <{v:g}>:",
+                        v=cls.last_width)
+            return True
+        if self._await == "dim_wid":
+            if value is None or value <= 0:
+                return False
+            cls.last_width = value
+            self._dims = (cls.last_length, value)
+            self._await = None
+            self._corner_prompt()     # the next pick places the quadrant
+            return True
+        if self._await == "rot":
+            if t in ("P", "PICK", "POINTS"):
+                self._await = "rot_p1"
+                self.prompt("Specify first point:")
+                return True
+            if value is None:
+                return False
+            cls.rotation = value
+            self._await = None
+            self._first_prompt() if self._first is None \
+                else self._corner_prompt()
+            return True
+        if self._await is not None:
+            return False
+        # keywords
+        if self._first is None:
+            if t in ("C", "CHAMFER"):
+                self._await = "chamfer1"
+                self.prompt(
+                    "Specify first chamfer distance for rectangles <{d:g}>:",
+                    d=cls.chamfer[0])
+                return True
+            if t in ("E", "ELEVATION"):
+                self._await = "elevation"
+                self.prompt(
+                    "Specify the elevation for rectangles <{v:g}>:",
+                    v=cls.elevation)
+                return True
+            if t in ("F", "FILLET"):
+                self._await = "fillet"
+                self.prompt(
+                    "Specify fillet radius for rectangles <{v:g}>:",
+                    v=cls.fillet)
+                return True
+            if t in ("T", "THICKNESS"):
+                self._await = "thickness"
+                self.prompt(
+                    "Specify thickness for rectangles <{v:g}>:",
+                    v=cls.thickness)
+                return True
+            if t in ("W", "WIDTH"):
+                self._await = "plwidth"
+                self.prompt(
+                    "Specify line width for rectangles <{v:g}>:",
+                    v=cls.pl_width)
+                return True
+            return False
+        if t in ("A", "AREA"):
+            self._await = "area"
+            self.prompt(
+                "Enter area of rectangle in current units <{v:g}>:",
+                v=cls.last_area)
+            return True
+        if t in ("D", "DIMENSIONS"):
+            self._await = "dim_len"
+            self.prompt("Specify length for rectangles <{v:g}>:",
+                        v=cls.last_length)
+            return True
+        if t in ("R", "ROTATION"):
+            self._await = "rot"
+            self.prompt(
+                "Specify rotation angle or [Pick points] <{v:g}>:",
+                v=cls.rotation)
+            return True
+        return False
+
+    def preview_segments(self, cursor: Point):
+        if self._first is None or self._await is not None:
+            return []
+        try:
+            if self._dims is not None:
+                lx, ly = self._to_local(cursor)
+                length = self._dims[0] if lx >= 0 else -self._dims[0]
+                width = self._dims[1] if ly >= 0 else -self._dims[1]
+                points = actions.rect_vertices(
+                    self._first, length, width,
+                    rotation_deg=self._rotation())
+            else:
+                lx, ly = self._to_local(cursor)
+                points = actions.rect_vertices(
+                    self._first, lx, ly, rotation_deg=self._rotation())
+        except ValueError:
+            return []
+        ring = [(p[0], p[1]) for p in points]
+        return list(zip(ring, ring[1:] + ring[:1]))
+
+
+class PolygonTool(Tool):
+    """POLYGON with AutoCAD's full flow: sides (POLYSIDES session default),
+    Edge, Inscribed/Circumscribed with sticky <I/C> default, and the
+    orientation rules — a typed radius puts the bottom edge horizontal, a
+    picked point is a vertex (I) or an edge midpoint (C)."""
+
+    last_sides = 4        # POLYSIDES: session-only default
+    last_mode = "I"
+
+    def start(self) -> None:
+        self.name = "POLYGON"
+        self._sides = 0
+        self._center: Point | None = None
+        self._mode = None
+        self._edge_first: Point | None = None
+        self._stage = "sides"
+        self.prompt("Enter number of sides <{n}>:",
+                    n=type(self).last_sides)
+
+    def _mode_prompt(self) -> None:
+        self._stage = "mode"
+        self.prompt(
+            "Enter an option [Inscribed in circle/Circumscribed about "
+            "circle] <{m}>:", m=type(self).last_mode)
+
+    def _build_ring(self, ring) -> None:
+        self.ctx.execute(actions.add_polyline(ring, closed=True))
+        self.ctx.finish()
+
+    def _typed_radius(self, radius: float) -> None:
+        # bottom edge along the UCS's X: vertices straddle -90 from it
+        first = self.ucs().degrees - 90.0 + 180.0 / self._sides
+        r = radius if self._mode == "I" \
+            else radius / math.cos(math.pi / self._sides)
+        self._build_ring(actions.polygon_ring(
+            self._center, self._sides, r, first))
+
+    def _dragged_radius(self, point: Point) -> None:
+        theta = math.degrees(math.atan2(point[1] - self._center[1],
+                                        point[0] - self._center[0]))
+        dist = math.dist(self._center, point)
+        if dist <= 0.0:
+            return
+        if self._mode == "I":
+            first, r = theta, dist                 # the pick IS a vertex
+        else:
+            first = theta + 180.0 / self._sides    # the pick is a midpoint
+            r = dist / math.cos(math.pi / self._sides)
+        self._build_ring(actions.polygon_ring(
+            self._center, self._sides, r, first))
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
+        if self._stage == "sides":
+            try:
+                sides = int(text)
+            except ValueError:
+                return False
+            if 3 <= sides <= 1024:
+                self._sides = sides
+                type(self).last_sides = sides
+                self._stage = "center"
+                self.prompt("Specify center of polygon or [Edge]:")
+                return True
+            self.ctx.echo(tr("Between 3 and 1024 sides."))
+            return True
+        if self._stage == "center" and t in ("E", "EDGE"):
+            self._stage = "edge1"
+            self.prompt("Specify first endpoint of edge:")
+            return True
+        if self._stage == "mode":
+            if t in ("I", "INSCRIBED"):
+                self._mode = "I"
+            elif t in ("C", "CIRCUMSCRIBED"):
+                self._mode = "C"
+            else:
+                return False
+            type(self).last_mode = self._mode
+            self._stage = "radius"
+            self.prompt("Specify radius of circle:")
+            return True
+        if self._stage == "radius":
+            radius = _parse_number(text)
+            if radius is None or radius <= 0:
+                return False
+            self._typed_radius(radius)
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._stage == "sides":
+            self._sides = type(self).last_sides
+            self._stage = "center"
+            self.prompt("Specify center of polygon or [Edge]:")
+            return
+        if self._stage == "mode":
+            self.on_option(type(self).last_mode)
+            return
+        self.ctx.finish()
+
+    def on_point(self, point: Point) -> None:
+        if self._stage == "center":
+            self._center = point
+            self.last_point = point
+            self._mode_prompt()
+            return
+        if self._stage == "mode":
+            # picking instead of answering: accept the default mode and
+            # treat the pick as the dragged radius (AutoCAD flow shortcut)
+            self._mode = type(self).last_mode
+            self._stage = "radius"
+            self._dragged_radius(point)
+            return
+        if self._stage == "radius":
+            self._dragged_radius(point)
+            return
+        if self._stage == "edge1":
+            self._edge_first = point
+            self.last_point = point
+            self._stage = "edge2"
+            self.prompt("Specify second endpoint of edge:")
+            return
+        if self._stage == "edge2":
+            try:
+                ring = actions.polygon_from_edge(
+                    self._edge_first, point, self._sides)
+            except ValueError:
+                self.ctx.echo(tr("Zero-length edge."))
+                return
+            self._build_ring(ring)
+
+    def preview_segments(self, cursor: Point):
+        if self._stage in ("mode", "radius") and self._center is not None:
+            mode = self._mode or type(self).last_mode
+            theta = math.degrees(math.atan2(cursor[1] - self._center[1],
+                                            cursor[0] - self._center[0]))
+            dist = math.dist(self._center, cursor)
+            if dist <= 0.0:
+                return []
+            if mode == "I":
+                first, r = theta, dist
+            else:
+                first = theta + 180.0 / self._sides
+                r = dist / math.cos(math.pi / self._sides)
+            pts = actions.polygon_ring(self._center, self._sides, r, first)
+            return list(zip(pts, pts[1:] + pts[:1]))
+        if self._stage == "edge2" and self._edge_first is not None:
+            try:
+                pts = actions.polygon_from_edge(
+                    self._edge_first, cursor, self._sides)
+            except ValueError:
+                return []
+            return list(zip(pts, pts[1:] + pts[:1]))
+        return []
+
+
+class ImageAttachTool(Tool):
+    """IMAGEATTACH: file dialog, insertion point, scale — AutoCAD's flow.
+
+    The image is referenced, never embedded (the DXF stores the path, like
+    AutoCAD). Base size with no resolution info: one unit per pixel.
+    """
+
+    def start(self) -> None:
+        self.name = "IMAGEATTACH"
+        self._path = None
+        self._size = None
+        self._insert = None
+        window = getattr(self.ctx.services, "window", None)
+        from views import file_dialogs
+
+        filename = file_dialogs.get_open_file(
+            window, tr("Select Image File"),
+            tr("Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif);;"
+               "All files (*)"))
+        if not filename:
+            self.ctx.finish()
+            return
+        try:
+            import PIL.Image
+
+            with PIL.Image.open(filename) as im:
+                self._size = im.size
+        except Exception:
+            self.ctx.echo(tr("Cannot read {name} as an image.",
+                             name=filename))
+            self.ctx.finish()
+            return
+        self._path = filename
+        self.prompt("Specify insertion point <0,0>:")
+
+    def wants_raw_text(self) -> bool:
+        return self._insert is not None
+
+    def on_point(self, point: Point) -> None:
+        if self._path is None or self._insert is not None:
+            return
+        self._insert = (point[0], point[1])
+        width, height = self._size
+        self.prompt(
+            "Base image size: {w} x {h} units. Specify scale factor <1>:",
+            w=width, h=height)
+
+    def _place(self, scale: float) -> None:
+        self.ctx.execute(actions.attach_image(
+            self._path, self._size, self._insert, scale))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if self._insert is None:
+            return False
+        try:
+            scale = float(text)
+        except ValueError:
+            return False
+        if scale <= 0:
+            self.ctx.echo(tr("Value must be positive."))
+            return True
+        self._place(scale)
+        return True
+
+    def on_enter(self) -> None:
+        if self._insert is not None:
+            self._place(1.0)
+
+
+class TableTool(Tool):
+    """TABLE: the Insert Table dialog, then the top-left corner on canvas.
+
+    The grid is plain LINEs and TEXTs (see core.tables) — the construction
+    every coordinate-chart LISP uses, and it round-trips everywhere.
+    """
+
+    def start(self) -> None:
+        self.name = "TABLE"
+        self._spec = None
+        window = getattr(self.ctx.services, "window", None)
+        from views.table_dialog import InsertTableDialog
+
+        char_height = 2.5
+        try:
+            char_height = float(
+                window.document.doc.header.get("$TEXTSIZE", 2.5)) or 2.5
+        except Exception:
+            pass
+        dialog = InsertTableDialog(window, char_height)
+        if not dialog.exec():
+            self.ctx.finish()
+            return
+        self._spec = dialog.result_table()
+        self.prompt("Specify insertion point:")
+
+    def on_point(self, point: Point) -> None:
+        if self._spec is None:
+            return
+        from core import tables
+
+        self.ctx.execute(tables.insert_table((point[0], point[1]),
+                                             self._spec["cols"],
+                                             self._spec["col_width"],
+                                             self._spec["data_rows"],
+                                             self._spec["row_height"],
+                                             self._spec["text_height"],
+                                             title=self._spec["title"],
+                                             headers=self._spec["headers"]))
+        self.ctx.echo(tr("Table created. Fill the cells with TEXT."))
+        self.ctx.finish()
+
+
+class PdfAttachTool(Tool):
+    """PDFATTACH, the raster way: rasterize one page with QtPdf and attach
+    it as a plain IMAGE — good enough to trace over, honest about what it
+    is (the canvas shows exactly what every other CAD will see: an image).
+
+    Base size = the page's physical size, one drawing unit per millimetre.
+    """
+
+    DPI = 150.0
+
+    def start(self) -> None:
+        self.name = "PDFATTACH"
+        self._png = None
+        self._size_px = None
+        self._insert = None
+        self._scale_unit = 25.4 / self.DPI     # world units (mm) per pixel
+        window = getattr(self.ctx.services, "window", None)
+        from views import file_dialogs
+
+        filename = file_dialogs.get_open_file(
+            window, tr("Select PDF File"), tr("PDF (*.pdf)"))
+        if not filename:
+            self.ctx.finish()
+            return
+        from PySide6.QtCore import QSize
+        from PySide6.QtPdf import QPdfDocument
+
+        pdf = QPdfDocument(window)
+        pdf.load(filename)
+        if pdf.pageCount() < 1:
+            self.ctx.echo(tr("Cannot read {name} as a PDF.", name=filename))
+            self.ctx.finish()
+            return
+        page = 0
+        if pdf.pageCount() > 1:
+            page = self._ask_page(pdf.pageCount())
+            if page is None:
+                self.ctx.finish()
+                return
+        points = pdf.pagePointSize(page)
+        px = QSize(max(1, round(points.width() / 72.0 * self.DPI)),
+                   max(1, round(points.height() / 72.0 * self.DPI)))
+        rendered = pdf.render(page, px)
+        # A PDF page paints no background: the render arrives with ALPHA
+        # where there is no ink, and on the dark canvas the sheet looked
+        # black with its black text invisible. Composite over white, like
+        # every PDF viewer does.
+        from PySide6.QtGui import QImage, QPainter
+
+        image = QImage(px, QImage.Format_RGB32)
+        image.fill(0xFFFFFFFF)
+        painter = QPainter(image)
+        painter.drawImage(0, 0, rendered)
+        painter.end()
+        import pathlib
+
+        source = pathlib.Path(filename)
+        target = source.with_name(f"{source.stem}-p{page + 1}.png")
+        try:
+            image.save(str(target))
+        except Exception:
+            target = None
+        if target is None or not target.exists():
+            from core.paths import user_cache_dir
+
+            cache = user_cache_dir() / "pdf"
+            cache.mkdir(parents=True, exist_ok=True)
+            target = cache / f"{source.stem}-p{page + 1}.png"
+            image.save(str(target))
+        self._png = str(target)
+        self._size_px = (px.width(), px.height())
+        self.prompt("Specify insertion point:")
+
+    def _ask_page(self, count: int):
+        window = getattr(self.ctx.services, "window", None)
+        from PySide6.QtWidgets import QInputDialog
+
+        page, ok = QInputDialog.getInt(
+            window, tr("PDF Page"),
+            tr("Page (1-{count}):", count=count), 1, 1, count)
+        return page - 1 if ok else None
+
+    def on_point(self, point: Point) -> None:
+        if self._png is None or self._insert is not None:
+            return
+        self._insert = (point[0], point[1])
+        width_mm = self._size_px[0] * self._scale_unit
+        height_mm = self._size_px[1] * self._scale_unit
+        self.prompt(
+            "Page size: {w:.0f} x {h:.0f} units. Specify scale factor <1>:",
+            w=width_mm, h=height_mm)
+
+    def _place(self, factor: float) -> None:
+        self.ctx.execute(actions.attach_image(
+            self._png, self._size_px, self._insert,
+            self._scale_unit * factor))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if self._insert is None:
+            return False
+        try:
+            factor = float(text)
+        except ValueError:
+            return False
+        if factor <= 0:
+            self.ctx.echo(tr("Value must be positive."))
+            return True
+        self._place(factor)
+        return True
+
+    def on_enter(self) -> None:
+        if self._insert is not None:
+            self._place(1.0)
+
+
+class SplineTool(Tool):
+    """SPLINE, the Fit method (Command Reference p. 1828): fit points until
+    Enter, with Close and Undo. Method/CV, Knots, Tangency, Tolerance and
+    Object are not offered — the prompt lists only what it can do.
+    """
+
+    def start(self) -> None:
+        self.name = "SPLINE"
+        self._pts: list[Point] = []
+        self.prompt("Specify first point:")
+
+    def _prompt(self) -> None:
+        if len(self._pts) >= 3:
+            self.prompt("Enter next point or [Close/Undo]:")
+        elif len(self._pts) >= 1:
+            self.prompt("Enter next point or [Undo]:")
+        else:
+            self.prompt("Specify first point:")
+
+    def on_point(self, point: Point) -> None:
+        self._pts.append(point)
+        self.last_point = point
+        self._prompt()
+
+    def on_option(self, text: str) -> bool:
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        word = self.option(text) or text.strip().upper()
+        if word in ("U", "UNDO") and self._pts:
+            self._pts.pop()
+            self._prompt()
+            return True
+        if word in ("C", "CLOSE") and len(self._pts) >= 3:
+            self.ctx.execute(actions.add_spline(self._pts, closed=True))
+            self.ctx.finish()
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if len(self._pts) >= 2:
+            self.ctx.execute(actions.add_spline(self._pts))
+        self.ctx.finish()
+
+    def preview_segments(self, cursor: Point) -> list:
+        pts = self._pts + [cursor]
+        if len(pts) < 2:
+            return []
+        if len(pts) == 2:
+            return [tuple(pts)]
+        try:
+            from ezdxf.math import global_bspline_interpolation
+
+            # degree must stay below the point count (3 points -> degree 2)
+            curve = global_bspline_interpolation(
+                pts, degree=min(3, len(pts) - 1))
+            flat = [(v.x, v.y) for v in curve.flattening(0.05)]
+            return list(zip(flat, flat[1:]))
+        except Exception:
+            return list(zip(pts, pts[1:]))
+
+
+TOOL_CLASSES = {
+    "LINE": LineTool,
+    "CIRCLE": CircleTool,
+    "ARC": ArcTool,
+    "PLINE": PlineTool,
+    "RECTANG": RectangTool,
+    "POLYGON": PolygonTool,
+    "ELLIPSE": EllipseTool,
+    "POINT": PointTool,
+    "TEXT": TextTool,
+    "MTEXT": MTextTool,
+    "IMAGEATTACH": ImageAttachTool,
+    "TABLE": TableTool,
+    "PDFATTACH": PdfAttachTool,
+    "SPLINE": SplineTool,
+}

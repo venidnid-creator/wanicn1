@@ -1,0 +1,1228 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Object snaps (osnap) — the AutoCAD drawing "feel".
+
+The engine extracts snappable geometry from the ezdxf modelspace into
+NumPy arrays once (lazily, invalidated on edits), so each cursor move is a
+vectorized query instead of an entity walk — a cadastre-sized drawing
+stays interactive.
+
+Scale notes (1.35 M segment rows on a real cadastre): owners are interned
+to int32 ids for vectorized removal/translation, and ``find`` prefilters
+segments through a per-row bounds table — one vectorized pass selects the
+rows near the cursor and every snap kind works on those candidates only
+(the old per-kind full-array passes cost ~130 ms per mouse move).
+
+Supported: END, MID, CEN, GCE, NOD, QUA, INT, INS, PER, TAN, NEA — the
+running-snap set of ``core.osnap`` minus the three tracking modes
+(extension, apparent intersection, parallel), which need alignment paths.
+Priorities follow AutoCAD: an endpoint beats a nearby midpoint beats
+"nearest".
+
+Curves (ELLIPSE, SPLINE, and the arc segments of a polyline) are NOT fed in
+as chords. A chord chain would put a false ENDpoint on every flattening
+vertex and a false MIDpoint on every chord — dozens of markers that are not
+features of the drawing. Instead each type contributes what it really has:
+
+* polyline arc segments become real arcs, so END lands on the vertices, MID
+  on the arc's own midpoint and CEN on its centre — before this they were
+  treated as straight, and MID sat on the chord, off the drawing;
+* an ellipse gives its centre, its quadrants, and its two ends if it is an
+  elliptical arc;
+* a spline gives its two ends;
+* both give a MIDpoint measured ALONG the curve, and feed a separate chord
+  table (``_curves``) that only NEA, PER and INT read — the snaps for which
+  a fine chord chain is the right approximation.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+
+from core import ocs
+
+# Lower = wins when within threshold.
+PRIORITY = {"END": 0, "INT": 1, "MID": 2, "CEN": 3, "GCE": 4, "NOD": 5,
+            "ORI": 6, "QUA": 7, "INS": 8, "PER": 9, "TAN": 10, "DTAN": 10,
+            "NEA": 11}
+#: Every snap a drawing's geometry offers. The origin (ORI) is not one of
+#: them: it is a point no entity owns, offered only when the user ticks it.
+ALL_KINDS = frozenset(k for k in PRIORITY if k not in ("ORI", "DTAN"))
+
+# Point targets share one table with a kind column, so a curve can offer an
+# end, a midpoint, a centre and four quadrants without four more arrays.
+TARGET_KINDS = ("END", "MID", "CEN", "QUA", "INS", "GCE")
+_TARGET_CODE = {kind: i for i, kind in enumerate(TARGET_KINDS)}
+
+# Max sagitta of the chord chain, as a fraction of the curve's size. The
+# exact snaps (END, MID, CEN, QUA) never come from these chords, so this only
+# bounds how far a NEA can sit from the true curve — same divisor the pick
+# index uses, so both agree on where a curve is.
+CURVE_SAGITTA = 500
+
+
+@dataclass(frozen=True)
+class SnapHit:
+    x: float
+    y: float
+    kind: str
+    #: The VIEWPORT (handle) this hit was reached through, when a paper-space
+    #: cursor snapped to model geometry a viewport shows; None otherwise.
+    via: Optional[str] = None
+    #: DTAN (deferred tangent) only: the circle ``(cx, cy, r)`` picked. The
+    #: point is just where the pick touched it; the real tangent point is
+    #: solved once the next point is known.
+    circle: Optional[tuple] = None
+
+
+class SnapEngine:
+    """Snappable-geometry cache over a Document's current space -- or over
+    ``space`` when one is given (the true modelspace, for snapping from a
+    sheet to what its viewports show)."""
+
+    def __init__(self, document, space=None) -> None:
+        self.document = document
+        self._space = space
+        self._dirty = True
+        #: block definitions being walked, to stop a cyclic one
+        self._block_stack: set = set()
+        #: transformed block rows collected by a build (see _emit)
+        self._chunks = None
+        self._owners: list[str] = []
+        self._owner_ids: dict[str, int] = {}
+        self._segs = np.empty((0, 4))     # x1 y1 x2 y2
+        self._seg_oidx = np.empty(0, dtype=np.int32)
+        self._seg_bounds = np.empty((0, 4))
+        self._circles = np.empty((0, 3))  # cx cy r (full circles)
+        self._circle_oidx = np.empty(0, dtype=np.int32)
+        self._arcs = np.empty((0, 5))     # cx cy r a0 a1 (ccw radians)
+        self._arc_oidx = np.empty(0, dtype=np.int32)
+        self._points = np.empty((0, 2))   # NOD targets
+        self._point_oidx = np.empty(0, dtype=np.int32)
+        # Chords of ELLIPSE/SPLINE: read by NEA, PER and INT only.
+        self._curves = np.empty((0, 4))
+        self._curve_oidx = np.empty(0, dtype=np.int32)
+        self._curve_bounds = np.empty((0, 4))
+        # x y kind_code, for the exact targets a curve owns (see TARGET_KINDS)
+        self._targets = np.empty((0, 3))
+        self._target_oidx = np.empty(0, dtype=np.int32)
+
+    def invalidate(self) -> None:
+        self._dirty = True
+
+    def _intern(self, handle: str) -> int:
+        oid = self._owner_ids.get(handle)
+        if oid is None:
+            oid = len(self._owners)
+            self._owners.append(handle)
+            self._owner_ids[handle] = oid
+        return oid
+
+    def _ids_of(self, handles) -> np.ndarray:
+        ids = [self._owner_ids[h] for h in handles if h in self._owner_ids]
+        return np.asarray(ids, dtype=np.int32)
+
+    # -- extraction -----------------------------------------------------------
+    @staticmethod
+    def _extract(e, oid, segs, seg_o, circles, circle_o,
+                 arcs, arc_o, points, point_o,
+                 curves=None, curve_o=None, targets=None, target_o=None) -> None:
+        t = e.dxftype()
+        try:
+            if t == "LINE":
+                s, w = e.dxf.start, e.dxf.end
+                segs.append((s.x, s.y, w.x, w.y))
+                seg_o.append(oid)
+            elif t in ("LWPOLYLINE", "CIRCLE", "ARC") \
+                    and not ocs.is_planar(e):
+                # Tilted extrusion: no circle in plan. Its traced outline
+                # still snaps (NEArest, endpoints of the trace).
+                if curves is not None:
+                    points = SnapEngine._flatten(e)
+                    SnapEngine._chords(points, oid, curves, curve_o)
+                    SnapEngine._curve_targets(points, oid, targets, target_o)
+            elif t == "LWPOLYLINE":
+                vertices = ocs.bulge_vertices_wcs(
+                    e, [(v[0], v[1], v[4]) for v in e.get_points("xyseb")])
+                SnapEngine._polyline(vertices, bool(e.closed), oid,
+                                     segs, seg_o, arcs, arc_o)
+                if e.closed and targets is not None:
+                    SnapEngine._geometric_center(
+                        [(v[0], v[1]) for v in vertices], oid,
+                        targets, target_o)
+            elif t == "POLYLINE":
+                if e.get_mode() in ("AcDb2dPolyline", "AcDb3dPolyline"):
+                    vertices = [(v.dxf.location.x, v.dxf.location.y,
+                                 getattr(v.dxf, "bulge", 0.0) or 0.0)
+                                for v in e.vertices]
+                    if e.get_mode() == "AcDb2dPolyline":
+                        vertices = ocs.bulge_vertices_wcs(e, vertices)
+                    SnapEngine._polyline(vertices, bool(e.is_closed), oid,
+                                         segs, seg_o, arcs, arc_o)
+            elif t == "CIRCLE":
+                cx, cy, r = ocs.circle_wcs(e)
+                circles.append((cx, cy, r))
+                circle_o.append(oid)
+                if targets is not None:      # a circle's area centre is its centre
+                    targets.append((cx, cy, _TARGET_CODE["GCE"]))
+                    target_o.append(oid)
+            elif t == "ARC":
+                cx, cy, r, d0, d1 = ocs.arc_wcs(e)
+                a0 = math.radians(d0)
+                a1 = math.radians(d1)
+                if a1 <= a0:
+                    a1 += math.tau
+                arcs.append((cx, cy, r, a0, a1))
+                arc_o.append(oid)
+            elif t == "POINT":
+                l = e.dxf.location
+                points.append((l.x, l.y))
+                point_o.append(oid)
+            elif t in ("INSERT", "TEXT", "MTEXT", "ATTDEF", "ATTRIB", "SHAPE") \
+                    and targets is not None:
+                # INSertion: the point the object hangs from.
+                anchor = e.dxf.get("insert")
+                targets.append((anchor.x, anchor.y, _TARGET_CODE["INS"]))
+                target_o.append(oid)
+            elif t == "ELLIPSE" and curves is not None:
+                SnapEngine._ellipse(e, oid, curves, curve_o, targets, target_o)
+                c = e.dxf.center
+                targets.append((c.x, c.y, _TARGET_CODE["GCE"]))
+                target_o.append(oid)
+            elif t == "SPLINE" and curves is not None:
+                SnapEngine._spline(e, oid, curves, curve_o, targets, target_o)
+            elif t == "VIEWPORT":
+                SnapEngine._viewport_frame(e, oid, segs, seg_o)
+            elif t in ("DIMENSION", "ARC_DIMENSION") and targets is not None:
+                SnapEngine._dimension(e, oid, segs, seg_o, points, point_o,
+                                      targets, target_o)
+        except Exception:
+            pass  # malformed entity: not snappable, not fatal
+
+    @staticmethod
+    def _dimension(dim, oid, segs, seg_o, points, point_o,
+                   targets, target_o) -> None:
+        """A dimension snaps through what its block draws, as in AutoCAD:
+        its dimension and extension lines (Endpoint, Midpoint, Nearest,
+        Intersection, Perpendicular), its arrows' tips (Endpoint -- an
+        arrowhead is inserted at its tip), its definition points (Node) and
+        its text (Insertion). None of it snapped, so a drafter could not
+        measure from an arrow tip to check a standard's 8 mm (Rafael's
+        seventh review, 16:41)."""
+        block = dim.get_geometry_block()
+        if block is None:
+            return
+        dx = dy = 0.0
+        if dim.dxf.hasattr("insert"):            # a moved copy's block offset
+            dx, dy = dim.dxf.insert.x, dim.dxf.insert.y
+        end, ins = _TARGET_CODE["END"], _TARGET_CODE["INS"]
+        for part in block:
+            kind = part.dxftype()
+            if kind == "LINE":
+                a, b = part.dxf.start, part.dxf.end
+                segs.append((a.x + dx, a.y + dy, b.x + dx, b.y + dy))
+                seg_o.append(oid)
+            elif kind == "INSERT":
+                p = part.dxf.insert
+                targets.append((p.x + dx, p.y + dy, end))
+                target_o.append(oid)
+            elif kind == "POINT":
+                p = part.dxf.location
+                points.append((p.x + dx, p.y + dy))
+                point_o.append(oid)
+            elif kind in ("MTEXT", "TEXT"):
+                p = part.dxf.insert
+                targets.append((p.x + dx, p.y + dy, ins))
+                target_o.append(oid)
+
+    @staticmethod
+    def _viewport_frame(vp, oid, segs, seg_o) -> None:
+        """A floating viewport's frame snaps like a rectangle -- Endpoint at
+        its corners, Midpoint, Intersection, Nearest, Perpendicular -- as in
+        AutoCAD, so a second viewport can be butted against the first. It
+        did not: the snap found only the title block behind it, and
+        Rafael's two viewports overlapped by 2.5 mm (seventh review, 25:45).
+        Not the sheet's own main viewport, which is no window; and a
+        viewport clipped to a shape snaps through that shape, an entity of
+        its own."""
+        from core import layouts
+
+        layout = vp.doc.layouts.get_layout_for_entity(vp) if vp.doc else None
+        if layout is None or vp not in layouts.visible_viewports(layout):
+            return
+        if layouts.viewport_clip(vp) is not None:
+            return
+        x0, y0, x1, y1 = layouts.viewport_rect(vp)
+        for edge in ((x0, y0, x1, y0), (x1, y0, x1, y1),
+                     (x1, y1, x0, y1), (x0, y1, x0, y0)):
+            segs.append(edge)
+            seg_o.append(oid)
+
+    # -- per-type helpers ------------------------------------------------------
+    @staticmethod
+    def _polyline(vertices, closed: bool, oid, segs, seg_o, arcs, arc_o) -> None:
+        """Straight spans become segments, bulged spans become real arcs.
+
+        A bulged span used to go in as its chord, which put MIDpoint off the
+        drawing and hid the arc's centre entirely.
+        """
+        from ezdxf.math import bulge_to_arc
+
+        spans = list(zip(vertices, vertices[1:]))
+        if closed and len(vertices) > 2:
+            spans.append((vertices[-1], vertices[0]))
+        for (x1, y1, bulge), (x2, y2, _b2) in spans:
+            if not bulge:
+                segs.append((x1, y1, x2, y2))
+                seg_o.append(oid)
+                continue
+            try:
+                center, a0, a1, radius = bulge_to_arc((x1, y1), (x2, y2), bulge)
+            except Exception:
+                segs.append((x1, y1, x2, y2))
+                seg_o.append(oid)
+                continue
+            if a1 <= a0:
+                a1 += math.tau
+            arcs.append((center.x, center.y, radius, a0, a1))
+            arc_o.append(oid)
+
+    @staticmethod
+    def _geometric_center(points, oid, targets, target_o) -> None:
+        """The centroid of a closed shape — AutoCAD's Geometric Center.
+
+        The area centroid, not the average of the vertices: on an L-shaped
+        lot those are different points, and the one a drafter wants is the
+        one the area balances on.
+        """
+        if len(points) < 3:
+            return
+        twice_area = 0.0
+        cx = cy = 0.0
+        for (x0, y0), (x1, y1) in zip(points, points[1:] + points[:1]):
+            cross = x0 * y1 - x1 * y0
+            twice_area += cross
+            cx += (x0 + x1) * cross
+            cy += (y0 + y1) * cross
+        if abs(twice_area) < 1e-12:
+            return
+        targets.append((cx / (3.0 * twice_area), cy / (3.0 * twice_area),
+                        _TARGET_CODE["GCE"]))
+        target_o.append(oid)
+
+    @staticmethod
+    def _curve_targets(points, oid, targets, target_o) -> None:
+        """END at the two ends and MID measured ALONG the curve."""
+        if len(points) < 2:
+            return
+        first, last = points[0], points[-1]
+        closed = math.isclose(first[0], last[0], abs_tol=1e-9) and \
+            math.isclose(first[1], last[1], abs_tol=1e-9)
+        if closed:
+            # A closed curve has no ends and no midpoint — AutoCAD offers
+            # neither. Its quadrants and centre carry the exact snaps.
+            return
+        for x, y in (first, last):
+            targets.append((x, y, _TARGET_CODE["END"]))
+            target_o.append(oid)
+        lengths = [0.0]
+        for a, b in zip(points, points[1:]):
+            lengths.append(lengths[-1] + math.dist(a, b))
+        half = lengths[-1] / 2.0
+        if half <= 0:
+            return
+        for i, run in enumerate(lengths[1:], start=1):
+            if run >= half:
+                a, b = points[i - 1], points[i]
+                span = run - lengths[i - 1]
+                t = 0.0 if span == 0 else (half - lengths[i - 1]) / span
+                targets.append((a[0] + t * (b[0] - a[0]),
+                                a[1] + t * (b[1] - a[1]),
+                                _TARGET_CODE["MID"]))
+                target_o.append(oid)
+                return
+
+    @staticmethod
+    def _flatten(entity):
+        """Chord chain of a curve, at a sagitta that scales with its size."""
+        from ezdxf import bbox as ezbbox
+        from ezdxf import path as ezpath
+
+        path = ezpath.make_path(entity)
+        box = ezbbox.extents([entity], fast=True)
+        size = max(box.size.x, box.size.y) if box.has_data else 1.0
+        distance = max(abs(size) / CURVE_SAGITTA, 1e-9)
+        return [(v.x, v.y) for v in path.flattening(distance)]
+
+    @staticmethod
+    def _chords(points, oid, curves, curve_o) -> None:
+        for a, b in zip(points, points[1:]):
+            curves.append((a[0], a[1], b[0], b[1]))
+            curve_o.append(oid)
+
+    @staticmethod
+    def _ellipse(e, oid, curves, curve_o, targets, target_o) -> None:
+        points = SnapEngine._flatten(e)
+        SnapEngine._chords(points, oid, curves, curve_o)
+        SnapEngine._curve_targets(points, oid, targets, target_o)
+        c = e.dxf.center
+        targets.append((c.x, c.y, _TARGET_CODE["CEN"]))
+        target_o.append(oid)
+        # Quadrants: the four axis extremes, and only those the arc covers.
+        major = e.dxf.major_axis
+        minor = e.minor_axis
+        for sign_major, sign_minor in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+            qx = c.x + sign_major * major.x + sign_minor * minor.x
+            qy = c.y + sign_major * major.y + sign_minor * minor.y
+            if SnapEngine._on_curve((qx, qy), points):
+                targets.append((qx, qy, _TARGET_CODE["QUA"]))
+                target_o.append(oid)
+
+    @staticmethod
+    def _on_curve(point, points, tol_ratio: float = 0.02) -> bool:
+        """Is this point on the traced run of the curve? (elliptical arcs)"""
+        if len(points) < 2:
+            return False
+        spread = max(max(p[0] for p in points) - min(p[0] for p in points),
+                     max(p[1] for p in points) - min(p[1] for p in points))
+        tol = max(spread * tol_ratio, 1e-9)
+        px, py = point
+        return any(math.dist((px, py), p) <= tol for p in points)
+
+    @staticmethod
+    def _spline(e, oid, curves, curve_o, targets, target_o) -> None:
+        points = SnapEngine._flatten(e)
+        SnapEngine._chords(points, oid, curves, curve_o)
+        SnapEngine._curve_targets(points, oid, targets, target_o)
+
+    @staticmethod
+    def _seg_bounds_of(segs: np.ndarray) -> np.ndarray:
+        if not len(segs):
+            return np.empty((0, 4))
+        return np.column_stack((
+            np.minimum(segs[:, 0], segs[:, 2]),
+            np.minimum(segs[:, 1], segs[:, 3]),
+            np.maximum(segs[:, 0], segs[:, 2]),
+            np.maximum(segs[:, 1], segs[:, 3]),
+        ))
+
+    def _xref_children(self, e, oid, segs, seg_o, circles, circle_o,
+                       arcs, arc_o, points, point_o, curves, curve_o,
+                       targets, target_o) -> bool:
+        """The referenced drawing's geometry snaps through an xref INSERT
+        (#33): a colleague's wall end is an ENDpoint here too. Every hit
+        belongs to the INSERT, the only object the host can select."""
+        from core import xrefs
+
+        if not xrefs.is_xref_insert(e):
+            return False
+        host = getattr(e.doc, "_ingecad_document", None) or self.document
+        found = False
+        for child in xrefs.virtual_entities(e, host):
+            found = True
+            self._extract(child, oid, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o,
+                          curves, curve_o, targets, target_o)
+        return found
+
+    # -- what an ordinary block insert draws -----------------------------------
+    #: nesting deeper than this is not followed (and stops a cyclic definition)
+    _BLOCK_DEPTH = 8
+
+    def _block_local(self, block, depth: int = 0):
+        """A block definition's snap geometry in its own coordinates, as
+        arrays, extracted once per build and reused by every insert of it.
+        A drawing with a thousand inserts of one block pays one walk."""
+        cache = self._blocks()
+        name = block.name
+        local = cache.get(name)
+        if local is not None:
+            return local
+        if name in self._block_stack:            # a cyclic definition
+            return None
+        self._block_stack.add(name)
+        chunks, self._chunks = self._chunks, None    # into these lists
+        lists = [[] for _ in range(12)]
+        segs, seg_o, circles, circle_o, arcs, arc_o, points, point_o, \
+            curves, curve_o, targets, target_o = lists
+        for part in block:
+            kind = part.dxftype()
+            if kind == "ATTDEF":
+                continue          # a definition: the insert shows its ATTRIB
+            if kind == "INSERT":
+                self._insert_children(part, 0, *lists, depth=depth + 1)
+            self._extract(part, 0, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o,
+                          curves, curve_o, targets, target_o)
+        local = (np.asarray(segs, dtype=np.float64).reshape(-1, 4),
+                 np.asarray(circles, dtype=np.float64).reshape(-1, 3),
+                 np.asarray(arcs, dtype=np.float64).reshape(-1, 5),
+                 np.asarray(points, dtype=np.float64).reshape(-1, 2),
+                 np.asarray(curves, dtype=np.float64).reshape(-1, 4),
+                 np.asarray(targets, dtype=np.float64).reshape(-1, 3))
+        self._chunks = chunks
+        self._block_stack.discard(name)
+        cache[name] = local
+        return local
+
+    def _blocks(self) -> dict:
+        """The document's block geometry cache, for its current block
+        definitions. Shared by every engine of the document (model, sheets,
+        the background warmer) and kept across rebuilds: Plaza Yanque's
+        drawings-as-blocks cost 0.3 s to walk, and an edit that rebuilds
+        the index must not pay that again. ``blocks_revision`` (bumped by
+        History for anything that changes a definition) retires it."""
+        document = self.document
+        revision = getattr(document, "blocks_revision", 0)
+        shared = getattr(document, "_snap_block_cache", None)
+        if shared is None or shared[0] != revision:
+            shared = (revision, {})
+            try:
+                document._snap_block_cache = shared
+            except Exception:
+                pass
+        return shared[1]
+
+    def _insert_children(self, e, oid, segs, seg_o, circles, circle_o,
+                         arcs, arc_o, points, point_o, curves, curve_o,
+                         targets, target_o, depth: int = 0) -> None:
+        """What a block insert draws snaps, as in AutoCAD: a door's jamb,
+        a column's corner, a title block's frame -- every hit belongs to
+        the INSERT, the object the drawing can select. Only the insertion
+        point snapped before (GeoCad Yaguarete had to patch it in). An
+        external reference goes through ``_xref_children``."""
+        if depth > self._BLOCK_DEPTH:
+            return
+        lists = (segs, seg_o, circles, circle_o, arcs, arc_o, points,
+                 point_o, curves, curve_o, targets, target_o)
+        try:
+            if self._xref_children(e, oid, *lists):
+                return
+            for attrib in e.attribs:
+                if not attrib.is_invisible:
+                    self._extract(attrib, oid, *lists)
+            if e.mcount > 1:                       # MINSERT: each copy
+                for copy in e.multi_insert():
+                    self._one_insert(copy, oid, lists, depth)
+                return
+            self._one_insert(e, oid, lists, depth)
+        except Exception:
+            pass                  # a broken insert: its own point still snaps
+
+    def _one_insert(self, e, oid, lists, depth: int) -> None:
+        block = e.block()
+        if block is None or block.block.dxf.flags & 4:     # xref, unresolved
+            return
+        sx = float(e.dxf.get("xscale", 1.0))
+        sy = float(e.dxf.get("yscale", 1.0))
+        extrusion = e.dxf.get("extrusion", (0.0, 0.0, 1.0))
+        planar = abs(extrusion[0]) < 1e-12 and abs(extrusion[1]) < 1e-12 \
+            and extrusion[2] > 0
+        if not planar or abs(abs(sx) - abs(sy)) > 1e-9 * max(abs(sx), 1.0):
+            # Stretched or tilted: circles are no longer circles. Walk the
+            # insert's own transformed copies.
+            for child in e.virtual_entities():
+                if child.dxftype() == "INSERT":
+                    self._insert_children(child, oid, *lists, depth=depth + 1)
+                self._extract(child, oid, *lists)
+            return
+        local = self._block_local(block, depth)
+        if local is None:
+            return
+        segs, seg_o, circles, circle_o, arcs, arc_o, points, point_o, \
+            curves, curve_o, targets, target_o = lists
+        l_segs, l_circles, l_arcs, l_points, l_curves, l_targets = local
+        rot = math.radians(float(e.dxf.get("rotation", 0.0)))
+        cos_r, sin_r = math.cos(rot), math.sin(rot)
+        a = np.array([[cos_r * sx, -sin_r * sy],
+                      [sin_r * sx, cos_r * sy]])
+        base = block.block.dxf.get("base_point", (0.0, 0.0, 0.0))
+        ins = e.dxf.insert
+        shift = np.array([ins.x, ins.y]) - a @ np.array([base[0], base[1]])
+
+        def xy(arr):
+            return arr @ a.T + shift
+
+        if len(l_segs):
+            moved = np.hstack((xy(l_segs[:, :2]), xy(l_segs[:, 2:])))
+            self._emit("segs", moved, oid, segs, seg_o)
+        if len(l_curves):
+            moved = np.hstack((xy(l_curves[:, :2]), xy(l_curves[:, 2:])))
+            self._emit("curves", moved, oid, curves, curve_o)
+        if len(l_points):
+            self._emit("points", xy(l_points), oid, points, point_o)
+        if len(l_targets):
+            moved = np.column_stack((xy(l_targets[:, :2]), l_targets[:, 2]))
+            self._emit("targets", moved, oid, targets, target_o)
+        scale = abs(sx)
+        if len(l_circles):
+            moved = np.column_stack((xy(l_circles[:, :2]),
+                                     l_circles[:, 2] * scale))
+            self._emit("circles", moved, oid, circles, circle_o)
+        if len(l_arcs):
+            centres = xy(l_arcs[:, :2])
+            sweep = l_arcs[:, 4] - l_arcs[:, 3]
+            mirrored = sx * sy < 0
+            # a mirror runs the arc the other way: its new start is the
+            # image of its old end
+            start = l_arcs[:, 4] if mirrored else l_arcs[:, 3]
+            direction = np.column_stack((np.cos(start), np.sin(start))) @ a.T
+            a0 = np.mod(np.arctan2(direction[:, 1], direction[:, 0]), math.tau)
+            moved = np.column_stack((centres, l_arcs[:, 2] * scale,
+                                     a0, a0 + sweep))
+            self._emit("arcs", moved, oid, arcs, arc_o)
+
+    _CHUNK_KEYS = ("segs", "circles", "arcs", "points", "curves", "targets")
+
+    def _emit(self, key, rows, oid, values, owners) -> None:
+        """A transformed block's rows: kept as one array while a build
+        collects (no per-row Python lists for 170 000 segments), else
+        appended to the lists."""
+        if self._chunks is not None:
+            self._chunks[key].append((rows, oid))
+            return
+        values.extend(rows.tolist())
+        owners.extend([oid] * len(rows))
+
+    def _merged(self, key, values, owners, width):
+        rows = np.asarray(values, dtype=np.float64).reshape(-1, width)
+        oidx = np.asarray(owners, dtype=np.int32)
+        chunks = self._chunks[key] if self._chunks is not None else []
+        if chunks:
+            rows = np.vstack([rows] + [c for c, _ in chunks])
+            oidx = np.concatenate(
+                [oidx] + [np.full(len(c), o, dtype=np.int32)
+                          for c, o in chunks])
+        return rows, oidx
+
+    def _build(self) -> None:
+        self._chunks = {key: [] for key in self._CHUNK_KEYS}
+        self._owners = []
+        self._owner_ids = {}
+        segs: list = []
+        seg_o: list = []
+        circles: list = []
+        circle_o: list = []
+        arcs: list = []
+        arc_o: list = []
+        points: list = []
+        point_o: list = []
+        curves: list = []
+        curve_o: list = []
+        targets: list = []
+        target_o: list = []
+        space = self._space if self._space is not None \
+            else self.document.modelspace()
+        for e in space:
+            try:
+                oid = self._intern(e.dxf.handle)
+            except Exception:
+                continue
+            if e.dxftype() == "INSERT":
+                # what the block or external reference draws snaps as one
+                # object (and the INSERT's own insertion point below)
+                self._insert_children(e, oid, segs, seg_o, circles, circle_o,
+                                      arcs, arc_o, points, point_o,
+                                      curves, curve_o, targets, target_o)
+            self._extract(e, oid, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o,
+                          curves, curve_o, targets, target_o)
+        self._segs, self._seg_oidx = self._merged("segs", segs, seg_o, 4)
+        self._seg_bounds = self._seg_bounds_of(self._segs)
+        self._circles, self._circle_oidx = self._merged(
+            "circles", circles, circle_o, 3)
+        self._arcs, self._arc_oidx = self._merged("arcs", arcs, arc_o, 5)
+        self._points, self._point_oidx = self._merged(
+            "points", points, point_o, 2)
+        self._curves, self._curve_oidx = self._merged(
+            "curves", curves, curve_o, 4)
+        self._curve_bounds = self._seg_bounds_of(self._curves)
+        self._targets, self._target_oidx = self._merged(
+            "targets", targets, target_o, 3)
+        self._chunks = None
+        self._dirty = False
+
+    def add_entities(self, entities) -> None:
+        """Append the geometry of freshly added entities to the cache.
+
+        Purely additive edits (LINE segments, paste copies) must not pay a
+        full modelspace walk on the next cursor move — on a large drawing
+        that rebuild is the per-click lag. No-op while dirty: the pending
+        rebuild will pick the entities up anyway.
+        """
+        if self._dirty:
+            return
+        segs: list = []
+        seg_o: list = []
+        circles: list = []
+        circle_o: list = []
+        arcs: list = []
+        arc_o: list = []
+        points: list = []
+        point_o: list = []
+        curves: list = []
+        curve_o: list = []
+        targets: list = []
+        target_o: list = []
+        for e in entities:
+            try:
+                oid = self._intern(e.dxf.handle)
+            except Exception:
+                continue
+            if e.dxftype() == "INSERT":
+                self._insert_children(e, oid, segs, seg_o, circles, circle_o,
+                                      arcs, arc_o, points, point_o,
+                                      curves, curve_o, targets, target_o)
+            self._extract(e, oid, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o,
+                          curves, curve_o, targets, target_o)
+        if segs:
+            new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
+            self._segs = np.vstack([self._segs, new])
+            self._seg_oidx = np.concatenate(
+                [self._seg_oidx, np.asarray(seg_o, dtype=np.int32)])
+            self._seg_bounds = np.vstack(
+                [self._seg_bounds, self._seg_bounds_of(new)])
+        if circles:
+            self._circles = np.vstack(
+                [self._circles,
+                 np.asarray(circles, dtype=np.float64).reshape(-1, 3)])
+            self._circle_oidx = np.concatenate(
+                [self._circle_oidx, np.asarray(circle_o, dtype=np.int32)])
+        if arcs:
+            self._arcs = np.vstack(
+                [self._arcs, np.asarray(arcs, dtype=np.float64).reshape(-1, 5)])
+            self._arc_oidx = np.concatenate(
+                [self._arc_oidx, np.asarray(arc_o, dtype=np.int32)])
+        if points:
+            self._points = np.vstack(
+                [self._points,
+                 np.asarray(points, dtype=np.float64).reshape(-1, 2)])
+            self._point_oidx = np.concatenate(
+                [self._point_oidx, np.asarray(point_o, dtype=np.int32)])
+        if curves:
+            new = np.asarray(curves, dtype=np.float64).reshape(-1, 4)
+            self._curves = np.vstack([self._curves, new])
+            self._curve_oidx = np.concatenate(
+                [self._curve_oidx, np.asarray(curve_o, dtype=np.int32)])
+            self._curve_bounds = np.vstack(
+                [self._curve_bounds, self._seg_bounds_of(new)])
+        if targets:
+            self._targets = np.vstack(
+                [self._targets,
+                 np.asarray(targets, dtype=np.float64).reshape(-1, 3)])
+            self._target_oidx = np.concatenate(
+                [self._target_oidx, np.asarray(target_o, dtype=np.int32)])
+
+    def translate_handles(self, handles, dx: float, dy: float) -> None:
+        """Shift the cached geometry of MOVEd entities in place.
+
+        A pure translation needs no re-extraction at all — O(rows), pure
+        NumPy, no ezdxf calls. No-op while dirty.
+        """
+        if self._dirty:
+            return
+        ids = self._ids_of(handles)
+        if not len(ids):
+            return
+        shift4 = np.array([dx, dy, dx, dy])
+        mask = np.isin(self._seg_oidx, ids)
+        if mask.any():
+            self._segs[mask] += shift4
+            self._seg_bounds[mask] += shift4
+        mask = np.isin(self._curve_oidx, ids)
+        if mask.any():
+            self._curves[mask] += shift4
+            self._curve_bounds[mask] += shift4
+        for arr_name, oidx_name in (("_circles", "_circle_oidx"),
+                                    ("_arcs", "_arc_oidx"),
+                                    ("_points", "_point_oidx"),
+                                    ("_targets", "_target_oidx")):
+            oidx = getattr(self, oidx_name)
+            if not len(oidx):
+                continue
+            m = np.isin(oidx, ids)
+            if m.any():
+                arr = getattr(self, arr_name)
+                arr[m, 0] += dx
+                arr[m, 1] += dy
+
+    def remove_handles(self, handles) -> None:
+        """Drop the snap geometry of erased/modified entities (no rebuild).
+
+        Together with ``add_entities`` this lets TRIM/MOVE patch the cache in
+        O(touched); the full rebuild walks every LWPOLYLINE in the drawing.
+        No-op while dirty.
+        """
+        if self._dirty:
+            return
+        ids = self._ids_of(handles)
+        if not len(ids):
+            return
+        keep = ~np.isin(self._seg_oidx, ids)
+        if not keep.all():
+            self._segs = self._segs[keep]
+            self._seg_oidx = self._seg_oidx[keep]
+            self._seg_bounds = self._seg_bounds[keep]
+        keep = ~np.isin(self._curve_oidx, ids)
+        if not keep.all():
+            self._curves = self._curves[keep]
+            self._curve_oidx = self._curve_oidx[keep]
+            self._curve_bounds = self._curve_bounds[keep]
+        for arr_name, oidx_name in (("_circles", "_circle_oidx"),
+                                    ("_arcs", "_arc_oidx"),
+                                    ("_points", "_point_oidx"),
+                                    ("_targets", "_target_oidx")):
+            oidx = getattr(self, oidx_name)
+            if not len(oidx):
+                continue
+            k = ~np.isin(oidx, ids)
+            if not k.all():
+                setattr(self, arr_name, getattr(self, arr_name)[k])
+                setattr(self, oidx_name, oidx[k])
+
+    # -- query ----------------------------------------------------------------
+    # -- tracking sources: Extension and Parallel ---------------------------
+    def extension_source(self, cursor, threshold: float):
+        """The end of a line or an arc under the cursor, for EXT: either
+        ``("line", end, unit)`` -- the direction leading out of the line at
+        that end -- or ``("arc", center, radius, end, a0, a1)``. None if
+        none. Vectorized: it runs on every mouse move."""
+        if self._dirty:
+            self._build()
+        cx, cy = cursor
+        best = None
+        segs = self._segs
+        if len(segs):
+            for end, other in ((slice(2, 4), slice(0, 2)),
+                               (slice(0, 2), slice(2, 4))):
+                e, o = segs[:, end], segs[:, other]
+                d = np.hypot(e[:, 0] - cx, e[:, 1] - cy)
+                length = np.hypot(e[:, 0] - o[:, 0], e[:, 1] - o[:, 1])
+                d = np.where(length > 1e-12, d, np.inf)
+                i = int(np.argmin(d))
+                if d[i] <= threshold and (best is None or d[i] < best[0]):
+                    unit = ((e[i, 0] - o[i, 0]) / length[i],
+                            (e[i, 1] - o[i, 1]) / length[i])
+                    best = (float(d[i]), ("line", (float(e[i, 0]),
+                                                   float(e[i, 1])), unit))
+        arcs = self._arcs
+        if len(arcs):
+            for col in (3, 4):
+                ex = arcs[:, 0] + arcs[:, 2] * np.cos(arcs[:, col])
+                ey = arcs[:, 1] + arcs[:, 2] * np.sin(arcs[:, col])
+                d = np.hypot(ex - cx, ey - cy)
+                i = int(np.argmin(d))
+                if d[i] <= threshold and (best is None or d[i] < best[0]):
+                    row = arcs[i]
+                    best = (float(d[i]), ("arc", (float(row[0]), float(row[1])),
+                                          float(row[2]),
+                                          (float(ex[i]), float(ey[i])),
+                                          float(row[3]), float(row[4])))
+        return best[1] if best else None
+
+    def line_direction(self, cursor, threshold: float):
+        """The unit direction of the straight segment under the cursor, for
+        PAR, or None."""
+        if self._dirty:
+            self._build()
+        if not len(self._segs):
+            return None
+        cx, cy = cursor
+        b = self._seg_bounds
+        near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
+                & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
+        segs = self._segs[near]
+        if not len(segs):
+            return None
+        dx, dy = segs[:, 2] - segs[:, 0], segs[:, 3] - segs[:, 1]
+        l2 = dx * dx + dy * dy
+        t = np.clip(((cx - segs[:, 0]) * dx + (cy - segs[:, 1]) * dy)
+                    / np.where(l2 > 0, l2, 1.0), 0.0, 1.0)
+        d = np.hypot(segs[:, 0] + t * dx - cx, segs[:, 1] + t * dy - cy)
+        d = np.where(l2 > 1e-24, d, np.inf)
+        i = int(np.argmin(d))
+        if d[i] > threshold:
+            return None
+        length = math.sqrt(l2[i])
+        return (float(dx[i] / length), float(dy[i] / length))
+
+    def find(
+        self,
+        cursor: tuple[float, float],
+        threshold: float,
+        kinds: frozenset[str] = ALL_KINDS,
+        from_point: Optional[tuple[float, float]] = None,
+        drawn: Optional[list] = None,
+    ) -> Optional[SnapHit]:
+        """Best snap within ``threshold`` world units of the cursor.
+
+        ``from_point`` anchors PER (perpendicular from the previous point).
+        ``drawn``: segments (x1, y1, x2, y2) the running command has drawn
+        but not committed yet (Tool.drawn_segments), snapped like the
+        drawing's own.
+        """
+        if self._dirty:
+            self._build()
+        cx, cy = cursor
+        best: Optional[tuple[int, float, SnapHit]] = None
+
+        def offer(kind: str, x: float, y: float, circle=None,
+                  reach: Optional[float] = None) -> None:
+            """``reach``: how far the cursor is from what it points at, when
+            that is not the snap point itself (PER: the object, not the
+            foot)."""
+            nonlocal best
+            d = math.hypot(x - cx, y - cy) if reach is None else reach
+            if d > threshold:
+                return
+            key = (PRIORITY[kind], d)
+            if best is None or key < (best[0], best[1]):
+                best = (PRIORITY[kind], d, SnapHit(x, y, kind, circle=circle))
+
+        circles, arcs, points = self._circles, self._arcs, self._points
+
+        # ONE bounds pass selects the segments near the cursor; every snap
+        # kind below works on those candidates only.
+        segs = np.empty((0, 4))
+        seg_oids = np.empty(0, dtype=np.int32)
+        if len(self._segs):
+            b = self._seg_bounds
+            near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
+                    & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
+            segs = self._segs[near]
+            seg_oids = self._seg_oidx[near]
+        if drawn:
+            extra = np.asarray(drawn, dtype=float).reshape(-1, 4)
+            lo_x = np.minimum(extra[:, 0], extra[:, 2])
+            hi_x = np.maximum(extra[:, 0], extra[:, 2])
+            lo_y = np.minimum(extra[:, 1], extra[:, 3])
+            hi_y = np.maximum(extra[:, 1], extra[:, 3])
+            near = ((lo_x - threshold <= cx) & (hi_x + threshold >= cx)
+                    & (lo_y - threshold <= cy) & (hi_y + threshold >= cy))
+            if near.any():
+                # each its own object id: two segments of the shape being
+                # drawn do cross, unlike the chords of one curve
+                ids = -1 - np.nonzero(near)[0].astype(np.int32)
+                segs = np.vstack([segs, extra[near]]) if len(segs) else extra[near]
+                seg_oids = np.concatenate([seg_oids, ids]) if len(seg_oids) else ids
+        # Curve chords ride along for NEA/PER/INT, and ONLY those: an END on
+        # every chord vertex would be a marker on nothing.
+        curves = np.empty((0, 4))
+        curve_oids = np.empty(0, dtype=np.int32)
+        if len(self._curves):
+            b = self._curve_bounds
+            near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
+                    & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
+            curves = self._curves[near]
+            curve_oids = self._curve_oidx[near]
+        # Exact targets a curve owns (its ends, its midpoint, a centre, the
+        # quadrants), already filtered to the cursor's reach.
+        targets = np.empty((0, 3))
+        if len(self._targets):
+            t = self._targets
+            near = ((np.abs(t[:, 0] - cx) <= threshold)
+                    & (np.abs(t[:, 1] - cy) <= threshold))
+            targets = t[near]
+
+        def offer_targets(kind: str) -> None:
+            if not len(targets) or kind not in kinds:
+                return
+            rows = targets[targets[:, 2] == _TARGET_CODE[kind]]
+            if not len(rows):
+                return
+            d2 = (rows[:, 0] - cx) ** 2 + (rows[:, 1] - cy) ** 2
+            i = int(np.argmin(d2))
+            offer(kind, float(rows[i, 0]), float(rows[i, 1]))
+
+        if "ORI" in kinds:
+            # the origin of the space: no entity owns it, it is always there
+            offer("ORI", 0.0, 0.0)
+        if "END" in kinds and len(segs):
+            for exy in (segs[:, 0:2], segs[:, 2:4]):
+                d2 = (exy[:, 0] - cx) ** 2 + (exy[:, 1] - cy) ** 2
+                i = int(np.argmin(d2))
+                offer("END", exy[i, 0], exy[i, 1])
+        if "END" in kinds and len(arcs):
+            for a_idx in (3, 4):
+                ex = arcs[:, 0] + arcs[:, 2] * np.cos(arcs[:, a_idx])
+                ey = arcs[:, 1] + arcs[:, 2] * np.sin(arcs[:, a_idx])
+                d2 = (ex - cx) ** 2 + (ey - cy) ** 2
+                i = int(np.argmin(d2))
+                offer("END", float(ex[i]), float(ey[i]))
+        offer_targets("END")
+        if "MID" in kinds and len(segs):
+            mx = (segs[:, 0] + segs[:, 2]) / 2.0
+            my = (segs[:, 1] + segs[:, 3]) / 2.0
+            d2 = (mx - cx) ** 2 + (my - cy) ** 2
+            i = int(np.argmin(d2))
+            offer("MID", float(mx[i]), float(my[i]))
+        offer_targets("MID")
+        if "MID" in kinds and len(arcs):
+            # An arc's midpoint is on the arc, not on its chord.
+            amid = (arcs[:, 3] + arcs[:, 4]) / 2.0
+            mx = arcs[:, 0] + arcs[:, 2] * np.cos(amid)
+            my = arcs[:, 1] + arcs[:, 2] * np.sin(amid)
+            d2 = (mx - cx) ** 2 + (my - cy) ** 2
+            i = int(np.argmin(d2))
+            offer("MID", float(mx[i]), float(my[i]))
+        if "CEN" in kinds:
+            for arr in (circles, arcs):
+                if len(arr):
+                    d2 = (arr[:, 0] - cx) ** 2 + (arr[:, 1] - cy) ** 2
+                    i = int(np.argmin(d2))
+                    offer("CEN", float(arr[i, 0]), float(arr[i, 1]))
+        offer_targets("CEN")
+        offer_targets("GCE")
+        offer_targets("INS")
+        offer_targets("QUA")
+        if "QUA" in kinds:
+            # The four compass points of a circle, and of an arc when the
+            # sweep actually reaches them. Vectorized per compass point: a
+            # Python loop over every circle in the drawing cost 3 ms per
+            # mouse move on a plan with a thousand of them.
+            for arr, full in ((circles, True), (arcs, False)):
+                if not len(arr):
+                    continue
+                for step in range(4):
+                    ang = step * math.pi / 2.0
+                    qx = arr[:, 0] + arr[:, 2] * math.cos(ang)
+                    qy = arr[:, 1] + arr[:, 2] * math.sin(ang)
+                    hits = np.nonzero((np.abs(qx - cx) <= threshold)
+                                      & (np.abs(qy - cy) <= threshold))[0]
+                    for i in hits:
+                        if not full and not _angle_in_sweep(
+                                ang, arr[i, 3], arr[i, 4]):
+                            continue
+                        offer("QUA", float(qx[i]), float(qy[i]))
+        if "TAN" in kinds and from_point is not None:
+            # The tangent points from the previous point to a round object:
+            # the two touch points of the tangent lines through it.
+            fx, fy = from_point
+            for arr, full in ((circles, True), (arcs, False)):
+                for row in arr:
+                    for tx, ty in _tangent_points(row, fx, fy):
+                        if full or _angle_in_sweep(
+                                math.atan2(ty - row[1], tx - row[0]) % math.tau,
+                                row[3], row[4]):
+                            offer("TAN", tx, ty)
+        if "TAN" in kinds and from_point is None:
+            # No previous point to be tangent from: AutoCAD's deferred
+            # tangent. The pick names the round object; the point on it is
+            # solved when the next point is known.
+            for arr, full in ((circles, True), (arcs, False)):
+                if not len(arr):
+                    continue
+                dx, dy = cx - arr[:, 0], cy - arr[:, 1]
+                dist = np.hypot(dx, dy)
+                near = np.nonzero((np.abs(dist - arr[:, 2]) <= threshold)
+                                  & (dist > 1e-12))[0]
+                for i in near:
+                    row = arr[i]
+                    ang = math.atan2(dy[i], dx[i])
+                    if not full and not _angle_in_sweep(ang % math.tau,
+                                                        row[3], row[4]):
+                        continue
+                    offer("DTAN", float(row[0] + row[2] * math.cos(ang)),
+                          float(row[1] + row[2] * math.sin(ang)),
+                          circle=(float(row[0]), float(row[1]),
+                                  float(row[2])))
+        if "NOD" in kinds and len(points):
+            d2 = (points[:, 0] - cx) ** 2 + (points[:, 1] - cy) ** 2
+            i = int(np.argmin(d2))
+            offer("NOD", float(points[i, 0]), float(points[i, 1]))
+
+        if len(curves):
+            segs = np.vstack([segs, curves]) if len(segs) else curves
+            seg_oids = (np.concatenate([seg_oids, curve_oids])
+                        if len(seg_oids) else curve_oids)
+        near_idx = np.arange(len(segs))[:64]  # dense areas: cap pairwise work
+        if "INT" in kinds and len(near_idx) >= 2:
+            for j, a in enumerate(near_idx):
+                for b_ in near_idx[j + 1:]:
+                    # An entity does not intersect itself: two chords of the
+                    # same curve meet at every flattening vertex, and that is
+                    # a seam of ours, not a feature of the drawing.
+                    if len(seg_oids) and seg_oids[a] == seg_oids[b_]:
+                        continue
+                    hit = _seg_intersection(segs[a], segs[b_])
+                    if hit is not None:
+                        offer("INT", hit[0], hit[1])
+        if "INT" in kinds:
+            # Circles, arcs and a polyline's curved segments cross lines and
+            # each other too (#82: INT answered only between straight
+            # segments). Only rims within reach of the cursor take part.
+            rims = []
+            for arr, oids, full in ((circles, self._circle_oidx, True),
+                                    (arcs, self._arc_oidx, False)):
+                if not len(arr):
+                    continue
+                reach = np.abs(np.hypot(cx - arr[:, 0], cy - arr[:, 1])
+                               - arr[:, 2]) <= threshold
+                for i in np.nonzero(reach)[0][:32]:
+                    rims.append((arr[i], int(oids[i]) if len(oids) else -1, full))
+            for j, (row, oid, full) in enumerate(rims):
+                for a in near_idx:
+                    if len(seg_oids) and seg_oids[a] == oid:
+                        continue
+                    for x, y in _segment_circle_crossings(segs[a], row):
+                        if full or _angle_in_sweep(
+                                math.atan2(y - row[1], x - row[0]) % math.tau,
+                                row[3], row[4]):
+                            offer("INT", x, y)
+                for row2, oid2, full2 in rims[j + 1:]:
+                    if oid2 == oid:
+                        continue
+                    for x, y in _circle_circle_crossings(row, row2):
+                        if (full or _angle_in_sweep(
+                                math.atan2(y - row[1], x - row[0]) % math.tau,
+                                row[3], row[4])) and (full2 or _angle_in_sweep(
+                                math.atan2(y - row2[1], x - row2[0]) % math.tau,
+                                row2[3], row2[4])):
+                            offer("INT", x, y)
+        if "PER" in kinds and from_point is not None and len(near_idx):
+            fx, fy = from_point
+            # A foot ON the point it is drawn from is no perpendicular: the
+            # point lies on that very object. It is what a grip dragged
+            # along its own line meets (the line's other end anchors PER),
+            # and taking it pinned the drag to where it started -- "no
+            # consigo menguar esto", a line that would not shorten.
+            same = threshold * 1e-3
+            for a in near_idx:
+                p = _project_on_segment(segs[a], fx, fy)
+                if p is not None and math.hypot(p[0] - fx, p[1] - fy) <= same:
+                    continue
+                if p is not None:
+                    # AutoCAD lights PER when the aperture is over the
+                    # OBJECT, and the marker goes to the foot wherever it
+                    # falls on it: the foot is often far from the cursor
+                    # (a grip drag on a big screen missed it, the CI's)
+                    over = _closest_on_segment(segs[a], cx, cy)
+                    offer("PER", p[0], p[1],
+                          reach=math.hypot(over[0] - cx, over[1] - cy))
+        if "NEA" in kinds:
+            for a in near_idx:
+                p = _closest_on_segment(segs[a], cx, cy)
+                offer("NEA", p[0], p[1])
+            for arr, full in ((circles, True), (arcs, False)):
+                if not len(arr):
+                    continue
+                # only rims within reach of the cursor
+                rim = np.abs(np.hypot(cx - arr[:, 0], cy - arr[:, 1])
+                             - arr[:, 2]) <= threshold
+                for row in arr[rim]:
+                    p = _closest_on_circle(row, cx, cy, full)
+                    if p is not None:
+                        offer("NEA", p[0], p[1])
+
+        return best[2] if best else None
+
+
+def _segment_circle_crossings(seg, row):
+    """Where segment (x1, y1, x2, y2) crosses the circle of ``row``."""
+    x1, y1, x2, y2 = seg
+    cx, cy, r = row[0], row[1], row[2]
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    if L2 == 0:
+        return []
+    t0 = ((cx - x1) * dx + (cy - y1) * dy) / L2
+    fx, fy = x1 + t0 * dx, y1 + t0 * dy
+    h2 = r * r - ((cx - fx) ** 2 + (cy - fy) ** 2)
+    if h2 < -1e-12 * max(1.0, r * r):
+        return []
+    dt = math.sqrt(max(h2, 0.0) / L2)
+    out = []
+    for t in (t0 - dt, t0 + dt):
+        if -1e-9 <= t <= 1 + 1e-9:
+            out.append((x1 + t * dx, y1 + t * dy))
+    return out
+
+
+def _circle_circle_crossings(a, b):
+    """Where the circles of rows ``a`` and ``b`` cross (0, 1 or 2 points)."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    d = math.hypot(dx, dy)
+    r1, r2 = a[2], b[2]
+    if d == 0 or d > r1 + r2 + 1e-9 * max(1.0, d) or d < abs(r1 - r2) - 1e-9 * max(1.0, d):
+        return []
+    m = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+    h = math.sqrt(max(r1 * r1 - m * m, 0.0))
+    mx, my = a[0] + m * dx / d, a[1] + m * dy / d
+    return [(mx + h * dy / d, my - h * dx / d), (mx - h * dy / d, my + h * dx / d)]
+
+
+def _tangent_points(row, px: float, py: float):
+    """Where the tangent lines from (px, py) touch the circle in ``row``."""
+    cx, cy, r = row[0], row[1], row[2]
+    dx, dy = px - cx, py - cy
+    d2 = dx * dx + dy * dy
+    if d2 <= r * r + 1e-12:
+        return []                       # inside or on it: no tangent from here
+    d = math.sqrt(d2)
+    # The touch points sit at angle acos(r/d) either side of the line to the
+    # external point.
+    base = math.atan2(dy, dx)
+    spread = math.acos(max(-1.0, min(1.0, r / d)))
+    return [(cx + r * math.cos(base + s * spread),
+             cy + r * math.sin(base + s * spread)) for s in (1.0, -1.0)]
+
+
+def _angle_in_sweep(angle: float, a0: float, a1: float) -> bool:
+    """Is this compass angle inside the arc's counter-clockwise sweep?"""
+    rel = (angle - a0) % math.tau
+    return rel <= (a1 - a0) + 1e-12
+
+
+def _closest_on_segment(seg, px, py):
+    x1, y1, x2, y2 = seg
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
+    return (x1 + t * dx, y1 + t * dy)
+
+
+def _project_on_segment(seg, px, py):
+    """Foot of the perpendicular, only when it lands inside the segment."""
+    x1, y1, x2, y2 = seg
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    if L2 == 0:
+        return None
+    t = ((px - x1) * dx + (py - y1) * dy) / L2
+    if t < 0.0 or t > 1.0:
+        return None
+    return (x1 + t * dx, y1 + t * dy)
+
+
+def _closest_on_circle(row, px, py, full: bool):
+    cx, cy, r = row[0], row[1], row[2]
+    d = math.hypot(px - cx, py - cy)
+    if d == 0:
+        return None
+    ang = math.atan2(py - cy, px - cx)
+    if not full:
+        a0, a1 = row[3], row[4]
+        a = ang % math.tau
+        if a < a0:
+            a += math.tau
+        if a > a1:
+            return None
+    return (cx + r * math.cos(ang), cy + r * math.sin(ang))
+
+
+def _seg_intersection(s1, s2):
+    """Intersection point of two segments, or None."""
+    x1, y1, x2, y2 = s1
+    x3, y3, x4, y4 = s2
+    d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+    if abs(d) < 1e-12:
+        return None
+    t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d
+    u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+    return None

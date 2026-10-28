@@ -1,0 +1,167 @@
+# IngeCAD's Flatpak, for self-distribution (own OSTree repo + bundles), NOT
+# Flathub — Flathub forbids network during build, and the app module below
+# lets pip download wheels. The shape follows IngePresupuestos' proven
+# manifest (installer/flatpak/ in that repo), krb5 lesson included.
+app-id: org.ingecad.IngeCAD
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: ingecad
+
+finish-args:
+  # GUI — native Wayland when present, X11 when it is not... and X11 also
+  # when Wayland IS present, which is why this is --socket=x11 and not
+  # --socket=fallback-x11: "fallback" hands over nothing while a Wayland
+  # socket exists, and then core.gl_fallback has no X11 to escape to on a
+  # driver whose EGL cannot give us a desktop-GL context (the NVIDIA
+  # report of 2026-09-09). Costs the usual X11 sandbox hole; buys an app
+  # that opens on those machines instead of showing nothing.
+  - --socket=wayland
+  - --socket=x11
+  - --share=ipc
+  - --device=dri                 # the OpenGL canvas IS the application
+  # The user's drawings live anywhere; a CAD that cannot open the plan a
+  # colleague sent to ~/Descargas is not a CAD.
+  - --filesystem=home
+  # ... and on external disks and USB sticks: without these the file
+  # chooser portal hands over /run/flatpak/doc/<id>/... instead of the real
+  # path, and an xref attached from a disk was saved with that path, which
+  # no other program (nor IngeCAD after a reboot) can follow (Rafael's
+  # reviews 6 and 7). Ubuntu/Debian mount there under /media, Fedora and
+  # Arch under /run/media.
+  - --filesystem=/media
+  - --filesystem=/run/media
+  # Network, since the Terrain plugin (0.6): DEMPOINTS / DEMPROFILE fetch
+  # elevation tiles on request, and the coming satellite imagery and KML
+  # need it too. Nothing else in IngeCAD touches the network, and the
+  # metainfo says so.
+  - --share=network
+
+modules:
+  # PySide6's Qt links QtNetwork/QtPdf against GSSAPI; the Freedesktop
+  # runtime carries no libgssapi_krb5.so.2. Without this, importing QtPdf
+  # (the PDF-underlay feature) dies at load time. Verbatim from the
+  # IngePresupuestos manifest, C23 workaround included.
+  - name: krb5
+    subdir: src
+    build-options:
+      cflags: -std=gnu17 -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion -Wno-incompatible-pointer-types
+    config-opts:
+      - --disable-static
+      - --without-ldap
+      - --without-tcl
+      - --without-libedit
+      - --without-readline
+      - --disable-rpath
+    cleanup:
+      - /bin
+      - /sbin
+      - /share
+      - /include
+      - /etc
+      - '*.la'
+    sources:
+      - type: archive
+        url: https://kerberos.org/dist/krb5/1.21/krb5-1.21.3.tar.gz
+        sha256: b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35
+        mirror-urls:
+          - https://web.mit.edu/kerberos/dist/krb5/1.21/krb5-1.21.3.tar.gz
+
+  - name: ingecad
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network        # pip downloads the wheels (self-dist only)
+    build-commands:
+      # 1. Python dependencies into /app's prefix. pytest is a test tool.
+      - grep -vE '^\s*pytest\b' requirements.txt > reqs.txt
+      - pip3 install --prefix=${FLATPAK_DEST} --no-warn-script-location -r reqs.txt
+      # 2. The application, as source — GPL code hides from nobody.
+      - mkdir -p ${FLATPAK_DEST}/ingecad
+      - cp -a main.py core views render formats tools plugins resources i18n LICENSE ${FLATPAK_DEST}/ingecad/
+      - find ${FLATPAK_DEST}/ingecad -name '__pycache__' -type d -exec rm -rf {} +
+      # 3. Launcher + desktop integration
+      - install -Dm755 packaging/flatpak/flatpak-launcher.sh ${FLATPAK_DEST}/bin/ingecad
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 resources/icons/ingecad_256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+      - install -Dm644 resources/ingecad.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      # 4. MIME types (.dwg / .dxf) so double-click opens IngeCAD, with the
+      #    branded document icons. Flatpak only exports icons whose file
+      #    name starts with the app id, so the mimetype icons go in under
+      #    that prefix and the exported XML points at those names — a plain
+      #    "image-vnd.dwg" never leaves the sandbox (the file manager then
+      #    paints the generic sheet). Same fix as IngeTrazo 7e86f29.
+      - |
+        mkdir -p "${FLATPAK_DEST}/share/mime/packages"
+        sed -e 's|<icon name="\([^"]*\)"/>|<icon name="'"${FLATPAK_ID}"'.\1"/>|' \
+          resources/mime/ingecad.xml > "${FLATPAK_DEST}/share/mime/packages/${FLATPAK_ID}.xml"
+        grep -q "${FLATPAK_ID}.image-vnd.dwg" "${FLATPAK_DEST}/share/mime/packages/${FLATPAK_ID}.xml"
+        for d in resources/icons/hicolor/*/mimetypes; do
+          size=$(basename "$(dirname "$d")")
+          for f in "$d"/*.png; do
+            install -Dm644 "$f" "${FLATPAK_DEST}/share/icons/hicolor/${size}/mimetypes/${FLATPAK_ID}.$(basename "$f")"
+          done
+        done
+      # 5. Trim PySide6 to the seven Qt modules IngeCAD imports (QtCore,
+      #    QtGui, QtWidgets, QtOpenGL(+Widgets), QtPdf, QtPrintSupport).
+      #    The full wheel installs 771 MB, 195 of them a WebEngine no line
+      #    of this program touches. Blocklist, not allowlist: an unknown
+      #    library stays, so a Qt upgrade can add deps without blanking the
+      #    app. Verified afterwards by importing every module we use inside
+      #    the sandbox and opening a real plan.
+      - |
+        set -e
+        PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+        PS=${FLATPAK_DEST}/lib/python${PYVER}/site-packages/PySide6
+        cd "$PS"
+        rm -rf Qt/qml Qt/resources Qt/libexec Qt/metatypes examples typesystems glue include
+        rm -f  assistant designer linguist lupdate lrelease qmlformat qmllint qmlls qsb balsam* svgtoqml
+        for stem in WebEngine Pdf Quick Qml 3D Quick3D Multimedia SpatialAudio                     Location Positioning Sensors SerialPort SerialBus Bluetooth                     Nfc WebSockets WebChannel WebView RemoteObjects Scxml                     TextToSpeech Charts DataVisualization Graphs Sql Help                     UiTools Designer NetworkAuth HttpServer VirtualKeyboard                     LabsAnimation LabsFolderListModel LabsPlatform LabsQmlModels                     LabsSettings LabsSharedImage LabsWavefrontMesh Test; do
+          case "$stem" in Pdf) continue;; esac   # QtPdf stays: PDF underlay
+          rm -f  Qt${stem}*.abi3.so Qt${stem}*.pyi
+          rm -f  Qt/lib/libQt6${stem}*.so*
+        done
+        # Quick/Qml family again by lib name (Quick3D matches Quick prefix)
+        rm -f Qt/lib/libQt6Quick*.so* Qt/lib/libQt6Qml*.so*
+        # PdfQuick needs Quick: gone. Plain Pdf + PdfWidgets stay.
+        rm -f Qt/lib/libQt6PdfQuick*.so* QtPdfQuick*
+        # ffmpeg came along for Multimedia
+        rm -f Qt/lib/libav*.so* Qt/lib/libsw*.so*
+        rm -rf Qt/plugins/multimedia Qt/plugins/webview Qt/plugins/qmltooling                Qt/plugins/scenegraph Qt/plugins/designer Qt/plugins/assetimporters                Qt/plugins/sceneparsers Qt/plugins/renderers Qt/plugins/geometryloaders                Qt/plugins/sqldrivers Qt/plugins/position Qt/plugins/sensors                Qt/plugins/canbus Qt/plugins/virtualkeyboard Qt/plugins/texttospeech
+        du -sh "$PS"
+    sources:
+      - type: dir
+        path: ../../
+        skip:
+          - venv
+          - build
+          - dist
+          - .git
+          - web
+          - vendor
+          - capturas
+          - packaging/flatpak/.staging
+          - packaging/flatpak/.flatpak-builder
+
+  # The DWG converters, compiled from the pristine release plus the same
+  # patch stack the AppImage carries (tools/libredwg-patches). Static, so
+  # two self-contained binaries and no .so to ship. Installed inside the
+  # app tree because core.paths.app_root() answers /app/ingecad and
+  # formats.dwg_bridge looks for vendor/libredwg/bin under it.
+  - name: libredwg
+    buildsystem: simple
+    build-commands:
+      # prefix INSIDE the build tree: every build-command runs in its own
+      # sandbox invocation, so /tmp does not survive between them.
+      - ./configure --disable-shared --disable-bindings --disable-python --prefix=$(pwd)/_prefix > /dev/null
+      - make -j $FLATPAK_BUILDER_N_JOBS > /dev/null
+      - make install-strip > /dev/null
+      - install -Dm755 _prefix/bin/dwg2dxf ${FLATPAK_DEST}/ingecad/vendor/libredwg/bin/dwg2dxf
+      - install -Dm755 _prefix/bin/dxf2dwg ${FLATPAK_DEST}/ingecad/vendor/libredwg/bin/dxf2dwg
+    sources:
+      - type: archive
+        url: https://github.com/LibreDWG/libredwg/releases/download/0.14.8597/libredwg-0.14.8597.tar.xz
+        sha256: af2646681858a78d756cfb9e0eeb6901f61be3d09ae8f56a98e94b1490dec4ed
+      - type: patch
+        path: ../../tools/libredwg-patches/current/ingecad-vendor-0.14.8597.patch

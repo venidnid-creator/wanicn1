@@ -1,0 +1,1674 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Entity selection: pick box, window (fully inside), crossing (touching).
+
+A GeometryIndex extracts pickable geometry per entity into NumPy arrays
+(the same lazy strategy as the snap engine). Entity types we do not know how
+to trace fall back to their bounding box, so everything on screen stays
+selectable even when we do not understand its exact shape.
+
+That fallback is a last resort, not a shortcut: a boxed entity is picked by
+clicking anywhere inside its rectangle and is highlighted AS a rectangle, so
+a window over a busy drawing drags in things the user never crossed. Curves
+(ellipses, splines, polylines with bulges), the filled quads and the
+construction lines are therefore traced for real; what stays boxed is listed
+in ``BOXED_TYPES`` with the reason.
+
+Scale notes (a real 92k-entity cadastre = 1.35 M segment rows):
+- Owners are interned to int32 ids (``_owners`` list + per-row ``*_oidx``
+  arrays), so every ownership test is a vectorized ``np.isin`` instead of a
+  Python loop over a million handle strings.
+- A per-row segment bounds table prefilters pick() to the rows near the
+  cursor; window()/crossing() are fully vectorized (Python only touches the
+  handful of ambiguous rows).
+- ``version`` bumps on every mutation so per-frame consumers (selection
+  highlight, grips) can cache their derived geometry.
+"""
+from __future__ import annotations
+
+import math
+from typing import Iterable, Optional
+
+import numpy as np
+
+from ezdxf import bbox as ezbbox
+
+from core import ocs
+
+# Types ezdxf can turn into a Path, which we flatten into pick segments.
+PATH_TYPES = frozenset(
+    {"ELLIPSE", "SPLINE", "POLYLINE", "SOLID", "TRACE", "3DFACE", "HELIX"})
+
+# What still falls back to its bounding box, and why:
+#   TEXT/MTEXT/ATTDEF/ATTRIB  a text IS picked by its box, in AutoCAD too
+#   INSERT                    tracing one means expanding its block: measured
+#                             on a real plan, 42 inserts expand to 75 718
+#                             entities in 1.2 s — the index would cost more
+#                             than the drawing. Blocks stay boxed on purpose.
+#   IMAGE/WIPEOUT/MLINE/...   rectangular by nature, or too rare to trace
+BOXED_TYPES = frozenset(
+    {"TEXT", "MTEXT", "ATTDEF", "ATTRIB", "INSERT", "IMAGE", "WIPEOUT",
+     "MLINE", "SHAPE", "VIEWPORT", "ACAD_PROXY_ENTITY"})
+
+# A pick index needs the shape, not the render: past this many segments a
+# curve is decimated evenly (an ellipse the size of a plan is still exact to
+# a fraction of a pixel at 512 chords).
+MAX_CURVE_SEGMENTS = 512
+
+# Half-length given to the infinite construction lines. Long enough to cross
+# any real drawing (1000 km), short enough to keep float64 arithmetic exact
+# next to UTM coordinates.
+CONSTRUCTION_REACH = 1.0e6
+
+
+def _arc_record(e) -> tuple:
+    """An ARC as the index stores it: (cx, cy, r, 1.0, a0, a1), WCS radians."""
+    cx, cy, r, d0, d1 = ocs.arc_wcs(e)
+    a0 = math.radians(d0) % math.tau
+    a1 = math.radians(d1) % math.tau
+    if a1 <= a0:
+        a1 += math.tau
+    return (cx, cy, r, 1.0, a0, a1)
+
+
+def flatten_points(entity, max_segments: int = MAX_CURVE_SEGMENTS):
+    """Trace an entity into 2D points, or None if ezdxf cannot path it.
+
+    The sagitta scales with the entity so a fillet and a cadastre-sized
+    ellipse are both traced to the same *relative* accuracy — a fixed
+    tolerance would either shred the small one or square off the big one.
+    """
+    from ezdxf import path as ezpath
+
+    try:
+        path = ezpath.make_path(entity)
+    except Exception:
+        return None
+    box = ezbbox.extents([entity], fast=True)
+    size = max(box.size.x, box.size.y) if box.has_data else 1.0
+    distance = max(abs(size) / 500.0, 1e-9)
+    try:
+        points = [(v.x, v.y) for v in path.flattening(distance)]
+    except Exception:
+        return None
+    if len(points) > max_segments + 1:
+        keep = np.linspace(0, len(points) - 1, max_segments + 1).astype(int)
+        points = [points[i] for i in keep]
+    return points if len(points) > 1 else None
+
+
+def _selectable_viewports(space):
+    """Handles of the VIEWPORT entities that are real objects on a sheet,
+    or None where the question does not apply (model, block definition).
+
+    A paper-space layout also carries the "main" viewport that stands for
+    the paper view itself; AutoCAD never lets you pick that one. The
+    heuristic lives in core.layouts (it is the frontend's own), so this
+    only borrows it.
+    """
+    if not getattr(space, "is_any_paperspace", False):
+        return None
+    try:
+        from core.layouts import visible_viewports
+
+        return frozenset(vp.dxf.handle for vp in visible_viewports(space))
+    except Exception:
+        return frozenset()
+
+
+class GeometryIndex:
+    """Per-entity pick geometry over the Document's CURRENT space.
+
+    Modelspace on the Model tab, the sheet on a layout tab, the definition
+    inside the Block Editor — ``Document.current_space()`` decides, so a
+    tab switch is an ``invalidate()`` and nothing else.
+    """
+
+    def __init__(self, document) -> None:
+        self.document = document
+        self._dirty = True
+        self.version = 0
+        self._owners: list[str] = []            # owner id -> handle
+        self._owner_ids: dict[str, int] = {}    # handle -> owner id
+        self._segs = np.empty((0, 4))
+        self._seg_oidx = np.empty(0, dtype=np.int32)
+        self._seg_bounds = np.empty((0, 4))     # min_x min_y max_x max_y
+        # cx cy r arc_flag a0 a1 (radians, ccw, a1 > a0; full circle: 0..tau)
+        self._circles = np.empty((0, 6))
+        self._circle_oidx = np.empty(0, dtype=np.int32)
+        self._boxes = np.empty((0, 4))          # min_x min_y max_x max_y
+        self._box_oidx = np.empty(0, dtype=np.int32)
+        # Boxes that answer a CLICK but nothing else: the inside of a piece of
+        # text a user aims at (a dimension's number). They must stay out of
+        # window/crossing and out of the highlight, which is where a rectangle
+        # turns into selection garbage.
+        self._pick_boxes = np.empty((0, 4))
+        self._pick_box_oidx = np.empty(0, dtype=np.int32)
+        # Filled areas that answer a CLICK inside them: a hatch. Kept as
+        # polygons rather than a rectangle because an L-shaped hatch would
+        # otherwise swallow the clicks in the corner it does not cover, and
+        # out of window/crossing because its boundary already answers those.
+        # [(owner id, polygon Nx2, (minx, miny, maxx, maxy))]
+        self._areas: list = []
+        # A turned text's real outline (4x2 corners), by owner id: its box
+        # row stays for window/crossing, but a click must land in THIS --
+        # the box of a 45 degree label is mostly empty paper.
+        self._text_quads: dict = {}
+
+    def invalidate(self) -> None:
+        self._dirty = True
+        self.version += 1
+
+    def entity(self, handle: str):
+        return self.document.doc.entitydb.get(handle)
+
+    # -- owner interning -------------------------------------------------------
+    def _intern(self, handle: str) -> int:
+        oid = self._owner_ids.get(handle)
+        if oid is None:
+            oid = len(self._owners)
+            self._owners.append(handle)
+            self._owner_ids[handle] = oid
+        return oid
+
+    def _ids_of(self, handles) -> np.ndarray:
+        ids = [self._owner_ids[h] for h in handles if h in self._owner_ids]
+        return np.asarray(ids, dtype=np.int32)
+
+    # -- extraction -------------------------------------------------------------
+    @staticmethod
+    def _extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
+                 pboxes=None, pbox_o=None, areas=None) -> None:
+        t = e.dxftype()
+        try:
+            if t == "LINE":
+                s, w = e.dxf.start, e.dxf.end
+                segs.append((s.x, s.y, w.x, w.y))
+                seg_o.append(oid)
+            elif t in ("LWPOLYLINE", "CIRCLE", "ARC") \
+                    and not ocs.is_planar(e):
+                # A tilted extrusion is no circle in plan: trace it the
+                # way the renderer does, OCS and all.
+                points = flatten_points(e)
+                if points:
+                    for a, b in zip(points, points[1:]):
+                        segs.append((a[0], a[1], b[0], b[1]))
+                        seg_o.append(oid)
+                else:
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t == "LWPOLYLINE":
+                if any(p[4] for p in e.get_points("xyseb")):
+                    # Arc segments: trace the arcs. Picking a curved lot
+                    # boundary by its chords misses the bulge exactly where
+                    # the user aims — at the curve.
+                    pts = flatten_points(e) or [
+                        (p[0], p[1]) for p in e.get_points("xy")]
+                    pairs = list(zip(pts, pts[1:]))
+                else:
+                    pts = ocs.points_wcs(e, e.get_points("xy"))
+                    pairs = list(zip(pts, pts[1:]))
+                    if e.closed and len(pts) > 2:
+                        pairs.append((pts[-1], pts[0]))
+                for a, b in pairs:
+                    segs.append((a[0], a[1], b[0], b[1]))
+                    seg_o.append(oid)
+            elif t == "CIRCLE":
+                cx, cy, r = ocs.circle_wcs(e)
+                circles.append((cx, cy, r, 0.0, 0.0, math.tau))
+                circle_o.append(oid)
+            elif t == "ARC":
+                circles.append(_arc_record(e))
+                circle_o.append(oid)
+            elif t == "POINT":
+                l = e.dxf.location
+                segs.append((l.x, l.y, l.x, l.y))
+                seg_o.append(oid)
+            elif t in ("XLINE", "RAY"):
+                # Infinite by definition: a long chord through the base point
+                # picks and crosses correctly, and never sits "fully inside"
+                # a window — which is the right answer for an infinite line.
+                base = e.dxf.start
+                d = e.dxf.unit_vector
+                reach = CONSTRUCTION_REACH
+                back = 0.0 if t == "RAY" else reach
+                segs.append((base.x - d.x * back, base.y - d.y * back,
+                             base.x + d.x * reach, base.y + d.y * reach))
+                seg_o.append(oid)
+            elif t == "LEADER":
+                vertices = [(v[0], v[1]) for v in e.vertices]
+                for a, b in zip(vertices, vertices[1:]):
+                    segs.append((a[0], a[1], b[0], b[1]))
+                    seg_o.append(oid)
+            elif t in PATH_TYPES:
+                points = flatten_points(e)
+                if points:
+                    for a, b in zip(points, points[1:]):
+                        segs.append((a[0], a[1], b[0], b[1]))
+                        seg_o.append(oid)
+                else:
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t == "DIMENSION":
+                # A dimension's picture lives in its anonymous block. Tracing
+                # it is what makes a dimension pick like AutoCAD's — on its
+                # lines, arrows and text — instead of anywhere in a rectangle
+                # that usually spans the object being measured. Measured cheap:
+                # 317 dimensions expand to 3094 entities in under 10 ms.
+                if not GeometryIndex._dimension(e, oid, segs, seg_o,
+                                                circles, circle_o,
+                                                pboxes, pbox_o):
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t in ("MULTILEADER", "MLEADER"):
+                if not GeometryIndex._multileader(e, oid, segs, seg_o,
+                                                  circles, circle_o,
+                                                  pboxes, pbox_o):
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t == "HATCH":
+                if not GeometryIndex._hatch(e, oid, segs, seg_o):
+                    GeometryIndex._box(e, oid, boxes, box_o)
+                elif areas is not None:
+                    GeometryIndex._hatch_area(e, oid, areas)
+            elif t == "VIEWPORT":
+                # "AutoCAD selects viewports by their frame, not their
+                # interior" — the same rule viewport_border_hit codes, said
+                # here so the ordinary pick/window/crossing machinery obeys
+                # it too. A box would swallow every click inside the view.
+                cx, cy = e.dxf.center.x, e.dxf.center.y
+                hw, hh = float(e.dxf.width) / 2.0, float(e.dxf.height) / 2.0
+                corners = [(cx - hw, cy - hh), (cx + hw, cy - hh),
+                           (cx + hw, cy + hh), (cx - hw, cy + hh)]
+                for a, b in zip(corners, corners[1:] + corners[:1]):
+                    segs.append((a[0], a[1], b[0], b[1]))
+                    seg_o.append(oid)
+            elif t == "INSERT" and GeometryIndex._xref(e, oid, segs, seg_o,
+                                                       circles, circle_o,
+                                                       pboxes, pbox_o):
+                pass    # an external reference: traced, picks as one object
+            else:
+                GeometryIndex._box(e, oid, boxes, box_o)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _xref(e, oid, segs, seg_o, circles, circle_o,
+              pboxes=None, pbox_o=None) -> bool:
+        """Trace an xref INSERT through the referenced drawing (#33): its
+        block is empty here, so a box would be empty too. Clicking a
+        colleague's wall selects the whole reference, as in AutoCAD."""
+        from core import xrefs
+
+        if not xrefs.is_xref_insert(e):
+            return False
+        host = getattr(e.doc, "_ingecad_document", None)
+        if host is None:
+            return False
+        children = list(xrefs.virtual_entities(e, host))
+        if not children:
+            return False
+        return GeometryIndex._children(children, oid, segs, seg_o,
+                                       circles, circle_o, pboxes, pbox_o)
+
+    @staticmethod
+    def _text_extents(e):
+        """(x0, y0, x1, y1) respecting an MTEXT's EFFECTIVE height, or None.
+
+        ezdxf's bbox lays the MTEXT out at char_height — for an AutoCAD
+        text whose real height lives in an inline backslash-H code: the attribute
+        holds a residue and the box collapses to a point far smaller than
+        the visible glyphs: clicking the text picked whatever lay behind
+        it. Scale the box about the insert point by effective/attribute.
+        """
+        box = ezbbox.extents([e], fast=True)
+        if not box.has_data:
+            return None
+        x0, y0 = box.extmin.x, box.extmin.y
+        x1, y1 = box.extmax.x, box.extmax.y
+        if e.dxftype() == "MTEXT":
+            base = float(e.dxf.get("char_height", 0.0) or 0.0)
+            try:
+                from core.modify import _effective_text_height
+
+                effective = _effective_text_height(e) or base
+            except Exception:
+                effective = base
+            if base > 0 and effective > 0 \
+                    and abs(effective - base) > base * 1e-6:
+                factor = effective / base
+                ins = e.dxf.insert
+                x0 = ins.x + (x0 - ins.x) * factor
+                y0 = ins.y + (y0 - ins.y) * factor
+                x1 = ins.x + (x1 - ins.x) * factor
+                y1 = ins.y + (y1 - ins.y) * factor
+        return (x0, y0, x1, y1)
+
+    @staticmethod
+    def _text_box_segments(e, oid, segs, seg_o) -> bool:
+        """A closed rectangle around a text/arrow, as four real segments.
+
+        A text IS picked by its box, in AutoCAD too — but the box must be the
+        TEXT's, not the whole owner's.
+        """
+        extents = GeometryIndex._text_extents(e)
+        if extents is None:
+            return False
+        x0, y0, x1, y1 = extents
+        for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)),
+                     ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+            segs.append((a[0], a[1], b[0], b[1]))
+            seg_o.append(oid)
+        return True
+
+    @staticmethod
+    def _dimension(e, oid, segs, seg_o, circles, circle_o,
+                   pboxes=None, pbox_o=None) -> bool:
+        """Trace the dimension's own geometry block. True if anything came out."""
+        try:
+            block = e.get_geometry_block()
+        except Exception:
+            block = None
+        if block is None:
+            return False
+        return GeometryIndex._children(block, oid, segs, seg_o,
+                                       circles, circle_o, pboxes, pbox_o)
+
+    @staticmethod
+    def _multileader(e, oid, segs, seg_o, circles, circle_o,
+                     pboxes=None, pbox_o=None) -> bool:
+        """Trace a MULTILEADER through its virtual entities.
+
+        A leader points AT something, so its bounding box always contains
+        what it points at — the worst possible pick rectangle. They are few
+        and expand to a handful of entities each, unlike block inserts.
+        """
+        try:
+            children = list(e.virtual_entities())
+        except Exception:
+            return False
+        return GeometryIndex._children(children, oid, segs, seg_o,
+                                       circles, circle_o, pboxes, pbox_o)
+
+    @staticmethod
+    def _children(children, oid, segs, seg_o, circles, circle_o,
+                  pboxes=None, pbox_o=None) -> bool:
+        """Trace the entities of a generated block into the owner's geometry."""
+        before = len(segs) + len(circles)
+        for child in children:
+            kind = child.dxftype()
+            if kind == "LINE":
+                s, w = child.dxf.start, child.dxf.end
+                segs.append((s.x, s.y, w.x, w.y))
+                seg_o.append(oid)
+            elif kind == "ARC" and ocs.is_planar(child):
+                circles.append(_arc_record(child))
+                circle_o.append(oid)
+            elif kind == "CIRCLE" and ocs.is_planar(child):
+                cx, cy, r = ocs.circle_wcs(child)
+                circles.append((cx, cy, r, 0.0, 0.0, math.tau))
+                circle_o.append(oid)
+            elif kind in ("ARC", "CIRCLE", "LWPOLYLINE", "SOLID", "TRACE", "3DFACE", "SPLINE",
+                          "ELLIPSE", "POLYLINE"):
+                points = flatten_points(child)
+                if points:
+                    for a, b in zip(points, points[1:]):
+                        segs.append((a[0], a[1], b[0], b[1]))
+                        seg_o.append(oid)
+            elif kind in ("MTEXT", "TEXT", "INSERT"):
+                # The outline goes in as real geometry (window/crossing see
+                # the text where it is), and the inside answers a click:
+                # people select a dimension by clicking its number.
+                GeometryIndex._text_box_segments(child, oid, segs, seg_o)
+                if pboxes is not None:
+                    GeometryIndex._box(child, oid, pboxes, pbox_o)
+        return len(segs) + len(circles) > before
+
+    @staticmethod
+    def _hatch(e, oid, segs, seg_o) -> bool:
+        """Trace a hatch by its boundary paths.
+
+        Clicking INSIDE a hatch no longer selects it — the same rule AutoCAD
+        applies to a pattern hatch. The rectangle it replaces was worse: it
+        caught the hatch from anywhere in its bounding box, including a
+        crossing window that never touched it.
+        """
+        from ezdxf import path as ezpath
+
+        box = ezbbox.extents([e], fast=True)
+        size = max(box.size.x, box.size.y) if box.has_data else 1.0
+        distance = max(abs(size) / 500.0, 1e-9)
+        emitted = False
+        try:
+            paths = list(ezpath.from_hatch(e))
+        except Exception:
+            return False
+        for path in paths:
+            try:
+                points = [(v.x, v.y) for v in path.flattening(distance)]
+            except Exception:
+                continue
+            if len(points) > MAX_CURVE_SEGMENTS + 1:
+                keep = np.linspace(
+                    0, len(points) - 1, MAX_CURVE_SEGMENTS + 1).astype(int)
+                points = [points[i] for i in keep]
+            for a, b in zip(points, points[1:]):
+                segs.append((a[0], a[1], b[0], b[1]))
+                seg_o.append(oid)
+                emitted = True
+        return emitted
+
+    @staticmethod
+    def _hatch_area(e, oid, areas) -> None:
+        """Remember a hatch's filled area so a click inside it selects it.
+
+        Marco, dogfooding: "apliqué hatch a un dibujo, quiero editarlo o
+        eliminarlo, trato de seleccionar con el mouse y no se selecciona; en
+        AutoCAD selecciono un área pequeña donde está el hatch, se selecciona
+        y lo elimino". Tracing only the boundary -- what this used to do --
+        means the only way in is to hit an edge within a pixel or two.
+
+        Islands are honoured by counting how many rings contain the point
+        (even-odd), the same rule the renderer fills with, so a click in a
+        hole selects nothing.
+        """
+        from ezdxf import path as ezpath
+
+        try:
+            paths = list(ezpath.from_hatch(e))
+        except Exception:
+            return
+        rings = []
+        for path in paths:
+            try:
+                pts = [(v.x, v.y) for v in path.flattening(distance=0.0,
+                                                           segments=16)]
+            except Exception:
+                continue
+            if len(pts) >= 3:
+                rings.append(np.asarray(pts, dtype=np.float64))
+        if not rings:
+            return
+        every = np.vstack(rings)
+        bounds = (float(every[:, 0].min()), float(every[:, 1].min()),
+                  float(every[:, 0].max()), float(every[:, 1].max()))
+        areas.append((oid, rings, bounds))
+
+    def _area_hits(self, cx: float, cy: float) -> list:
+        """Owner ids of the filled areas that contain (cx, cy), smallest
+        first -- a small hatch drawn over a big one is the one you meant."""
+        hits = []
+        for oid, rings, (x0, y0, x1, y1) in self._areas:
+            if not (x0 <= cx <= x1 and y0 <= cy <= y1):
+                continue
+            inside = sum(1 for ring in rings if _point_in_ring(ring, cx, cy))
+            if inside % 2 == 1:
+                hits.append(((x1 - x0) * (y1 - y0), oid))
+        hits.sort()
+        return [oid for _area, oid in hits]
+
+    @staticmethod
+    def _box(e, oid, boxes, box_o) -> None:
+        """The last-resort bounding box (see BOXED_TYPES)."""
+        extents = GeometryIndex._text_extents(e)
+        if extents is not None:
+            boxes.append(extents)
+            box_o.append(oid)
+
+    @staticmethod
+    def _text_quad(e):
+        """The four corners of a TURNED text's own rectangle, or None for
+        one that reads square to the sheet (its box is already exact).
+
+        Measured on an unturned copy at the same anchor, then turned about
+        that anchor -- where TEXT turns about (the alignment point once it
+        is justified) and where MTEXT hangs from."""
+        kind = e.dxftype()
+        if kind not in ("TEXT", "MTEXT", "ATTDEF", "ATTRIB"):
+            return None
+        try:
+            if kind == "MTEXT":
+                angle = float(e.get_rotation())
+            else:
+                angle = float(e.dxf.get("rotation", 0.0))
+            if abs(math.remainder(angle, 90.0)) < 1e-6:
+                return None
+            flat = e.copy()
+            if kind == "MTEXT":
+                flat.dxf.discard("text_direction")
+                flat.dxf.rotation = 0.0
+                pivot = e.dxf.insert
+            else:
+                flat.dxf.rotation = 0.0
+                justified = (e.dxf.get("halign", 0) or e.dxf.get("valign", 0)) \
+                    and e.dxf.hasattr("align_point")
+                pivot = e.dxf.align_point if justified else e.dxf.insert
+            extents = GeometryIndex._text_extents(flat)
+        except Exception:
+            return None
+        if extents is None:
+            return None
+        x0, y0, x1, y1 = extents
+        a = math.radians(angle)
+        c, s_ = math.cos(a), math.sin(a)
+        corners = np.array([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]) \
+            - (pivot.x, pivot.y)
+        turned = corners @ np.array([[c, s_], [-s_, c]])
+        return turned + (pivot.x, pivot.y)
+
+    def _note_quad(self, e, oid) -> None:
+        quad = self._text_quad(e)
+        if quad is not None:
+            self._text_quads[oid] = quad
+
+    def _in_quad(self, oid, cx: float, cy: float, tolerance: float) -> bool:
+        """Is the cursor on this owner's turned text (within tolerance)?
+        True for everything that has no turned outline."""
+        quad = self._text_quads.get(int(oid))
+        if quad is None:
+            return True
+        edges = np.column_stack((quad, np.roll(quad, -1, axis=0)))
+        cross = ((edges[:, 2] - edges[:, 0]) * (cy - edges[:, 1])
+                 - (edges[:, 3] - edges[:, 1]) * (cx - edges[:, 0]))
+        if (cross >= 0).all() or (cross <= 0).all():
+            return True
+        return bool(_dist_point_segments(edges, cx, cy).min() <= tolerance)
+
+    def _quad_edges(self, ids) -> np.ndarray:
+        rows = [np.column_stack((q, np.roll(q, -1, axis=0)))
+                for oid, q in self._text_quads.items() if oid in ids]
+        return np.vstack(rows) if rows else np.empty((0, 4))
+
+    @staticmethod
+    def _seg_bounds_of(segs: np.ndarray) -> np.ndarray:
+        if not len(segs):
+            return np.empty((0, 4))
+        return np.column_stack((
+            np.minimum(segs[:, 0], segs[:, 2]),
+            np.minimum(segs[:, 1], segs[:, 3]),
+            np.maximum(segs[:, 0], segs[:, 2]),
+            np.maximum(segs[:, 1], segs[:, 3]),
+        ))
+
+    def _build(self) -> None:
+        self._owners = []
+        self._owner_ids = {}
+        self._areas = []
+        self._text_quads = {}
+        segs: list = []
+        seg_o: list = []
+        circles: list = []
+        circle_o: list = []
+        boxes: list = []
+        box_o: list = []
+        pboxes: list = []
+        pbox_o: list = []
+        # A hidden entity must not be pickable either: AutoCAD's isolation
+        # takes objects out of the view, not just out of the picture.
+        from core.isolate import hidden_handles
+
+        hidden = hidden_handles(self.document)
+        space = self.document.current_space()
+        pickable_vps = _selectable_viewports(space)
+        for e in space:
+            try:
+                oid = self._intern(e.dxf.handle)
+            except Exception:
+                continue
+            if hidden and e.dxf.handle in hidden:
+                continue
+            if (pickable_vps is not None and e.dxftype() == "VIEWPORT"
+                    and e.dxf.handle not in pickable_vps):
+                continue    # the sheet's own "main" viewport is not an object
+            self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
+                          pboxes, pbox_o, self._areas)
+            self._note_quad(e, oid)
+        self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
+        self._seg_oidx = np.asarray(seg_o, dtype=np.int32)
+        self._seg_bounds = self._seg_bounds_of(self._segs)
+        self._circles = np.asarray(circles, dtype=np.float64).reshape(-1, 6)
+        self._circle_oidx = np.asarray(circle_o, dtype=np.int32)
+        self._boxes = np.asarray(boxes, dtype=np.float64).reshape(-1, 4)
+        self._box_oidx = np.asarray(box_o, dtype=np.int32)
+        self._pick_boxes = np.asarray(pboxes, dtype=np.float64).reshape(-1, 4)
+        self._pick_box_oidx = np.asarray(pbox_o, dtype=np.int32)
+        self._dirty = False
+        self.version += 1
+
+    # -- incremental maintenance -------------------------------------------------
+    def add_entities(self, entities) -> None:
+        """Append pick geometry of freshly added entities (no full rebuild).
+
+        Additive edits (drawn segments, paste copies) stay O(new) instead of
+        re-walking the whole modelspace. No-op while dirty: the pending
+        rebuild includes them anyway.
+        """
+        if self._dirty:
+            return
+        segs: list = []
+        seg_o: list = []
+        circles: list = []
+        circle_o: list = []
+        boxes: list = []
+        box_o: list = []
+        pboxes: list = []
+        pbox_o: list = []
+        for e in entities:
+            try:
+                oid = self._intern(e.dxf.handle)
+            except Exception:
+                continue
+            self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
+                          pboxes, pbox_o, self._areas)
+            self._note_quad(e, oid)
+        if segs:
+            new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
+            self._segs = np.vstack([self._segs, new])
+            self._seg_oidx = np.concatenate(
+                [self._seg_oidx, np.asarray(seg_o, dtype=np.int32)])
+            self._seg_bounds = np.vstack(
+                [self._seg_bounds, self._seg_bounds_of(new)])
+        if circles:
+            self._circles = np.vstack(
+                [self._circles,
+                 np.asarray(circles, dtype=np.float64).reshape(-1, 6)])
+            self._circle_oidx = np.concatenate(
+                [self._circle_oidx, np.asarray(circle_o, dtype=np.int32)])
+        if boxes:
+            self._boxes = np.vstack(
+                [self._boxes, np.asarray(boxes, dtype=np.float64).reshape(-1, 4)])
+            self._box_oidx = np.concatenate(
+                [self._box_oidx, np.asarray(box_o, dtype=np.int32)])
+        if pboxes:
+            self._pick_boxes = np.vstack(
+                [self._pick_boxes,
+                 np.asarray(pboxes, dtype=np.float64).reshape(-1, 4)])
+            self._pick_box_oidx = np.concatenate(
+                [self._pick_box_oidx, np.asarray(pbox_o, dtype=np.int32)])
+        self.version += 1
+
+    def remove_handles(self, handles) -> None:
+        """Drop the pick geometry of erased/modified entities (no rebuild).
+
+        Modified entities are re-added via ``add_entities`` right after —
+        the full rebuild pays ezdxf bbox extents for every exotic entity in
+        the drawing (>1 s on a real 10k-entity plan) and used to freeze the
+        first pick after every MOVE/TRIM. No-op while dirty.
+        """
+        if self._dirty:
+            return
+        ids = self._ids_of(handles)
+        if not len(ids):
+            return
+        for i in ids:
+            self._text_quads.pop(int(i), None)
+        if self._areas:
+            drop = set(int(i) for i in ids)
+            self._areas = [a for a in self._areas if a[0] not in drop]
+        for arr_name, oidx_name, bounds_name in (
+                ("_segs", "_seg_oidx", "_seg_bounds"),
+                ("_circles", "_circle_oidx", None),
+                ("_boxes", "_box_oidx", None),
+                ("_pick_boxes", "_pick_box_oidx", None)):
+            oidx = getattr(self, oidx_name)
+            if not len(oidx):
+                continue
+            keep = ~np.isin(oidx, ids)
+            if keep.all():
+                continue
+            setattr(self, arr_name, getattr(self, arr_name)[keep])
+            setattr(self, oidx_name, oidx[keep])
+            if bounds_name is not None:
+                setattr(self, bounds_name, getattr(self, bounds_name)[keep])
+        self.version += 1
+
+    def translate_handles(self, handles, dx: float, dy: float) -> None:
+        """Shift the pick geometry of MOVEd entities in place (O(rows),
+        pure NumPy — no ezdxf bbox calls). No-op while dirty."""
+        if self._dirty:
+            return
+        ids = self._ids_of(handles)
+        if not len(ids):
+            return
+        shift4 = np.array([dx, dy, dx, dy])
+        mask = np.isin(self._seg_oidx, ids)
+        if mask.any():
+            self._segs[mask] += shift4
+            self._seg_bounds[mask] += shift4
+        mask = np.isin(self._circle_oidx, ids)
+        if mask.any():
+            self._circles[mask, 0] += dx
+            self._circles[mask, 1] += dy
+        mask = np.isin(self._box_oidx, ids)
+        if mask.any():
+            self._boxes[mask] += shift4
+        mask = np.isin(self._pick_box_oidx, ids)
+        if mask.any():
+            self._pick_boxes[mask] += shift4
+        for i in ids:
+            quad = self._text_quads.get(int(i))
+            if quad is not None:
+                quad += (dx, dy)
+        self.version += 1
+
+    def add_translated(self, pairs, dx: float, dy: float) -> set:
+        """Register pasted/copied entities by translating their SOURCE rows.
+
+        ``pairs`` is ``[(src_handle, new_handle)]``. The sources are still in
+        the drawing (Ctrl+C copies, it does not consume), so their rows are
+        already here — copying + shifting them skips the ezdxf bbox extents
+        walk that made a 3000-entity paste pay ~0.7 s. Returns the source
+        handles that had NO rows (deleted/changed since): the caller falls
+        back to ``add_entities`` for those. No-op while dirty (returns all).
+        """
+        if self._dirty:
+            return {src for src, _new in pairs}
+        known = [(s, n) for s, n in pairs if s in self._owner_ids]
+        missing = {s for s, _n in pairs if s not in self._owner_ids}
+        if not known:
+            return missing
+        remap = np.full(len(self._owners) + len(known), -1, dtype=np.int32)
+        src_ids = np.empty(len(known), dtype=np.int32)
+        for i, (s, n) in enumerate(known):
+            sid = self._owner_ids[s]
+            src_ids[i] = sid
+            remap[sid] = self._intern(n)
+        shift4 = np.array([dx, dy, dx, dy])
+        found_ids: set = set()
+        for arr_name, oidx_name, bounds_name, shift in (
+                ("_segs", "_seg_oidx", "_seg_bounds", shift4),
+                ("_circles", "_circle_oidx", None, None),
+                ("_boxes", "_box_oidx", None, shift4),
+                ("_pick_boxes", "_pick_box_oidx", None, shift4)):
+            oidx = getattr(self, oidx_name)
+            if not len(oidx):
+                continue
+            mask = np.isin(oidx, src_ids)
+            if not mask.any():
+                continue
+            rows = np.nonzero(mask)[0]
+            arr = getattr(self, arr_name)
+            block = arr[rows].copy()
+            if shift is not None:
+                block += shift
+            else:  # circles: center only
+                block[:, 0] += dx
+                block[:, 1] += dy
+            setattr(self, arr_name, np.vstack([arr, block]))
+            setattr(self, oidx_name,
+                    np.concatenate([oidx, remap[oidx[rows]]]))
+            if bounds_name is not None:
+                bounds = getattr(self, bounds_name)
+                setattr(self, bounds_name,
+                        np.vstack([bounds, bounds[rows] + shift4]))
+            found_ids.update(np.unique(oidx[rows]).tolist())
+        for sid in src_ids:
+            quad = self._text_quads.get(int(sid))
+            if quad is not None:
+                self._text_quads[int(remap[sid])] = quad + (dx, dy)
+        self.version += 1
+        missing |= {s for s, _n in known
+                    if self._owner_ids[s] not in found_ids}
+        return missing
+
+    # -- queries --------------------------------------------------------------
+    def pick(self, cursor: tuple[float, float], tolerance: float) -> Optional[str]:
+        """Handle of the closest entity within ``tolerance`` of the cursor."""
+        if self._dirty:
+            self._build()
+        cx, cy = cursor
+        best: Optional[tuple[float, str]] = None
+
+        if len(self._segs):
+            # bounds prefilter: exact distances only for rows near the cursor
+            b = self._seg_bounds
+            cand = np.nonzero(
+                (b[:, 0] - tolerance <= cx) & (b[:, 2] + tolerance >= cx)
+                & (b[:, 1] - tolerance <= cy) & (b[:, 3] + tolerance >= cy))[0]
+            if len(cand):
+                d = _dist_point_segments(self._segs[cand], cx, cy)
+                i = int(np.argmin(d))
+                if d[i] <= tolerance:
+                    best = (float(d[i]),
+                            self._owners[self._seg_oidx[cand[i]]])
+        if len(self._circles):
+            c = self._circles
+            dc = np.hypot(c[:, 0] - cx, c[:, 1] - cy)
+            d = np.abs(dc - c[:, 2])
+            # arcs only count when the cursor angle falls inside their sweep
+            ang = np.arctan2(cy - c[:, 1], cx - c[:, 0]) % math.tau
+            rel = (ang - c[:, 4]) % math.tau
+            on_span = (c[:, 3] == 0.0) | (rel <= (c[:, 5] - c[:, 4]))
+            d = np.where(on_span, d, np.inf)
+            i = int(np.argmin(d))
+            if d[i] <= tolerance and (best is None or d[i] < best[0]):
+                best = (float(d[i]), self._owners[self._circle_oidx[i]])
+        if len(self._boxes) and best is None:
+            b = self._boxes
+            inside = ((cx >= b[:, 0] - tolerance) & (cx <= b[:, 2] + tolerance)
+                      & (cy >= b[:, 1] - tolerance) & (cy <= b[:, 3] + tolerance))
+            hits = np.nonzero(inside)[0]
+            if len(hits) and self._text_quads:
+                hits = np.array([k for k in hits if self._in_quad(
+                    self._box_oidx[k], cx, cy, tolerance)], dtype=np.int64)
+            if len(hits):
+                areas = ((b[hits, 2] - b[hits, 0]) * (b[hits, 3] - b[hits, 1]))
+                best = (tolerance, self._owners[
+                    self._box_oidx[hits[int(np.argmin(areas))]]])
+        if len(self._pick_boxes) and best is None:
+            # Click-only regions (a dimension's text): last resort, and
+            # deliberately absent from window/crossing and the highlight.
+            b = self._pick_boxes
+            inside = ((cx >= b[:, 0] - tolerance) & (cx <= b[:, 2] + tolerance)
+                      & (cy >= b[:, 1] - tolerance) & (cy <= b[:, 3] + tolerance))
+            hits = np.nonzero(inside)[0]
+            if len(hits):
+                areas = ((b[hits, 2] - b[hits, 0]) * (b[hits, 3] - b[hits, 1]))
+                best = (tolerance, self._owners[
+                    self._pick_box_oidx[hits[int(np.argmin(areas))]]])
+        if self._areas and best is None:
+            # Inside a hatch: last of all, so a line drawn over one still
+            # wins the click, exactly as the hatch's own edges already do.
+            for oid in self._area_hits(cx, cy):
+                return self._owners[oid]
+        return best[1] if best else None
+
+    def pick_all(self, cursor: tuple[float, float],
+                 tolerance: float) -> list[str]:
+        """Every entity within ``tolerance``, nearest first.
+
+        Selection cycling needs the candidates, not just the winner: on a
+        dense plan a dimension and the text somebody typed next to it sit on
+        top of each other, and picking always gave the same one.
+
+        The ordering is the one :meth:`pick` uses, so the first element is
+        exactly what a single click has always selected -- cycling only ever
+        offers what comes *after* it.
+        """
+        if self._dirty:
+            self._build()
+        cx, cy = cursor
+        best: dict[str, float] = {}
+
+        def offer(handle: str, distance: float) -> None:
+            if handle not in best or distance < best[handle]:
+                best[handle] = distance
+
+        if len(self._segs):
+            b = self._seg_bounds
+            cand = np.nonzero(
+                (b[:, 0] - tolerance <= cx) & (b[:, 2] + tolerance >= cx)
+                & (b[:, 1] - tolerance <= cy) & (b[:, 3] + tolerance >= cy))[0]
+            if len(cand):
+                d = _dist_point_segments(self._segs[cand], cx, cy)
+                near = np.nonzero(d <= tolerance)[0]
+                for k in near:
+                    offer(self._owners[self._seg_oidx[cand[k]]], float(d[k]))
+        if len(self._circles):
+            c = self._circles
+            dc = np.hypot(c[:, 0] - cx, c[:, 1] - cy)
+            d = np.abs(dc - c[:, 2])
+            ang = np.arctan2(cy - c[:, 1], cx - c[:, 0]) % math.tau
+            rel = (ang - c[:, 4]) % math.tau
+            on_span = (c[:, 3] == 0.0) | (rel <= (c[:, 5] - c[:, 4]))
+            d = np.where(on_span, d, np.inf)
+            for k in np.nonzero(d <= tolerance)[0]:
+                offer(self._owners[self._circle_oidx[k]], float(d[k]))
+        # Boxes and click-only regions rank behind real geometry, smallest
+        # first -- the same last-resort order pick() applies.
+        for boxes, oidx in ((self._boxes, self._box_oidx),
+                            (self._pick_boxes, self._pick_box_oidx)):
+            if not len(boxes):
+                continue
+            inside = ((cx >= boxes[:, 0] - tolerance)
+                      & (cx <= boxes[:, 2] + tolerance)
+                      & (cy >= boxes[:, 1] - tolerance)
+                      & (cy <= boxes[:, 3] + tolerance))
+            hits = np.nonzero(inside)[0]
+            if len(hits) and self._text_quads and boxes is self._boxes:
+                hits = np.array([k for k in hits if self._in_quad(
+                    oidx[k], cx, cy, tolerance)], dtype=np.int64)
+            if not len(hits):
+                continue
+            areas = ((boxes[hits, 2] - boxes[hits, 0])
+                     * (boxes[hits, 3] - boxes[hits, 1]))
+            order = np.argsort(areas)
+            for rank, k in enumerate(hits[order]):
+                # tolerance + a hair keeps them behind every real hit while
+                # preserving smallest-box-first among themselves
+                offer(self._owners[oidx[k]], tolerance * (1.0 + 1e-6 * (rank + 1)))
+        # And last, the inside of a hatch, so cycling can reach the fill
+        # under whatever was drawn on top of it.
+        for rank, oid in enumerate(self._area_hits(cx, cy)):
+            offer(self._owners[oid], tolerance * (1.0 + 1e-3 * (rank + 1)))
+        return [h for h, _ in sorted(best.items(), key=lambda kv: kv[1])]
+
+    def window(self, rect: tuple[float, float, float, float]) -> list[str]:
+        """Entities FULLY inside the rect (left-to-right blue window)."""
+        if self._dirty:
+            self._build()
+        x0, y0, x1, y1 = rect
+        n = len(self._owners)
+        present = np.zeros(n, dtype=bool)
+        bad = np.zeros(n, dtype=bool)
+        if len(self._segs):
+            b = self._seg_bounds
+            ins = ((b[:, 0] >= x0) & (b[:, 2] <= x1)
+                   & (b[:, 1] >= y0) & (b[:, 3] <= y1))
+            present[self._seg_oidx] = True
+            bad[self._seg_oidx[~ins]] = True
+        if len(self._circles):
+            # An arc is inside when ITS extent is, not its whole circle's:
+            # a quarter arc drawn well inside the window used to be left out.
+            b = _circle_bounds(self._circles)
+            ins = ((b[:, 0] >= x0) & (b[:, 2] <= x1)
+                   & (b[:, 1] >= y0) & (b[:, 3] <= y1))
+            present[self._circle_oidx] = True
+            bad[self._circle_oidx[~ins]] = True
+        if len(self._boxes):
+            b = self._boxes
+            ins = ((b[:, 0] >= x0) & (b[:, 2] <= x1)
+                   & (b[:, 1] >= y0) & (b[:, 3] <= y1))
+            present[self._box_oidx] = True
+            bad[self._box_oidx[~ins]] = True
+        return [self._owners[i] for i in np.nonzero(present & ~bad)[0]]
+
+    def crossing(self, rect: tuple[float, float, float, float]) -> list[str]:
+        """Entities touching the rect (right-to-left green crossing)."""
+        if self._dirty:
+            self._build()
+        x0, y0, x1, y1 = rect
+        n = len(self._owners)
+        touched = np.zeros(n, dtype=bool)
+        if len(self._segs):
+            s = self._segs
+            b = self._seg_bounds
+            overlap = ((b[:, 0] <= x1) & (b[:, 2] >= x0)
+                       & (b[:, 1] <= y1) & (b[:, 3] >= y0))
+            in1 = ((s[:, 0] >= x0) & (s[:, 0] <= x1)
+                   & (s[:, 1] >= y0) & (s[:, 1] <= y1))
+            in2 = ((s[:, 2] >= x0) & (s[:, 2] <= x1)
+                   & (s[:, 3] >= y0) & (s[:, 3] <= y1))
+            touched[self._seg_oidx[overlap & (in1 | in2)]] = True
+            # both endpoints outside but bbox overlapping: exact test on the
+            # (few) rows that might cross an edge of the rect
+            for i in np.nonzero(overlap & ~in1 & ~in2)[0]:
+                if _seg_intersects_rect(s[i], x0, y0, x1, y1):
+                    touched[self._seg_oidx[i]] = True
+        if len(self._circles):
+            c = self._circles
+            qx = np.clip(c[:, 0], x0, x1)
+            qy = np.clip(c[:, 1], y0, y1)
+            near = np.hypot(c[:, 0] - qx, c[:, 1] - qy) <= c[:, 2]
+            corners_in = np.ones(len(c), dtype=bool)
+            for X in (x0, x1):
+                for Y in (y0, y1):
+                    corners_in &= np.hypot(c[:, 0] - X, c[:, 1] - Y) < c[:, 2]
+            center_in = ((c[:, 0] >= x0) & (c[:, 0] <= x1)
+                         & (c[:, 1] >= y0) & (c[:, 1] <= y1))
+            hit = near & ~(corners_in & ~center_in)
+            # The circle test is only a filter for arcs: the rect may touch
+            # the part of the circle the arc doesn't have (issue #17).
+            for i in np.nonzero(hit & (c[:, 3] != 0.0))[0]:
+                hit[i] = _arc_touches_rect(c[i], x0, y0, x1, y1)
+            touched[self._circle_oidx[hit]] = True
+        if len(self._boxes):
+            b = self._boxes
+            hit = ~((b[:, 2] < x0) | (b[:, 0] > x1)
+                    | (b[:, 3] < y0) | (b[:, 1] > y1))
+            touched[self._box_oidx[hit]] = True
+        return sorted(self._owners[i] for i in np.nonzero(touched)[0])
+
+    def bounds_of(self, handles: Iterable[str]):
+        """(min_x, min_y, max_x, max_y) of the given entities from the cached
+        rows, or None. Ctrl+C needs a base point; ezdxf bbox.extents walks
+        INSERT contents recursively (~1.6 s on a 3000-entity selection)."""
+        if self._dirty:
+            return None
+        wanted = set(handles)
+        min_x = min_y = np.inf
+        max_x = max_y = -np.inf
+        segs = self.segments_of(wanted)
+        if len(segs):
+            min_x = min(min_x, segs[:, (0, 2)].min())
+            max_x = max(max_x, segs[:, (0, 2)].max())
+            min_y = min(min_y, segs[:, (1, 3)].min())
+            max_y = max(max_y, segs[:, (1, 3)].max())
+        circles = self.circles_of(wanted)
+        if len(circles):
+            b = _circle_bounds(circles)
+            min_x = min(min_x, b[:, 0].min())
+            min_y = min(min_y, b[:, 1].min())
+            max_x = max(max_x, b[:, 2].max())
+            max_y = max(max_y, b[:, 3].max())
+        boxes = self.boxes_of(wanted)
+        if len(boxes):
+            min_x = min(min_x, boxes[:, 0].min())
+            max_x = max(max_x, boxes[:, 2].max())
+            min_y = min(min_y, boxes[:, 1].min())
+            max_y = max(max_y, boxes[:, 3].max())
+        if min_x > max_x:
+            return None
+        return (float(min_x), float(min_y), float(max_x), float(max_y))
+
+    def segments_of(self, handles: Iterable[str]) -> np.ndarray:
+        """Pick segments of the given entities (for highlight drawing)."""
+        if self._dirty:
+            self._build()
+        ids = self._ids_of(handles)
+        if not len(ids) or not len(self._seg_oidx):
+            return np.empty((0, 4))
+        return self._segs[np.isin(self._seg_oidx, ids)]
+
+    def circles_of(self, handles: Iterable[str]) -> np.ndarray:
+        if self._dirty:
+            self._build()
+        ids = self._ids_of(handles)
+        if not len(ids) or not len(self._circle_oidx):
+            return np.empty((0, 4))
+        return self._circles[np.isin(self._circle_oidx, ids)]
+
+    def highlight_of(self, handles: Iterable[str]):
+        """(segments, circles, boxes) to outline the given entities: a
+        turned text by its own rectangle, not by its box."""
+        if self._dirty:
+            self._build()
+        segs = self.segments_of(handles)
+        circles = self.circles_of(handles)
+        boxes = self.boxes_of(handles)
+        if self._text_quads:
+            ids = {int(i) for i in self._ids_of(handles)}
+            turned = [i for i in ids if i in self._text_quads]
+            if turned:
+                segs = np.vstack([segs, self._quad_edges(set(turned))])
+                keep = ~np.isin(self._box_oidx, turned) & \
+                    np.isin(self._box_oidx, list(ids))
+                boxes = self._boxes[keep]
+        return segs, circles, boxes
+
+    def boxes_of(self, handles: Iterable[str]) -> np.ndarray:
+        if self._dirty:
+            self._build()
+        ids = self._ids_of(handles)
+        if not len(ids) or not len(self._box_oidx):
+            return np.empty((0, 4))
+        return self._boxes[np.isin(self._box_oidx, ids)]
+
+
+def _dist_point_segments(segs: np.ndarray, px: float, py: float) -> np.ndarray:
+    dx = segs[:, 2] - segs[:, 0]
+    dy = segs[:, 3] - segs[:, 1]
+    L2 = dx * dx + dy * dy
+    L2s = np.where(L2 == 0.0, 1.0, L2)
+    t = ((px - segs[:, 0]) * dx + (py - segs[:, 1]) * dy) / L2s
+    t = np.clip(np.where(L2 == 0.0, 0.0, t), 0.0, 1.0)
+    qx = segs[:, 0] + t * dx
+    qy = segs[:, 1] + t * dy
+    return np.hypot(px - qx, py - qy)
+
+
+def _seg_intersects_rect(s, x0, y0, x1, y1) -> bool:
+    if max(s[0], s[2]) < x0 or min(s[0], s[2]) > x1:
+        return False
+    if max(s[1], s[3]) < y0 or min(s[1], s[3]) > y1:
+        return False
+    # endpoint inside?
+    for px, py in ((s[0], s[1]), (s[2], s[3])):
+        if x0 <= px <= x1 and y0 <= py <= y1:
+            return True
+    # crosses any rect edge?
+    edges = ((x0, y0, x1, y0), (x1, y0, x1, y1),
+             (x1, y1, x0, y1), (x0, y1, x0, y0))
+    for e in edges:
+        if _segments_cross(s, e):
+            return True
+    return False
+
+
+def _segments_cross(s1, s2) -> bool:
+    x1, y1, x2, y2 = s1
+    x3, y3, x4, y4 = s2
+    d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+    if abs(d) < 1e-15:
+        return False
+    t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d
+    u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d
+    return 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0
+
+
+def _on_span(row, angle: float) -> bool:
+    """Is ``angle`` (radians) on the circle/arc row (cx, cy, r, is_arc, a0, a1)?"""
+    if row[3] == 0.0:
+        return True
+    return (angle - row[4]) % math.tau <= (row[5] - row[4]) + 1e-12
+
+
+def _circle_bounds(c: np.ndarray) -> np.ndarray:
+    """(min_x, min_y, max_x, max_y) of each circle/arc row, arcs exactly:
+    their two ends plus whichever of the four axis extremes they sweep."""
+    out = np.column_stack((c[:, 0] - c[:, 2], c[:, 1] - c[:, 2],
+                           c[:, 0] + c[:, 2], c[:, 1] + c[:, 2]))
+    for i in np.nonzero(c[:, 3] != 0.0)[0]:
+        cx, cy, r, _, a0, a1 = c[i]
+        xs = [cx + r * math.cos(a0), cx + r * math.cos(a1)]
+        ys = [cy + r * math.sin(a0), cy + r * math.sin(a1)]
+        for k in range(4):
+            angle = k * math.pi / 2.0
+            if _on_span(c[i], angle):
+                xs.append(cx + r * math.cos(angle))
+                ys.append(cy + r * math.sin(angle))
+        out[i] = (min(xs), min(ys), max(xs), max(ys))
+    return out
+
+
+def _arc_touches_rect(row, x0, y0, x1, y1) -> bool:
+    """Exact crossing test for an ARC row: an end inside the rect, or the
+    arc itself crossing one of its edges."""
+    cx, cy, r, _, a0, a1 = row
+    for angle in (a0, a1):
+        px, py = cx + r * math.cos(angle), cy + r * math.sin(angle)
+        if x0 <= px <= x1 and y0 <= py <= y1:
+            return True
+    for ex0, ey0, ex1, ey1 in ((x0, y0, x1, y0), (x1, y0, x1, y1),
+                               (x1, y1, x0, y1), (x0, y1, x0, y0)):
+        dx, dy = ex1 - ex0, ey1 - ey0
+        fx, fy = ex0 - cx, ey0 - cy
+        a = dx * dx + dy * dy
+        if a == 0.0:
+            continue
+        b = 2.0 * (fx * dx + fy * dy)
+        disc = b * b - 4.0 * a * (fx * fx + fy * fy - r * r)
+        if disc < 0.0:
+            continue
+        sq = math.sqrt(disc)
+        for t in ((-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)):
+            if 0.0 <= t <= 1.0:
+                px, py = ex0 + t * dx, ey0 + t * dy
+                if _on_span(row, math.atan2(py - cy, px - cx) % math.tau):
+                    return True
+    return False
+
+
+def _circle_intersects_rect(c, x0, y0, x1, y1) -> bool:
+    cx, cy, r = c[0], c[1], c[2]
+    # closest point of rect to center within r AND rect not fully inside circle
+    qx = min(max(cx, x0), x1)
+    qy = min(max(cy, y0), y1)
+    if math.hypot(cx - qx, cy - qy) > r:
+        return False
+    # if all four corners are inside the circle, the circle does not touch
+    # the rect boundary (rect fully inside circle: crossing should still
+    # select it? AutoCAD: crossing selects if the curve crosses the window
+    # OR is inside; a rect inside the circle does not touch the curve).
+    corners_in = all(math.hypot(cx - X, cy - Y) < r
+                     for X in (x0, x1) for Y in (y0, y1))
+    center_in = x0 <= cx <= x1 and y0 <= cy <= y1
+    if corners_in and not center_in:
+        return False
+    return True
+
+
+def _text_anchor(entity):
+    """Where a TEXT visually hangs: the align point when aligned, else
+    the insert point (an aligned TEXT's insert is often stale)."""
+    align = entity.dxf.get("align_point", None)
+    if align is not None and (entity.dxf.get("halign", 0)
+                              or entity.dxf.get("valign", 0)):
+        return align
+    return entity.dxf.insert
+
+
+def _mleader_vertices(entity):
+    """(leader, line, vertex) indices of a MULTILEADER's leader lines, in one
+    fixed order -- ``entity_grips`` and ``apply_grip_edit`` must walk it
+    identically, because the grip index IS the position in that walk."""
+    try:
+        leaders = entity.context.leaders
+    except Exception:
+        return
+    for li, leader in enumerate(leaders):
+        for ni, line in enumerate(getattr(leader, "lines", ()) or ()):
+            for vi in range(len(getattr(line, "vertices", ()) or ())):
+                yield li, ni, vi
+
+
+def _point_in_ring(ring: np.ndarray, x: float, y: float) -> bool:
+    """Even-odd ray test, vectorised: is (x, y) inside this closed ring?"""
+    px, py = ring[:, 0], ring[:, 1]
+    qx, qy = np.roll(px, -1), np.roll(py, -1)
+    straddles = (py > y) != (qy > y)
+    if not straddles.any():
+        return False
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cross = (qx - px) * (y - py) / np.where(qy - py == 0, np.nan, qy - py)
+    left = x < px + cross
+    return bool(np.count_nonzero(straddles & left) % 2 == 1)
+
+
+def _hatch_vertices(entity):
+    """(path index, x, y) of a hatch's boundary corners, in one fixed order.
+
+    ``entity_grips`` and ``apply_grip_edit`` must walk this identically --
+    the grip index IS the position in the walk, exactly as for a
+    MULTILEADER. Straight boundaries only: an arc or spline edge has no
+    corner to drag, and offering one would have to invent a shape.
+    """
+    from ezdxf.entities.boundary_paths import LineEdge
+
+    for pi, path in enumerate(getattr(entity, "paths", ()) or ()):
+        vertices = getattr(path, "vertices", None)
+        if vertices is not None:                      # PolylinePath
+            for v in vertices:
+                yield pi, float(v[0]), float(v[1])
+            continue
+        for edge in getattr(path, "edges", ()) or ():  # EdgePath
+            if isinstance(edge, LineEdge):
+                yield pi, float(edge.start[0]), float(edge.start[1])
+
+
+def _hatch_move_vertex(entity, path_index: int, old, new) -> bool:
+    """Drag one boundary corner, keeping the boundary closed.
+
+    EVERY endpoint of that path sitting on the dragged corner moves with
+    it: in an edge path a corner belongs to two edges, and moving only one
+    of them tears the boundary open -- the fill then leaks or vanishes.
+    """
+    from ezdxf.entities.boundary_paths import LineEdge
+
+    try:
+        path = entity.paths[path_index]
+    except (IndexError, TypeError, AttributeError):
+        return False
+    ox, oy = old
+    # Shared corners are written bit-identical by the CAD that saved them;
+    # the epsilon rides the magnitude so UTM coordinates behave too.
+    eps = 1e-9 * max(1.0, abs(ox), abs(oy))
+
+    def same(x, y) -> bool:
+        return abs(x - ox) <= eps and abs(y - oy) <= eps
+
+    moved = False
+    vertices = getattr(path, "vertices", None)
+    if vertices is not None:
+        for i, v in enumerate(vertices):
+            if same(float(v[0]), float(v[1])):
+                bulge = v[2] if len(v) > 2 else 0.0
+                vertices[i] = (new[0], new[1], bulge)
+                moved = True
+        return moved
+    for edge in getattr(path, "edges", ()) or ():
+        if not isinstance(edge, LineEdge):
+            continue
+        if same(float(edge.start[0]), float(edge.start[1])):
+            edge.start = (new[0], new[1])
+            moved = True
+        if same(float(edge.end[0]), float(edge.end[1])):
+            edge.end = (new[0], new[1])
+            moved = True
+    return moved
+
+
+def entity_grips(entity) -> list[tuple[float, float, str]]:
+    """Grip points of an entity: (x, y, role).
+
+    Roles drive editing: 'end'/'mid'/'vertex' move that point, 'center'
+    moves the whole entity, 'radius'/'quadrant' resize. Mirrors AutoCAD's
+    grip set for the supported types.
+    """
+    import math
+
+    t = entity.dxftype()
+    grips: list[tuple[float, float, str]] = []
+    if t == "LINE":
+        s, e = entity.dxf.start, entity.dxf.end
+        grips.append((s.x, s.y, "end"))
+        grips.append(((s.x + e.x) / 2, (s.y + e.y) / 2, "mid"))
+        grips.append((e.x, e.y, "end"))
+    elif t == "LWPOLYLINE":
+        pts = ocs.points_wcs(entity, entity.get_points("xy"))
+        for x, y in pts:
+            grips.append((x, y, "vertex"))
+        pairs = list(zip(pts, pts[1:]))
+        if entity.closed and len(pts) > 2:
+            pairs.append((pts[-1], pts[0]))
+        for a, b in pairs:
+            grips.append(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, "mid"))
+    elif t == "CIRCLE":
+        c, r = ocs.center_wcs(entity), entity.dxf.radius
+        grips.append((c.x, c.y, "center"))
+        for ang in (0, 90, 180, 270):
+            grips.append((c.x + r * math.cos(math.radians(ang)),
+                          c.y + r * math.sin(math.radians(ang)), "quadrant"))
+    elif t == "ARC":
+        c, r = ocs.center_wcs(entity), entity.dxf.radius
+        start, end = ocs.angles_wcs(entity)
+        grips.append((c.x, c.y, "center"))
+        for a in (start, end):
+            grips.append((c.x + r * math.cos(math.radians(a)),
+                          c.y + r * math.sin(math.radians(a)), "end"))
+        # along the sweep: an arc across 0° (350°..10°) has its middle at
+        # 0°, not at the 180° a plain average gives
+        mid = math.radians(start + ((end - start) % 360.0) / 2)
+        grips.append((c.x + r * math.cos(mid), c.y + r * math.sin(mid), "mid"))
+    elif t == "POINT":
+        l = entity.dxf.location
+        grips.append((l.x, l.y, "center"))
+    elif t == "TEXT":
+        p = _text_anchor(entity)
+        grips.append((p.x, p.y, "center"))
+    elif t in ("MTEXT", "INSERT"):
+        p = entity.dxf.insert
+        grips.append((p.x, p.y, "center"))
+    elif t in ("XLINE", "RAY"):
+        # Root point only: moving it slides the line; direction stays a
+        # command-level edit (the prompt-honesty rule).
+        p = entity.dxf.start
+        grips.append((p.x, p.y, "center"))
+    elif t == "SOLID":
+        for i in range(4):
+            p = getattr(entity.dxf, f"vtx{i}")
+            grips.append((p.x, p.y, "vertex"))
+    elif t == "HATCH":
+        try:
+            import ezdxf.bbox as _bbox
+
+            c = _bbox.extents([entity]).center
+            grips.append((c.x, c.y, "center"))
+        except Exception:
+            pass
+        # p. 873: "when you select a nonassociative hatch, both the control
+        # grip and the boundary grips are displayed". An associative hatch
+        # gets the control grip alone -- its shape follows the objects it
+        # was built from, so a corner of its own would be a lie you could
+        # drag. The control grip stays first either way.
+        if not int(entity.dxf.get("associative", 0) or 0):
+            for _pi, x, y in _hatch_vertices(entity):
+                grips.append((x, y, "vertex"))
+    elif t == "DIMENSION":
+        # AutoCAD's set for linear/aligned: the two extension-line origins
+        # (re-measure), the dimension-line point (relocates it) and the
+        # text. Every other dimension type offers its text grip.
+        kind = int(entity.dxf.get("dimtype", 0)) & 7
+        if kind in (0, 1):
+            for attr in ("defpoint2", "defpoint3"):
+                pt = entity.dxf.get(attr, None)
+                if pt is not None:
+                    grips.append((pt.x, pt.y, f"dim_{attr}"))
+            # BricsCAD/AutoCAD show the LINE's two arrowhead ends, not a
+            # mid-line point: project the origins onto the dimension line.
+            loc = entity.dxf.get("defpoint", None)
+            p1 = entity.dxf.get("defpoint2", None)
+            p2 = entity.dxf.get("defpoint3", None)
+            if loc is not None and p1 is not None and p2 is not None:
+                angle = math.radians(float(entity.dxf.get("angle", 0.0)))
+                ux, uy = math.cos(angle), math.sin(angle)
+                for pt in (p1, p2):
+                    t = (pt.x - loc.x) * ux + (pt.y - loc.y) * uy
+                    grips.append((loc.x + ux * t, loc.y + uy * t,
+                                  "dim_defpoint"))
+        text_mid = entity.dxf.get("text_midpoint", None)
+        if text_mid is not None:
+            grips.append((text_mid.x, text_mid.y, "dim_text"))
+    elif t == "SPLINE":
+        # AutoCAD: a grip on every fit point (or control point for a CV
+        # spline); dragging one re-fits the curve through the new spot.
+        points = list(entity.fit_points) or list(entity.control_points)
+        for pt in points:
+            grips.append((pt[0], pt[1], "vertex"))
+    elif t == "ELLIPSE":
+        # AutoCAD: center plus the four axis endpoints.
+        c = entity.dxf.center
+        major = entity.dxf.major_axis
+        minor = entity.minor_axis
+        grips.append((c.x, c.y, "center"))
+        for vec in (major, minor):
+            grips.append((c.x + vec.x, c.y + vec.y, "quadrant"))
+            grips.append((c.x - vec.x, c.y - vec.y, "quadrant"))
+    elif t == "LEADER":
+        # AutoCAD puts a grip on every vertex of the leader line -- the
+        # arrowhead, each bend and the end the annotation hangs off -- and
+        # dragging one re-aims that segment. Without them a leader could be
+        # selected and nothing more, which is how Marco found it: "no
+        # aparecen esos cuadraditos". The annotation deliberately stays put:
+        # the association runs text -> leader, so AutoCAD moves the leader
+        # end when the TEXT moves, not the other way round.
+        try:
+            for v in entity.vertices:
+                grips.append((v[0], v[1], "vertex"))
+        except Exception:
+            pass
+    elif t in ("MULTILEADER", "MLEADER"):
+        # Same idea as LEADER, one level deeper: the vertices live in the
+        # object's context, per leader and per line.
+        for li, ni, vi in _mleader_vertices(entity):
+            v = entity.context.leaders[li].lines[ni].vertices[vi]
+            grips.append((v.x, v.y, "vertex"))
+    elif t == "IMAGE":
+        # AutoCAD: four corner grips; dragging one scales the image.
+        try:
+            corners = list(entity.boundary_path_wcs())[:4]
+        except Exception:
+            corners = []
+        for v in corners:
+            grips.append((v.x, v.y, "corner"))
+    return grips
+
+
+def apply_grip_edit(entity, grip_index: int, role: str, new_point):
+    """Move the grip at ``grip_index`` to ``new_point``, editing the entity
+    in place. Returns True on success (undo is handled by the caller through
+    a snapshot Command)."""
+    import math
+
+    t = entity.dxftype()
+    nx, ny = new_point
+    if t in ("CIRCLE", "ARC", "LWPOLYLINE"):
+        # The branches below write raw attributes as WCS: flip an inverted
+        # OCS to +Z first (same geometry, same grip list — entity_grips
+        # reads WCS either way; the caller's snapshot undoes it).
+        ocs.upright(entity)
+    if t == "IMAGE":
+        # Uniform scale about the OPPOSITE corner (aspect locked, like
+        # AutoCAD's image grips): the drag point projects onto the diagonal
+        # and the whole frame follows.
+        try:
+            corners = list(entity.boundary_path_wcs())[:4]
+        except Exception:
+            return False
+        if grip_index >= len(corners):
+            return False
+        fixed = corners[(grip_index + 2) % 4]
+        moved = corners[grip_index]
+        dx, dy = moved.x - fixed.x, moved.y - fixed.y
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 0:
+            return False
+        factor = ((nx - fixed.x) * dx + (ny - fixed.y) * dy) / length_sq
+        if factor <= 0.01:
+            return False              # collapsing/inverting: ignore the drop
+        ins = entity.dxf.insert
+        entity.dxf.insert = (fixed.x + (ins.x - fixed.x) * factor,
+                             fixed.y + (ins.y - fixed.y) * factor, 0)
+        u, v = entity.dxf.u_pixel, entity.dxf.v_pixel
+        entity.dxf.u_pixel = (u.x * factor, u.y * factor, u.z * factor)
+        entity.dxf.v_pixel = (v.x * factor, v.y * factor, v.z * factor)
+        return True
+    if t in ("MULTILEADER", "MLEADER"):
+        from ezdxf.math import Vec3
+
+        for i, (li, ni, vi) in enumerate(_mleader_vertices(entity)):
+            if i != grip_index:
+                continue
+            line = entity.context.leaders[li].lines[ni]
+            z = line.vertices[vi].z
+            line.vertices[vi] = Vec3(nx, ny, z)
+            return True
+        return False
+    if t == "LEADER":
+        try:
+            vertices = [list(v) for v in entity.vertices]
+        except Exception:
+            return False
+        if not 0 <= grip_index < len(vertices):
+            return False
+        z = vertices[grip_index][2] if len(vertices[grip_index]) > 2 else 0.0
+        vertices[grip_index] = [nx, ny, z]
+        entity.set_vertices([tuple(v) for v in vertices])
+        return True
+    if t == "TEXT":
+        p = _text_anchor(entity)
+        entity.translate(nx - p.x, ny - p.y, 0)
+        return True
+    if t in ("MTEXT", "INSERT"):
+        p = entity.dxf.insert
+        entity.translate(nx - p.x, ny - p.y, 0)
+        return True
+    if t in ("XLINE", "RAY"):
+        p = entity.dxf.start
+        entity.translate(nx - p.x, ny - p.y, 0)
+        return True
+    if t == "SOLID":
+        if grip_index >= 4:
+            return False
+        setattr(entity.dxf, f"vtx{grip_index}", (nx, ny, 0))
+        return True
+    if t == "HATCH":
+        if role == "vertex":
+            walk = list(_hatch_vertices(entity))
+            # The offset is measured, not assumed: the control grip is
+            # absent when the bounding box cannot be computed.
+            offset = len(entity_grips(entity)) - len(walk)
+            i = grip_index - offset
+            if not 0 <= i < len(walk):
+                return False
+            pi, ox, oy = walk[i]
+            return _hatch_move_vertex(entity, pi, (ox, oy), (nx, ny))
+        try:
+            import ezdxf.bbox as _bbox
+
+            c = _bbox.extents([entity]).center
+        except Exception:
+            return False
+        entity.translate(nx - c.x, ny - c.y, 0)
+        return True
+    if t == "SPLINE":
+        points = list(entity.fit_points)
+        if points:
+            if grip_index >= len(points):
+                return False
+            points[grip_index] = (nx, ny, 0)
+            entity.fit_points = points
+            # ezdxf keeps stale control points when only the fit points
+            # move; drop them so every renderer re-fits the curve.
+            if entity.control_points:
+                entity.control_points = []
+            return True
+        points = list(entity.control_points)
+        if grip_index >= len(points):
+            return False
+        points[grip_index] = (nx, ny, 0)
+        entity.control_points = points
+        return True
+    if t == "ELLIPSE":
+        c = entity.dxf.center
+        if role == "center":
+            major = entity.dxf.major_axis
+            entity.dxf.center = (nx, ny, 0)
+            return True
+        # quadrant grips: 1,2 = +/- major axis end, 3,4 = +/- minor end.
+        major = entity.dxf.major_axis
+        major_len = math.hypot(major.x, major.y)
+        if major_len <= 0:
+            return False
+        minor_len = major_len * float(entity.dxf.ratio)
+        if grip_index in (1, 2):
+            vx, vy = nx - c.x, ny - c.y
+            if grip_index == 2:
+                vx, vy = -vx, -vy
+            new_len = math.hypot(vx, vy)
+            if new_len <= 1e-12:
+                return False
+            if minor_len > new_len:
+                # DXF wants ratio <= 1: what the user just made shorter IS
+                # the minor axis now — swap (full ellipse semantics).
+                ux, uy = -vy / new_len, vx / new_len
+                entity.dxf.major_axis = (ux * minor_len, uy * minor_len, 0)
+                entity.dxf.ratio = new_len / minor_len
+            else:
+                entity.dxf.major_axis = (vx, vy, 0)
+                entity.dxf.ratio = minor_len / new_len
+            return True
+        if grip_index in (3, 4):
+            # length of the projection onto the minor direction
+            ux, uy = -major.y / major_len, major.x / major_len
+            new_len = abs((nx - c.x) * ux + (ny - c.y) * uy)
+            if new_len <= 1e-12:
+                return False
+            if new_len > major_len:
+                entity.dxf.major_axis = (ux * new_len, uy * new_len, 0)
+                entity.dxf.ratio = major_len / new_len
+            else:
+                entity.dxf.ratio = new_len / major_len
+            return True
+        return False
+    if t == "LINE":
+        if role == "mid":               # move whole line
+            s, e = entity.dxf.start, entity.dxf.end
+            dx = nx - (s.x + e.x) / 2
+            dy = ny - (s.y + e.y) / 2
+            entity.dxf.start = (s.x + dx, s.y + dy, 0)
+            entity.dxf.end = (e.x + dx, e.y + dy, 0)
+        elif grip_index == 0:
+            entity.dxf.start = (nx, ny, 0)
+        else:
+            entity.dxf.end = (nx, ny, 0)
+        return True
+    if t == "LWPOLYLINE":
+        pts = entity.get_points("xyseb")
+        n = len(pts)
+        if role == "vertex" and grip_index < n:
+            p = list(pts[grip_index])
+            p[0], p[1] = nx, ny
+            pts[grip_index] = tuple(p)
+            entity.set_points(pts, format="xyseb")
+            return True
+        if role == "mid":
+            # AutoCAD/BricsCAD: the midpoint (triangle) grip MOVES the whole
+            # segment — it translates both its endpoints by the drag delta,
+            # keeping the segment straight; adjacent segments stretch to
+            # follow. No vertex is inserted.
+            seg = grip_index - n
+            a, b = seg, (seg + 1) % n if entity.closed else seg + 1
+            if b >= len(pts):
+                return False
+            mid_x = (pts[a][0] + pts[b][0]) / 2.0
+            mid_y = (pts[a][1] + pts[b][1]) / 2.0
+            dx, dy = nx - mid_x, ny - mid_y
+            for idx in (a, b):
+                p = list(pts[idx])
+                p[0] += dx
+                p[1] += dy
+                pts[idx] = tuple(p)
+            entity.set_points(pts, format="xyseb")
+            return True
+        return False
+    if t == "CIRCLE":
+        if role == "center":
+            entity.dxf.center = (nx, ny, 0)
+        else:                            # quadrant: new radius
+            c = entity.dxf.center
+            entity.dxf.radius = max(1e-9, math.hypot(nx - c.x, ny - c.y))
+        return True
+    if t == "ARC":
+        c = entity.dxf.center
+        if role == "center":
+            entity.dxf.center = (nx, ny, 0)
+        elif role == "mid":              # new radius, angles kept
+            entity.dxf.radius = max(1e-9, math.hypot(nx - c.x, ny - c.y))
+        else:                            # end grip: move that angle
+            ang = math.degrees(math.atan2(ny - c.y, nx - c.x))
+            if grip_index == 1:
+                entity.dxf.start_angle = ang
+            else:
+                entity.dxf.end_angle = ang
+        return True
+    if t == "POINT":
+        entity.dxf.location = (nx, ny, 0)
+        return True
+    return False

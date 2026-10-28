@@ -1,0 +1,802 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Entity properties palette — AutoCAD/BricsCAD PROPERTIES, context-sensitive.
+
+The palette rebuilds itself for whatever is selected: a **General** section
+(color, layer, linetype, linetype scale, lineweight, thickness) common to
+every entity, plus a type section (Geometry / Text / …) whose editable rows
+mirror what AutoCAD shows for that object. A filter combo at the top narrows a
+mixed selection to one type, exactly like the palette's object dropdown.
+
+Enum rows (layer/color/linetype/lineweight/style) apply across the whole
+selection through :class:`SetPropertyCommand`; geometry and text edits touch the
+single active entity through an in-place snapshot. Both land on the undo stack.
+"""
+from __future__ import annotations
+
+import math
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QLineEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core import actions, layers as layer_ops, pickfilter, text_justify
+from core.i18n import tr
+
+BYLAYER_LW = -1          # AutoCAD's ByLayer lineweight sentinel
+
+_STYLE = """
+PropertiesPanel { background: #26262a; }
+PropertiesPanel QComboBox#filter { background: #1e1e22; color: #d8d8d8;
+    border: 1px solid #3a3940; padding: 2px 4px; font-size: 11px; }
+QTreeWidget { background: #26262a; color: #c8c8c8; border: 0;
+    font-size: 11px; outline: 0; }
+QTreeWidget::item { border-bottom: 1px solid #2f2f34; min-height: 19px; }
+QTreeWidget QComboBox, QTreeWidget QLineEdit { background: #1e1e22;
+    color: #e0e0e0; border: 1px solid #3a3940; padding: 0 3px;
+    font-size: 11px; combobox-popup: 0; }
+"""
+
+_VARIES = object()   # marker: property differs across the selection
+
+
+class Row:
+    """One property line: how to read it and how to write it back."""
+
+    def __init__(self, label, kind, get, apply=None, items=None):
+        self.label = label
+        self.kind = kind          # 'combo' | 'num' | 'str' | 'ro'
+        self.get = get            # (entity) -> value  (or ignored for common)
+        self.apply = apply        # (value) -> None
+        self.items = items        # combo: list[(label, data)]
+
+
+def _fmt(v) -> str:
+    if isinstance(v, (int, float)):
+        return f"{v:.6g}"
+    return str(v)
+
+
+class PropertiesPanel(QWidget):
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self.window = window
+        self.setObjectName("PropertiesPanel")
+        self.setStyleSheet(_STYLE)
+        self._loading = False
+        self._all: list = []
+        self._filter: str | None = None   # None = all types
+
+        self.filter_cb = QComboBox(self)
+        self.filter_cb.setObjectName("filter")
+        self.filter_cb.activated.connect(self._on_filter)
+
+        self.tree = QTreeWidget(self)
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderHidden(True)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setIndentation(6)
+        self.tree.setUniformRowHeights(False)
+        self.tree.setSelectionMode(QTreeWidget.NoSelection)
+        self.tree.setFocusPolicy(Qt.NoFocus)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.filter_cb)
+        layout.addWidget(self.tree, 1)
+
+        self.refresh()
+
+    # -- data -----------------------------------------------------------------
+    @property
+    def _document(self):
+        return self.window.document
+
+    def _selection(self) -> list:
+        tools = getattr(self.window, "tools", None)
+        if tools is None or self._document is None:
+            return []
+        return [e for e in tools._selection_entities() if e.is_alive]
+
+    def _active(self) -> list:
+        if self._filter is None:
+            return self._all
+        return [e for e in self._all if e.dxftype() == self._filter]
+
+    # -- top-level refresh ----------------------------------------------------
+    def refresh(self) -> None:
+        self._all = self._selection()
+        # keep the current filter only if it still matches something
+        types = {e.dxftype() for e in self._all}
+        if self._filter not in types:
+            self._filter = None
+        self._rebuild_filter(types)
+        self._rebuild_grid()
+
+    def _rebuild_filter(self, types: set) -> None:
+        self._loading = True
+        self.filter_cb.clear()
+        n = len(self._all)
+        if n == 0:
+            self.filter_cb.addItem(tr("No selection"), None)
+            self.filter_cb.setEnabled(False)
+            self._loading = False
+            return
+        self.filter_cb.setEnabled(True)
+        if n > 1:
+            self.filter_cb.addItem(tr("All ({n})", n=n), None)
+        from collections import Counter
+        counts = Counter(e.dxftype() for e in self._all)
+        for t, c in sorted(counts.items()):
+            label = pickfilter.display(pickfilter.type_label(t))
+            self.filter_cb.addItem(f"{label} ({c})" if c > 1 else label, t)
+        idx = self.filter_cb.findData(self._filter)
+        self.filter_cb.setCurrentIndex(max(0, idx))
+        self._loading = False
+
+    def _on_filter(self, index: int) -> None:
+        if self._loading:
+            return
+        self._filter = self.filter_cb.itemData(index)
+        self._rebuild_grid()
+
+    # -- the grid -------------------------------------------------------------
+    def _rebuild_grid(self) -> None:
+        self._loading = True
+        self.tree.clear()
+        entities = self._active()
+        if entities:
+            for title, rows in self._schema(entities):
+                self._add_section(title, rows, entities)
+        self.tree.expandAll()
+        self._loading = False
+
+    def _add_section(self, title: str, rows: list, entities: list) -> None:
+        head = QTreeWidgetItem(self.tree, [title])
+        head.setFirstColumnSpanned(True)
+        head.setFlags(Qt.ItemIsEnabled)
+        f = head.font(0)
+        f.setBold(True)
+        head.setFont(0, f)
+        head.setForeground(0, Qt.GlobalColor.lightGray)
+        head.setBackground(0, self.palette().color(self.backgroundRole()).darker(112))
+        for row in rows:
+            self._add_row(head, row, entities)
+
+    def _add_row(self, parent, row: Row, entities: list) -> None:
+        item = QTreeWidgetItem(parent, [row.label, ""])
+        item.setForeground(0, Qt.GlobalColor.gray)
+        value = self._common(entities, row.get)
+        if row.kind == "ro":
+            item.setText(1, "" if value is _VARIES else _fmt(value))
+            item.setForeground(1, Qt.GlobalColor.darkGray)
+            return
+        if row.kind == "combo":
+            w = QComboBox()
+            for lbl, data in row.items:
+                w.addItem(lbl, data)
+            w.setMaxVisibleItems(18)
+            if value is _VARIES:
+                w.setCurrentIndex(-1)
+            else:
+                j = w.findData(value)
+                if j < 0 and row.items and callable(getattr(w, "setCurrentText", None)):
+                    j = w.findText(str(value))
+                w.setCurrentIndex(j)
+            w.activated.connect(
+                lambda i, r=row, cb=w: self._edit(r, cb.itemData(i)))
+            self.tree.setItemWidget(item, 1, w)
+        else:   # 'num' or 'str'
+            w = QLineEdit("" if value is _VARIES else _fmt(value))
+            w.setPlaceholderText(tr("*varies*") if value is _VARIES else "")
+            w.editingFinished.connect(
+                lambda r=row, le=w: self._edit_text(r, le))
+            self.tree.setItemWidget(item, 1, w)
+
+    def _common(self, entities, getter):
+        """The shared value, or _VARIES. Stops at the FIRST difference:
+        building the whole set over a 5000-object selection cost ~20 ms per
+        panel refresh, and every one of those refreshes happened while the
+        user was still selecting."""
+        if getter is None:
+            return None
+        first = _UNSET = object()
+        try:
+            for e in entities:
+                v = getter(e)
+                if first is _UNSET:
+                    first = v
+                elif v != first:
+                    return _VARIES
+        except Exception:
+            return _VARIES
+        return None if first is _UNSET else first
+
+    # -- edits ----------------------------------------------------------------
+    def _edit(self, row: Row, value) -> None:
+        if self._loading or row.apply is None:
+            return
+        row.apply(value)
+        self._after_edit()
+
+    def _edit_text(self, row: Row, editor: QLineEdit) -> None:
+        if self._loading or row.apply is None:
+            return
+        text = editor.text().strip()
+        if text == "":
+            return
+        if row.kind == "num":
+            # a decimal comma is how half the users type it ("0,0035" was
+            # dropped without a word)
+            try:
+                value = float(text.replace(",", "."))
+            except ValueError:
+                self.window.command_line.echo(tr("Requires a numeric value."))
+                return
+        else:
+            value = text
+        row.apply(value)
+        self._after_edit()
+
+    def _after_edit(self) -> None:
+        self.window.regen_in_memory()
+        self.refresh()
+
+    def _set_prop(self, prop: str, value) -> None:
+        ents = self._active()
+        if ents:
+            # via the tool controller: surgical hide + overlay = instant look
+            self.window.tools._execute(
+                actions.SetPropertyCommand(ents, prop, value))
+
+    def _in_place(self, mutate, regen: bool = False) -> None:
+        ents = self._active()
+        if ents:
+            actions.apply_in_place(self.window.history, ents, mutate)
+            if regen:
+                # Pixels (an image's shading or frame) only land through the
+                # real regen — and so must undo/redo of this edit.
+                self.window.history._undo[-1].needs_regen = True
+                self.window.regen_in_memory()
+                return
+            # instant look while the async regen catches up: hide the stale
+            # base copies, show the mutated entities through the overlay
+            tools = self.window.tools
+            tools._invalidate_geometry()
+            self.window.viewport.hide_handles([e.dxf.handle for e in ents])
+            tools._pending_render.extend(
+                e for e in ents
+                if e.is_alive and e.dxf.owner is not None
+                and e not in tools._pending_render)
+            tools._refresh_overlay()
+
+    def _set_comp(self, attr: str, axis: int, value: float) -> None:
+        def mutate():
+            for e in self._active():
+                v = e.dxf.get(attr)
+                comp = [v.x, v.y, v.z]
+                comp[axis] = value
+                e.dxf.set(attr, tuple(comp))
+        self._in_place(mutate)
+
+    # -- schema per entity type ----------------------------------------------
+    def _schema(self, entities: list):
+        types = {e.dxftype() for e in entities}
+        sections = [(tr("General"), self._general_rows(types))]
+        # One type, one object or many: AutoCAD shows the type's rows for
+        # the whole selection (*VARIES* where they differ) and an edit lands
+        # on every object -- #57: five texts in different styles could not
+        # be given one style, the Text section only came for a lone text.
+        if len(types) == 1:
+            builder = _TYPE_ROWS.get(next(iter(types)))
+            if builder is not None:
+                sections.append(builder(self, entities[0]))
+        return sections
+
+    def _general_rows(self, types: set | None = None):
+        color_items = _color_items()
+        lt_items = [(tr("ByLayer"), "ByLayer")] + [
+            (lt, lt) for lt in layer_ops.available_linetypes(self._document)]
+        lw_items = [(tr("ByLayer"), BYLAYER_LW)] + [
+            (layer_ops.lineweight_label(lw), lw) for lw in layer_ops.LINEWEIGHTS]
+        layer_items = [(i.name, i.name)
+                       for i in layer_ops.layer_list(self._document)]
+        rows = [
+            Row(tr("Color"), "combo", lambda e: e.dxf.get("color", 256),
+                lambda v: self._set_prop("color", v), color_items),
+            Row(tr("Layer"), "combo", lambda e: e.dxf.layer,
+                lambda v: self._set_prop("layer", v), layer_items),
+            Row(tr("Linetype"), "combo",
+                lambda e: e.dxf.get("linetype", "ByLayer"),
+                lambda v: self._set_prop("linetype", v), lt_items),
+            Row(tr("Linetype scale"), "num",
+                lambda e: e.dxf.get("ltscale", 1.0),
+                lambda v: self._set_prop("ltscale", v)),
+            Row(tr("Lineweight"), "combo",
+                lambda e: e.dxf.get("lineweight", -1),
+                lambda v: self._set_prop("lineweight", v), lw_items),
+        ]
+        if not (types or set()) & self._NO_THICKNESS:
+            rows.append(
+                Row(tr("Thickness"), "num",
+                    lambda e: e.dxf.get("thickness", 0.0),
+                    lambda v: self._set_prop("thickness", v)))
+        return rows
+
+    #: Entities with no group 39. AutoCAD leaves Thickness out of their
+    #: Properties rather than showing it as varying, and so does this: the
+    #: getter raises for them, which the panel would render as "*varies*".
+    _NO_THICKNESS = frozenset((
+        "DIMENSION", "MTEXT", "INSERT", "HATCH", "IMAGE", "LEADER",
+        "SPLINE", "ELLIPSE", "XLINE", "RAY", "ATTRIB", "ATTDEF", "MLINE",
+    ))
+
+
+# -- type-specific row builders (module-level, take panel + entity) ----------
+
+def _pt_rows(panel, attr, label):
+    return [
+        Row(f"{label} X", "num", lambda e, a=attr: e.dxf.get(a).x,
+            lambda v: panel._set_comp(attr, 0, v)),
+        Row(f"{label} Y", "num", lambda e, a=attr: e.dxf.get(a).y,
+            lambda v: panel._set_comp(attr, 1, v)),
+        Row(f"{label} Z", "num", lambda e, a=attr: e.dxf.get(a).z,
+            lambda v: panel._set_comp(attr, 2, v)),
+    ]
+
+
+def _line_rows(panel, e):
+    s, w = e.dxf.start, e.dxf.end
+    rows = _pt_rows(panel, "start", tr("Start"))
+    rows += _pt_rows(panel, "end", tr("End"))
+    rows += [
+        Row(tr("Delta X"), "ro", lambda e: e.dxf.end.x - e.dxf.start.x),
+        Row(tr("Delta Y"), "ro", lambda e: e.dxf.end.y - e.dxf.start.y),
+        Row(tr("Length"), "ro",
+            lambda e: math.dist((e.dxf.start.x, e.dxf.start.y),
+                                (e.dxf.end.x, e.dxf.end.y))),
+        Row(tr("Angle"), "ro",
+            lambda e: math.degrees(math.atan2(e.dxf.end.y - e.dxf.start.y,
+                                              e.dxf.end.x - e.dxf.start.x)) % 360),
+    ]
+    return (tr("Geometry"), rows)
+
+
+def _circle_rows(panel, e):
+    rows = _pt_rows(panel, "center", tr("Center"))
+    rows += [
+        Row(tr("Radius"), "num", lambda e: e.dxf.radius,
+            lambda v: panel._set_prop("radius", v)),
+        Row(tr("Diameter"), "num", lambda e: e.dxf.radius * 2,
+            lambda v: panel._set_prop("radius", v / 2)),
+        Row(tr("Circumference"), "ro", lambda e: 2 * math.pi * e.dxf.radius),
+        Row(tr("Area"), "ro", lambda e: math.pi * e.dxf.radius ** 2),
+    ]
+    return (tr("Geometry"), rows)
+
+
+def _arc_rows(panel, e):
+    rows = _pt_rows(panel, "center", tr("Center"))
+    rows += [
+        Row(tr("Radius"), "num", lambda e: e.dxf.radius,
+            lambda v: panel._set_prop("radius", v)),
+        Row(tr("Start angle"), "num", lambda e: e.dxf.start_angle,
+            lambda v: panel._set_prop("start_angle", v)),
+        Row(tr("End angle"), "num", lambda e: e.dxf.end_angle,
+            lambda v: panel._set_prop("end_angle", v)),
+        Row(tr("Total angle"), "ro",
+            lambda e: (e.dxf.end_angle - e.dxf.start_angle) % 360),
+        Row(tr("Length"), "ro",
+            lambda e: e.dxf.radius * math.radians(
+                (e.dxf.end_angle - e.dxf.start_angle) % 360)),
+    ]
+    return (tr("Geometry"), rows)
+
+
+def _ellipse_rows(panel, e):
+    rows = _pt_rows(panel, "center", tr("Center"))
+    rows += [
+        Row(tr("Ratio"), "num", lambda e: e.dxf.ratio,
+            lambda v: panel._set_prop("ratio", v)),
+        Row(tr("Start angle"), "num", lambda e: math.degrees(e.dxf.start_param),
+            lambda v: panel._set_prop("start_param", math.radians(v))),
+        Row(tr("End angle"), "num", lambda e: math.degrees(e.dxf.end_param),
+            lambda v: panel._set_prop("end_param", math.radians(v))),
+    ]
+    return (tr("Geometry"), rows)
+
+
+def _point_rows(panel, e):
+    return (tr("Geometry"), _pt_rows(panel, "location", tr("Position")))
+
+
+def _lwpolyline_rows(panel, e):
+    def set_closed(v):
+        def mutate():
+            for ent in panel._active():
+                ent.close(bool(v))
+        panel._in_place(mutate)
+    rows = [
+        Row(tr("Closed"), "combo", lambda e: 1 if e.closed else 0,
+            set_closed, [(tr("No"), 0), (tr("Yes"), 1)]),
+        Row(tr("Global width"), "num", lambda e: e.dxf.get("const_width", 0.0),
+            lambda v: panel._set_prop("const_width", v)),
+        Row(tr("Elevation"), "num", lambda e: e.dxf.get("elevation", 0.0),
+            lambda v: panel._set_prop("elevation", v)),
+        Row(tr("Vertices"), "ro", lambda e: len(e)),
+        Row(tr("Length"), "ro", lambda e: _polyline_length(e)),
+    ]
+    if e.closed:
+        rows.append(Row(tr("Area"), "ro", lambda e: _polyline_area(e)))
+    return (tr("Geometry"), rows)
+
+
+
+def _annotative_row(panel):
+    """AutoCAD's Annotative property (#73): make existing texts and
+    dimensions annotative, so OBJECTSCALE can give them more scales."""
+    from core import annotative
+
+    def apply(value):
+        ents = panel._active()
+        if ents:
+            panel.window.history.execute(
+                annotative.AnnotativePropertyCommand(ents, bool(value)))
+            panel.window.regen_in_memory()
+
+    return Row(tr("Annotative"), "combo",
+               lambda e: 1 if annotative.is_annotative(e) else 0, apply,
+               [(tr("No"), 0), (tr("Yes"), 1)])
+
+def _text_rows(panel, e):
+    def set_justify(v):
+        # #77: the letters stay put; only the alignment point moves
+        def mutate():
+            for ent in panel._active():
+                text_justify.set_justification(ent, v)
+        panel._in_place(mutate)
+
+    def set_text(v):
+        def mutate():
+            for ent in panel._active():
+                ent.dxf.text = v
+        panel._in_place(mutate)
+    rows = [
+        Row(tr("Contents"), "str", lambda e: e.dxf.text, set_text),
+        Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
+            lambda v: panel._set_prop("style", v), _style_items(panel)),
+        Row(tr("Justify"), "combo", text_justify.justification, set_justify,
+            [(tr(label), name) for label, name in text_justify.JUSTIFICATIONS]),
+        Row(tr("Height"), "num", lambda e: e.dxf.height,
+            lambda v: panel._set_prop("height", v)),
+        Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
+            lambda v: panel._set_prop("rotation", v)),
+        Row(tr("Width factor"), "num", lambda e: e.dxf.get("width", 1.0),
+            lambda v: panel._set_prop("width", v)),
+        Row(tr("Obliquing"), "num", lambda e: e.dxf.get("oblique", 0.0),
+            lambda v: panel._set_prop("oblique", v)),
+    ]
+    rows.append(_annotative_row(panel))
+    rows += _pt_rows(panel, "insert", tr("Position"))
+    return (tr("Text"), rows)
+
+
+def _mtext_rows(panel, e):
+    rows = [
+        Row(tr("Contents"), "ro",
+            lambda e: e.text.replace("\n", " ")[:40]),
+        Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
+            lambda v: panel._set_prop("style", v), _style_items(panel)),
+        Row(tr("Justify"), "combo", lambda e: e.dxf.get("attachment_point", 1),
+            lambda v: panel._set_prop("attachment_point", v),
+            [(tr(label), n) for label, n in text_justify.ATTACHMENTS]),
+        Row(tr("Text height"), "num", lambda e: e.dxf.char_height,
+            lambda v: panel._set_prop("char_height", v)),
+        Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
+            lambda v: panel._set_prop("rotation", v)),
+        Row(tr("Width"), "num", lambda e: e.dxf.get("width", 0.0),
+            lambda v: panel._set_prop("width", v)),
+    ]
+    rows.append(_annotative_row(panel))
+    rows += _pt_rows(panel, "insert", tr("Position"))
+    return (tr("Text"), rows)
+
+
+def _insert_rows(panel, e):
+    rows = [Row(tr("Name"), "ro", lambda e: e.dxf.name)]
+    rows += _pt_rows(panel, "insert", tr("Position"))
+    rows += [
+        Row(tr("Scale X"), "num", lambda e: e.dxf.get("xscale", 1.0),
+            lambda v: panel._set_prop("xscale", v)),
+        Row(tr("Scale Y"), "num", lambda e: e.dxf.get("yscale", 1.0),
+            lambda v: panel._set_prop("yscale", v)),
+        Row(tr("Scale Z"), "num", lambda e: e.dxf.get("zscale", 1.0),
+            lambda v: panel._set_prop("zscale", v)),
+        Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
+            lambda v: panel._set_prop("rotation", v)),
+    ]
+    return (tr("Geometry"), rows)
+
+
+def _hatch_rows(panel, e):
+    rows = [
+        Row(tr("Pattern name"), "ro", lambda e: e.dxf.get("pattern_name", "")),
+        Row(tr("Solid fill"), "ro",
+            lambda e: tr("Yes") if e.dxf.solid_fill else tr("No")),
+        Row(tr("Pattern angle"), "num", lambda e: e.dxf.get("pattern_angle", 0.0),
+            lambda v: _set_hatch_pattern(panel, "angle", v)),
+        Row(tr("Pattern scale"), "num", lambda e: e.dxf.get("pattern_scale", 1.0),
+            lambda v: _set_hatch_pattern(panel, "scale", v)),
+    ]
+    return (tr("Pattern"), rows)
+
+
+def _set_hatch_pattern(panel, what: str, value: float) -> None:
+    """A hatch's pattern lines carry its scale and angle: setting the DXF
+    value alone redrew the pattern as it was (#86, Rafael). ezdxf scales or
+    turns the hatch's own lines, so a colleague's custom pattern stays
+    itself; the snapshot of _in_place restores them on undo."""
+    if what == "scale" and value <= 0:
+        panel.window.command_line.echo(tr("Requires a positive number."))
+        return
+
+    def mutate():
+        for e in panel._active():
+            if e.dxftype() != "HATCH":
+                continue
+            if what == "scale":
+                e.set_pattern_scale(value)
+            else:
+                e.set_pattern_angle(value)
+    panel._in_place(mutate)
+
+
+def _polyline_length(e) -> float:
+    pts = [(p[0], p[1]) for p in e.get_points("xy")]
+    if e.closed and pts:
+        pts = pts + [pts[0]]
+    return sum(math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+
+
+def _polyline_area(e) -> float:
+    pts = [(p[0], p[1]) for p in e.get_points("xy")]
+    a = 0.0
+    for i in range(len(pts)):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % len(pts)]
+        a += x1 * y2 - x2 * y1
+    return abs(a) / 2
+
+
+def _color_items():
+    """(label, aci) pairs — mirror the layers panel's swatch combo data."""
+    from views.color_dialog import BYBLOCK, BYLAYER, STANDARD_ACIS, aci_label
+    items = [(tr("ByLayer"), BYLAYER), (tr("ByBlock"), BYBLOCK)]
+    for aci in STANDARD_ACIS:
+        items.append((aci_label(aci), aci))
+    return items
+
+
+def _style_items(panel):
+    doc = panel._document.doc
+    return [(s.dxf.name, s.dxf.name) for s in doc.styles]
+
+
+def _dimstyle_items(panel):
+    doc = panel._document.doc
+    return [(s.dxf.name, s.dxf.name) for s in doc.dimstyles]
+
+
+def _dimension_rows(panel, e):
+    """What AutoCAD's Properties shows for a dimension, led by its style.
+
+    Changing the style has to re-render the dimension's block — the geometry
+    on screen is what the old style produced — so this row does not go
+    through the plain property setter.
+    """
+    def set_dimstyle(value):
+        from core.modify import _rerender_dimension
+
+        def mutate():
+            for ent in panel._active():
+                if ent.dxftype() != "DIMENSION":
+                    continue
+                ent.dxf.dimstyle = value
+                _rerender_dimension(panel._document, ent)
+        panel._in_place(mutate, regen=True)
+
+    def set_text_override(value):
+        def mutate():
+            from core.modify import _rerender_dimension
+
+            for ent in panel._active():
+                if ent.dxftype() != "DIMENSION":
+                    continue
+                ent.dxf.text = value
+                _rerender_dimension(panel._document, ent)
+        panel._in_place(mutate, regen=True)
+
+    rows = [
+        Row(tr("Dim style"), "combo",
+            lambda e: e.dxf.get("dimstyle", "Standard"),
+            set_dimstyle, _dimstyle_items(panel)),
+        Row(tr("Measurement"), "ro",
+            lambda e: e.get_measurement() if hasattr(e, "get_measurement")
+            else e.dxf.get("actual_measurement", 0.0)),
+        # AutoCAD's own convention: empty or "<>" means the measured value.
+        Row(tr("Text override"), "str", lambda e: e.dxf.get("text", ""),
+            set_text_override),
+        Row(tr("Text rotation"), "num",
+            lambda e: e.dxf.get("text_rotation", 0.0),
+            lambda v: panel._set_prop("text_rotation", v)),
+    ]
+    rows += _pt_rows(panel, "text_midpoint", tr("Text position"))
+    rows.append(_annotative_row(panel))
+    return (tr("Dimension"), rows)
+
+
+def _set_attribute(panel, prop: str, value: str) -> None:
+    """Tag, prompt or value of the selected attributes, one undo step
+    (#88: a definition's tag, prompt and default could not be edited)."""
+    from core import attributes as att
+
+    if prop == "tag":
+        value = att.normal_tag(value)
+        if not value:
+            return
+    changes = [(e, prop, value) for e in panel._active()
+               if e.dxftype() in ("ATTRIB", "ATTDEF")
+               and (prop != "prompt" or e.dxftype() == "ATTDEF")]
+    if changes:
+        panel.window.tools._execute(att.EditAttribsCommand(changes))
+
+
+def _attrib_rows(panel, e):
+    """ATTRIB and ATTDEF carry a text style like any other text. A
+    definition edits its tag, prompt and default here, as AutoCAD's
+    Properties does; a reference's attribute its value."""
+    if e.dxftype() == "ATTDEF":
+        rows = [
+            Row(tr("Tag"), "str", lambda e: e.dxf.get("tag", ""),
+                lambda v: _set_attribute(panel, "tag", v)),
+            Row(tr("Prompt"), "str", lambda e: e.dxf.get("prompt", ""),
+                lambda v: _set_attribute(panel, "prompt", v)),
+            Row(tr("Value"), "str", lambda e: e.dxf.get("text", ""),
+                lambda v: _set_attribute(panel, "text", v)),
+        ]
+    else:
+        rows = [
+            Row(tr("Tag"), "ro", lambda e: e.dxf.get("tag", "")),
+            Row(tr("Value"), "str", lambda e: e.dxf.get("text", ""),
+                lambda v: _set_attribute(panel, "text", v)),
+        ]
+    rows += [
+        Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
+            lambda v: panel._set_prop("style", v), _style_items(panel)),
+        Row(tr("Height"), "num", lambda e: e.dxf.get("height", 1.0),
+            lambda v: panel._set_prop("height", v)),
+        Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
+            lambda v: panel._set_prop("rotation", v)),
+    ]
+    rows += _pt_rows(panel, "insert", tr("Position"))
+    return (tr("Text"), rows)
+
+
+def _leader_rows(panel, e):
+    """A leader is drawn by a dimension style too."""
+    return (tr("Leader"), [
+        Row(tr("Dim style"), "combo",
+            lambda e: e.dxf.get("dimstyle", "Standard"),
+            lambda v: panel._set_prop("dimstyle", v), _dimstyle_items(panel)),
+        Row(tr("Vertices"), "ro", lambda e: len(e.vertices)),
+    ])
+
+
+
+def _image_rows(panel, e):
+    from ezdxf.entities.image import Image as _Image
+
+    def adjust(attr):
+        def apply(value):
+            value = int(max(0, min(100, value)))
+            panel._in_place(
+                lambda: [setattr(x.dxf, attr, value) for x in panel._active()],
+                regen=True)
+        return apply
+
+    def set_flag(bit):
+        def apply(on):
+            def mutate():
+                for x in panel._active():
+                    x.dxf.flags = (x.dxf.flags | bit) if on \
+                        else (x.dxf.flags & ~bit)
+            panel._in_place(mutate, regen=True)
+        return apply
+
+    def set_size(axis):
+        def apply(value):
+            def mutate():
+                for x in panel._active():
+                    size = x.dxf.image_size
+                    px = size.x if axis == 0 else size.y
+                    if px <= 0 or value <= 0:
+                        continue
+                    vec = x.dxf.u_pixel if axis == 0 else x.dxf.v_pixel
+                    import math
+                    length = math.hypot(vec.x, vec.y, vec.z)
+                    if length <= 0:
+                        continue
+                    factor = (value / px) / length
+                    scaled = (vec.x * factor, vec.y * factor, vec.z * factor)
+                    if axis == 0:
+                        x.dxf.u_pixel = scaled
+                    else:
+                        x.dxf.v_pixel = scaled
+            panel._in_place(mutate, regen=True)
+        return apply
+
+    def width(x):
+        import math
+        u = x.dxf.u_pixel
+        return x.dxf.image_size.x * math.hypot(u.x, u.y, u.z)
+
+    def height(x):
+        import math
+        v = x.dxf.v_pixel
+        return x.dxf.image_size.y * math.hypot(v.x, v.y, v.z)
+
+    yesno = [(tr("Yes"), True), (tr("No"), False)]
+    rows = _pt_rows(panel, "insert", tr("Position"))
+    rows += [
+        Row(tr("Width"), "num", width, set_size(0)),
+        Row(tr("Height"), "num", height, set_size(1)),
+        Row(tr("Brightness"), "num", lambda x: x.dxf.get("brightness", 50),
+            adjust("brightness")),
+        Row(tr("Contrast"), "num", lambda x: x.dxf.get("contrast", 50),
+            adjust("contrast")),
+        Row(tr("Fade"), "num", lambda x: x.dxf.get("fade", 0),
+            adjust("fade")),
+        # Entity transparency, AutoCAD's 0-90 % (group 440); the render
+        # multiplies it into the alpha channel.
+        Row(tr("Transparency %"), "num",
+            lambda x: round(x.transparency * 100),
+            lambda v: panel._in_place(
+                lambda: [setattr(x, "transparency",
+                                 max(0.0, min(90.0, float(v))) / 100.0)
+                         for x in panel._active()], regen=True)),
+        Row(tr("Transparent background"), "combo",
+            lambda x: bool(x.dxf.flags & _Image.USE_TRANSPARENCY),
+            set_flag(_Image.USE_TRANSPARENCY), yesno),
+        Row(tr("Show image"), "combo",
+            lambda x: bool(x.dxf.flags & _Image.SHOW_IMAGE),
+            set_flag(_Image.SHOW_IMAGE), yesno),
+        Row(tr("File"), "ro",
+            lambda x: x.image_def.dxf.filename if x.image_def else "?"),
+    ]
+    return (tr("Image"), rows)
+
+
+_TYPE_ROWS = {
+    "LINE": _line_rows,
+    "CIRCLE": _circle_rows,
+    "ARC": _arc_rows,
+    "ELLIPSE": _ellipse_rows,
+    "POINT": _point_rows,
+    "LWPOLYLINE": _lwpolyline_rows,
+    "TEXT": _text_rows,
+    "MTEXT": _mtext_rows,
+    "INSERT": _insert_rows,
+    "HATCH": _hatch_rows,
+    "IMAGE": _image_rows,
+    "DIMENSION": _dimension_rows,
+    "ATTRIB": _attrib_rows,
+    "ATTDEF": _attrib_rows,
+    "LEADER": _leader_rows,
+}
