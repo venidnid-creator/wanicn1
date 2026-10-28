@@ -47,7 +47,22 @@ QTY_KINDS = {
     "count": ("จำนวนชิ้น", "ชิ้น"),
     "steel_kg": ("น้ำหนักเหล็ก (ปริมาตร × 7,850)", "กก."),
     "metrado": ("ปริมาณตามคลาส BIM", ""),
+    "manual": ("กรอกจำนวนเอง", "หน่วย"),
 }
+
+#: The three parts of a Thai government price estimate (หลักเกณฑ์ 2569).
+SECTIONS = {
+    "work": "ค่างานต้นทุน (ปร.1)",
+    "equip": "ครุภัณฑ์จัดซื้อ (ปร.2)",
+    "special": "ค่าใช้จ่ายพิเศษ (ปร.3)",
+}
+
+#: Pricing method: the government one multiplies the construction cost by
+#: Factor F (which already holds overhead, interest, profit and VAT) and
+#: adds VAT only to purchased equipment and special expenses; the private
+#: one adds VAT on top of everything.
+METHODS = {"gov": "ราคากลางราชการ (Factor F รวม VAT แล้ว)",
+           "private": "งานเอกชน (บวก VAT ทั้งหมด)"}
 
 STEEL_DENSITY = 7850.0
 
@@ -55,15 +70,28 @@ STEEL_DENSITY = 7850.0
 def new_rate(**kw) -> dict:
     rate = {"id": "", "category": "", "code": "", "desc": "", "by": "layer",
             "value": "", "qty": "area", "unit": "ตร.ม.", "factor": 1.0,
-            "mat": 0.0, "lab": 0.0, "note": ""}
+            "mat": 0.0, "lab": 0.0, "note": "", "section": "work",
+            "manual_qty": 0.0}
     rate.update(kw)
     return rate
 
 
+DEFAULT_SETTINGS = {
+    "project": "", "owner": "", "location": "", "drawing_no": "",
+    "date": "", "area_m2": 0.0, "factor_f": 1.0, "vat": 7.0,
+    "method": "gov", "adv_pay": 0.0, "retention": 0.0, "interest": 6.0,
+    "chair": "", "member1": "", "member2": "",
+}
+
+
 def default_data() -> dict:
-    return {"rates": [], "settings": {"project": "", "owner": "",
-                                      "location": "", "factor_f": 1.0,
-                                      "vat": 7.0}}
+    return {"rates": [], "settings": dict(DEFAULT_SETTINGS)}
+
+
+def settings_of(data) -> dict:
+    s = dict(DEFAULT_SETTINGS)
+    s.update((data or {}).get("settings") or {})
+    return s
 
 
 #: Starting lines a user can add and then price (units only — no prices
@@ -287,7 +315,9 @@ def compute(items: list[dict], data: dict) -> dict:
         {"lines": [ {rate…, "quantity", "mat_total", "lab_total", "total",
                      "items": [keys], "problems": [(label, reason)]} ],
          "status": {item_key: "ok" | "no_rate" | "problem"},
-         "subtotal", "factor_f", "after_f", "vat_pct", "vat", "grand"}
+         "subtotal" (ค่างานต้นทุน), "factor_f", "after_f" (ค่าก่อสร้าง),
+         "equip", "equip_vat", "special", "special_vat",
+         "vat_pct", "vat" (all VAT added), "grand" (ราคากลาง), "method"}
     """
     rates = data.get("rates", [])
     status = {it["key"]: "no_rate" for it in items}
@@ -296,33 +326,52 @@ def compute(items: list[dict], data: dict) -> dict:
         factor = _num(rate.get("factor"), 1.0)
         qty_sum = 0.0
         keys, problems = [], []
-        for it in items:
-            if not rate_matches(rate, it):
-                continue
-            v, why = item_quantity(it, rate.get("qty", "area"))
-            if v is None:
-                problems.append((it["label"], why))
-                status[it["key"]] = "problem"
-                continue
-            qty_sum += v
-            keys.append(it["key"])
-            if status[it["key"]] == "no_rate":
-                status[it["key"]] = "ok"
+        if rate.get("qty") == "manual":
+            qty_sum = _num(rate.get("manual_qty"))
+        else:
+            for it in items:
+                if not rate_matches(rate, it):
+                    continue
+                v, why = item_quantity(it, rate.get("qty", "area"))
+                if v is None:
+                    problems.append((it["label"], why))
+                    status[it["key"]] = "problem"
+                    continue
+                qty_sum += v
+                keys.append(it["key"])
+                if status[it["key"]] == "no_rate":
+                    status[it["key"]] = "ok"
         quantity = qty_sum * factor
         mat_total = quantity * _num(rate.get("mat"))
         lab_total = quantity * _num(rate.get("lab"))
-        lines.append({**rate, "quantity": quantity, "mat_total": mat_total,
-                      "lab_total": lab_total, "total": mat_total + lab_total,
-                      "items": keys, "problems": problems})
-    settings = data.get("settings", {})
-    subtotal = sum(ln["total"] for ln in lines)
+        section = rate.get("section") or "work"
+        if section not in SECTIONS:
+            section = "work"
+        lines.append({**rate, "section": section, "quantity": quantity,
+                      "mat_total": mat_total, "lab_total": lab_total,
+                      "total": mat_total + lab_total, "items": keys,
+                      "problems": problems})
+    settings = settings_of(data)
+    method = settings.get("method") if settings.get("method") in METHODS \
+        else "gov"
+    subtotal = sum(ln["total"] for ln in lines if ln["section"] == "work")
+    equip = sum(ln["total"] for ln in lines if ln["section"] == "equip")
+    special = sum(ln["total"] for ln in lines if ln["section"] == "special")
     factor_f = _num(settings.get("factor_f"), 1.0) or 1.0
     after_f = subtotal * factor_f
     vat_pct = _num(settings.get("vat"), 0.0)
-    vat = after_f * vat_pct / 100.0
+    v = vat_pct / 100.0
+    equip_vat, special_vat = equip * v, special * v
+    if method == "gov":
+        vat = equip_vat + special_vat
+    else:
+        vat = (after_f + equip + special) * v
+    grand = after_f + equip + special + vat
     return {"lines": lines, "status": status, "subtotal": subtotal,
-            "factor_f": factor_f, "after_f": after_f, "vat_pct": vat_pct,
-            "vat": vat, "grand": after_f + vat}
+            "factor_f": factor_f, "after_f": after_f, "equip": equip,
+            "equip_vat": equip_vat, "special": special,
+            "special_vat": special_vat, "vat_pct": vat_pct, "vat": vat,
+            "grand": grand, "method": method}
 
 
 def by_category(lines) -> list[tuple[str, list[dict]]]:
@@ -397,9 +446,10 @@ def baht_text(amount: float) -> str:
 # ---------------------------------------------------------------------------
 
 RATE_FIELDS = ["category", "code", "desc", "by", "value", "qty", "unit",
-               "factor", "mat", "lab", "note"]
+               "factor", "mat", "lab", "note", "section", "manual_qty"]
 RATE_HEADERS = ["หมวด", "รหัส", "รายการ", "ผูกกับ", "ค่า", "คิดจาก", "หน่วย",
-                "ตัวคูณ", "ค่าวัสดุต่อหน่วย", "ค่าแรงต่อหน่วย", "หมายเหตุ"]
+                "ตัวคูณ", "ค่าวัสดุต่อหน่วย", "ค่าแรงต่อหน่วย", "หมายเหตุ", "ส่วน",
+                "จำนวนที่กรอกเอง"]
 
 
 def rates_to_csv(rates) -> str:
@@ -426,6 +476,7 @@ def rates_from_csv(text: str) -> list[dict]:
     out = []
     by_th = {v: k for k, v in MATCH_BY.items()}
     qty_th = {v[0]: k for k, v in QTY_KINDS.items()}
+    sec_th = {v: k for k, v in SECTIONS.items()}
     for i, row in enumerate(rows[1:]):
         if not any(c.strip() for c in row):
             continue
@@ -440,7 +491,10 @@ def rates_from_csv(text: str) -> list[dict]:
             value=get("value"), qty=qty if qty in QTY_KINDS else "area",
             unit=get("unit") or QTY_KINDS.get(qty, ("", ""))[1],
             factor=_num(get("factor"), 1.0) or 1.0, mat=_num(get("mat")),
-            lab=_num(get("lab")), note=get("note")))
+            lab=_num(get("lab")), note=get("note"),
+            section=sec_th.get(get("section"), get("section"))
+            if sec_th.get(get("section"), get("section")) in SECTIONS
+            else "work", manual_qty=_num(get("manual_qty"))))
     return out
 
 
@@ -476,15 +530,22 @@ def boq_rows(result: dict):
         rows.append(("sum", ["", f"รวม{cat}", None, "", None, cm, None, cl,
                              cm + cl, ""]))
     r = result
-    rows.append(("total", ["", "รวมค่าก่อสร้าง (ค่าวัสดุและค่าแรงงาน)", None,
-                           "", None, None, None, None, r["subtotal"], ""]))
+
+    def tot(label, value):
+        rows.append(("total", ["", label, None, "", None, None, None, None,
+                               value, ""]))
+    tot("รวมค่างานต้นทุน (ค่าวัสดุและค่าแรงงาน)", r["subtotal"])
     if abs(r["factor_f"] - 1.0) > 1e-12:
-        rows.append(("total", ["", f"รวมค่าก่อสร้างคูณ Factor F ({r['factor_f']:g})",
-                               None, "", None, None, None, None, r["after_f"],
-                               ""]))
-    if r["vat_pct"]:
-        rows.append(("total", ["", f"ภาษีมูลค่าเพิ่ม {r['vat_pct']:g}%", None, "",
-                               None, None, None, None, r["vat"], ""]))
+        tot(f"ค่าก่อสร้าง = ค่างานต้นทุน × Factor F ({r['factor_f']:g})",
+            r["after_f"])
+    if r.get("equip"):
+        tot("ค่าครุภัณฑ์จัดซื้อ (ก่อน VAT)", r["equip"])
+    if r.get("special"):
+        tot("ค่าใช้จ่ายพิเศษตามข้อกำหนด (ก่อน VAT)", r["special"])
+    if r["vat"]:
+        what = ("ของครุภัณฑ์และค่าใช้จ่ายพิเศษ" if r.get("method") == "gov"
+                else "")
+        tot(f"ภาษีมูลค่าเพิ่ม {r['vat_pct']:g}% {what}".strip(), r["vat"])
     rows.append(("total", ["", "รวมราคาทั้งสิ้น", None, "", None, None, None,
                            None, r["grand"], ""]))
     rows.append(("words", ["", f"({baht_text(r['grand'])})", None, "", None,
@@ -517,11 +578,12 @@ def _col(i: int) -> str:
 
 
 class _Sheet:
-    def __init__(self, name):
+    def __init__(self, name, landscape=True):
         self.name = name
         self.rows = []          # list of list of (value, style)
         self.merges = []
         self.widths = []
+        self.landscape = landscape
 
     def add(self, cells, style=0, styles=None):
         self.rows.append([(c, (styles[i] if styles else style))
@@ -558,18 +620,20 @@ class _Sheet:
             out.append("</mergeCells>")
         out.append('<pageMargins left="0.5" right="0.4" top="0.6" bottom="0.6" '
                    'header="0.3" footer="0.3"/>')
-        out.append('<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" '
-                   'fitToHeight="0"/>')
+        orient = "landscape" if self.landscape else "portrait"
+        out.append(f'<pageSetup paperSize="9" orientation="{orient}" '
+                   'fitToWidth="1" fitToHeight="0"/>')
         out.append("</worksheet>")
         return "".join(out)
 
 
 # style ids (see _STYLES): 0 normal, 1 bold, 2 title, 3 header, 4 text cell,
-# 5 number cell, 6 bold text cell, 7 bold number cell, 8 centred text cell
+# 5 number cell, 6 bold text cell, 7 bold number cell, 8 centred text cell,
+# 9 bold right (form code), 10 centred plain (signatures), 11 Factor F cell
 _FONT = "TH Sarabun New"
 _STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>
+<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.00"/><numFmt numFmtId="165" formatCode="0.0000"/></numFmts>
 <fonts count="3">
 <font><sz val="14"/><name val="{_FONT}"/><family val="2"/></font>
 <font><b/><sz val="14"/><name val="{_FONT}"/><family val="2"/></font>
@@ -585,7 +649,7 @@ _STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="9">
+<cellXfs count="12">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf>
@@ -595,6 +659,9 @@ _STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
 <xf numFmtId="164" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"/>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>"""
@@ -647,10 +714,278 @@ def _detail_sheet(items, result) -> _Sheet:
     return sh
 
 
-def boq_xlsx_bytes(result: dict, settings: dict, items=None) -> bytes:
-    sheets = [_boq_sheet(result, settings)]
+
+# ---------------------------------------------------------------------------
+# The government forms (หลักเกณฑ์การคำนวณราคากลางงานก่อสร้าง พ.ศ. 2569):
+# ปร.1 ค่างานต้นทุน · ปร.1 (ก) สรุปค่าก่อสร้าง · ปร.2 ครุภัณฑ์จัดซื้อ ·
+# ปร.2 (ก) สรุปค่าครุภัณฑ์ · ปร.3 ค่าใช้จ่ายพิเศษ · ปร.4 สรุปราคากลาง
+# ---------------------------------------------------------------------------
+
+_TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม",
+              "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม",
+              "พฤศจิกายน", "ธันวาคม"]
+
+
+def thai_date(d=None) -> str:
+    import datetime
+    d = d or datetime.date.today()
+    return f"{d.day} {_TH_MONTHS[d.month - 1]} {d.year + 543}"
+
+
+_DOTS = "................................................"
+
+
+def _hdr(sh, code, title, st, ncols, attach=None):
+    last = _col(ncols - 1)
+    r = sh.add([""] * (ncols - 1) + [f"แบบ {code}"], style=9)
+    r = sh.add([title] + [""] * (ncols - 1), style=2)
+    sh.merges.append(f"A{r}:{last}{r}")
+    lines = [f"ชื่อโครงการงานก่อสร้าง  {st.get('project') or _DOTS}",
+             f"สถานที่ก่อสร้าง  {st.get('location') or _DOTS}",
+             f"แบบเลขที่  {st.get('drawing_no') or _DOTS}",
+             f"หน่วยงานเจ้าของโครงการงานก่อสร้าง  {st.get('owner') or _DOTS}"]
+    if attach:
+        lines.append(attach)
+    lines.append(f"คำนวณราคากลาง เมื่อวันที่  {st.get('date') or thai_date()}")
+    for text in lines:
+        r = sh.add([text] + [""] * (ncols - 1), style=0)
+        sh.merges.append(f"A{r}:{last}{r}")
+
+
+def _sign(sh, st, ncols):
+    last = _col(ncols - 1)
+    sh.add([""] * ncols)
+    for role, key in (("ประธานกรรมการกำหนดราคากลาง", "chair"),
+                      ("กรรมการกำหนดราคากลาง", "member1"),
+                      ("กรรมการกำหนดราคากลาง", "member2")):
+        r = sh.add([f"(ลงชื่อ) ......................................  {role}"]
+                   + [""] * (ncols - 1), style=10)
+        sh.merges.append(f"A{r}:{last}{r}")
+        name = st.get(key) or ".........................................."
+        r = sh.add([f"( {name} )"] + [""] * (ncols - 1), style=10)
+        sh.merges.append(f"A{r}:{last}{r}")
+        sh.add([""] * ncols)
+
+
+def _two_row_head(sh, top, sub, spans):
+    """A two-row table head: ``spans`` = {first col: last col} merged
+    across in the top row; every other column merges down."""
+    r1 = sh.add(top, style=3)
+    r2 = sh.add(sub, style=3)
+    c = 0
+    while c < len(top):
+        if c in spans:
+            sh.merges.append(f"{_col(c)}{r1}:{_col(spans[c])}{r1}")
+            c = spans[c] + 1
+        else:
+            sh.merges.append(f"{_col(c)}{r1}:{_col(c)}{r2}")
+            c += 1
+
+
+def _pages(nrows, per=28):
+    return max(1, math.ceil(nrows / per))
+
+
+def _section_lines(result, section):
+    return [ln for ln in result["lines"] if ln.get("section", "work") == section]
+
+
+def _pr1(result, st) -> _Sheet:
+    sh = _Sheet("ปร.1")
+    sh.widths = [8, 44, 11, 9, 13, 15, 13, 15, 17, 16]
+    _hdr(sh, "ปร.1", "แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน", st, 10)
+    _two_row_head(sh, ["ลำดับที่", "รายการ", "จำนวน", "หน่วย", "ค่าวัสดุ", "",
+                       "ค่าแรงงาน", "", "รวมค่าวัสดุและค่าแรงงาน", "หมายเหตุ"],
+                  ["", "", "", "", "ราคาต่อหน่วย", "จำนวนเงิน", "ราคาต่อหน่วย",
+                   "จำนวนเงิน", "", ""], {4: 5, 6: 7})
+    work = _section_lines(result, "work")
+    if not work:
+        sh.add(["", "(ไม่มีรายการ)"] + [""] * 8, styles=[4] * 10)
+    for ci, (cat, lines) in enumerate(by_category(work), 1):
+        sh.add([str(ci), cat] + [""] * 8, styles=[8, 6] + [4] * 8)
+        cm = cl = 0.0
+        for li, ln in enumerate(lines, 1):
+            note = ln.get("note") or ""
+            if ln["problems"]:
+                note = (note + " " if note else "") + \
+                    f"(วัดไม่ได้ {len(ln['problems'])} วัตถุ)"
+            sh.add([ln.get("code") or f"{ci}.{li}", ln.get("desc") or "",
+                    ln["quantity"], ln.get("unit", ""), _num(ln.get("mat")),
+                    ln["mat_total"], _num(ln.get("lab")), ln["lab_total"],
+                    ln["total"], note], styles=[8, 4, 5, 8, 5, 5, 5, 5, 5, 4])
+            cm += ln["mat_total"]
+            cl += ln["lab_total"]
+        sh.add(["", f"รวม{cat}", None, "", None, cm, None, cl, cm + cl, ""],
+               styles=[4, 6, 4, 4, 4, 7, 4, 7, 7, 4])
+    sh.add(["", "รวมค่างานต้นทุน", None, "", None,
+            sum(ln["mat_total"] for ln in work), None,
+            sum(ln["lab_total"] for ln in work), result["subtotal"], ""],
+           styles=[4, 6, 4, 4, 4, 7, 4, 7, 7, 4])
+    _sign(sh, st, 10)
+    return sh
+
+
+def _pr1k(result, st, pr1_rows) -> _Sheet:
+    sh = _Sheet("ปร.1 (ก)", landscape=False)
+    sh.widths = [8, 40, 17, 11, 17, 14]
+    _hdr(sh, "ปร.1 (ก)", "แบบสรุปค่าก่อสร้าง ค่างานต้นทุน", st, 6,
+         attach=f"แบบ ปร.1 ที่แนบ จำนวน {_pages(pr1_rows)} หน้า")
+    sh.add(["ลำดับที่", "รายการ", "ค่างานต้นทุน", "Factor F", "ค่าก่อสร้าง",
+            "หมายเหตุ"], style=3)
+    F = result["factor_f"]
+    work = _section_lines(result, "work")
+    for ci, (cat, lines) in enumerate(by_category(work), 1):
+        cost = sum(ln["total"] for ln in lines)
+        sh.add([str(ci), cat, cost, F, cost * F, ""],
+               styles=[8, 4, 5, 11, 5, 4])
+    sh.add(["", "รวมค่าก่อสร้าง", result["subtotal"], None, result["after_f"],
+            ""], styles=[4, 6, 7, 4, 7, 4])
+    r = sh.add(["", "เงื่อนไขการใช้ตาราง Factor F", "", "", "", ""], style=1)
+    sh.merges.append(f"B{r}:F{r}")
+    for label, key in (("อัตราเงินค่าจ้างล่วงหน้า", "adv_pay"),
+                       ("อัตราเงินประกันผลงาน", "retention"),
+                       ("อัตราดอกเบี้ยเงินกู้", "interest"),
+                       ("อัตราภาษีมูลค่าเพิ่ม", "vat")):
+        r = sh.add(["", f"{label}  {_num(st.get(key)):g} %", "", "", "", ""])
+        sh.merges.append(f"B{r}:F{r}")
+    area = _num(st.get("area_m2"))
+    avg = (f"{result['after_f'] / area:,.2f}" if area > 0 else "........")
+    r = sh.add(["", f"ขนาดหรือเนื้อที่อาคาร  {area:,.2f}  ตารางเมตร  เฉลี่ย  "
+                    f"{avg}  บาทต่อตารางเมตร", "", "", "", ""])
+    sh.merges.append(f"B{r}:F{r}")
+    _sign(sh, st, 6)
+    return sh
+
+
+def _pr2(result, st) -> _Sheet:
+    sh = _Sheet("ปร.2")
+    sh.widths = [8, 44, 11, 9, 13, 15, 13, 15, 17, 16]
+    _hdr(sh, "ปร.2", "แบบแสดงรายการ ปริมาณงาน และราคา ค่าครุภัณฑ์จัดซื้อ",
+         st, 10)
+    _two_row_head(sh, ["ลำดับที่", "รายการ", "จำนวน", "หน่วย", "ค่าครุภัณฑ์", "",
+                       "ค่าติดตั้ง", "", "รวมค่าครุภัณฑ์", "หมายเหตุ"],
+                  ["", "", "", "", "ราคาต่อหน่วย", "จำนวนเงิน", "ราคาต่อหน่วย",
+                   "จำนวนเงิน", "", ""], {4: 5, 6: 7})
+    eq = _section_lines(result, "equip")
+    if not eq:
+        sh.add(["", "(ไม่มีรายการ)"] + [""] * 8, styles=[4] * 10)
+    for i, ln in enumerate(eq, 1):
+        sh.add([ln.get("code") or str(i), ln.get("desc") or "",
+                ln["quantity"], ln.get("unit", ""), _num(ln.get("mat")),
+                ln["mat_total"], _num(ln.get("lab")), ln["lab_total"],
+                ln["total"], ln.get("note") or ""],
+               styles=[8, 4, 5, 8, 5, 5, 5, 5, 5, 4])
+    sh.add(["", "รวม", None, "", None, sum(ln["mat_total"] for ln in eq),
+            None, sum(ln["lab_total"] for ln in eq), result["equip"], ""],
+           styles=[4, 6, 4, 4, 4, 7, 4, 7, 7, 4])
+    _sign(sh, st, 10)
+    return sh
+
+
+def _pr2k(result, st, pr2_rows) -> _Sheet:
+    sh = _Sheet("ปร.2 (ก)")
+    sh.widths = [8, 38, 14, 13, 15, 14, 13, 15, 17, 14]
+    _hdr(sh, "ปร.2 (ก)", "แบบสรุปค่าครุภัณฑ์จัดซื้อ", st, 10,
+         attach=f"แบบ ปร.2 ที่แนบ จำนวน {_pages(pr2_rows)} หน้า")
+    _two_row_head(sh, ["ลำดับที่", "รายการ", "ค่าครุภัณฑ์", "", "", "ค่าติดตั้ง",
+                       "", "", "รวม", "หมายเหตุ"],
+                  ["", "", "ค่าครุภัณฑ์", "ค่าภาษีมูลค่าเพิ่ม", "จำนวนเงิน",
+                   "ค่าติดตั้ง", "ค่าภาษีมูลค่าเพิ่ม", "จำนวนเงิน",
+                   "ค่าครุภัณฑ์จัดซื้อ", ""], {2: 4, 5: 7})
+    v = result["vat_pct"] / 100.0
+    tot = [0.0] * 7
+    eq = _section_lines(result, "equip")
+    if not eq:
+        sh.add(["", "(ไม่มีรายการ)"] + [""] * 8, styles=[4] * 10)
+    for i, ln in enumerate(eq, 1):
+        m, lb = ln["mat_total"], ln["lab_total"]
+        vals = [m, m * v, m * (1 + v), lb, lb * v, lb * (1 + v),
+                (m + lb) * (1 + v)]
+        tot = [a + b for a, b in zip(tot, vals)]
+        sh.add([ln.get("code") or str(i), ln.get("desc") or ""] + vals + [""],
+               styles=[8, 4] + [5] * 7 + [4])
+    sh.add(["", "รวม"] + tot + [""], styles=[4, 6] + [7] * 7 + [4])
+    _sign(sh, st, 10)
+    return sh
+
+
+def _pr3(result, st) -> _Sheet:
+    sh = _Sheet("ปร.3", landscape=False)
+    sh.widths = [8, 50, 18, 20, 18]
+    _hdr(sh, "ปร.3",
+         "แบบแสดงรายการ ปริมาณงาน และราคา ค่าใช้จ่ายพิเศษตามข้อกำหนด", st, 5)
+    sh.add(["ลำดับที่", "รายการ", "จำนวนหน่วย", "ค่าใช้จ่ายรวม (ค่าก่อสร้าง)",
+            "หมายเหตุ"], style=3)
+    v = result["vat_pct"] / 100.0
+    sp = _section_lines(result, "special")
+    if not sp:
+        sh.add(["", "(ไม่มีรายการ)", "", "", ""], styles=[4] * 5)
+    for i, ln in enumerate(sp, 1):
+        sh.add([ln.get("code") or str(i), ln.get("desc") or "",
+                f"{ln['quantity']:,.2f} {ln.get('unit', '')}".strip(),
+                ln["total"] * (1 + v),
+                ("รวมภาษีมูลค่าเพิ่ม " f"{result['vat_pct']:g}%"
+                 + (f" · {ln['note']}" if ln.get("note") else ""))],
+               styles=[8, 4, 8, 5, 4])
+    sh.add(["", "รวมค่าใช้จ่ายพิเศษตามข้อกำหนดทุกรายการ", "",
+            result["special"] + result["special_vat"], ""],
+           styles=[4, 6, 4, 7, 4])
+    r = sh.add(["", "แนบแบบแสดงการคำนวณและเหตุผลความจำเป็นของแต่ละรายการ",
+                "", "", ""])
+    sh.merges.append(f"B{r}:E{r}")
+    _sign(sh, st, 5)
+    return sh
+
+
+def _pr4(result, st) -> _Sheet:
+    sh = _Sheet("ปร.4", landscape=False)
+    sh.widths = [8, 58, 20, 18]
+    _hdr(sh, "ปร.4", "แบบสรุปราคากลางงานก่อสร้างอาคาร", st, 4,
+         attach="แบบ ปร.1 (ก) ปร.2 (ก) และ ปร.3 (ถ้ามี) ที่แนบ จำนวน "
+                f"{1 + bool(result['equip']) + bool(result['special'])} ชุด")
+    sh.add(["ลำดับที่", "รายการ", "ค่าก่อสร้าง", "หมายเหตุ"], style=3)
+    rows = [("1", "ค่างานต้นทุน × Factor F (ตามแบบ ปร.1 (ก))",
+             result["after_f"], f"Factor F {result['factor_f']:.4f}"),
+            ("2", "ค่าครุภัณฑ์จัดซื้อ (ตามแบบ ปร.2 (ก))",
+             result["equip"] + result["equip_vat"], "รวมภาษีมูลค่าเพิ่ม"),
+            ("3", "ค่าใช้จ่ายพิเศษตามข้อกำหนด (ถ้ามี) (ตามแบบ ปร.3)",
+             result["special"] + result["special_vat"], "รวมภาษีมูลค่าเพิ่ม")]
+    if result.get("method") == "private":
+        rows.append(("4", f"ภาษีมูลค่าเพิ่ม {result['vat_pct']:g}% ของค่าก่อสร้าง "
+                          "(งานเอกชน)", result["after_f"] * result["vat_pct"] / 100,
+                     ""))
+    for no, label, val, note in rows:
+        sh.add([no, label, val, note], styles=[8, 4, 5, 4])
+    sh.add(["", "รวมค่าก่อสร้างทั้งโครงการงานก่อสร้าง", result["grand"], ""],
+           styles=[4, 6, 7, 4])
+    sh.add(["", "ราคากลาง", result["grand"], ""], styles=[4, 6, 7, 4])
+    r = sh.add(["", f"ราคากลาง (ตัวอักษร)  ({baht_text(result['grand'])})", "",
+                ""], styles=[4, 6, 4, 4])
+    sh.merges.append(f"B{r}:D{r}")
+    _sign(sh, st, 4)
+    return sh
+
+
+def pr_sheets(result, settings, items=None):
+    st = dict(DEFAULT_SETTINGS)
+    st.update(settings or {})
+    pr1 = _pr1(result, st)
+    pr2 = _pr2(result, st)
+    sheets = [_pr4(result, st), _pr1k(result, st, len(pr1.rows)), pr1,
+              _pr2k(result, st, len(pr2.rows)), pr2, _pr3(result, st),
+              _boq_sheet(result, st)]
     if items is not None:
         sheets.append(_detail_sheet(items, result))
+    return sheets
+
+
+def boq_xlsx_bytes(result: dict, settings: dict, items=None) -> bytes:
+    """The full workbook: ปร.4, ปร.1 (ก), ปร.1, ปร.2 (ก), ปร.2, ปร.3, a
+    one-sheet BOQ and (with ``items``) the object detail."""
+    return _xlsx(pr_sheets(result, settings, items))
+
+
+def _xlsx(sheets) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml",

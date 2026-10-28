@@ -129,6 +129,45 @@ class PlanCanvas(QWidget):
             p.setPen(NAVY)
             p.drawText(r, Qt.AlignCenter,
                        f"{rm.get('name', '')}\n{rm['w']:g} × {rm['d']:g} ม.")
+        st = B.settings_of(self.panel.data())
+        # Stairs: the flight's outline, its treads and the way up.
+        for stp in self.panel.items("stairs"):
+            pts = [self.to_screen(*q) for q in B.stair_rect(stp, st)]
+            sel = stp["id"] == self.selected
+            p.setPen(QPen(SEL if sel else NAVY, 2 if sel else 1.2))
+            p.setBrush(QColor(255, 255, 255, 200))
+            from PySide6.QtGui import QPolygonF
+            p.drawPolygon(QPolygonF(pts))
+            n, _L, _H = B.stair_geometry(stp, st)
+            a, b, c, d = pts
+            for i in range(1, n):
+                t = i / n
+                p.drawLine(a + (b - a) * t, d + (c - d) * t)
+            mid0 = (a + d) / 2
+            mid1 = (b + c) / 2
+            p.setPen(QPen(QColor("#B01E33"), 1.6))
+            p.drawLine(mid0, mid1)
+            p.drawText(mid1 + QPointF(4, -4), "ขึ้น")
+        # Doors and windows on the walls.
+        for op in self.panel.items("openings"):
+            w, _h, _sill = B.opening_size(op, st)
+            segs = B.segments(self.rooms())
+            hit = B.snap_to_segment(op["x"], op["y"], segs, 0.1)
+            if hit is None:
+                continue
+            (p0, p1) = hit[2]
+            import math as _m
+            L = _m.hypot(p1[0] - p0[0], p1[1] - p0[1]) or 1.0
+            ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+            a = self.to_screen(op["x"] - ux * w / 2, op["y"] - uy * w / 2)
+            b = self.to_screen(op["x"] + ux * w / 2, op["y"] + uy * w / 2)
+            sel = op["id"] == self.selected
+            color = QColor("#3BA3D8") if op.get("type") == "window" \
+                else QColor("#E8772E")
+            p.setPen(QPen(SEL if sel else color,
+                          max(5.0, st["wall_t"] * self.scale * 1.6),
+                          Qt.SolidLine, Qt.FlatCap))
+            p.drawLine(a, b)
         # Columns where the build will put them.
         p.setPen(Qt.NoPen)
         p.setBrush(NAVY)
@@ -150,15 +189,38 @@ class PlanCanvas(QWidget):
             self._pan = (ev.position(), QPointF(self.origin))
             return
         rm = self.room_at(x, y)
+        item = self.panel.item_at(x, y)
+        tool = self.panel.tool()
         if ev.button() == Qt.RightButton:
-            if rm is not None:
+            if item is not None:
+                self.selected = item["id"]
+                self.update()
+                self._item_menu(item, ev.globalPosition().toPoint())
+            elif rm is not None:
                 self.selected = rm["id"]
                 self.update()
                 self._menu(rm, ev.globalPosition().toPoint())
             return
         if ev.button() != Qt.LeftButton:
             return
-        if rm is not None:
+        if item is not None and item["id"].startswith("s"):
+            self.selected = item["id"]
+            self._drag = ("stair", item["id"], x - item["x"], y - item["y"])
+            self.update()
+            return
+        if tool in ("door", "window"):
+            got = self.panel.place_opening(x, y, tool)
+            if got:
+                self.selected = got
+            self.update()
+            return
+        if tool == "stair":
+            self.selected = self.panel.place_stair(x, y)
+            self.update()
+            return
+        if item is not None:
+            self.selected = item["id"]
+        elif rm is not None:
             self.selected = rm["id"]
             self._drag = (rm["id"], x - rm["x"], y - rm["y"],
                           copy.deepcopy(self.rooms()))
@@ -172,6 +234,12 @@ class PlanCanvas(QWidget):
         if self._pan is not None:
             start, org = self._pan
             self.origin = org + (ev.position() - start)
+        elif self._drag is not None and self._drag[0] == "stair":
+            _k, sid, dx, dy = self._drag
+            g = float(B.settings_of(self.panel.data())["grid"]) or 0.5
+            nx = round((x - dx) / (g / 2)) * (g / 2)
+            ny = round((y - dy) / (g / 2)) * (g / 2)
+            self.panel.preview_stair(sid, nx, ny)
         elif self._drag is not None:
             rid, dx, dy, rooms = self._drag
             for rm in rooms:
@@ -188,13 +256,20 @@ class PlanCanvas(QWidget):
         if ev.button() == Qt.MiddleButton:
             self._pan = None
             return
-        if self._drag is not None:
+        if self._drag is not None and self._drag[0] == "stair":
+            self._drag = None
+            self.panel.commit_stair()
+        elif self._drag is not None:
             rooms = self._drag[3]
             self._drag = None
             self.panel.set_rooms(rooms)
 
     def mouseDoubleClickEvent(self, ev):
         x, y = self.to_world(ev.position())
+        item = self.panel.item_at(x, y)
+        if item is not None:
+            self.panel.edit_item(item["id"])
+            return
         rm = self.room_at(x, y)
         if rm is not None:
             self.panel.edit_room(rm["id"])
@@ -209,11 +284,18 @@ class PlanCanvas(QWidget):
         self.update()
 
     def keyPressEvent(self, ev):
-        if ev.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self.selected:
-            self.panel.delete_room(self.selected)
+        sel = self.selected or ""
+        if ev.key() in (Qt.Key_Delete, Qt.Key_Backspace) and sel:
+            if sel.startswith("r"):
+                self.panel.delete_room(sel)
+            else:
+                self.panel.delete_item(sel)
             self.selected = None
-        elif ev.key() == Qt.Key_R and self.selected:
-            self.panel.rotate_room(self.selected)
+        elif ev.key() == Qt.Key_R and sel:
+            if sel.startswith("r"):
+                self.panel.rotate_room(sel)
+            elif sel.startswith("s"):
+                self.panel.rotate_stair(sel)
         else:
             super().keyPressEvent(ev)
 
@@ -225,6 +307,44 @@ class PlanCanvas(QWidget):
         m.addSeparator()
         m.addAction("ลบห้อง (Delete)", lambda: self.panel.delete_room(rm["id"]))
         m.exec(at)
+
+
+    def _item_menu(self, item, at):
+        m = QMenu(self)
+        m.addAction("แก้ไขขนาด…", lambda: self.panel.edit_item(item["id"]))
+        if item["id"].startswith("s"):
+            m.addAction("หมุน 90° (R)", lambda: self.panel.rotate_stair(item["id"]))
+        m.addSeparator()
+        m.addAction("ลบ (Delete)", lambda: self.panel.delete_item(item["id"]))
+        m.exec(at)
+
+
+class ItemDialog(QDialog):
+    """Size of a door, window or stair (blank = the panel's default)."""
+
+    def __init__(self, item, s, parent=None):
+        super().__init__(parent)
+        f = QFormLayout(self)
+        self.fields = {}
+        if item["id"].startswith("s"):
+            self.setWindowTitle("แก้ไขบันได")
+            rows = [("w", "ความกว้างบันได", s["stair_w"])]
+        else:
+            win = item.get("type") == "window"
+            self.setWindowTitle("แก้ไขหน้าต่าง" if win else "แก้ไขประตู")
+            w, h, sill = B.opening_size(item, s)
+            rows = [("w", "กว้าง", w), ("h", "สูง", h)]
+            if win:
+                rows.append(("sill", "ความสูงขอบล่าง", sill))
+        for k, label, v in rows:
+            sp = _spin(0.0 if k == "sill" else 0.3, 10.0,
+                       float(item.get(k) if item.get(k) is not None else v))
+            self.fields[k] = sp
+            f.addRow(label, sp)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        f.addRow(bb)
 
 
 class RoomDialog(QDialog):
@@ -266,6 +386,7 @@ class BuildingPanel(QWidget):
         self.app = app
         self.floor = 0
         self._preview = None
+        self._stair_preview = None
         self._loading = False
 
         outer = QVBoxLayout(self)
@@ -325,6 +446,15 @@ class BuildingPanel(QWidget):
         hint.setStyleSheet("color: palette(mid);")
         lay.addWidget(hint)
 
+        tl = QHBoxLayout()
+        tl.addWidget(QLabel("เครื่องมือ"))
+        self.tool_box = QComboBox()
+        for k, v in (("room", "🟩 วางห้อง"), ("door", "🚪 ประตู (คลิกที่แนวผนัง)"),
+                     ("window", "🪟 หน้าต่าง (คลิกที่แนวผนัง)"),
+                     ("stair", "🪜 บันได (คลิกวาง · ลากย้าย · R หมุน)")):
+            self.tool_box.addItem(v, k)
+        tl.addWidget(self.tool_box, 1)
+        lay.addLayout(tl)
         self.canvas = PlanCanvas(self)
         lay.addWidget(self.canvas, 1)
         cb = QHBoxLayout()
@@ -400,6 +530,17 @@ class BuildingPanel(QWidget):
         num("wall_t", "ผนังหนา", 0.05, 0.5, 0.01)
         lay.addWidget(st)
 
+        ow = QGroupBox("ประตู หน้าต่าง บันได (ค่าเริ่มต้น)")
+        sf = QFormLayout(ow)
+        pair("door_w", "door_h", "ประตู กว้าง × สูง")
+        pair("win_w", "win_h", "หน้าต่าง กว้าง × สูง")
+        num("win_sill", "หน้าต่าง ขอบล่างสูงจากพื้น", 0.0, 3.0)
+        num("stair_w", "บันได กว้าง", 0.6, 5.0)
+        num("riser_max", "ลูกตั้งสูงไม่เกิน", 0.10, 0.25, 0.01)
+        num("going", "ลูกนอน", 0.20, 0.40, 0.01)
+        num("stair_t", "ท้องบันไดหนา", 0.08, 0.40, 0.01)
+        lay.addWidget(ow)
+
         rf = QGroupBox("หลังคา")
         rff = QFormLayout(rf)
         self.roof = QComboBox()
@@ -408,6 +549,12 @@ class BuildingPanel(QWidget):
             self.roof.addItem(v, k)
         self.roof.currentIndexChanged.connect(lambda _i: self._save_settings())
         rff.addRow("แบบหลังคา", self.roof)
+        self.roof_mode = QComboBox()
+        self.roof_mode.addItem("ตามรูปผัง (ตัว L / T มีราง)", "plan")
+        self.roof_mode.addItem("คลุมกรอบสี่เหลี่ยมทั้งหลัง", "bbox")
+        self.roof_mode.currentIndexChanged.connect(
+            lambda _i: self._save_settings())
+        rff.addRow("รูปหลังคา", self.roof_mode)
         sf_backup = sf
         sf = rff
         num("pitch", "ความชัน", 5.0, 60.0, 1.0, 1, "°")
@@ -428,8 +575,9 @@ class BuildingPanel(QWidget):
         self.skin.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.skin)
         lay.addWidget(rf)
-        note = QLabel("รุ่นนี้วางหลังคาคลุมกรอบสี่เหลี่ยมรอบห้องของชั้นบนสุด "
-                      "ปริมาณคอนกรีตนับรอยต่อเสา-คานซ้ำเล็กน้อย")
+        note = QLabel("หลังคาตามรูปผังซ้อนกันตรงรางน้ำ จึงนับพื้นที่มุง/แปซ้ำบางส่วน "
+                      "· ปริมาณคอนกรีตนับรอยต่อเสา-คานซ้ำเล็กน้อย "
+                      "· ชั้นที่ไม่มีห้องจะถูกข้าม")
         note.setWordWrap(True)
         note.setStyleSheet("color: palette(mid);")
         lay.addWidget(note)
@@ -441,9 +589,9 @@ class BuildingPanel(QWidget):
     # ---- document data -------------------------------------------------------
     def data(self) -> dict:
         d = self.app.document_data(None) or B.default_data()
-        d.setdefault("floors", [{"rooms": []}])
+        d.setdefault("floors", [B.new_floor()])
         if not d["floors"]:
-            d["floors"] = [{"rooms": []}]
+            d["floors"] = [B.new_floor()]
         d["settings"] = B.settings_of(d)
         return d
 
@@ -542,13 +690,129 @@ class BuildingPanel(QWidget):
 
     def clear_floor(self):
         d = self.data()
-        d["floors"][self.floor]["rooms"] = []
+        d["floors"][self.floor] = B.new_floor()
         self._write(d)
+
+    # ---- doors, windows, stairs -------------------------------------------------
+    def tool(self):
+        return self.tool_box.currentData() or "room"
+
+    def items(self, kind, floor=None):
+        floor = self.floor if floor is None else floor
+        floors = self.data()["floors"]
+        if floor < 0 or floor >= len(floors):
+            return []
+        out = list(floors[floor].get(kind) or [])
+        if kind == "stairs" and self._stair_preview is not None:
+            sid, x, y = self._stair_preview
+            out = [dict(st, x=x, y=y) if st["id"] == sid else st for st in out]
+        return out
+
+    def item_at(self, x, y):
+        s = self.data()["settings"]
+        best = None
+        for op in self.items("openings"):
+            dist = ((op["x"] - x) ** 2 + (op["y"] - y) ** 2) ** 0.5
+            w = B.opening_size(op, s)[0]
+            if dist <= max(0.25, w / 2) and (best is None or dist < best[0]):
+                best = (dist, op)
+        if best:
+            return best[1]
+        for stp in self.items("stairs"):
+            xs = [q[0] for q in B.stair_rect(stp, s)]
+            ys = [q[1] for q in B.stair_rect(stp, s)]
+            if min(xs) <= x <= max(xs) and min(ys) <= y <= max(ys):
+                return stp
+        return None
+
+    def _item_id(self, d, prefix):
+        n = 0
+        for f in d["floors"]:
+            for k in ("openings", "stairs"):
+                for it in f.get(k) or []:
+                    sid = str(it.get("id", ""))
+                    if sid[1:].isdigit():
+                        n = max(n, int(sid[1:]))
+        return f"{prefix}{n + 1}"
+
+    def place_opening(self, x, y, kind):
+        d = self.data()
+        f = d["floors"][self.floor]
+        hit = B.snap_to_segment(x, y, B.segments(f.get("rooms") or []))
+        if hit is None:
+            self.status.setText("คลิกให้ใกล้แนวผนัง (ขอบห้อง) เพื่อวางประตู/หน้าต่าง")
+            return None
+        oid = self._item_id(d, "o")
+        f.setdefault("openings", []).append(
+            {"id": oid, "type": kind, "x": hit[0], "y": hit[1]})
+        self._write(d)
+        return oid
+
+    def place_stair(self, x, y):
+        d = self.data()
+        f = d["floors"][self.floor]
+        g = float(d["settings"]["grid"]) or 0.5
+        sid = self._item_id(d, "s")
+        f.setdefault("stairs", []).append(
+            {"id": sid, "x": round(x / (g / 2)) * (g / 2),
+             "y": round(y / (g / 2)) * (g / 2), "dir": 1})
+        self._write(d)
+        n, L, _H = B.stair_geometry({}, d["settings"])
+        self.status.setText(f"บันได {n} ลูกตั้ง ระยะราบ {L:.2f} ม. — ลากเพื่อย้าย "
+                            "กด R เพื่อหมุนทิศขึ้น")
+        return sid
+
+    def preview_stair(self, sid, x, y):
+        self._stair_preview = (sid, x, y)
+        self.canvas.update()
+
+    def commit_stair(self):
+        if self._stair_preview is None:
+            return
+        sid, x, y = self._stair_preview
+        self._stair_preview = None
+        d = self.data()
+        for st in d["floors"][self.floor].get("stairs") or []:
+            if st["id"] == sid:
+                st["x"], st["y"] = x, y
+        self._write(d)
+
+    def _with_item(self, iid, fn):
+        d = self.data()
+        f = d["floors"][self.floor]
+        for kind in ("openings", "stairs"):
+            lst = f.setdefault(kind, [])
+            for i, it in enumerate(lst):
+                if it["id"] == iid:
+                    if fn(lst, i, it) is not False:
+                        self._write(d)
+                    return
+
+    def delete_item(self, iid):
+        def fn(lst, i, it):
+            del lst[i]
+        self._with_item(iid, fn)
+
+    def rotate_stair(self, iid):
+        def fn(lst, i, it):
+            it["dir"] = (int(it.get("dir", 1)) + 1) % 4
+        self._with_item(iid, fn)
+
+    def edit_item(self, iid):
+        s = self.data()["settings"]
+
+        def fn(lst, i, it):
+            dlg = ItemDialog(it, s, self)
+            if dlg.exec() != QDialog.Accepted:
+                return False
+            for k, sp in dlg.fields.items():
+                it[k] = sp.value()
+        self._with_item(iid, fn)
 
     # ---- floors -----------------------------------------------------------------
     def add_floor(self):
         d = self.data()
-        d["floors"].append({"rooms": []})
+        d["floors"].append(B.new_floor())
         self.floor = len(d["floors"]) - 1
         self._write(d)
 
@@ -559,14 +823,15 @@ class BuildingPanel(QWidget):
         for rm in copy.deepcopy(d["floors"][self.floor]["rooms"]):
             new.append(dict(rm, id=f"r{nid}"))
             nid += 1
-        d["floors"].insert(self.floor + 1, {"rooms": new})
+        d["floors"].insert(self.floor + 1, {"rooms": new, "openings": [],
+                                            "stairs": []})
         self.floor += 1
         self._write(d)
 
     def delete_floor(self):
         d = self.data()
         if len(d["floors"]) <= 1:
-            d["floors"] = [{"rooms": []}]
+            d["floors"] = [B.new_floor()]
         else:
             del d["floors"][self.floor]
             self.floor = max(0, self.floor - 1)
@@ -590,6 +855,7 @@ class BuildingPanel(QWidget):
         s["walls"] = self.walls.isChecked()
         s["skin"] = self.skin.isChecked()
         s["roof"] = self.roof.currentData()
+        s["roof_mode"] = self.roof_mode.currentData()
         for k, c in self.steel.items():
             s[k] = c.currentText()
         if s != self.data()["settings"]:
@@ -611,6 +877,8 @@ class BuildingPanel(QWidget):
             self.walls.setChecked(bool(s["walls"]))
             self.skin.setChecked(bool(s["skin"]))
             self.roof.setCurrentIndex(max(self.roof.findData(s["roof"]), 0))
+            self.roof_mode.setCurrentIndex(
+                max(self.roof_mode.findData(s.get("roof_mode", "plan")), 0))
             for k, c in self.steel.items():
                 i = c.findText(s[k])
                 c.setCurrentIndex(max(i, 0))
@@ -645,9 +913,12 @@ class BuildingPanel(QWidget):
         if callable(n):
             n()
         vp.update()
-        floors = sum(1 for f in d["floors"] if f.get("rooms"))
-        msg = (f"สร้างเสร็จ {floors} ชั้น — {B.summary(count)}"
+        stack, skipped = B.stacked(d)
+        msg = (f"สร้างเสร็จ {len(stack)} ชั้น — {B.summary(count)}"
                + (f" (แทนของเดิม {len(old)} ชิ้น)" if old else ""))
+        if skipped:
+            msg += (f"\nหมายเหตุ: ข้ามชั้นที่ยังไม่มีห้อง {skipped} ชั้น — ชั้นที่มีห้อง"
+                    "เรียงต่อกันจากพื้นดินขึ้นไป")
         self.status.setText(msg)
         f = getattr(vp, "flash_status", None)
         if callable(f):

@@ -158,6 +158,25 @@ def _road(p):
             (-hw, -drop)], []
 
 
+def _stair(p):
+    """A straight concrete flight seen from the side: ``n`` risers over a
+    run ``L`` and a rise ``H``, with a waist ``t`` under the steps."""
+    L, H, n, t = p["L"], p["H"], max(int(round(p["n"])), 2), p["t"]
+    r, g = H / n, L / n
+    pts = [(0.0, 0.0)]
+    for i in range(n):
+        pts += [(i * g, (i + 1) * r), ((i + 1) * g, (i + 1) * r)]
+    m = H / L
+    tv = t * math.sqrt(1 + m * m)
+    pts += [(L, H - tv), (tv / m, 0.0)]
+    # Drop repeated points (the first riser starts at x = 0).
+    out = []
+    for q in pts:
+        if not out or math.dist(q, out[-1]) > 1e-9:
+            out.append(q)
+    return out, []
+
+
 def _embankment(p):
     bt, h, z = p["bt"], p["h"], p["z"]
     hb = bt / 2 + z * h
@@ -283,6 +302,11 @@ _fam("pile", "เสาเข็มกลม คสล.", "คอนกรีต
          ("เข็มเจาะ ø350", dict(D=350)), ("เข็มเจาะ ø500", dict(D=500)),
          ("เข็มเจาะ ø600", dict(D=600)),
      ])
+_fam("stair", "บันได คสล. (ช่วงตรง)", "คอนกรีตและไม้",
+     [("L", "ระยะราบรวม L"), ("H", "ความสูงรวม H"),
+      ("n", "จำนวนลูกตั้ง n (ไม่มีหน่วย)"), ("t", "ความหนาท้องบันได t")],
+     _stair, "IfcStair", False,
+     [("บันได สูง 3.00 ม. 17 ลูกตั้ง", dict(L=4250, H=3000, n=17, t=150))])
 _fam("curb", "คันหิน (Kerb)", "งานทางและระบายน้ำ",
      [("bb", "ความกว้างฐาน"), ("bt", "ความกว้างบน"), ("h", "ความสูง")], _curb,
      "", False, [("คันหิน 150/125×300", dict(bb=150, bt=125, h=300))])
@@ -326,7 +350,7 @@ _fam("embank", "คันทาง / คันดิน (ดินถม)", "ง
      [("คันทาง กว้าง 8 ม. สูง 1.5 ม. ลาด 1:2", dict(bt=8000, h=1500, z=2))])
 
 #: Parameters that are plain numbers, not millimetres.
-UNITLESS = {"s", "z"}
+UNITLESS = {"s", "z", "n"}
 
 ANCHORS = {
     "c": "กึ่งกลาง", "tc": "บนกลาง", "bc": "ล่างกลาง", "tl": "บนซ้าย",
@@ -387,6 +411,8 @@ def validate(family: str, params: dict):
         "pipe": lambda: 2 * p["t"] < p["D"],
         "tbeam": lambda: p["bw"] <= p["bf"] and p["hf"] < p["h"],
         "curb": lambda: p["bt"] <= p["bb"],
+        "stair": lambda: p["n"] >= 2 and p["t"] * math.sqrt(
+            1 + (p["H"] / p["L"]) ** 2) * p["L"] / p["H"] < p["L"] / 2,
         "curb_gutter": lambda: p["tg"] + p["d"] < p["hc"],
     }
     ok = checks.get(family)

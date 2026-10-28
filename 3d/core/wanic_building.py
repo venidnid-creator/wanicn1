@@ -10,10 +10,16 @@ Layout rules (simple, predictable, all editable afterwards):
 - beams run along every room edge, split at the columns on that edge:
   ground beams (GB) at ±0.00, floor beams (B) at upper levels, roof beams
   (RB) at the top;
-- one slab per room (S1 on the ground, S2 above), walls optional;
-- the roof covers the top floor's bounding rectangle (+ overhang): gable
-  (จั่ว) or hip (ปั้นหยา), with ridge, hips, rafters, purlins, king posts
-  and a roof skin whose area the takeoff bills.
+- one slab per room (S1 on the ground, S2 above), walls optional, split
+  around doors and windows; straight concrete stairs between floors;
+- floors without rooms are skipped: the floors that have rooms stack up
+  from the ground in order (a plan drawn on «ชั้น 3» alone is a one-storey
+  building, never a roof floating over nothing);
+- the roof follows the top floor's plan: the plan is covered by the fewest
+  rectangles (overlapping where an L / T wing runs into the main block, so
+  the slopes meet in valleys), each with a gable (จั่ว) or hip (ปั้นหยา)
+  frame — ridge, hips, rafters, purlins, king posts — and a roof skin
+  whose area the takeoff bills.
 
 Member sizes are starting values only — nothing here designs or checks
 structural strength; a civil engineer sets the real sizes.
@@ -49,12 +55,38 @@ DEFAULT_SETTINGS = {
     "rafter_sp": 1.0, "purlin_sp": 0.8,
     "ridge": "C 150×65×20×3.2", "hip": "C 150×65×20×3.2",
     "rafter": "C 150×65×20×3.2", "purlin": "C 75×45×15×2.3",
-    "post": "C 100×50×20×2.3", "skin": True,
+    "post": "C 100×50×20×2.3", "skin": True, "roof_mode": "plan",
+    "door_w": 0.9, "door_h": 2.0, "win_w": 1.2, "win_h": 1.1,
+    "win_sill": 0.9, "stair_w": 1.0, "riser_max": 0.18, "going": 0.25,
+    "stair_t": 0.15,
 }
 
 
+def new_floor() -> dict:
+    return {"rooms": [], "openings": [], "stairs": []}
+
+
 def default_data() -> dict:
-    return {"floors": [{"rooms": []}], "settings": dict(DEFAULT_SETTINGS)}
+    return {"floors": [new_floor()], "settings": dict(DEFAULT_SETTINGS)}
+
+
+def stacked(data):
+    """``(floors, skipped)``: the floors that have rooms, bottom up, each
+    ``{"rooms", "openings", "stairs", "src"}`` (``src`` = its index in the
+    plan), and how many empty floors were left out."""
+    out, skipped = [], 0
+    for i, f in enumerate((data or {}).get("floors") or []):
+        if f.get("rooms"):
+            out.append({"rooms": f.get("rooms") or [],
+                        "openings": f.get("openings") or [],
+                        "stairs": f.get("stairs") or [], "src": i})
+        else:
+            skipped += 1
+    # Empty floors above the last used one are not "skipped" — just unused.
+    last = max((f["src"] for f in out), default=-1)
+    total = len((data or {}).get("floors") or [])
+    skipped -= max(0, total - 1 - last)
+    return out, max(skipped, 0)
 
 
 def settings_of(data) -> dict:
@@ -184,12 +216,118 @@ def _mm(v):
     return float(v) * 1000.0
 
 
+
+# ---------------------------------------------------------------------------
+# Doors, windows, stairs (plan helpers)
+# ---------------------------------------------------------------------------
+
+def snap_to_segment(x, y, segs, reach=0.4):
+    """The nearest point on a beam span within ``reach`` metres:
+    ``(px, py, (p0, p1))`` or ``None``."""
+    best = None
+    for p0, p1 in segs:
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        L2 = dx * dx + dy * dy
+        if L2 < 1e-12:
+            continue
+        t = max(0.0, min(1.0, ((x - p0[0]) * dx + (y - p0[1]) * dy) / L2))
+        px, py = p0[0] + t * dx, p0[1] + t * dy
+        dist = math.hypot(x - px, y - py)
+        if dist <= reach and (best is None or dist < best[0]):
+            best = (dist, (_r(px), _r(py), (p0, p1)))
+    return None if best is None else best[1]
+
+
+def _openings_on(p0, p1, openings, tol=0.06):
+    """Openings standing on span p0→p1: [(s, opening)] with ``s`` the
+    distance of its centre from p0."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    L = math.hypot(dx, dy)
+    out = []
+    if L < 1e-9:
+        return out
+    ux, uy = dx / L, dy / L
+    for op in openings:
+        ox, oy = float(op["x"]) - p0[0], float(op["y"]) - p0[1]
+        s = ox * ux + oy * uy
+        if abs(ox * uy - oy * ux) <= tol and -1e-6 <= s <= L + 1e-6:
+            out.append((s, op))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def opening_size(op, s):
+    """(width, height, sill) of an opening, defaults from the settings."""
+    if op.get("type") == "window":
+        return (float(op.get("w") or s["win_w"]),
+                float(op.get("h") or s["win_h"]),
+                float(op.get("sill") if op.get("sill") is not None
+                      else s["win_sill"]))
+    return (float(op.get("w") or s["door_w"]),
+            float(op.get("h") or s["door_h"]), 0.0)
+
+
+def opening_name(op, s):
+    w, h, _sill = opening_size(op, s)
+    kind = "หน้าต่าง" if op.get("type") == "window" else "ประตู"
+    return f"{kind} {w:.2f}×{h:.2f} ม."
+
+
+_DIRS = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)]
+
+
+def stair_geometry(st, s):
+    """(risers, run length, rise) of a flight for the floor height."""
+    H = float(s["floor_h"])
+    n = max(2, math.ceil(H / max(float(s["riser_max"]), 0.05) - 1e-9))
+    return n, n * float(s["going"]), H
+
+
+def stair_rect(st, s):
+    """The flight's plan rectangle as 4 corners (for drawing and picking)."""
+    n, L, _H = stair_geometry(st, s)
+    rx, ry = _DIRS[int(st.get("dir", 1)) % 4]
+    tx, ty = ry, -rx
+    w = float(st.get("w") or s["stair_w"])
+    cx, cy = float(st["x"]), float(st["y"])
+    a = (cx - rx * L / 2, cy - ry * L / 2)
+    pts = []
+    for su, sw in ((0, -1), (1, -1), (1, 1), (0, 1)):
+        pts.append((a[0] + rx * L * su + tx * w / 2 * sw,
+                    a[1] + ry * L * su + ty * w / 2 * sw))
+    return pts
+
+
+# ---------------------------------------------------------------------------
+# Members
+# ---------------------------------------------------------------------------
+
+def _tag(g, part, kind, mark):
+    ext = dict(g.ext or {})
+    ext[EXT_KEY] = {"part": part, "kind": kind, "mark": mark}
+    g.ext = ext
+    return g
+
+
+def _member(part, kind, mark, family, params, path, anchor="c", ifc="",
+            name=None, closed=False, offset=(0.0, 0.0)):
+    g = P.build_member({"family": family, "params": params, "path": path,
+                        "anchor": anchor, "ifc": ifc, "name": name or mark,
+                        "closed": closed, "offset": offset})
+    if isinstance(g, str):
+        return None
+    return _tag(g, part, kind, mark)
+
+
+def _mm(v):
+    return float(v) * 1000.0
+
+
 def structure_members(data) -> tuple[list, dict]:
-    """The concrete frame (+ walls) as groups, and a count per kind."""
+    """The concrete frame, walls, doors, windows and stairs as groups, and
+    a count per kind."""
     s = settings_of(data)
-    floors = [f.get("rooms") or [] for f in data.get("floors", [])]
-    while floors and not floors[-1]:
-        floors.pop()
+    floors, _skipped = stacked(data)
     out, count = [], {}
 
     def add(g, kind):
@@ -197,24 +335,34 @@ def structure_members(data) -> tuple[list, dict]:
             out.append(g)
             count[kind] = count.get(kind, 0) + 1
 
-    if not floors or not floors[0]:
+    if not floors:
         return out, count
+    rooms_of = [f["rooms"] for f in floors]
     H = float(s["floor_h"])
     n = len(floors)
     base = -float(s["footing_depth"])
     ft = float(s["footing_t"])
     fw = _mm(s["footing_w"])
     st, col = _mm(s["stump"]), _mm(s["col"])
-    for (x, y) in nodes(floors[0]):
+    # Every column needs a footing: the ground floor's, and any upper-floor
+    # column with nothing under it.
+    ground = set(nodes(rooms_of[0]))
+    for k in range(1, n):
+        ground |= set(nodes(rooms_of[k]))
+    for (x, y) in sorted(ground):
         add(_member("structure", "footing", "F1", "rect", dict(b=fw, h=fw),
                     [(x, y, base), (x, y, base + ft)], ifc="IfcFooting"),
             "footing")
         add(_member("structure", "stump", "PC1", "rect", dict(b=st, h=st),
                     [(x, y, base + ft), (x, y, 0.0)], ifc="IfcColumn"),
             "stump")
-    for k, rooms in enumerate(floors):
+    # Columns: a floor's columns, and the columns below an upper floor's.
+    for k in range(n):
         z0, z1 = k * H, (k + 1) * H
-        for (x, y) in nodes(rooms):
+        pts = set()
+        for j in range(k, n):
+            pts |= set(nodes(rooms_of[j]))
+        for (x, y) in sorted(pts):
             add(_member("structure", "column", "C1", "rect",
                         dict(b=col, h=col), [(x, y, z0), (x, y, z1)],
                         ifc="IfcColumn"), "column")
@@ -223,9 +371,9 @@ def structure_members(data) -> tuple[list, dict]:
         z = lvl * H
         rooms = []
         if lvl < n:
-            rooms += floors[lvl]
+            rooms += rooms_of[lvl]
         if lvl > 0:
-            rooms += floors[lvl - 1]
+            rooms += rooms_of[lvl - 1]
         if lvl == 0:
             mark, b, h = "GB1", s["gb_b"], s["gb_h"]
         elif lvl == n:
@@ -238,7 +386,7 @@ def structure_members(data) -> tuple[list, dict]:
                         [(p0[0], p0[1], z), (p1[0], p1[1], z)], anchor="tc",
                         ifc="IfcBeam"), "beam")
     t = float(s["slab_t"])
-    for k, rooms in enumerate(floors):
+    for k, rooms in enumerate(rooms_of):
         z = k * H
         mark = "S1" if k == 0 else "S2"
         for rm in rooms:
@@ -249,44 +397,135 @@ def structure_members(data) -> tuple[list, dict]:
                         [(cx, cy, z - t), (cx, cy, z)], ifc="IfcSlab"),
                 "slab")
     if s.get("walls"):
-        wt = _mm(s["wall_t"])
-        half = float(s["col"]) / 2
-        for k, rooms in enumerate(floors):
-            z0 = k * H
-            above_h = s["rb_h"] if k == n - 1 else s["b_h"]
-            wh = H - float(above_h)
-            if wh <= 0.05:
-                continue
-            for p0, p1 in segments(rooms):
-                dx, dy = p1[0] - p0[0], p1[1] - p0[1]
-                L = math.hypot(dx, dy)
-                if L <= 2 * half + 0.05:
-                    continue
-                ux, uy = dx / L, dy / L
-                a = (p0[0] + ux * half, p0[1] + uy * half, z0)
-                b = (p1[0] - ux * half, p1[1] - uy * half, z0)
-                add(_member("structure", "wall", "ผนังก่ออิฐ", "rect",
-                            dict(b=wt, h=_mm(wh)), [a, b], anchor="bc",
-                            ifc="IfcWall"), "wall")
+        _walls(floors, s, H, n, add)
+    for k, f in enumerate(floors):
+        for stp in f["stairs"]:
+            g = stair_member(stp, s, k * H)
+            add(g, "stair")
     return out, count
 
 
-def roof_lines(data):
-    """The roof frame as lines: {"ridge": [...], "hip": [...], "rafter":
-    [...], "purlin": [paths…], "post": [...], "skin": [polygons…]} — each
-    a list of 3D points (metres). None when there is no roof to make."""
-    s = settings_of(data)
-    floors = [f.get("rooms") or [] for f in data.get("floors", [])]
-    floors = [f for f in floors if f]
-    if not floors or s.get("roof") not in ("hip", "gable"):
-        return None
-    fp = footprint(floors[-1])
-    H = float(s["floor_h"])
-    z0 = len([f for f in data.get("floors", [])
-              if f.get("rooms")]) * H
+def _walls(floors, s, H, n, add):
+    wt = _mm(s["wall_t"])
+    half = float(s["col"]) / 2
+    for k, f in enumerate(floors):
+        z0 = k * H
+        above_h = s["rb_h"] if k == n - 1 else s["b_h"]
+        wh = H - float(above_h)
+        if wh <= 0.05:
+            continue
+        for p0, p1 in segments(f["rooms"]):
+            dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+            L = math.hypot(dx, dy)
+            if L <= 2 * half + 0.05:
+                continue
+            ux, uy = dx / L, dy / L
+
+            def at(dist, z):
+                return (p0[0] + ux * dist, p0[1] + uy * dist, z)
+
+            def piece(a, b, z, height):
+                if b - a > 0.02 and height > 0.02:
+                    add(_member("structure", "wall", "ผนังก่ออิฐ", "rect",
+                                dict(b=wt, h=_mm(height)),
+                                [at(a, z), at(b, z)], anchor="bc",
+                                ifc="IfcWall"), "wall")
+            cur = half
+            for sdist, op in _openings_on(p0, p1, f["openings"]):
+                ow, oh, sill = opening_size(op, s)
+                a = max(half, sdist - ow / 2)
+                b = min(L - half, sdist + ow / 2)
+                if b - a < 0.1:
+                    continue
+                top = min(sill + oh, wh)
+                piece(cur, a, z0, wh)
+                piece(a, b, z0, sill)                       # under a window
+                piece(a, b, z0 + top, wh - top)             # over the opening
+                kind = "window" if op.get("type") == "window" else "door"
+                add(_member("structure", kind, opening_name(op, s), "rect",
+                            dict(b=40.0, h=_mm(top - sill)),
+                            [at(a, z0 + sill), at(b, z0 + sill)], anchor="bc",
+                            ifc="IfcWindow" if kind == "window" else "IfcDoor",
+                            name=opening_name(op, s)), kind)
+                cur = max(cur, b)
+            piece(cur, L - half, z0, wh)
+
+
+def stair_member(stp, s, z):
+    n, L, H = stair_geometry(stp, s)
+    rx, ry = _DIRS[int(stp.get("dir", 1)) % 4]
+    tx, ty = ry, -rx
+    w = float(stp.get("w") or s["stair_w"])
+    cx, cy = float(stp["x"]), float(stp["y"])
+    ax, ay = cx - rx * L / 2, cy - ry * L / 2
+    path = [(ax - tx * w / 2, ay - ty * w / 2, z),
+            (ax + tx * w / 2, ay + ty * w / 2, z)]
+    return _member("structure", "stair", "บันได คสล.", "stair",
+                   dict(L=_mm(L), H=_mm(H), n=n, t=_mm(s["stair_t"])), path,
+                   anchor="bl", ifc="IfcStair", name="บันได คสล.")
+
+
+# ---------------------------------------------------------------------------
+# Roofs
+# ---------------------------------------------------------------------------
+
+def plan_rectangles(rooms):
+    """Cover the plan with few rectangles, each as large as the plan allows
+    (they overlap where a wing runs into the main block — that is what makes
+    the roofs meet in valleys). Returns [(x0, y0, x1, y1)]."""
+    xs = sorted({_r(p[0]) for rm in rooms for p in room_corners(rm)})
+    ys = sorted({_r(p[1]) for rm in rooms for p in room_corners(rm)})
+    nx, ny = len(xs) - 1, len(ys) - 1
+    if nx < 1 or ny < 1:
+        return []
+
+    def inside(cx, cy):
+        return any(rm["x"] - 1e-9 <= cx <= rm["x"] + rm["w"] + 1e-9
+                   and rm["y"] - 1e-9 <= cy <= rm["y"] + rm["d"] + 1e-9
+                   for rm in rooms)
+    full = [[inside((xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2)
+             for j in range(ny)] for i in range(nx)]
+    area = [[(xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]) for j in range(ny)]
+            for i in range(nx)]
+    covered = [[False] * ny for _ in range(nx)]
+    rects = []
+    while any(full[i][j] and not covered[i][j]
+              for i in range(nx) for j in range(ny)):
+        best = None
+        for i0 in range(nx):
+            for i1 in range(i0, nx):
+                for j0 in range(ny):
+                    for j1 in range(j0, ny):
+                        ok, new, tot = True, 0.0, 0.0
+                        for i in range(i0, i1 + 1):
+                            for j in range(j0, j1 + 1):
+                                if not full[i][j]:
+                                    ok = False
+                                    break
+                                tot += area[i][j]
+                                if not covered[i][j]:
+                                    new += area[i][j]
+                            if not ok:
+                                break
+                        if ok and new > 1e-9:
+                            key = (new, tot)
+                            if best is None or key > best[0]:
+                                best = (key, (i0, i1, j0, j1))
+        if best is None:
+            break
+        i0, i1, j0, j1 = best[1]
+        for i in range(i0, i1 + 1):
+            for j in range(j0, j1 + 1):
+                covered[i][j] = True
+        rects.append((xs[i0], ys[j0], xs[i1 + 1], ys[j1 + 1]))
+    return rects
+
+
+def _roof_rect(rect, z0, s):
+    """The frame lines of one rectangular roof (see :func:`roof_lines`)."""
     ov = float(s["overhang"])
     tan = math.tan(math.radians(float(s["pitch"])))
-    x0, y0, x1, y1 = fp[0] - ov, fp[1] - ov, fp[2] + ov, fp[3] + ov
+    x0, y0, x1, y1 = rect[0] - ov, rect[1] - ov, rect[2] + ov, rect[3] + ov
     swap = (y1 - y0) > (x1 - x0)            # ridge along the long side
     if swap:
         x0, y0, x1, y1 = y0, x0, y1, x1
@@ -311,20 +550,15 @@ def roof_lines(data):
         for cx, cy, ex in ((x0, y0, rx0), (x0, y1, rx0), (x1, y0, rx1),
                            (x1, y1, rx1)):
             out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
-    # Rafters on the two long slopes, at spacing along the eave.
     sp = max(float(s["rafter_sp"]), 0.2)
     count = max(int(math.floor(L / sp + 1e-9)), 1)
-    xs = [x0 + L * i / count for i in range(count + 1)]
-    for x in xs:
-        reach = half
-        if hip:
-            reach = min(half, x - x0, x1 - x)
+    for i in range(count + 1):
+        x = x0 + L * i / count
+        reach = min(half, x - x0, x1 - x) if hip else half
         if reach <= 0.05:
             continue
-        for side in (0, 1):
-            ye = y0 if side == 0 else y1
-            yt = ye + reach if side == 0 else ye - reach
-            out["rafter"].append([P3(x, ye, h(0)), P3(x, yt, h(reach))])
+        out["rafter"].append([P3(x, y0, h(0)), P3(x, y0 + reach, h(reach))])
+        out["rafter"].append([P3(x, y1, h(0)), P3(x, y1 - reach, h(reach))])
     if hip:                                  # jack rafters on the ends
         cnt = max(int(math.floor(W / sp + 1e-9)), 1)
         for i in range(cnt + 1):
@@ -334,7 +568,6 @@ def roof_lines(data):
                 continue
             out["rafter"].append([P3(x0, y, h(0)), P3(x0 + reach, y, h(reach))])
             out["rafter"].append([P3(x1, y, h(0)), P3(x1 - reach, y, h(reach))])
-    # Purlins at spacing up the slope (horizontal distance = slope × cos).
     psp = max(float(s["purlin_sp"]), 0.1) * math.cos(math.radians(
         float(s["pitch"])))
     d = 0.05
@@ -349,11 +582,9 @@ def roof_lines(data):
                 out["purlin"].append({"closed": False, "path": [
                     P3(x0, yy, h(d)), P3(x1, yy, h(d))]})
         d += psp
-    # King posts (ดั้ง) under the ridge ends, from the roof beam.
     if zr - z0 > 0.1:
         for xx in ((rx0, rx1) if rx1 - rx0 > 1e-6 else (rx0,)):
             out["post"].append([P3(xx, yc, z0), P3(xx, yc, zr)])
-    # The skin: one polygon per slope.
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
     r0, r1 = P3(rx0, yc, zr), P3(rx1, yc, zr)
@@ -366,7 +597,31 @@ def roof_lines(data):
                            [e[2], e[3], r0, r1], [e[3], e[0], r0]]
     else:
         out["skin"] = [[e[0], e[1], r1, r0], [e[2], e[3], r0, r1]]
-    out["z0"], out["swap"] = z0, swap
+    return out
+
+
+def roof_lines(data):
+    """The roof frame as lines: {"ridge": [...], "hip": [...], "rafter":
+    [...], "purlin": [{"path", "closed"}…], "post": [...], "skin":
+    [polygons…], "rects": [...], "z0"} — 3D points in metres. ``None``
+    when there is no roof to make."""
+    s = settings_of(data)
+    floors, _skipped = stacked(data)
+    if not floors or s.get("roof") not in ("hip", "gable"):
+        return None
+    top = floors[-1]["rooms"]
+    z0 = len(floors) * float(s["floor_h"])
+    if s.get("roof_mode") == "bbox":
+        fp = footprint(top)
+        rects = [fp]
+    else:
+        rects = plan_rectangles(top)
+    out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
+           "skin": [], "rects": rects, "z0": z0}
+    for rect in rects:
+        part = _roof_rect(rect, z0, s)
+        for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
+            out[k] += part[k]
     return out
 
 
@@ -447,6 +702,7 @@ def build(data, parts=("structure", "roof")):
 
 KIND_TH = [("footing", "ฐานราก"), ("stump", "ตอม่อ"), ("column", "เสา"),
            ("beam", "คาน"), ("slab", "พื้น"), ("wall", "ผนัง"),
+           ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("skin", "แผ่นหลังคา")]
 
@@ -490,6 +746,14 @@ def takeoff_rates(data) -> list[dict]:
             "ผนังก่ออิฐ", "side_area", "ตร.ม.", 0.5)
         add("งานสถาปัตยกรรม", "3.2", "ฉาบปูนผนัง (2 ด้าน)", "ผนังก่ออิฐ",
             "side_area", "ตร.ม.")
+    floors, _sk = stacked(data)
+    ops = sorted({(op.get("type", "door"), opening_name(op, s))
+                  for f in floors for op in f["openings"]})
+    for i, (kind, label) in enumerate(ops):
+        add("งานประตู-หน้าต่าง", f"3.{i + 3}", label, label, "count", "ชุด")
+    if any(f["stairs"] for f in floors):
+        add("งานโครงสร้าง", "2.7", "คอนกรีตบันได", "บันได คสล.", "volume",
+            "ลบ.ม.")
     names = {"ridge": "อกไก่", "hip": "ตะเฆ่สัน", "rafter": "จันทัน",
              "purlin": "แป", "post": "ดั้ง"}
     seen = set()

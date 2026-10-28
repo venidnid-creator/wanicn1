@@ -80,7 +80,7 @@ def test_tagged_wall_is_measured():
 def test_pricing_with_factor_and_vat():
     items = T.collect_items(_tagged_wall_scene())
     data = T.default_data()
-    data["settings"].update(factor_f=1.1, vat=7)
+    data["settings"].update(factor_f=1.1, vat=7, method="private")
     data["rates"] = [
         T.new_rate(id="a", by="ifc", value="IfcWall", qty="volume",
                    mat=2000, lab=500),
@@ -111,6 +111,10 @@ def test_open_shell_reports_no_volume():
     data["rates"] = [T.new_rate(by="layer", value="Layer 0", qty="area",
                                 mat=10)]
     r = T.compute(items, data)
+    # Government method: Factor F (1.0 here) already holds VAT.
+    assert math.isclose(r["grand"], 6.0 * 10, rel_tol=1e-6)
+    data["settings"] = dict(data["settings"], method="private")
+    r = T.compute(items, data)
     assert math.isclose(r["grand"], 6.0 * 10 * 1.07, rel_tol=1e-6)
 
 
@@ -133,6 +137,34 @@ def test_rates_csv_round_trip_and_xlsx():
     r = T.compute(items, data)
     blob = T.boq_xlsx_bytes(r, data["settings"], items)
     with zipfile.ZipFile(io.BytesIO(blob)) as z:
-        assert "xl/worksheets/sheet2.xml" in z.namelist()
-        assert "ผนังก่ออิฐ" in z.read("xl/worksheets/sheet1.xml").decode()
+        names = z.namelist()
+        assert "xl/worksheets/sheet8.xml" in names          # 7 forms + detail
+        wb = z.read("xl/workbook.xml").decode()
+        for name in ("ปร.4", "ปร.1 (ก)", "ปร.1", "ปร.2 (ก)", "ปร.2", "ปร.3"):
+            assert f'name="{name}"' in wb
+        assert "ผนังก่ออิฐ" in z.read("xl/worksheets/sheet3.xml").decode()
+        assert "แบบสรุปราคากลางงานก่อสร้างอาคาร" in z.read(
+            "xl/worksheets/sheet1.xml").decode()
     assert T.boq_csv(r, data["settings"]).startswith("﻿")
+
+
+def test_government_price_with_equipment_and_special():
+    items = T.collect_items(_tagged_wall_scene())
+    data = T.default_data()
+    data["settings"].update(factor_f=1.25, vat=7)
+    data["rates"] = [
+        T.new_rate(id="w", by="ifc", value="IfcWall", qty="volume", mat=1000),
+        T.new_rate(id="e", qty="manual", manual_qty=2, mat=20000, lab=3000,
+                   section="equip", desc="เครื่องปรับอากาศ"),
+        T.new_rate(id="s", qty="manual", manual_qty=1, mat=5000,
+                   section="special", desc="ค่าทดสอบวัสดุ"),
+    ]
+    r = T.compute(items, data)
+    vol = 4.0 * 0.25 * 2.6
+    assert math.isclose(r["subtotal"], vol * 1000, rel_tol=1e-6)
+    assert math.isclose(r["equip"], 46000) and math.isclose(r["special"], 5000)
+    expect = vol * 1000 * 1.25 + 46000 * 1.07 + 5000 * 1.07
+    assert math.isclose(r["grand"], expect, rel_tol=1e-6)
+    back = T.rates_from_csv(T.rates_to_csv(data["rates"]))
+    assert [x["section"] for x in back] == ["work", "equip", "special"]
+    assert back[1]["manual_qty"] == 2

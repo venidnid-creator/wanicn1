@@ -20,6 +20,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QDialog, QDialogButtonBox,
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
@@ -31,9 +32,10 @@ from core import wanic_takeoff as T
 TITLE = "ถอดปริมาณ"
 
 COLS = ["หมวด", "รหัส", "รายการ", "ผูกกับ", "ค่า", "คิดจาก", "หน่วย",
-        "ตัวคูณ", "ค่าวัสดุ/หน่วย", "ค่าแรง/หน่วย", "ปริมาณ", "รวมเงิน (บาท)"]
+        "ตัวคูณ", "ค่าวัสดุ/หน่วย", "ค่าแรง/หน่วย", "ปริมาณ", "รวมเงิน (บาท)",
+        "ส่วน (แบบ ปร.)"]
 C_CAT, C_CODE, C_DESC, C_BY, C_VALUE, C_QTY, C_UNIT, C_FACTOR, C_MAT, \
-    C_LAB, C_QUANTITY, C_TOTAL = range(12)
+    C_LAB, C_QUANTITY, C_TOTAL, C_SEC = range(13)
 
 STATUS_COLORS = {"ok": QColor(46, 160, 67), "no_rate": QColor(220, 53, 69),
                  "problem": QColor(240, 140, 30)}
@@ -42,6 +44,61 @@ MAX_PAINT_FACES = 30000
 
 def _money(x: float) -> str:
     return f"{x:,.2f}"
+
+
+class PrDialog(QDialog):
+    """Project, Factor F conditions and committee for the ปร. forms."""
+
+    FIELDS = [
+        ("drawing_no", "แบบเลขที่", "text"),
+        ("date", "คำนวณราคากลาง เมื่อวันที่ (ว่าง = วันนี้)", "text"),
+        ("area_m2", "ขนาดหรือเนื้อที่อาคาร (ตร.ม.)", "num"),
+        ("adv_pay", "อัตราเงินค่าจ้างล่วงหน้า (%)", "num"),
+        ("retention", "อัตราเงินประกันผลงาน (%)", "num"),
+        ("interest", "อัตราดอกเบี้ยเงินกู้ (%)", "num"),
+        ("chair", "ประธานกรรมการกำหนดราคากลาง", "text"),
+        ("member1", "กรรมการกำหนดราคากลาง คนที่ 1", "text"),
+        ("member2", "กรรมการกำหนดราคากลาง คนที่ 2", "text"),
+    ]
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ข้อมูลราคากลาง (แบบ ปร.1 – ปร.4)")
+        f = QFormLayout(self)
+        note = QLabel("ตามหลักเกณฑ์การคำนวณราคากลางงานก่อสร้าง พ.ศ. 2569: "
+                      "ค่าก่อสร้าง = ค่างานต้นทุน × Factor F (ตาราง ว481 — "
+                      "รวมค่าอำนวยการ ดอกเบี้ย กำไร และภาษีแล้ว) · ครุภัณฑ์และ"
+                      "ค่าใช้จ่ายพิเศษบวกภาษีมูลค่าเพิ่ม ไม่คูณ Factor F")
+        note.setWordWrap(True)
+        f.addRow(note)
+        self.method = QComboBox()
+        for k, v in T.METHODS.items():
+            self.method.addItem(v, k)
+        self.method.setCurrentIndex(max(self.method.findData(
+            settings.get("method", "gov")), 0))
+        f.addRow("วิธีคิดราคา", self.method)
+        self.w = {}
+        for key, label, kind in self.FIELDS:
+            if kind == "num":
+                w = QDoubleSpinBox()
+                w.setRange(0.0, 1e9)
+                w.setDecimals(2)
+                w.setValue(T._num(settings.get(key)))
+            else:
+                w = QLineEdit(str(settings.get(key) or ""))
+            self.w[key] = w
+            f.addRow(label, w)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        f.addRow(bb)
+
+    def values(self) -> dict:
+        out = {"method": self.method.currentData()}
+        for key, _label, kind in self.FIELDS:
+            w = self.w[key]
+            out[key] = w.value() if kind == "num" else w.text().strip()
+        return out
 
 
 class TakeoffPanel(QWidget):
@@ -112,8 +169,12 @@ class TakeoffPanel(QWidget):
         button("📥 นำเข้าราคา…", "อ่านบัญชีราคาจากไฟล์ CSV", self.import_rates, 1, 0)
         button("📤 บันทึกบัญชีราคา…", "บันทึกบัญชีราคาเป็น CSV เพื่อใช้กับโครงการอื่น",
                self.export_rates, 1, 1)
-        button("📊 ส่งออก BOQ…", "ส่งออกแบบสรุปราคา (Excel .xlsx หรือ CSV)",
-               self.export_boq, 1, 2)
+        button("📊 ส่งออก ปร.1–ปร.4…",
+               "ส่งออกชุดแบบ ปร.1, ปร.1 (ก), ปร.2, ปร.2 (ก), ปร.3, ปร.4 "
+               "ตามหลักเกณฑ์ 2569 (Excel) หรือ BOQ แบบ CSV", self.export_boq, 1, 2)
+        button("🏛 ข้อมูลราคากลาง (ปร.)…",
+               "แบบเลขที่ วันที่ เนื้อที่อาคาร เงื่อนไข Factor F และรายชื่อ"
+               "คณะกรรมการกำหนดราคากลาง", self.edit_pr, 2, 0)
         lay.addLayout(btns)
 
         self.checker = QCheckBox("ตัวตรวจราคา — ระบายสีบนโมเดล "
@@ -157,10 +218,16 @@ class TakeoffPanel(QWidget):
     def data(self) -> dict:
         d = self.app.document_data(None) or T.default_data()
         d.setdefault("rates", [])
-        base = T.default_data()["settings"]
-        base.update(d.get("settings") or {})
-        d["settings"] = base
+        d["settings"] = T.settings_of(d)
         return d
+
+    def edit_pr(self) -> None:
+        d = self.data()
+        dlg = PrDialog(d["settings"], self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        d["settings"].update(dlg.values())
+        self._write(d)
 
     def _write(self, data: dict) -> None:
         self._loading = True
@@ -187,6 +254,10 @@ class TakeoffPanel(QWidget):
                     data = w.currentData()
                     return data if data is not None else w.currentText().strip()
                 return text(c)
+            qty_kind = combo(C_QTY)
+            if qty_kind == "manual":
+                base["manual_qty"] = T._num(text(C_QUANTITY))
+            base["section"] = combo(C_SEC) or "work"
             base.update(category=text(C_CAT), code=text(C_CODE),
                         desc=text(C_DESC), by=combo(C_BY),
                         value=combo(C_VALUE) if combo(C_BY) != "all" else "",
@@ -307,12 +378,12 @@ class TakeoffPanel(QWidget):
         safe = "".join(ch for ch in name if ch not in '\\/:*?"<>|') or "BOQ"
         path, flt = QFileDialog.getSaveFileName(
             self, "ส่งออกแบบสรุปราคา", f"{safe}.xlsx",
-            "Excel (*.xlsx);;CSV (*.csv)")
+            "Excel ชุดแบบ ปร.1–ปร.4 (*.xlsx);;BOQ CSV (*.csv)")
         if not path:
             return
         settings = self.data()["settings"]
         try:
-            if path.lower().endswith(".csv") or flt.startswith("CSV"):
+            if path.lower().endswith(".csv") or "CSV" in flt:
                 if not path.lower().endswith(".csv"):
                     path += ".csv"
                 Path(path).write_text(T.boq_csv(self._result, settings),
@@ -327,7 +398,7 @@ class TakeoffPanel(QWidget):
             return
         flash = getattr(self.app.viewport, "flash_status", None)
         if callable(flash):
-            flash(f"ส่งออก BOQ แล้ว: {path}")
+            flash(f"ส่งออกแล้ว: {path}")
 
     def rate_from_selection(self, selection) -> None:
         """Add a price line bound to the selected object's BIM class,
@@ -456,25 +527,41 @@ class TakeoffPanel(QWidget):
                 if ln["problems"]:
                     tip = "วัดไม่ได้:\n" + "\n".join(
                         f"• {a} — {b}" for a, b in ln["problems"][:20])
-                q = put(C_QUANTITY, f"{ln['quantity']:,.3f}", False, right,
-                        tip or f"วัตถุที่นับรวม {len(ln['items'])} รายการ")
-                if ln["problems"]:
+                manual = ln.get("qty") == "manual"
+                if manual:
+                    q = put(C_QUANTITY, f"{T._num(ln.get('manual_qty')):g}", True,
+                            right, "กรอกจำนวนเอง (ดับเบิลคลิกเพื่อแก้)")
+                else:
+                    q = put(C_QUANTITY, f"{ln['quantity']:,.3f}", False, right,
+                            tip or f"วัตถุที่นับรวม {len(ln['items'])} รายการ")
+                if manual:
+                    pass
+                elif ln["problems"]:
                     q.setForeground(STATUS_COLORS["problem"])
                 elif not ln["items"]:
                     q.setForeground(STATUS_COLORS["no_rate"])
                     q.setToolTip("ยังไม่มีวัตถุที่ตรงกับรายการนี้")
                 put(C_TOTAL, _money(ln["total"]), False, right)
+                self.table.setCellWidget(r, C_SEC, self._combo(
+                    list(T.SECTIONS.items()), ln.get("section", "work")))
             if 0 <= sel < len(lines):
                 self.table.setCurrentCell(sel, 0)
             res = self._result
-            parts = [f"รวมค่าวัสดุและค่าแรง <b>{_money(res['subtotal'])}</b> บาท"]
+            parts = [f"ค่างานต้นทุน <b>{_money(res['subtotal'])}</b>"]
             if abs(res["factor_f"] - 1.0) > 1e-12:
-                parts.append(f"× Factor F {res['factor_f']:g} = {_money(res['after_f'])}")
-            if res["vat_pct"]:
+                parts.append(f"× Factor F {res['factor_f']:.4f} = "
+                             f"{_money(res['after_f'])}")
+            if res["equip"]:
+                parts.append(f"ครุภัณฑ์ {_money(res['equip'])}")
+            if res["special"]:
+                parts.append(f"ค่าใช้จ่ายพิเศษ {_money(res['special'])}")
+            if res["vat"]:
                 parts.append(f"VAT {res['vat_pct']:g}% {_money(res['vat'])}")
-            parts.append(f"<br><b>รวมทั้งสิ้น {_money(res['grand'])} บาท</b> "
-                         f"({T.baht_text(res['grand'])})")
-            self.totals.setText(" · ".join(parts[:-1]) + parts[-1])
+            label = "ราคากลาง" if res["method"] == "gov" else "รวมทั้งสิ้น"
+            self.totals.setText(
+                " · ".join(parts) + f"<br><b>{label} {_money(res['grand'])} บาท"
+                f"</b> ({T.baht_text(res['grand'])})<br><span style='color:gray'>"
+                f"{T.METHODS[res['method']]}</span>")
             st = list(res["status"].values())
             self.summary.setText(
                 f"วัตถุในโมเดล {len(st)} รายการ — มีราคา {st.count('ok')} · "

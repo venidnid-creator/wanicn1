@@ -147,6 +147,11 @@ def test_panel_places_rooms_builds_and_rebuilds(monkeypatch):
     assert first > 50
     panel.build(("structure",))                     # replaces, no duplicates
     assert len(B.generated(scene)) == first
+    assert panel.place_opening(1.5, 0.05, "door")       # snaps onto the wall
+    assert panel.place_opening(9.0, 9.0, "window") is None
+    sid = panel.place_stair(1.5, 1.5)
+    panel.rotate_stair(sid)
+    assert panel.items("stairs")[0]["dir"] == 2
     panel.copy_floor()
     assert len(panel.data()["floors"]) == 2
     panel.send_rates()
@@ -158,3 +163,60 @@ def test_panel_places_rooms_builds_and_rebuilds(monkeypatch):
     assert B.generated(scene) == []
     app.viewport.history.undo()
     assert len(B.generated(scene)) == first
+
+
+def test_empty_lower_floors_are_skipped_not_floating():
+    d = B.default_data()
+    d["floors"] = [B.new_floor(), B.new_floor(),
+                   {"rooms": _grid2x2(), "openings": [], "stairs": []}]
+    floors, skipped = B.stacked(d)
+    assert len(floors) == 1 and skipped == 2
+    _g, count = B.structure_members(d)
+    assert count["footing"] == 9 and count["column"] == 9
+    lines = B.roof_lines(d)
+    assert close(lines["z0"], 3.0)                 # on the one storey built
+
+
+def test_doors_and_windows_cut_the_walls():
+    d = B.default_data()
+    d["floors"][0]["rooms"] = _grid2x2()
+    d["floors"][0]["openings"] = [
+        {"id": "o1", "type": "door", "x": 1.5, "y": 0.0},
+        {"id": "o2", "type": "window", "x": 0.0, "y": 4.5},
+    ]
+    _g, count = B.structure_members(d)
+    assert count["door"] == 1 and count["window"] == 1
+    # 12 spans: the door span → 2 sides + 1 over; the window span → 2 sides
+    # + 1 under + 1 over.
+    assert count["wall"] == 12 - 2 + 3 + 4
+    rates = B.takeoff_rates(d)
+    assert any(r["qty"] == "count" and r["value"].startswith("ประตู")
+               for r in rates)
+
+
+def test_stair_flight_volume():
+    from core import wanic_profiles as P
+    from core.bim import face_set_volume
+    d = B.default_data()
+    d["floors"] = [{"rooms": _grid2x2(), "openings": [],
+                    "stairs": [{"id": "s1", "x": 1.5, "y": 1.5, "dir": 1}]},
+                   {"rooms": _grid2x2(), "openings": [], "stairs": []}]
+    groups, count = B.structure_members(d)
+    assert count["stair"] == 1
+    st = [g for g in groups if g.name == "บันได คสล."][0]
+    s = B.settings_of(d)
+    n, L, H = B.stair_geometry({}, s)
+    area = P.section_area("stair", dict(L=L * 1000, H=H * 1000, n=n,
+                                        t=s["stair_t"] * 1000))
+    assert close(face_set_volume(list(st.mesh.faces)), area * s["stair_w"])
+
+
+def test_l_shaped_plan_gets_two_roofs_meeting_in_a_valley():
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(id="a", x=0, y=0, w=8, d=4),
+                               dict(id="b", x=0, y=4, w=3, d=4)]
+    lines = B.roof_lines(d)
+    assert len(lines["rects"]) == 2
+    assert len(lines["ridge"]) == 2
+    d["settings"]["roof_mode"] = "bbox"
+    assert len(B.roof_lines(d)["rects"]) == 1
