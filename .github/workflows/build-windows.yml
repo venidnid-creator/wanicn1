@@ -86,7 +86,7 @@ jobs:
           maturin build --release -m 3d/rust/ingetrazo_core/Cargo.toml -o "$RUNNER_TEMP/wheels"
           pip install "$RUNNER_TEMP"/wheels/ingetrazo_core-*.whl
 
-      - name: Tests of WANIC ถอดปริมาณ
+      - name: Tests of WANIC extensions
         shell: bash
         working-directory: 3d
         env:
@@ -94,7 +94,7 @@ jobs:
         run: |
           pip install pytest
           set +e
-          python -m pytest -q -rfE --tb=line -p no:cacheprovider tests/test_wanic_takeoff.py tests/test_bim.py > "$RUNNER_TEMP/pt.txt" 2>&1
+          python -m pytest -q -rfE --tb=line -p no:cacheprovider tests/test_wanic_takeoff.py tests/test_wanic_profiles.py tests/test_bim.py > "$RUNNER_TEMP/pt.txt" 2>&1
           code=$?
           cat "$RUNNER_TEMP/pt.txt"
           if [ $code -ne 0 ]; then
@@ -102,7 +102,7 @@ jobs:
             exit $code
           fi
           set -e
-          python -c "from core.extensions import discover_plugins; p, e = discover_plugins(); print([x.stem for x in p], e); assert any(x.stem == 'wanic_takeoff' and x.setup for x in p); assert not [x for x in e if x.stem == 'wanic_takeoff']"
+          python -c "from core.extensions import discover_plugins; p, e = discover_plugins(); print([x.stem for x in p], e); assert all(any(x.stem == s and x.setup for x in p) for s in ('wanic_takeoff', 'wanic_profiles')); assert not [x for x in e if x.stem.startswith('wanic')]"
 
       - uses: actions/download-artifact@v4
         with:

@@ -193,6 +193,16 @@ def collect_items(scene) -> list[dict]:
                       "material": mat or "", "ifc": "", "faces": faces,
                       "group": g, "count": 1, "metrado": None,
                       "metrado_unit": "", **_measure(faces)})
+    # A WANIC profile member knows its true length along its path (a bent
+    # gutter or a ring beam is longer than its bounding box).
+    try:
+        from core.wanic_profiles import member_record
+    except Exception:                                    # pragma: no cover
+        member_record = lambda g: None                  # noqa: E731
+    for it in items:
+        rec = member_record(it["group"]) if it["group"] is not None else None
+        if rec and rec.get("length"):
+            it["length"] = float(rec["length"])
     buckets: dict = {}
     for f in scene.loose_mesh.faces:
         if id(f) in tagged_faces or f.attrs.get("ifc"):
