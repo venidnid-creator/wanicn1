@@ -152,7 +152,12 @@ jobs:
           $out | ForEach-Object { Write-Host $_ }
           if ($code -ne 0) {
             # Errors as annotations, so they read without downloading the log.
-            $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::error::$_" }
+            # GitHub shows 10 annotations per step: sizes first, then the end
+            # of the compiler output without the per-file "Compressing" lines.
+            $sizes = Get-ChildItem dist -Directory | ForEach-Object {
+              "$($_.Name)=" + [math]::Round(((Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)) + "MB" }
+            Write-Host "::error::bundle sizes: $($sizes -join ', ')"
+            $out | Where-Object { "$_" -notmatch 'Compressing:' } | Select-Object -Last 8 | ForEach-Object { Write-Host "::error::$_" }
             exit $code
           }
           Get-ChildItem dist\*.exe
