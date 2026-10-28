@@ -93,7 +93,15 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           pip install pytest
-          python -m pytest -q tests/test_wanic_takeoff.py tests/test_bim.py
+          set +e
+          python -m pytest -q -rfE --tb=line -p no:cacheprovider tests/test_wanic_takeoff.py tests/test_bim.py > "$RUNNER_TEMP/pt.txt" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/pt.txt"
+          if [ $code -ne 0 ]; then
+            grep -E "Error|error|assert|FAILED|ERROR|\.py:[0-9]+" "$RUNNER_TEMP/pt.txt" | grep -v "^ *$" | tail -9 | sed 's/^/::error::/'
+            exit $code
+          fi
+          set -e
           python -c "from core.extensions import discover_plugins; p, e = discover_plugins(); print([x.stem for x in p], e); assert any(x.stem == 'wanic_takeoff' and x.setup for x in p); assert not [x for x in e if x.stem == 'wanic_takeoff']"
 
       - uses: actions/download-artifact@v4
