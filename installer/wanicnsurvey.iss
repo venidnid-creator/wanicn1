@@ -47,9 +47,8 @@ SetupIconFile=..\branding\wanicnsurvey.ico
 UninstallDisplayIcon={app}\{#LauncherExe}
 ShowLanguageDialog=no
 ChangesAssociations=yes
-Compression=lzma2/ultra64
+Compression=lzma2/max
 SolidCompression=yes
-LZMANumBlockThreads=4
 
 [Languages]
 Name: "thai"; MessagesFile: "Thai.isl"
