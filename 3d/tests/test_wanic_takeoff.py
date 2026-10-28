@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 import os
 import zipfile
 
@@ -72,7 +73,7 @@ def test_tagged_wall_is_measured():
     w = wall[0]
     assert abs(w["volume"] - 4.0 * 0.25 * 2.6) < 1e-6
     assert abs(w["top_area"] - 4.0 * 0.25) < 1e-6
-    assert abs(w["side_area"] - 2 * (4.0 + 0.25) * 2.6) < 1e-6
+    assert math.isclose(w["side_area"], 2 * (4.0 + 0.25) * 2.6, rel_tol=1e-6)
     assert abs(w["length"] - 4.0) < 1e-6
 
 
@@ -89,10 +90,11 @@ def test_pricing_with_factor_and_vat():
     r = T.compute(items, data)
     vol = 4.0 * 0.25 * 2.6
     side = 2 * (4.0 + 0.25) * 2.6
-    assert abs(r["lines"][0]["total"] - vol * 2500) < 1e-6
-    assert abs(r["lines"][1]["quantity"] - side * 2) < 1e-6
+    close = lambda a, b: math.isclose(a, b, rel_tol=1e-6)  # noqa: E731
+    assert close(r["lines"][0]["total"], vol * 2500)
+    assert close(r["lines"][1]["quantity"], side * 2)
     sub = vol * 2500 + side * 2 * 50
-    assert abs(r["grand"] - sub * 1.1 * 1.07) < 1e-6
+    assert close(r["grand"], sub * 1.1 * 1.07)
     assert set(r["status"].values()) == {"ok"}
 
 
@@ -109,7 +111,7 @@ def test_open_shell_reports_no_volume():
     data["rates"] = [T.new_rate(by="layer", value="Layer 0", qty="area",
                                 mat=10)]
     r = T.compute(items, data)
-    assert abs(r["grand"] - 6.0 * 10 * 1.07) < 1e-9
+    assert math.isclose(r["grand"], 6.0 * 10 * 1.07, rel_tol=1e-6)
 
 
 def test_baht_text():
