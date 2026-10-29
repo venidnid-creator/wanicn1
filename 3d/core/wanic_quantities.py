@@ -29,6 +29,7 @@ from __future__ import annotations
 import math
 
 from core import wanic_building as B
+from core import wanic_catalog as CAT
 from core import wanic_profiles as P
 from core import wanic_recipes2569 as RC
 from core import wanic_std2569 as S
@@ -43,6 +44,7 @@ GROUPS = [
     ("rebar", "หมวดงานเหล็กเสริมคอนกรีต"),
     ("wall", "หมวดงานผนัง ฉาบปูน และทาสี"),
     ("opening", "หมวดงานประตู-หน้าต่าง"),
+    ("sanitary", "หมวดงานสุขภัณฑ์และอุปกรณ์"),
     ("finish", "หมวดงานพื้นผิวและฝ้าเพดาน"),
     ("roof", "หมวดงานหลังคา"),
 ]
@@ -152,6 +154,14 @@ def compute(data) -> dict:
     o = options_of(data)
     prices, labour = prices_of(data), labour_of(data)
     bill = _Bill(prices, labour)
+    need: dict[str, str] = {}
+
+    def rprice(code, prices_):
+        rc = RC.find(code)
+        for it in (rc or {}).get("items", []):
+            if "price" not in it:
+                need.setdefault(it["name"], it["unit"])
+        return recipe_price(code, prices_)
     notes = []
     rebar: dict[str, float] = {}
 
@@ -161,14 +171,14 @@ def compute(data) -> dict:
 
     if not n:
         return {"lines": [], "groups": [], "totals": _totals([]),
-                "rebar": {}, "notes": ["ยังไม่มีห้องในแปลน"]}
+                "rebar": {}, "need": {}, "notes": ["ยังไม่มีห้องในแปลน"]}
 
     form_price = S.formwork_unit_price(prices)
     multi = n > 1
     conc_lab = ("1.7b" if multi else "1.7a") if o["ready_mix"] else \
         ("1.6.2b" if multi else "1.6.2a")
     conc_mat = prices.get(CONCRETE, 0.0) if o["ready_mix"] else \
-        recipe_price("2.2", prices)[0]
+        rprice("2.2", prices)[0]
     conc_desc = "คอนกรีตโครงสร้าง " + ("ผสมเสร็จ 240 กก./ตร.ซม." if
                                        o["ready_mix"] else "ค.3 (ผสมเอง)")
     form_total = [0.0]
@@ -250,7 +260,7 @@ def compute(data) -> dict:
              waste=S.BEDDING_WASTE["ทราย"], mat_key="ทรายหยาบ",
              lab_code="1.5", basis="กว้าง×ยาว×หนาทราย × จำนวนฐาน",
              ref="หลักเกณฑ์ 4.1 ข้อ 2.1 (เผื่อ 25%) · ว480 1.5")
-    lean_price, lean_note = recipe_price("1.1", prices)
+    lean_price, lean_note = rprice("1.1", prices)
     bill.add(g, "คอนกรีตหยาบรองก้นหลุม 1:3:5", lean, "ลบ.ม.",
              mat=lean_price, lab_code="1.6.1",
              basis="กว้าง×ยาว×หนา × จำนวนฐาน",
@@ -426,11 +436,12 @@ def compute(data) -> dict:
              ref="หลักเกณฑ์ 4.1 ข้อ 4 (30 กก./ตัน)",
              note="ค่าแรงรวมในงานผูกเหล็ก")
 
-    # --- 7. Walls, plaster, paint ----------------------------------------
+    # --- 7. Walls, plaster, wall tiles, paint ----------------------------
     g = "wall"
+    col_b = float(lib["C1"]["b"])
+    tiles: dict[str, float] = {}
     if s.get("walls"):
         wall_a = ext_face = int_face = 0.0
-        col_b = float(lib["C1"]["b"])
         for wl in E["walls"]:
             ops = sum(op_w * op_h for op_w, op_h, _sl in
                       (B.opening_size(op, s) for op in wl["openings"]))
@@ -442,7 +453,26 @@ def compute(data) -> dict:
                 int_face += a
             else:
                 int_face += 2 * a
-        wp, wnote = recipe_price(o["wall_recipe"], prices)
+        # Wall tiles inside rooms that have them (bathroom, kitchen …).
+        for e in E["slabs"]:
+            rm = e["room"]
+            fin = CAT.finish_of(rm)
+            if not fin["wall_tile"] or fin["tile_h"] <= 0:
+                continue
+            k = e["floor"]
+            th = min(fin["tile_h"], H - float(lib["B1"]["h"]))
+            per = 2 * (float(rm["w"]) + float(rm["d"])) - 4 * col_b
+            cut = 0.0
+            for op in E["openings"]:
+                if op["floor"] != k or not B._on_edge(
+                        rm, float(op["op"]["x"]), float(op["op"]["y"])):
+                    continue
+                cut += op["w"] * max(0.0, min(op["sill"] + op["h"], th)
+                                     - op["sill"])
+            area = max(per * th - cut, 0.0)
+            tiles[fin["wall_tile"]] = tiles.get(fin["wall_tile"], 0.0) + area
+        tile_a = sum(tiles.values())
+        wp, wnote = rprice(o["wall_recipe"], prices)
         rc = RC.find(o["wall_recipe"])
         bill.add(g, rc["name"] if rc else "ผนังก่ออิฐ", wall_a, "ตร.ม.",
                  mat=wp, lab_code="2.3.1a",
@@ -450,20 +480,37 @@ def compute(data) -> dict:
                        "ลึกคาน) − ช่องเปิด",
                  ref=f"หลักเกณฑ์ 4.2 ข้อ 3.1 · สูตรวัสดุ {o['wall_recipe']}"
                      " · ว480 2.3.1", note=wnote)
-        pp, pnote = recipe_price(o["plaster_recipe"], prices)
-        bill.add(g, "ฉาบปูนเรียบ ผนังภายใน", int_face, "ตร.ม.", mat=pp,
-                 lab_code="2.3.2a", basis="พื้นที่ผนังด้านภายในทุกด้าน",
+        pp, pnote = rprice(o["plaster_recipe"], prices)
+        bill.add(g, "ฉาบปูนเรียบ ผนังภายใน", int_face - tile_a, "ตร.ม.",
+                 mat=pp, lab_code="2.3.2a",
+                 basis="พื้นที่ผนังด้านภายในทุกด้าน − ส่วนที่บุกระเบื้อง",
                  ref=f"หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ "
                      f"{o['plaster_recipe']} · ว480 2.3.1.2", note=pnote)
         bill.add(g, "ฉาบปูนเรียบ ผนังภายนอก", ext_face, "ตร.ม.", mat=pp,
                  lab_code="2.3.2b", basis="พื้นที่ผนังด้านนอกอาคาร",
                  ref=f"หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ "
                      f"{o['plaster_recipe']} · ว480 2.3.1.2", note=pnote)
+        if tile_a:
+            bp, bnote = rprice("7.1", prices)
+            bill.add(g, "ฉาบปูนทรายรองพื้น (สำหรับบุกระเบื้องผนัง)", tile_a,
+                     "ตร.ม.", mat=bp, lab_code="2.3.2d",
+                     basis="เท่าพื้นที่บุกระเบื้อง",
+                     ref="หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ 7.1 · ว480 2.3.1.2",
+                     note=bnote)
+            for code, area in tiles.items():
+                rc = RC.find(code)
+                name = rc["name"] if rc else f"ผนังบุกระเบื้อง (สูตร {code})"
+                tp, tnote = rprice(code, prices)
+                bill.add(g, name, area, "ตร.ม.", mat=tp,
+                         lab_code=CAT.wall_tile_labour_code(name),
+                         basis="(เส้นรอบห้อง − กว้างเสา) × ความสูงบุ − ช่องเปิด",
+                         ref=f"หลักเกณฑ์ 4.2 ข้อ 3.3 · สูตรวัสดุ {code} · "
+                             "ว480 2.3.1.3", note=tnote)
         if o["paint"]:
             bill.add(g, "ทาสีน้ำอะครีลิค ภายใน (รองพื้น 1 + จริง 2 เที่ยว)",
-                     int_face, "ตร.ม.",
+                     int_face - tile_a, "ตร.ม.",
                      mat_key="สีน้ำอะครีลิค ภายใน (ต่อ ตร.ม.)",
-                     lab_code="2.8.1a", basis="เท่าพื้นที่ฉาบภายใน",
+                     lab_code="2.8.1a", basis="เท่าพื้นที่ฉาบเรียบภายใน",
                      ref="สูตรวัสดุ 10.2 · ว480 2.8.1")
             bill.add(g, "ทาสีน้ำอะครีลิค ภายนอก (รองพื้น 1 + จริง 2 เที่ยว)",
                      ext_face, "ตร.ม.",
@@ -471,44 +518,93 @@ def compute(data) -> dict:
                      lab_code="2.8.1b", basis="เท่าพื้นที่ฉาบภายนอก",
                      ref="สูตรวัสดุ 10.1 · ว480 2.8.1")
 
-    # --- 8. Doors and windows --------------------------------------------
+    # --- 8. Doors and windows: frame, leaves, hardware, glass ------------
     g = "opening"
-    sets: dict[tuple, list] = {}
+    sets: dict[tuple, int] = {}
     for op in E["openings"]:
-        key = (op["type"], op["name"])
-        sets.setdefault(key, [0, op["w"] * op["h"]])[0] += 1
-    for (kind, name), (cnt, a) in sorted(sets.items()):
-        if kind == "window":
-            lab = a * labour.get("2.5.2b", 0.0)
-            ref = "หลักเกณฑ์ 4.2 ข้อ 5 · ว480 2.5.2 (วงกบหน้าต่าง)"
-            key = "หน้าต่าง (ชุด)"
-        else:
-            lab = a * (labour.get("2.5.2a", 0.0) + labour.get("2.5.3", 0.0))
-            ref = "หลักเกณฑ์ 4.2 ข้อ 5 · ว480 2.5.2 + 2.5.3 (วงกบ + บาน)"
-            key = "ประตู (ชุด)"
-        bill.add(g, f"{name} พร้อมวงกบ บาน และอุปกรณ์", cnt, "ชุด",
-                 mat_key=key, lab=lab,
-                 basis=f"นับตามแบบ · ค่าแรง {a:.2f} ตร.ม./ชุด", ref=ref)
+        code, _spec = CAT.opening_type(op["op"])
+        key = (code, round(op["w"], 3), round(op["h"], 3))
+        sets[key] = sets.get(key, 0) + 1
+    for (code, w, h), cnt in sorted(sets.items()):
+        spec = CAT.OPENING_TYPES[code]
+        door = spec["kind"] == "door"
+        area = w * h
+        tag = f"{code} {spec['name']} {w:.2f}×{h:.2f} ม."
+        ref = "หลักเกณฑ์ 4.2 ข้อ 5.1–5.2"
+        if spec["frame"] == "alu":
+            bill.add(g, f"{tag} — ชุดอลูมิเนียมพร้อมกระจกและอุปกรณ์", cnt, "ชุด",
+                     mat_key=f"{tag} (ชุดอลูมิเนียม)", basis="นับตามแบบ",
+                     ref=ref, note="ราคาวัสดุพร้อมติดตั้งจากการสืบราคา")
+            continue
+        fl = "2.5.2a" if door else "2.5.2b"
+        bill.add(g, f"{tag} — วงกบ", cnt, "ชุด", mat_key=f"{tag} — วงกบ",
+                 lab=area * labour.get(fl, 0.0),
+                 basis=f"นับตามแบบ · ค่าแรง {area:.2f} ตร.ม./ชุด",
+                 ref=f"{ref} · ว480 2.5.2")
+        if spec["leaves"] and spec["leaf"] != "none":
+            lc = ("2.5.3b" if spec["leaf"] == "prefab" else "2.5.3") \
+                if door else "2.5.3c"
+            leaf_a = area / spec["leaves"]
+            bill.add(g, f"{tag} — บาน", cnt * spec["leaves"], "บาน",
+                     mat_key=f"{tag} — บาน", lab=leaf_a * labour.get(lc, 0.0),
+                     basis=f"{spec['leaves']} บาน/ชุด · ค่าแรง {leaf_a:.2f} "
+                           "ตร.ม./บาน", ref=f"{ref} · ว480 2.5.3")
+        if spec["slide"]:
+            sc = "2.5.5" if door else "2.5.6"
+            bill.add(g, f"{tag} — อุปกรณ์บานเลื่อน (ราง ลูกล้อ กุญแจ มือจับ)",
+                     cnt, "ชุด", mat_key=f"{tag} — อุปกรณ์", lab_code=sc,
+                     basis="นับตามแบบ", ref=f"{ref} · ว480 {sc}")
+        elif door:
+            bill.add(g, f"{tag} — อุปกรณ์ (ลูกบิด กุญแจ บานพับ กันชน)", cnt,
+                     "ชุด", mat_key=f"{tag} — อุปกรณ์", lab_code="2.5.4",
+                     basis="นับตามแบบ", ref=f"{ref} · ว480 2.5.4")
+        if spec["glass"] > 0:
+            sqft = area * spec["glass"] * CAT.SQFT_PER_M2
+            bill.add(g, f"{tag} — กระจกใส 5 มม.", sqft * cnt, "ตร.ฟ.",
+                     mat_key="กระจกใส 5 มม.", lab_code="2.5.7",
+                     basis=f"{area * spec['glass']:.2f} ตร.ม. × 10.764 × {cnt}",
+                     ref=f"{ref} (กระจกคิดเป็น ตร.ฟ.) · ว480 2.5.7")
 
-    # --- 9. Finishes -----------------------------------------------------
+    # --- 9. Sanitary ware --------------------------------------------------
+    g = "sanitary"
+    fx: dict[str, int] = {}
+    for e in E["fixtures"]:
+        t = e["fx"].get("type")
+        if t in CAT.SANITARY:
+            fx[t] = fx.get(t, 0) + 1
+    for t, cnt in fx.items():
+        name, item, _rate, *_r = CAT.SANITARY[t]
+        bill.add(g, name, cnt, "ชุด", mat_key=name, lab_code=item,
+                 basis="นับตามแบบ", ref=f"ว480 {item}")
+
+    # --- 10. Floors and ceilings by room ----------------------------------
     g = "finish"
     if o["finishes"]:
         wt = float(s["wall_t"])
-        floor_a = sum(max(float(e["room"]["w"]) - wt, 0) *
-                      max(float(e["room"]["d"]) - wt, 0) for e in E["slabs"])
-        fp, fnote = recipe_price(o["floor_recipe"], prices)
-        rc = RC.find(o["floor_recipe"])
-        bill.add(g, rc["name"] if rc else "พื้นปูกระเบื้อง", floor_a, "ตร.ม.",
-                 mat=fp, lab_code="2.4.6",
-                 basis="พื้นที่ริมผนังถึงริมผนังทุกห้อง",
-                 ref=f"หลักเกณฑ์ 4.2 ข้อ 4.2 · สูตรวัสดุ {o['floor_recipe']}"
-                     " · ว480 2.4.6", note=fnote)
-        bill.add(g, "ฝ้าเพดานยิปซัมบอร์ด 9 มม. โครงคร่าว T-bar", floor_a,
+        floors: dict[str, float] = {}
+        ceiling = 0.0
+        for e in E["slabs"]:
+            rm = e["room"]
+            fin = CAT.finish_of(rm, o["floor_recipe"])
+            a = max(float(rm["w"]) - wt, 0) * max(float(rm["d"]) - wt, 0)
+            floors[fin["floor"]] = floors.get(fin["floor"], 0.0) + a
+            if fin["ceiling"]:
+                ceiling += a
+        for code, a in floors.items():
+            rc = RC.find(code)
+            name = rc["name"] if rc else f"พื้น (สูตร {code})"
+            fp, fnote = rprice(code, prices)
+            lc = CAT.floor_labour_code(code, name)
+            bill.add(g, name, a, "ตร.ม.", mat=fp, lab_code=lc,
+                     basis="พื้นที่ริมผนังถึงริมผนัง",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 4.2 · สูตรวัสดุ {code} · "
+                         f"ว480 {lc[:5]}", note=fnote)
+        bill.add(g, "ฝ้าเพดานยิปซัมบอร์ด 9 มม. โครงคร่าว T-bar", ceiling,
                  "ตร.ม.", mat_key="ฝ้ายิปซัม 9 มม. โครง T-bar (วัสดุ)",
-                 lab_code="2.2.2", basis="พื้นที่ห้อง (ผนังถึงผนัง)",
+                 lab_code="2.2.2", basis="พื้นที่ห้องที่มีฝ้า (ผนังถึงผนัง)",
                  ref="หลักเกณฑ์ 4.2 ข้อ 2.1 · สูตรวัสดุ 5.42 · ว480 2.2.2")
 
-    # --- 10. Roof --------------------------------------------------------
+    # --- 11. Roof --------------------------------------------------------
     g = "roof"
     lines = B.roof_lines(data)
     if lines:
@@ -537,6 +633,22 @@ def compute(data) -> dict:
                  mat_key="สีกันสนิม", lab_code="2.8.3",
                  basis="เส้นรอบรูปหน้าตัด × ความยาวทุกท่อน",
                  ref="หลักเกณฑ์ 4.1 ข้อ 6.4 · ว480 2.8.3")
+        eave = sum(P.path_length(p) for p in lines["eave"])
+        barge = sum(P.path_length(p) for p in lines["barge"])
+        if s.get("fascia", True):
+            fk = "เชิงชายไม้สำเร็จรูป 1\"×8\" + ทับเชิงชาย 1\"×6\""
+            bill.add(g, "เชิงชาย + ทับเชิงชาย ไม้สำเร็จรูป (ไม้เทียม)", eave,
+                     "ม.", mat_key=fk, lab_code="2.1.10a",
+                     basis="ความยาวตามแนวชายคาทุกด้าน",
+                     ref="ว480 2.1.10 (เชิงชาย + ทับเชิงชาย)")
+            bill.add(g, "ปั้นลม + ทับปั้นลม ไม้สำเร็จรูป (ไม้เทียม)", barge,
+                     "ม.", mat_key=fk, lab_code="2.1.10a",
+                     basis="ความยาวตามแนวลาดหน้าจั่ว",
+                     ref="ว480 2.1.10")
+            if o["roofing"] != "metal":
+                bill.add(g, "ปิดนก (P.V.C) สำเร็จรูป", eave, "ม.",
+                         mat_key="ปิดนก P.V.C สำเร็จรูป", lab_code="2.1.10b",
+                         basis="ความยาวตามแนวชายคา", ref="ว480 2.1.10")
         slope = sum(_area3(p) for p in lines["skin"])
         if o["roofing"] == "metal":
             bill.add(g, "มุงหลังคาเหล็กรีดลอน (Metal Sheet)", slope, "ตร.ม.",
@@ -570,7 +682,14 @@ def compute(data) -> dict:
         rows = [ln for ln in bill.lines if ln["group"] == key]
         if rows:
             groups.append((key, th, rows))
-    return {"lines": bill.lines, "groups": groups,
+    for ln in bill.lines:
+        if ln["mat_key"]:
+            need.setdefault(ln["mat_key"], S.price_unit(ln["mat_key"]) or
+                            ln["unit"])
+    if form_total[0]:
+        for k, _q, u in S.FORMWORK_RECIPE:
+            need.setdefault(k, u)
+    return {"lines": bill.lines, "groups": groups, "need": need,
             "totals": _totals(bill.lines), "rebar": rebar, "notes": notes,
             "footer": footer("WANIC ออกแบบอาคาร")}
 

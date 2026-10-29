@@ -125,8 +125,12 @@ def test_openings_and_interior_walls():
     ext = _by(r, "ฉาบปูนเรียบ ผนังภายนอก")[0]
     # The middle wall is plastered on both faces, inside.
     assert close(inn["net"] - ext["net"], 2 * 2.8 * 2.6)
-    door = _by(r, "ประตู 0.90×2.00")[0]
-    assert door["qty"] == 1 and close(door["lab"], 1.8 * (103 + 108))
+    frame = _by(r, "D1 ประตูบานเปิดเดี่ยว ไม้ 0.90×2.00 ม. — วงกบ")[0]
+    leaf = _by(r, "D1 ประตูบานเปิดเดี่ยว ไม้ 0.90×2.00 ม. — บาน")[0]
+    assert frame["qty"] == 1 and close(frame["lab"], 1.8 * 103)
+    assert leaf["qty"] == 1 and close(leaf["lab"], 1.8 * 108)
+    assert _by(r, "D1 ประตูบานเปิดเดี่ยว ไม้ 0.90×2.00 ม. — อุปกรณ์")[0]["lab"] \
+        == 103
 
 
 def test_member_library_and_marks():
@@ -172,3 +176,53 @@ def test_hand_off_to_pr_forms_keeps_the_totals_and_signature():
 def test_empty_plan():
     r = Q.compute(B.default_data())
     assert r["lines"] == [] and r["notes"]
+
+
+def test_fascia_doors_windows_sanitary_and_bathroom_tiles():
+    from core import wanic_catalog as CAT
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [
+        dict(id="a", name="ห้องนอน", x=0, y=0, w=4, d=3),
+        dict(id="b", name="ห้องน้ำ", x=4, y=0, w=2, d=3)]
+    d["floors"][0]["openings"] = [
+        {"id": "o1", "type": "door", "style": "D3", "x": 4.0, "y": 1.5},
+        {"id": "o2", "type": "window", "style": "W1", "x": 2.0, "y": 3.0,
+         "w": 1.5, "h": 1.2},
+        {"id": "o3", "type": "window", "style": "W2", "x": 0.0, "y": 1.5}]
+    d["floors"][0]["fixtures"] = [
+        {"id": "x1", "type": "WC1", "x": 5.0, "y": 2.5},
+        {"id": "x2", "type": "LV", "x": 5.5, "y": 2.5}]
+    r = Q.compute(d)
+    # A custom-sized window keeps its size; its glass is billed in ตร.ฟ.
+    glass = _by(r, "W1 หน้าต่างบานเปิดคู่ ไม้ 1.50×1.20 ม. — กระจก")[0]
+    assert glass["unit"] == "ตร.ฟ."
+    assert close(glass["net"], 1.5 * 1.2 * 0.7 * CAT.SQFT_PER_M2)
+    assert _by(r, "W1 หน้าต่างบานเปิดคู่ ไม้ 1.50×1.20 ม. — บาน")[0]["qty"] == 2
+    # Prefab bathroom door leaf: ว480 2.5.3 บานสำเร็จรูป 77 บาท/ตร.ม.
+    leaf = _by(r, "D3 ")[1]
+    assert close(leaf["lab"], 0.7 * 2.0 * 77)
+    alu = _by(r, "W2 ")
+    assert len(alu) == 1 and alu[0]["unit"] == "ชุด"
+    # Sanitary ware with ว480 2.6 labour.
+    wc = _by(r, "โถส้วมนั่งราบ")[0]
+    assert wc["qty"] == 1 and wc["lab"] == 461
+    # Bathroom wall tiles to 2.00 m less the door, on a sand-cement base.
+    tile = _by(r, "ผนังบุกระเบื้อง")[0]
+    assert close(tile["net"], (2 * (2 + 3) - 4 * 0.2) * 2.0 - 0.7 * 2.0)
+    base = _by(r, "ฉาบปูนทรายรองพื้น")[0]
+    assert close(base["net"], tile["net"])
+    # Floors by room type: 8"x8" in the bathroom.
+    assert _by(r, "พื้นปูกระเบื้องดินเผาเคลือบเซรามิค (สีธรรมดา) ขนาด 8")
+    # เชิงชาย around the hip roof's eaves (with the 0.6 m overhang).
+    fascia = _by(r, "เชิงชาย")[0]
+    assert close(fascia["net"], 2 * (6 + 1.2) + 2 * (3 + 1.2))
+    assert fascia["lab"] == 74
+
+
+def test_gable_roof_has_barge_boards():
+    d = _one_room()
+    d["settings"]["roof"] = "gable"
+    lines = B.roof_lines(d)
+    assert len(lines["eave"]) == 2 and len(lines["barge"]) == 4
+    r = Q.compute(d)
+    assert _by(r, "ปั้นลม")[0]["net"] > 0

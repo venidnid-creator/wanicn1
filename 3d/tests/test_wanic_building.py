@@ -191,7 +191,7 @@ def test_doors_and_windows_cut_the_walls():
     # + 1 under + 1 over.
     assert count["wall"] == 12 - 2 + 3 + 4
     rates = B.takeoff_rates(d)
-    assert any(r["qty"] == "count" and r["value"].startswith("ประตู")
+    assert any(r["qty"] == "count" and r["value"].startswith("D1 ประตู")
                for r in rates)
 
 
@@ -271,3 +271,46 @@ def test_panel_select_copy_marks_library_and_standard_boq(monkeypatch):
     assert len(scene_data(scene)["wanic_takeoff"]["rates"]) == m
     assert axis_name(0) == "A" and axis_name(8) == "J"  # no I
     panel.canvas.grab()                                 # paints axes etc.
+
+
+def test_panel_door_types_fixtures_fascia(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    QApplication.instance() or QApplication([])
+    from plugins.wanic_building import BuildingPanel
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    scene = Scene()
+    app = _App(scene)
+    panel = BuildingPanel(app)
+    panel.resize(500, 900)
+    panel.room_name.setCurrentText("ห้องนอน")
+    panel.place_room(1.5, 1.5)
+    panel.room_name.setCurrentText("ห้องน้ำ")
+    panel.room_w.setValue(2.0)
+    panel.room_d.setValue(3.0)
+    panel.place_room(4.0, 1.5)
+    # A sliding window of a chosen size.
+    panel.set_tool("window")
+    panel.op_style.setCurrentIndex(panel.op_style.findData("W2"))
+    panel.op_w.setValue(1.5)
+    panel.op_h.setValue(1.2)
+    oid = panel.place_opening(1.5, 0.02, "window")
+    op = [o for o in panel.items("openings") if o["id"] == oid][0]
+    assert op["style"] == "W2" and op["w"] == 1.5 and op["h"] == 1.2
+    assert B.opening_name(op, B.settings_of(panel.data())).startswith("W2 ")
+    # The standard bathroom set goes into the bathroom only.
+    n = panel.fill_standard_sets()
+    assert n == len(__import__("core.wanic_catalog", fromlist=["x"])
+                    .BATHROOM_SET)
+    assert panel.fill_standard_sets() == 0            # not twice
+    panel.set_tool("fixture")
+    fid = panel.place_fixture(1.0, 1.0, "SK1")
+    panel.rotate_stair(fid)
+    fx = [f for f in panel.items("fixtures") if f["id"] == fid][0]
+    assert fx["dir"] == 1
+    assert panel.item_at(1.0, 1.0)["id"] == fid
+    panel.build(("structure", "roof"))
+    kinds = {((g.ext or {}).get("wanic_building") or {}).get("kind")
+             for g in B.generated(scene)}
+    assert {"fixture", "fascia", "window"} <= kinds
+    panel.canvas.grab()

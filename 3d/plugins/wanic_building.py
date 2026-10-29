@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import wanic_building as B
+from core import wanic_catalog as CAT
 from core.wanic_sign import label_html
 
 TITLE = "ออกแบบอาคาร"
@@ -38,6 +39,12 @@ FOOT = QColor(150, 120, 210, 90)
 FOOT_EDGE = QColor(120, 90, 190)
 AXIS = QColor(90, 120, 160)
 AXIS_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def fixture_size(fx) -> tuple[float, float]:
+    spec = CAT.SANITARY.get(fx.get("type"))
+    w, d = (spec[3], spec[4]) if spec else (0.4, 0.4)
+    return (d, w) if int(fx.get("dir", 0)) % 2 else (w, d)
 
 
 def axis_name(i: int) -> str:
@@ -210,6 +217,27 @@ class PlanCanvas(QWidget):
                           max(5.0, st["wall_t"] * self.scale * 1.6),
                           Qt.SolidLine, Qt.FlatCap))
             p.drawLine(a, b)
+            if self.scale >= 20:
+                code, _spec = CAT.opening_type(op)
+                p.setPen(QColor("#5A3A00") if op.get("type") != "window"
+                         else QColor("#0B4F75"))
+                mid = (a + b) / 2
+                p.drawText(mid + QPointF(4, -6), code)
+        # Sanitary ware.
+        for fx in self.panel.items("fixtures"):
+            w, d = fixture_size(fx)
+            q = self.to_screen(fx["x"], fx["y"])
+            r = QRectF(q.x() - w * self.scale / 2, q.y() - d * self.scale / 2,
+                       max(w * self.scale, 4), max(d * self.scale, 4))
+            sel = fx["id"] == self.selected
+            p.setPen(QPen(SEL if sel else QColor("#2F6C8F"), 1.4))
+            p.setBrush(QColor(255, 255, 255, 230))
+            if fx.get("type", "").startswith(("WC", "LV", "BT", "SK")):
+                p.drawRoundedRect(r, 3, 3)
+            else:
+                p.drawRect(r)
+            if self.scale >= 25:
+                p.drawText(r.bottomLeft() + QPointF(0, 10), fx.get("type", ""))
         # Columns where the build will put them, sized by their mark.
         p.setPen(Qt.NoPen)
         for x, y in B.nodes(rooms):
@@ -311,7 +339,11 @@ class PlanCanvas(QWidget):
                 self.update()
                 self.panel.edit_node(node)
             return
-        if item is not None and item["id"].startswith("s"):
+        if tool == "fixture" and item is None:
+            self.selected = self.panel.place_fixture(x, y)
+            self.update()
+            return
+        if item is not None and item["id"].startswith(("s", "x")):
             self.selected = item["id"]
             self._drag = ("stair", item["id"], x - item["x"], y - item["y"])
             self.update()
@@ -364,8 +396,9 @@ class PlanCanvas(QWidget):
         elif self._drag is not None and self._drag[0] == "stair":
             _k, sid, dx, dy = self._drag
             g = float(B.settings_of(self.panel.data())["grid"]) or 0.5
-            nx = round((x - dx) / (g / 2)) * (g / 2)
-            ny = round((y - dy) / (g / 2)) * (g / 2)
+            step = 0.05 if sid.startswith("x") else g / 2
+            nx = round((x - dx) / step) * step
+            ny = round((y - dy) / step) * step
             self.panel.preview_stair(sid, nx, ny)
         elif self._drag is not None:
             _k, anchor, ids, (sx, sy), rooms = self._drag
@@ -477,7 +510,7 @@ class PlanCanvas(QWidget):
         elif key == Qt.Key_R and sel:
             if sel.startswith("r"):
                 self.panel.rotate_room(sel)
-            elif sel.startswith("s"):
+            elif sel.startswith(("s", "x")):
                 self.panel.rotate_stair(sel)
         else:
             super().keyPressEvent(ev)
@@ -509,7 +542,7 @@ class PlanCanvas(QWidget):
     def _item_menu(self, item, at):
         m = QMenu(self)
         m.addAction("แก้ไขขนาด…", lambda: self.panel.edit_item(item["id"]))
-        if item["id"].startswith("s"):
+        if item["id"].startswith(("s", "x")):
             m.addAction("หมุน 90° (R)", lambda: self.panel.rotate_stair(item["id"]))
         m.addSeparator()
         m.addAction("ลบ (Delete)", lambda: self.panel.delete_item(item["id"]))
@@ -523,12 +556,29 @@ class ItemDialog(QDialog):
         super().__init__(parent)
         f = QFormLayout(self)
         self.fields = {}
-        if item["id"].startswith("s"):
+        self.choice = None
+        if item["id"].startswith("x"):
+            self.setWindowTitle("แก้ไขสุขภัณฑ์")
+            self.choice = ("type", QComboBox())
+            for code, spec in CAT.SANITARY.items():
+                self.choice[1].addItem(f"{code} — {spec[0]}", code)
+            self.choice[1].setCurrentIndex(max(
+                self.choice[1].findData(item.get("type")), 0))
+            f.addRow("ชนิด", self.choice[1])
+            rows = []
+        elif item["id"].startswith("s"):
             self.setWindowTitle("แก้ไขบันได")
             rows = [("w", "ความกว้างบันได", s["stair_w"])]
         else:
             win = item.get("type") == "window"
             self.setWindowTitle("แก้ไขหน้าต่าง" if win else "แก้ไขประตู")
+            code, _spec = CAT.opening_type(item)
+            self.choice = ("style", QComboBox())
+            for c, spec in CAT.types_of("window" if win else "door"):
+                self.choice[1].addItem(f"{c} — {spec['name']}", c)
+            self.choice[1].setCurrentIndex(max(self.choice[1].findData(code),
+                                               0))
+            f.addRow("แบบ", self.choice[1])
             w, h, sill = B.opening_size(item, s)
             rows = [("w", "กว้าง", w), ("h", "สูง", h)]
             if win:
@@ -571,6 +621,39 @@ class RoomDialog(QDialog):
         f.addRow("กว้าง X", self.w)
         f.addRow("ลึก Y", self.d)
         f.addRow("เบอร์พื้น", self.slab)
+        # Finishes (default: by room type — ห้องน้ำ gets tiles to 2.00 m).
+        from core import wanic_recipes2569 as RC
+        own = room.get("finish") or {}
+        fin = CAT.finish_of(room)
+        self.floor_fin = QComboBox()
+        self.floor_fin.addItem("ตามประเภทห้อง", None)
+        self.tile = QComboBox()
+        self.tile.addItem("ตามประเภทห้อง", None)
+        self.tile.addItem("ไม่บุกระเบื้อง", "")
+        for rc in RC.RECIPES:
+            if rc["code"].startswith("9.") and rc["items"]:
+                self.floor_fin.addItem(f"{rc['code']} {rc['name'][:60]}",
+                                       rc["code"])
+            if rc["code"].startswith("7.") and "บุ" in rc["name"] and \
+                    rc["items"]:
+                self.tile.addItem(f"{rc['code']} {rc['name'][:60]}",
+                                  rc["code"])
+        self.floor_fin.setCurrentIndex(max(self.floor_fin.findData(
+            own.get("floor")), 0) if "floor" in own else 0)
+        self.tile.setCurrentIndex(max(self.tile.findData(
+            own.get("wall_tile")), 0) if "wall_tile" in own else 0)
+        self.tile_h = _spin(0.0, 4.0, fin["tile_h"], 0.1)
+        self.ceiling = QCheckBox("มีฝ้าเพดาน")
+        self.ceiling.setChecked(fin["ceiling"])
+        f.addRow("พื้นผิว", self.floor_fin)
+        f.addRow("ผนังบุกระเบื้อง", self.tile)
+        f.addRow("บุสูง", self.tile_h)
+        f.addRow(self.ceiling)
+        hint = QLabel(f"ตอนนี้: พื้น {fin['floor']} · กระเบื้องผนัง "
+                      f"{fin['wall_tile'] or '-'} สูง {fin['tile_h']:g} ม. · "
+                      f"ฝ้า {'มี' if fin['ceiling'] else 'ไม่มี'}")
+        hint.setStyleSheet("color: palette(mid);")
+        f.addRow(hint)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -731,6 +814,8 @@ class BoqDialog(QDialog):
         self.panel = panel
         self.setWindowTitle("BOQ ตามหลักเกณฑ์กรมบัญชีกลาง พ.ศ. 2569 — WANIC ออกแบบอาคาร")
         self.resize(1180, 760)
+        from core import wanic_quantities as Q
+        self.result = Q.compute(panel.data())
         lay = QVBoxLayout(self)
         self.tabs = QTabWidget()
         lay.addWidget(self.tabs, 1)
@@ -787,7 +872,8 @@ class BoqDialog(QDialog):
         v.addWidget(note)
         h = QHBoxLayout()
         self.prices = QTableWidget(0, 3)
-        self.prices.setHorizontalHeaderLabels(["วัสดุ", "หน่วย", "ราคา/หน่วย (บาท)"])
+        self.prices.setHorizontalHeaderLabels(["วัสดุ (รายการที่ใช้ในแบบนี้อยู่บน)", "หน่วย",
+                                               "ราคา/หน่วย (บาท)"])
         self.prices.setColumnWidth(0, 330)
         self.labour = QTableWidget(0, 4)
         self.labour.setHorizontalHeaderLabels(["ข้อ ว480", "รายการ", "หน่วย",
@@ -817,11 +903,13 @@ class BoqDialog(QDialog):
         S, QTI = self._S, self._QTI
         d = self.panel.data()
         prices = Q.prices_of(d)
-        keys = [k for k, _u in S.PRICE_KEYS] + sorted(
-            k for k in prices if k not in dict(S.PRICE_KEYS))
+        need = dict(getattr(self, "result", {}).get("need") or {})
+        keys = list(need) + [k for k, _u in S.PRICE_KEYS if k not in need]
+        keys += sorted(k for k in prices if k not in keys)
+        self._units = {k: need.get(k) or S.price_unit(k) for k in keys}
         self.prices.setRowCount(len(keys))
         for r, k in enumerate(keys):
-            a, b = QTI(k), QTI(S.price_unit(k))
+            a, b = QTI(k), QTI(self._units.get(k, ""))
             for it in (a, b):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
             self.prices.setItem(r, 0, a)
@@ -960,8 +1048,10 @@ class BoqDialog(QDialog):
 
     def sample_prices(self):
         d = self.panel.data()
-        d["prices"] = dict(self._S.SAMPLE_PRICES)
+        keys = set(self._S.SAMPLE_PRICES) | set(self.result.get("need") or {})
+        d["prices"] = {k: self._S.sample_price(k) for k in keys}
         self.panel._write(d)
+        self.recompute()
         self._fill_prices()
         self.recompute()
         self.panel.status.setText("ใส่ราคาตัวอย่างแล้ว — ไม่ใช่ราคาทางราชการ "
@@ -1146,10 +1236,42 @@ class BuildingPanel(QWidget):
                      ("node", "📍 กำหนดเบอร์เสา/ฐานราก (คลิกที่เสา)"),
                      ("door", "🚪 ประตู (คลิกที่แนวผนัง)"),
                      ("window", "🪟 หน้าต่าง (คลิกที่แนวผนัง)"),
-                     ("stair", "🪜 บันได (คลิกวาง · ลากย้าย · R หมุน)")):
+                     ("stair", "🪜 บันได (คลิกวาง · ลากย้าย · R หมุน)"),
+                     ("fixture", "🚽 สุขภัณฑ์ (คลิกวาง · ลากย้าย · R หมุน)")):
             self.tool_box.addItem(v, k)
         tl.addWidget(self.tool_box, 1)
         lay.addLayout(tl)
+        # Door / window type and size for the next one placed.
+        self.op_row = QWidget()
+        og = QGridLayout(self.op_row)
+        og.setContentsMargins(0, 0, 0, 0)
+        self.op_style = QComboBox()
+        self.op_style.currentIndexChanged.connect(lambda _i: self._style_changed())
+        self.op_w = _spin(0.3, 6.0, 0.9)
+        self.op_h = _spin(0.3, 4.0, 2.0)
+        self.op_sill = _spin(0.0, 3.0, 0.9)
+        og.addWidget(QLabel("แบบ"), 0, 0)
+        og.addWidget(self.op_style, 0, 1, 1, 5)
+        for c, (lab, sp) in enumerate((("กว้าง", self.op_w), ("สูง", self.op_h),
+                                       ("ขอบล่าง", self.op_sill))):
+            og.addWidget(QLabel(lab), 1, c * 2)
+            og.addWidget(sp, 1, c * 2 + 1)
+        lay.addWidget(self.op_row)
+        # Sanitary ware.
+        self.fx_row = QWidget()
+        fg = QHBoxLayout(self.fx_row)
+        fg.setContentsMargins(0, 0, 0, 0)
+        self.fx_type = QComboBox()
+        for code, spec in CAT.SANITARY.items():
+            self.fx_type.addItem(f"{code} — {spec[0]}", code)
+        fg.addWidget(self.fx_type, 1)
+        bset = QPushButton("🛁 ชุดห้องน้ำ/ครัวมาตรฐาน")
+        bset.setToolTip("วางสุขภัณฑ์ชุดมาตรฐานในห้องน้ำ (และซิงค์ในห้องครัว) ทุกห้องของชั้นนี้"
+                        "ที่ยังไม่มี — ห้องที่เลือกอยู่จะถูกใส่ก่อน")
+        bset.clicked.connect(lambda _=False: self.fill_standard_sets())
+        fg.addWidget(bset)
+        lay.addWidget(self.fx_row)
+        self.tool_box.currentIndexChanged.connect(lambda _i: self._tool_changed())
         self.canvas = PlanCanvas(self)
         lay.addWidget(self.canvas, 1)
         cb = QHBoxLayout()
@@ -1226,11 +1348,8 @@ class BuildingPanel(QWidget):
         self.library = LibraryBox(self)
         lay.addWidget(self.library)
 
-        ow = QGroupBox("ประตู หน้าต่าง บันได (ค่าเริ่มต้น)")
+        ow = QGroupBox("บันได (ค่าเริ่มต้น)")
         sf = QFormLayout(ow)
-        pair("door_w", "door_h", "ประตู กว้าง × สูง")
-        pair("win_w", "win_h", "หน้าต่าง กว้าง × สูง")
-        num("win_sill", "หน้าต่าง ขอบล่างสูงจากพื้น", 0.0, 3.0)
         num("stair_w", "บันได กว้าง", 0.6, 5.0)
         num("riser_max", "ลูกตั้งสูงไม่เกิน", 0.10, 0.25, 0.01)
         num("going", "ลูกนอน", 0.20, 0.40, 0.01)
@@ -1274,6 +1393,14 @@ class BuildingPanel(QWidget):
         self.skin = QCheckBox("สร้างแผ่นหลังคา (คิดพื้นที่มุงหลังคา)")
         self.skin.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.skin)
+        self.fascia = QCheckBox("สร้างเชิงชาย (และปั้นลมหน้าจั่ว)")
+        self.fascia.toggled.connect(lambda _v: self._save_settings())
+        rff.addRow(self.fascia)
+        sf_keep = sf
+        sf = rff
+        num("fascia_h", "เชิงชาย หน้ากว้าง", 0.10, 0.40, 0.025)
+        num("fascia_t", "เชิงชาย หนา", 0.01, 0.06, 0.005)
+        sf = sf_keep
         lay.addWidget(rf)
         note = QLabel("ขนาดชิ้นส่วนและเหล็กเสริมเป็นค่าเริ่มต้น — วิศวกรผู้ออกแบบต้องกำหนด"
                       "ตามแบบจริง (โปรแกรมไม่ได้ออกแบบ/ตรวจกำลังโครงสร้าง) · "
@@ -1286,6 +1413,7 @@ class BuildingPanel(QWidget):
         lay.addWidget(sig)
 
         self._preset_changed()
+        self._tool_changed()
         self.refresh()
         QTimer.singleShot(0, self.canvas.fit)
 
@@ -1399,6 +1527,20 @@ class BuildingPanel(QWidget):
                 rm["slab"] = dlg.slab.currentData()
             else:
                 rm.pop("slab", None)
+            fin = {}
+            if dlg.floor_fin.currentData() is not None:
+                fin["floor"] = dlg.floor_fin.currentData()
+            if dlg.tile.currentData() is not None:
+                fin["wall_tile"] = dlg.tile.currentData()
+            base = CAT.finish_of(dict(rm, finish={}))
+            if abs(dlg.tile_h.value() - base["tile_h"]) > 1e-6:
+                fin["tile_h"] = dlg.tile_h.value()
+            if dlg.ceiling.isChecked() != base["ceiling"]:
+                fin["ceiling"] = dlg.ceiling.isChecked()
+            if fin:
+                rm["finish"] = fin
+            else:
+                rm.pop("finish", None)
         self._edit(rid, fn)
 
     def rotate_room(self, rid):
@@ -1477,7 +1619,7 @@ class BuildingPanel(QWidget):
         if floor < 0 or floor >= len(floors):
             return []
         out = list(floors[floor].get(kind) or [])
-        if kind == "stairs" and self._stair_preview is not None:
+        if kind in ("stairs", "fixtures") and self._stair_preview is not None:
             sid, x, y = self._stair_preview
             out = [dict(st, x=x, y=y) if st["id"] == sid else st for st in out]
         return out
@@ -1492,6 +1634,11 @@ class BuildingPanel(QWidget):
                 best = (dist, op)
         if best:
             return best[1]
+        for fx in self.items("fixtures"):
+            w, d = fixture_size(fx)
+            if abs(fx["x"] - x) <= max(w / 2, 0.12) and \
+                    abs(fx["y"] - y) <= max(d / 2, 0.12):
+                return fx
         for stp in self.items("stairs"):
             xs = [q[0] for q in B.stair_rect(stp, s)]
             ys = [q[1] for q in B.stair_rect(stp, s)]
@@ -1502,7 +1649,7 @@ class BuildingPanel(QWidget):
     def _item_id(self, d, prefix):
         n = 0
         for f in d["floors"]:
-            for k in ("openings", "stairs"):
+            for k in ("openings", "stairs", "fixtures"):
                 for it in f.get(k) or []:
                     sid = str(it.get("id", ""))
                     if sid[1:].isdigit():
@@ -1517,10 +1664,81 @@ class BuildingPanel(QWidget):
             self.status.setText("คลิกให้ใกล้แนวผนัง (ขอบห้อง) เพื่อวางประตู/หน้าต่าง")
             return None
         oid = self._item_id(d, "o")
-        f.setdefault("openings", []).append(
-            {"id": oid, "type": kind, "x": hit[0], "y": hit[1]})
+        style = self.op_style.currentData() if self.tool() == kind else None
+        if style is None or CAT.OPENING_TYPES[style]["kind"] != kind:
+            style = CAT.DEFAULT_STYLE[kind]
+            spec = CAT.OPENING_TYPES[style]
+            w, h, sill = spec["w"], spec["h"], spec.get("sill", 0.0)
+        else:
+            w, h, sill = self.op_w.value(), self.op_h.value(), \
+                self.op_sill.value()
+        op = {"id": oid, "type": kind, "style": style, "x": hit[0],
+              "y": hit[1], "w": w, "h": h}
+        if kind == "window":
+            op["sill"] = sill
+        f.setdefault("openings", []).append(op)
         self._write(d)
         return oid
+
+    def _tool_changed(self):
+        t = self.tool()
+        self.op_row.setVisible(t in ("door", "window"))
+        self.fx_row.setVisible(t == "fixture")
+        if t in ("door", "window"):
+            self.op_style.blockSignals(True)
+            self.op_style.clear()
+            for code, spec in CAT.types_of(t):
+                self.op_style.addItem(f"{code} — {spec['name']}", code)
+            self.op_style.blockSignals(False)
+            self._style_changed()
+            self.op_sill.setEnabled(t == "window")
+
+    def _style_changed(self):
+        spec = CAT.OPENING_TYPES.get(self.op_style.currentData())
+        if spec:
+            self.op_w.setValue(spec["w"])
+            self.op_h.setValue(spec["h"])
+            self.op_sill.setValue(spec.get("sill", 0.0))
+
+    def place_fixture(self, x, y, kind=None):
+        d = self.data()
+        f = d["floors"][self.floor]
+        kind = kind or self.fx_type.currentData() or "WC1"
+        fid = self._item_id(d, "x")
+        f.setdefault("fixtures", []).append(
+            {"id": fid, "type": kind, "x": B._r(round(x / 0.05) * 0.05),
+             "y": B._r(round(y / 0.05) * 0.05), "dir": 0})
+        self._write(d)
+        return fid
+
+    def fill_standard_sets(self):
+        """Put the standard bathroom set into every bathroom (and a sink
+        into every kitchen) on this floor that has no fittings yet."""
+        d = self.data()
+        f = d["floors"][self.floor]
+        fx = f.setdefault("fixtures", [])
+        added = 0
+        for rm in f.get("rooms") or []:
+            name = rm.get("name") or ""
+            kit = CAT.BATHROOM_SET if name.startswith("ห้องน้ำ") else \
+                CAT.KITCHEN_SET if name.startswith("ห้องครัว") else None
+            if not kit:
+                continue
+            x0, y0 = float(rm["x"]), float(rm["y"])
+            w, dd = float(rm["w"]), float(rm["d"])
+            if any(x0 <= it["x"] <= x0 + w and y0 <= it["y"] <= y0 + dd
+                   for it in fx):
+                continue
+            for code, fu, fv in kit:
+                fx.append({"id": self._item_id(d, "x"), "type": code,
+                           "x": B._r(x0 + w * fu), "y": B._r(y0 + dd * fv),
+                           "dir": 0})
+                added += 1
+        if added:
+            self._write(d)
+        self.status.setText(f"วางสุขภัณฑ์ชุดมาตรฐาน {added} ชิ้น" if added else
+                            "ไม่มีห้องน้ำ/ห้องครัวที่ยังว่าง (ตั้งชื่อห้องว่า «ห้องน้ำ» หรือ «ห้องครัว»)")
+        return added
 
     def place_stair(self, x, y):
         d = self.data()
@@ -1546,7 +1764,8 @@ class BuildingPanel(QWidget):
         sid, x, y = self._stair_preview
         self._stair_preview = None
         d = self.data()
-        for st in d["floors"][self.floor].get("stairs") or []:
+        f = d["floors"][self.floor]
+        for st in (f.get("stairs") or []) + (f.get("fixtures") or []):
             if st["id"] == sid:
                 st["x"], st["y"] = x, y
         self._write(d)
@@ -1554,7 +1773,7 @@ class BuildingPanel(QWidget):
     def _with_item(self, iid, fn):
         d = self.data()
         f = d["floors"][self.floor]
-        for kind in ("openings", "stairs"):
+        for kind in ("openings", "stairs", "fixtures"):
             lst = f.setdefault(kind, [])
             for i, it in enumerate(lst):
                 if it["id"] == iid:
@@ -1581,6 +1800,8 @@ class BuildingPanel(QWidget):
                 return False
             for k, sp in dlg.fields.items():
                 it[k] = sp.value()
+            if dlg.choice is not None:
+                it[dlg.choice[0]] = dlg.choice[1].currentData()
         self._with_item(iid, fn)
 
     # ---- column points and the member library ---------------------------------
@@ -1704,6 +1925,7 @@ class BuildingPanel(QWidget):
             s[k] = sp.value()
         s["walls"] = self.walls.isChecked()
         s["skin"] = self.skin.isChecked()
+        s["fascia"] = self.fascia.isChecked()
         s["roof"] = self.roof.currentData()
         s["roof_mode"] = self.roof_mode.currentData()
         for k, c in self.steel.items():
@@ -1726,6 +1948,7 @@ class BuildingPanel(QWidget):
                 sp.setValue(float(s[k]))
             self.walls.setChecked(bool(s["walls"]))
             self.skin.setChecked(bool(s["skin"]))
+            self.fascia.setChecked(bool(s.get("fascia", True)))
             self.roof.setCurrentIndex(max(self.roof.findData(s["roof"]), 0))
             self.roof_mode.setCurrentIndex(
                 max(self.roof_mode.findData(s.get("roof_mode", "plan")), 0))

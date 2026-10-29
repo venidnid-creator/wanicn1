@@ -59,7 +59,7 @@ DEFAULT_SETTINGS = {
     "post": "C 100×50×20×2.3", "skin": True, "roof_mode": "plan",
     "door_w": 0.9, "door_h": 2.0, "win_w": 1.2, "win_h": 1.1,
     "win_sill": 0.9, "stair_w": 1.0, "riser_max": 0.18, "going": 0.25,
-    "stair_t": 0.15,
+    "stair_t": 0.15, "fascia": True, "fascia_h": 0.20, "fascia_t": 0.025,
 }
 
 
@@ -121,7 +121,7 @@ ROLE_KIND = {"F": "footing", "PC": "stump", "C": "column"}
 
 
 def new_floor() -> dict:
-    return {"rooms": [], "openings": [], "stairs": []}
+    return {"rooms": [], "openings": [], "stairs": [], "fixtures": []}
 
 
 def default_data() -> dict:
@@ -137,7 +137,8 @@ def stacked(data):
         if f.get("rooms"):
             out.append({"rooms": f.get("rooms") or [],
                         "openings": f.get("openings") or [],
-                        "stairs": f.get("stairs") or [], "src": i})
+                        "stairs": f.get("stairs") or [],
+                        "fixtures": f.get("fixtures") or [], "src": i})
         else:
             skipped += 1
     # Empty floors above the last used one are not "skipped" — just unused.
@@ -235,7 +236,8 @@ def elements(data) -> dict:
     n = len(floors)
     H = float(s["floor_h"])
     E = {"footings": [], "stumps": [], "columns": [], "beams": [],
-         "slabs": [], "walls": [], "openings": [], "stairs": [], "n": n,
+         "slabs": [], "walls": [], "openings": [], "stairs": [],
+         "fixtures": [], "n": n,
          "H": H, "lib": lib, "settings": s, "floors": floors}
     if not floors:
         return E
@@ -296,6 +298,8 @@ def elements(data) -> dict:
                                   "name": opening_name(op, s)})
         for stp in f["stairs"]:
             E["stairs"].append({"floor": k, "st": stp})
+        for fx in f.get("fixtures") or []:
+            E["fixtures"].append({"floor": k, "fx": fx})
     return E
 
 
@@ -451,20 +455,26 @@ def _openings_on(p0, p1, openings, tol=0.06):
 
 
 def opening_size(op, s):
-    """(width, height, sill) of an opening, defaults from the settings."""
+    """(width, height, sill) of an opening: its own, else its type's
+    (:mod:`core.wanic_catalog`) when it has one, else the settings'."""
+    from core.wanic_catalog import opening_type
+    _code, spec = opening_type(op)
+    styled = bool(op.get("style"))
     if op.get("type") == "window":
-        return (float(op.get("w") or s["win_w"]),
-                float(op.get("h") or s["win_h"]),
+        dw, dh = (spec["w"], spec["h"]) if styled else (s["win_w"], s["win_h"])
+        dsill = spec.get("sill", s["win_sill"]) if styled else s["win_sill"]
+        return (float(op.get("w") or dw), float(op.get("h") or dh),
                 float(op.get("sill") if op.get("sill") is not None
-                      else s["win_sill"]))
-    return (float(op.get("w") or s["door_w"]),
-            float(op.get("h") or s["door_h"]), 0.0)
+                      else dsill))
+    dw, dh = (spec["w"], spec["h"]) if styled else (s["door_w"], s["door_h"])
+    return (float(op.get("w") or dw), float(op.get("h") or dh), 0.0)
 
 
 def opening_name(op, s):
+    from core.wanic_catalog import opening_type
     w, h, _sill = opening_size(op, s)
-    kind = "หน้าต่าง" if op.get("type") == "window" else "ประตู"
-    return f"{kind} {w:.2f}×{h:.2f} ม."
+    code, spec = opening_type(op)
+    return f"{code} {spec['name']} {w:.2f}×{h:.2f} ม."
 
 
 _DIRS = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)]
@@ -575,7 +585,25 @@ def structure_members(data) -> tuple[list, dict]:
         _walls(E, add)
     for e in E["stairs"]:
         add(stair_member(e["st"], s, e["floor"] * E["H"]), "stair")
+    for e in E["fixtures"]:
+        add(fixture_member(e["fx"], e["floor"] * E["H"]), "fixture")
     return out, count
+
+
+def fixture_member(fx, z):
+    """A sanitary fitting as a simple block (size from the catalog)."""
+    from core.wanic_catalog import SANITARY
+    spec = SANITARY.get(fx.get("type"))
+    if spec is None:
+        return None
+    name, _item, _rate, w, d, z0, height = spec
+    if int(fx.get("dir", 0)) % 2:
+        w, d = d, w
+    x, y = float(fx["x"]), float(fx["y"])
+    return _member("structure", "fixture", fx["type"], "rect",
+                   dict(b=_mm(w), h=_mm(d)),
+                   [(x, y, z + z0), (x, y, z + z0 + max(height, 0.01))],
+                   ifc="IfcSanitaryTerminal", name=name)
 
 
 def _walls(E, add):
@@ -710,7 +738,7 @@ def _roof_rect(rect, z0, s):
         return (y, x, z) if swap else (x, y, z)
 
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": []}
+           "skin": [], "eave": [], "barge": []}
     zr = h(half)
     yc = y0 + half
     hip = s["roof"] == "hip"
@@ -758,6 +786,14 @@ def _roof_rect(rect, z0, s):
             out["post"].append([P3(xx, yc, z0), P3(xx, yc, zr)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
+    # Eave lines (เชิงชาย) and, on a gable, the rakes (ปั้นลม).
+    out["eave"] = [[e[0], e[1]], [e[3], e[2]]]
+    if hip:
+        out["eave"] += [[e[1], e[2]], [e[0], e[3]]]
+    else:
+        for xx in (x0, x1):
+            out["barge"].append([P3(xx, y0, h(0)), P3(xx, yc, zr)])
+            out["barge"].append([P3(xx, y1, h(0)), P3(xx, yc, zr)])
     r0, r1 = P3(rx0, yc, zr), P3(rx1, yc, zr)
     if hip:
         if abs(rx1 - rx0) < 1e-6:                   # square plan: a pyramid
@@ -788,11 +824,77 @@ def roof_lines(data):
     else:
         rects = plan_rectangles(top)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "rects": rects, "z0": z0}
-    for rect in rects:
+           "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0}
+    ov = float(s["overhang"])
+    for i, rect in enumerate(rects):
         part = _roof_rect(rect, z0, s)
         for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
             out[k] += part[k]
+        others = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov)
+                  for j, r in enumerate(rects) if j != i]
+        for a, b in part["eave"]:
+            out["eave"] += _outside(a, b, others)
+        for a, b in part["barge"]:
+            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+            if not any(o[0] - 1e-6 <= mx <= o[2] + 1e-6 and
+                       o[1] - 1e-6 <= my <= o[3] + 1e-6 for o in others):
+                out["barge"].append([a, b])
+    out["eave"] = _merge_collinear(out["eave"])
+    return out
+
+
+def _merge_collinear(edges):
+    """Axis-aligned edges with overlapping runs on one line become one."""
+    lines = {}
+    for a, b in edges:
+        along_x = abs(a[1] - b[1]) < 1e-9
+        key = (along_x, round(a[1] if along_x else a[0], 4), round(a[2], 4))
+        k = 0 if along_x else 1
+        lines.setdefault(key, []).append(tuple(sorted((a[k], b[k]))))
+    out = []
+    for (along_x, c, z), runs in sorted(lines.items()):
+        runs.sort()
+        merged = [list(runs[0])]
+        for lo, hi in runs[1:]:
+            if lo <= merged[-1][1] + 1e-6:
+                merged[-1][1] = max(merged[-1][1], hi)
+            else:
+                merged.append([lo, hi])
+        for lo, hi in merged:
+            out.append([(lo, c, z), (hi, c, z)] if along_x
+                       else [(c, lo, z), (c, hi, z)])
+    return out
+
+
+def _outside(a, b, boxes):
+    """The parts of the axis-aligned edge a→b that lie outside every box
+    (x0, y0, x1, y1) — where another roof does not cover it."""
+    along_x = abs(a[1] - b[1]) < 1e-9
+    k = 0 if along_x else 1
+    c = a[1] if along_x else a[0]
+    lo, hi = sorted((a[k], b[k]))
+    pieces = [(lo, hi)]
+    for bx in boxes:
+        clo, chi = (bx[1], bx[3]) if along_x else (bx[0], bx[2])
+        if not clo + 1e-6 < c < chi - 1e-6:
+            continue
+        cut_lo, cut_hi = (bx[0], bx[2]) if along_x else (bx[1], bx[3])
+        nxt = []
+        for p0, p1 in pieces:
+            if cut_hi <= p0 or cut_lo >= p1:
+                nxt.append((p0, p1))
+                continue
+            if cut_lo > p0:
+                nxt.append((p0, cut_lo))
+            if cut_hi < p1:
+                nxt.append((cut_hi, p1))
+        pieces = nxt
+    z = a[2]
+    out = []
+    for p0, p1 in pieces:
+        if p1 - p0 > 0.05:
+            out.append([(p0, c, z), (p1, c, z)] if along_x
+                       else [(c, p0, z), (c, p1, z)])
     return out
 
 
@@ -822,6 +924,16 @@ def roof_members(data) -> tuple[list, dict]:
         add(_member("roof", "purlin", "แป", fam, params, pl["path"],
                     anchor="bc", ifc="IfcMember", closed=pl["closed"],
                     name=f"แป {s['purlin']}"), "purlin")
+    if s.get("fascia", True):
+        fp = dict(b=_mm(s.get("fascia_t", 0.025)), h=_mm(s.get("fascia_h", 0.20)))
+        for path in lines["eave"]:
+            add(_member("roof", "fascia", "เชิงชาย", "rect", fp, path,
+                        anchor="tc", ifc="IfcMember", name="เชิงชาย"),
+                "fascia")
+        for path in lines["barge"]:
+            add(_member("roof", "barge", "ปั้นลม", "rect", fp, path,
+                        anchor="tc", ifc="IfcMember", name="ปั้นลม"),
+                "barge")
     if s.get("skin") and lines["skin"]:
         lift = float(params.get("H", params.get("D", params.get("A", 80))))
         g = roof_skin(lines["skin"], lift / 1000.0)
@@ -875,7 +987,9 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("beam", "คาน"), ("slab", "พื้น"), ("wall", "ผนัง"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
-           ("purlin", "แป"), ("post", "ดั้ง"), ("skin", "แผ่นหลังคา")]
+           ("purlin", "แป"), ("post", "ดั้ง"), ("fascia", "เชิงชาย"),
+           ("barge", "ปั้นลม"), ("fixture", "สุขภัณฑ์"),
+           ("skin", "แผ่นหลังคา")]
 
 
 def summary(count) -> str:
