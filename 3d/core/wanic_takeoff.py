@@ -193,7 +193,7 @@ def collect_items(scene) -> list[dict]:
         if g is not None:
             faces = _group_faces(g)
             layer = getattr(g, "layer", None) or DEFAULT_LAYER
-            mat = (effective_material(g) or
+            mat = (_mat_name(effective_material(g)) or
                    _most_common(f.attrs.get("mat") for f in faces))
             key = ("group", id(g))
         else:
@@ -215,7 +215,7 @@ def collect_items(scene) -> list[dict]:
         faces = _group_faces(g)
         if not faces:
             continue
-        mat = (effective_material(g) or
+        mat = (_mat_name(effective_material(g)) or
                _most_common(f.attrs.get("mat") for f in faces))
         items.append({"key": ("group", id(g)), "label": g.name,
                       "kind": "group", "name": g.name or "",
@@ -247,6 +247,14 @@ def collect_items(scene) -> list[dict]:
                       "group": None, "count": None, "metrado": None,
                       "metrado_unit": "", **_measure(faces)})
     return items
+
+
+def _mat_name(material) -> str:
+    """A container's paint is a dict (colour, texture, ``mat`` name): the
+    takeoff matches by the material's NAME only."""
+    if isinstance(material, dict):
+        return str(material.get("mat") or "")
+    return str(material or "")
 
 
 def match_candidates(items) -> dict:
