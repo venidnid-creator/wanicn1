@@ -13,6 +13,8 @@ WANIC ถอดปริมาณ. The layout engine is :mod:`core.wanic_buildin
 """
 from __future__ import annotations
 
+from core.wanic_ui import safe as _safe
+
 import copy
 
 import math
@@ -724,14 +726,14 @@ class LibraryBox(QGroupBox):
         row.addWidget(self.kind)
         add = QPushButton("＋ เบอร์ใหม่")
         add.setToolTip("เพิ่มเบอร์ใหม่ของชนิดที่เลือก (คัดลอกขนาดจากเบอร์แรก)")
-        add.clicked.connect(lambda _=False: self.add_mark())
+        add.clicked.connect(lambda _=False: _safe(self, self.add_mark))
         row.addWidget(add)
         lay.addLayout(row)
         self.form = QFormLayout()
         lay.addLayout(self.form)
         self.edits = {}
         b = QPushButton("💾 บันทึกเบอร์นี้")
-        b.clicked.connect(lambda _=False: self.save())
+        b.clicked.connect(lambda _=False: _safe(self, self.save))
         lay.addWidget(b)
         hint = QLabel("เหล็กเสริมเขียนแบบ 4-DB12 (จำนวน-ขนาด) หรือ RB6@0.15 (ระยะห่าง ม.) "
                       "· ใช้คิดน้ำหนักเหล็กตามหลักเกณฑ์ (ยาวตามแนวเส้นตรง + เผื่อตามขนาด) "
@@ -831,7 +833,7 @@ class BoqDialog(QDialog):
             b = QPushButton(text)
             b.setStyleSheet(f"QPushButton{{background:{color};color:white;"
                             "font-weight:bold;padding:6px;border-radius:6px}}")
-            b.clicked.connect(lambda _=False, f=fn: f())
+            b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
             row.addWidget(b)
         close = QPushButton("ปิด")
         close.clicked.connect(self.accept)
@@ -890,7 +892,7 @@ class BoqDialog(QDialog):
                          ("ส่งออกราคา CSV…", self.export_prices),
                          ("💾 บันทึกราคาและคำนวณใหม่", self.save_prices)):
             b = QPushButton(text)
-            b.clicked.connect(lambda _=False, f=fn: f())
+            b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
             row.addWidget(b)
         v.addLayout(row)
         self.tabs.addTab(w, "ฐานข้อมูลราคา")
@@ -962,7 +964,7 @@ class BoqDialog(QDialog):
             self.sand[key] = sp
             f.addRow(th, sp)
         b = QPushButton("💾 บันทึกตัวเลือกและคำนวณใหม่")
-        b.clicked.connect(lambda _=False: self.save_options())
+        b.clicked.connect(lambda _=False: _safe(self, self.save_options))
         f.addRow(b)
         src = QLabel("ที่มา: หลักเกณฑ์การคำนวณราคากลางงานก่อสร้าง พ.ศ. 2569 ส่วนที่ 4 "
                      "(การคำนวณปริมาณงาน การเผื่อ) และวัสดุมวลรวมของงานก่อสร้างอาคาร "
@@ -1186,7 +1188,7 @@ class BuildingPanel(QWidget):
                 ("✕ ลบชั้น", "ลบชั้นที่เลือก", self.delete_floor)):
             b = QPushButton(text)
             b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, f=fn: f())
+            b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
             fb.addWidget(b)
         lay.addLayout(fb)
 
@@ -1204,7 +1206,7 @@ class BuildingPanel(QWidget):
         self.room_d = _spin(0.5, 100, 3.0, 0.5)
         rot = QPushButton("↻ หมุน 90°")
         rot.setToolTip("สลับกว้าง/ลึก ของห้องที่จะวาง (ห้องที่เลือกบนผังกด R)")
-        rot.clicked.connect(lambda _=False: self._swap_size())
+        rot.clicked.connect(lambda _=False: _safe(self, self._swap_size))
         rp.addWidget(QLabel("ประเภทห้อง"), 0, 0)
         rp.addWidget(self.room_name, 0, 1, 1, 3)
         rp.addWidget(QLabel("ขนาดมาตรฐาน"), 1, 0)
@@ -1265,7 +1267,7 @@ class BuildingPanel(QWidget):
         bset = QPushButton("🛁 ชุดห้องน้ำ/ครัวมาตรฐาน")
         bset.setToolTip("วางสุขภัณฑ์ชุดมาตรฐานในห้องน้ำ (และซิงค์ในห้องครัว) ทุกห้องของชั้นนี้"
                         "ที่ยังไม่มี — ห้องที่เลือกอยู่จะถูกใส่ก่อน")
-        bset.clicked.connect(lambda _=False: self.fill_standard_sets())
+        bset.clicked.connect(lambda _=False: _safe(self, self.fill_standard_sets))
         fg.addWidget(bset)
         lay.addWidget(self.fx_row)
         self.tool_box.currentIndexChanged.connect(lambda _i: self._tool_changed())
@@ -1276,7 +1278,7 @@ class BuildingPanel(QWidget):
                          ("↶ ย้อน", self.undo), ("↷ ทำซ้ำ", self.redo),
                          ("🗑 ล้างห้องชั้นนี้", self.clear_floor)):
             b = QPushButton(text)
-            b.clicked.connect(lambda _=False, f=fn: f())
+            b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
             cb.addWidget(b)
         self.foot_chk = QCheckBox("แสดงฐานราก")
         self.foot_chk.setChecked(True)
@@ -1293,7 +1295,7 @@ class BuildingPanel(QWidget):
             b.setToolTip(tip)
             b.setStyleSheet(f"QPushButton{{background:{color};color:white;"
                             "font-weight:bold;padding:6px;border-radius:6px}}")
-            b.clicked.connect(lambda _=False: fn())
+            b.clicked.connect(lambda _=False: _safe(self, fn))
             bb.addWidget(b, r, c)
         btn("🏗 สร้าง/อัปเดตโครงสร้าง", "ฐานราก ตอม่อ เสา คาน พื้น ผนัง ทุกชั้น",
             lambda: self.build(("structure",)), 0, 0, "#2E7D4F")
@@ -1309,7 +1311,7 @@ class BuildingPanel(QWidget):
             "(วัดจากโมเดล 3D)", self.send_rates, 2, 1, "#3B6FB6")
         lay.addLayout(bb)
         rm = QPushButton("ลบสิ่งที่สร้างโดย ออกแบบอาคาร")
-        rm.clicked.connect(lambda _=False: self.remove_built())
+        rm.clicked.connect(lambda _=False: _safe(self, self.remove_built))
         lay.addWidget(rm)
         self.status = QLabel()
         self.status.setWordWrap(True)

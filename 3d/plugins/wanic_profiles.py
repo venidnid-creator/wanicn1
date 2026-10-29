@@ -14,6 +14,8 @@ length, weight). The geometry engine is :mod:`core.wanic_profiles`.
 """
 from __future__ import annotations
 
+from core.wanic_ui import safe as _safe
+
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt, QTimer
@@ -208,14 +210,14 @@ class ProfilePanel(QWidget):
         self.make_btn = QPushButton("🛠 สร้างตามเส้นที่เลือก")
         self.make_btn.setToolTip("เลือกเส้นที่ต่อกันเป็นสายเดียว หรือพื้นผิว 1 ผืน "
                                  "แล้วกดปุ่มนี้")
-        self.make_btn.clicked.connect(lambda _=False: self.make_from_selection())
+        self.make_btn.clicked.connect(lambda _=False: _safe(self, self.make_from_selection))
         self.load_btn = QPushButton("📐 อ่านจากชิ้นที่เลือก")
         self.load_btn.setToolTip("นำรูปตัดของชิ้นส่วนโปรไฟล์ที่เลือกมาแสดงในฟอร์ม")
-        self.load_btn.clicked.connect(lambda _=False: self.load_selected())
+        self.load_btn.clicked.connect(lambda _=False: _safe(self, self.load_selected))
         self.apply_btn = QPushButton("🔁 เปลี่ยนรูปตัดของที่เลือก")
         self.apply_btn.setToolTip("สร้างชิ้นส่วนโปรไฟล์ที่เลือกใหม่ด้วยรูปตัดในฟอร์ม "
                                   "(ตามเส้นทางเดิม)")
-        self.apply_btn.clicked.connect(lambda _=False: self.apply_to_selected())
+        self.apply_btn.clicked.connect(lambda _=False: _safe(self, self.apply_to_selected))
         for b in (self.make_btn, self.load_btn, self.apply_btn):
             b1.addWidget(b)
         lay.addLayout(b1)
@@ -224,7 +226,7 @@ class ProfilePanel(QWidget):
         sched_head.addWidget(QLabel("<b>รายการโปรไฟล์ในโมเดล</b>"))
         sched_head.addStretch(1)
         exp = QPushButton("📤 ส่งออก CSV…")
-        exp.clicked.connect(lambda _=False: self.export_schedule())
+        exp.clicked.connect(lambda _=False: _safe(self, self.export_schedule))
         sched_head.addWidget(exp)
         lay.addLayout(sched_head)
         self.table = QTableWidget(0, 6)

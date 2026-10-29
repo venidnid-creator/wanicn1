@@ -901,7 +901,7 @@ def plan_rectangles(rooms):
     return rects
 
 
-def _roof_rect(rect, z0, s, others=()):
+def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
     """The frame lines of one rectangular roof (see :func:`roof_lines`).
 
     A gable end that runs into another roof (``others``: their eave boxes)
@@ -917,7 +917,9 @@ def _roof_rect(rect, z0, s, others=()):
     half = W / 2
 
     def h(dist):                            # roof height at a distance
-        return z0 + (dist - ov) * tan       # in from the eave line
+        # ``lift`` = the rafter depth: a rafter's underside sits on the
+        # ring beam / column heads at the wall line (dist = overhang).
+        return z0 + lift + (dist - ov) * tan
 
     def P3(x, y, z):
         return (y, x, z) if swap else (x, y, z)
@@ -947,9 +949,20 @@ def _roof_rect(rect, z0, s, others=()):
                 out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
     sp = max(float(s["rafter_sp"]), 0.2)
     big = 1e9
-    count = max(int(math.floor(L / sp + 1e-9)), 1)
-    for i in range(count + 1):
-        x = x0 + L * i / count
+    # Rafters (จันทัน) on every column line (จันทันเอก on the column heads),
+    # and between them at no more than the set spacing (จันทันพราง).
+    stations = {round(x0, 4), round(x1, 4)}
+    for c in cols:
+        cx = c[1] if swap else c[0]
+        if x0 + 1e-6 < cx < x1 - 1e-6:
+            stations.add(round(cx, 4))
+    stations = sorted(stations)
+    xs = []
+    for a_, b_ in zip(stations, stations[1:]):
+        n_ = max(int(math.ceil((b_ - a_) / sp - 1e-9)), 1)
+        xs += [a_ + (b_ - a_) * k / n_ for k in range(n_)]
+    xs.append(stations[-1])
+    for x in xs:
         reach = min(half, (x - x0) if h0 else big, (x1 - x) if h1 else big)
         if reach <= 0.05:
             continue
@@ -1044,7 +1057,10 @@ def roof_lines(data):
     from core import wanic_roofclip as RC
     boxes = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov) for r in rects]
     # A wing's gable end that runs into an earlier (larger) roof is hipped.
-    parts = [_roof_rect(rect, z0, s, boxes[:i]) for i, rect in
+    fam, prm = steel_lookup(s["rafter"])
+    lift = float(prm.get("H", prm.get("D", prm.get("A", 0.0)))) / 1000.0
+    cols = nodes(top)
+    parts = [_roof_rect(rect, z0, s, boxes[:i], cols, lift) for i, rect in
              enumerate(rects)]
     roofs = [RC.Roof((r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
                      part["skin"]) for r, part in zip(rects, parts)]

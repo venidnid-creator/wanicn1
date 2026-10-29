@@ -16,6 +16,8 @@ has no volume). The pricing logic lives in :mod:`core.wanic_takeoff`.
 """
 from __future__ import annotations
 
+from core.wanic_ui import safe as _safe
+
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -160,7 +162,7 @@ class TakeoffPanel(QWidget):
         def button(text, tip, fn, r, c):
             b = QPushButton(text)
             b.setToolTip(tip)
-            b.clicked.connect(lambda _=False: fn())
+            b.clicked.connect(lambda _=False: _safe(self, fn))
             btns.addWidget(b, r, c)
             return b
 
@@ -178,6 +180,9 @@ class TakeoffPanel(QWidget):
         button("🏛 ข้อมูลราคากลาง (ปร.)…",
                "แบบเลขที่ วันที่ เนื้อที่อาคาร เงื่อนไข Factor F และรายชื่อ"
                "คณะกรรมการกำหนดราคากลาง", self.edit_pr, 2, 0)
+        button("🏗 ดึง BOQ จาก ออกแบบอาคาร",
+               "ใส่รายการ BOQ ตามหลักเกณฑ์ 2569 ที่ถอดจากผังใน «ออกแบบอาคาร» "
+               "(แทนชุดเดิมที่ดึงมา)", self.pull_building_boq, 2, 1)
         lay.addLayout(btns)
 
         self.checker = QCheckBox("ตัวตรวจราคา — ระบายสีบนโมเดล "
@@ -374,13 +379,47 @@ class TakeoffPanel(QWidget):
         except OSError as e:
             QMessageBox.warning(self, TITLE, f"บันทึกไม่ได้: {e}")
 
+    def _building_data(self):
+        pd = getattr(self.app.scene, "plugin_data", {}) or {}
+        bd = pd.get("wanic_building")
+        if bd and any(f.get("rooms") for f in bd.get("floors") or []):
+            return bd
+        return None
+
+    def pull_building_boq(self, ask=False) -> int:
+        """Put the standard BOQ of WANIC ออกแบบอาคาร into this price list
+        (lines ``std…``, replacing an earlier pull)."""
+        from core import wanic_quantities as Q
+        bd = self._building_data()
+        if bd is None:
+            QMessageBox.information(
+                self, TITLE, "ยังไม่มีผังห้องในแท็บ «ออกแบบอาคาร» — วางห้องและกด "
+                "«สร้างทั้งหมด» ก่อน หรือเพิ่มรายการราคาเองที่นี่")
+            return 0
+        rates = Q.to_rates(Q.compute(bd))
+        d = self.data()
+        d["rates"] = [r for r in self._rates_from_table()
+                      if not str(r.get("id", "")).startswith("std")] + rates
+        self._write(d)
+        return len(rates)
+
     def export_boq(self) -> None:
         self.refresh()
         if self._result is None or not self._result["lines"]:
-            QMessageBox.information(
-                self, TITLE, "ยังไม่มีรายการราคา — กด «เพิ่มรายการ» หรือ "
-                "«รายการตัวอย่าง» ก่อน")
-            return
+            if self._building_data() is not None:
+                ans = QMessageBox.question(
+                    self, TITLE, "ยังไม่มีรายการราคาในแท็บนี้\n\nดึง BOQ ตาม"
+                    "หลักเกณฑ์ 2569 จาก «ออกแบบอาคาร» มาใส่แล้วส่งออกเลยหรือไม่?",
+                    QMessageBox.Yes | QMessageBox.No)
+                if ans != QMessageBox.Yes or not self.pull_building_boq():
+                    return
+                self.refresh()
+            else:
+                QMessageBox.information(
+                    self, TITLE, "ยังไม่มีรายการราคา — กด «เพิ่มรายการ» หรือ "
+                    "«รายการตัวอย่าง» ก่อน หรือวางผังใน «ออกแบบอาคาร» แล้วกด "
+                    "«ดึง BOQ จาก ออกแบบอาคาร»")
+                return
         name = (self.data()["settings"].get("project") or "BOQ").strip()
         safe = "".join(ch for ch in name if ch not in '\\/:*?"<>|') or "BOQ"
         path, flt = QFileDialog.getSaveFileName(
@@ -401,11 +440,20 @@ class TakeoffPanel(QWidget):
                 Path(path).write_bytes(
                     T.boq_xlsx_bytes(self._result, settings, self._items))
         except OSError as e:
-            QMessageBox.warning(self, TITLE, f"บันทึกไม่ได้: {e}")
+            QMessageBox.warning(self, TITLE, "บันทึกไม่ได้ (ไฟล์อาจเปิดค้างอยู่ใน "
+                                f"Excel): {e}")
             return
         flash = getattr(self.app.viewport, "flash_status", None)
         if callable(flash):
             flash(f"ส่งออกแล้ว: {path}")
+        self.last_export = path
+        ans = QMessageBox.question(
+            self, TITLE, f"บันทึกแล้ว:\n{path}\n\nเปิดไฟล์เลยหรือไม่?",
+            QMessageBox.Yes | QMessageBox.No)
+        if ans == QMessageBox.Yes:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def rate_from_selection(self, selection) -> None:
         """Add a price line bound to the selected object's BIM class,
