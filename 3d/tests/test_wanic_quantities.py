@@ -107,8 +107,13 @@ def test_one_room_house_quantities():
     # Roof steel in 6 m pieces, hip waste 5 %.
     steel = _by(r, "โครงหลังคาเหล็ก")
     assert steel and all("ท่อน" in ln["basis"] for ln in steel)
-    roofing = _by(r, "มุงกระเบื้องคอนกรีต")[0]
-    assert roofing["waste"] == 5
+    roofing = _by(r, "กระเบื้องคอนกรีต ซีแพคโมเนีย")[0]
+    assert roofing["waste"] == 5 and roofing["unit"] == "แผ่น"
+    area = _by(r, "ค่าแรงมุงกระเบื้องคอนกรีต")[0]
+    assert close(roofing["net"], area["net"] / (0.30 * 0.32))
+    assert area["lab"] == 76
+    caps = _by(r, "ครอบตะเข้สัน —")[0]
+    assert caps["waste"] == 3 and caps["unit"] == "แผ่น"
     assert all(ln["qty"] == round(ln["qty"], 2) for ln in r["lines"])
 
 
@@ -120,7 +125,10 @@ def test_openings_and_interior_walls():
                                    "y": 0.0}]
     r = Q.compute(d)
     wall = _by(r, "ผนังก่ออิฐมอญ")[0]
-    assert close(wall["net"], 7 * 2.8 * 2.6 - 0.9 * 2.0)
+    # Less the door and its concrete band (2 posts × 2.10 + lintel 0.90).
+    assert close(wall["net"], 7 * 2.8 * 2.6 - 0.9 * 2.0 - 5.1 * 0.10)
+    band = _by(r, "เสาเอ็นและคานทับหลัง")[0]
+    assert close(band["net"], 5.1) and band["lab"] == 51
     inn = _by(r, "ฉาบปูนเรียบ ผนังภายใน")[0]
     ext = _by(r, "ฉาบปูนเรียบ ผนังภายนอก")[0]
     # The middle wall is plastered on both faces, inside.
@@ -226,3 +234,24 @@ def test_gable_roof_has_barge_boards():
     assert len(lines["eave"]) == 2 and len(lines["barge"]) == 4
     r = Q.compute(d)
     assert _by(r, "ปั้นลม")[0]["net"] > 0
+
+
+def test_window_band_and_tile_choice():
+    d = _one_room()
+    d["floors"][0]["openings"] = [{"id": "o1", "type": "window",
+                                   "style": "W1", "x": 1.5, "y": 0.0}]
+    r = Q.compute(d)
+    # Window 1.20×1.10 at sill 0.90: posts 2 × (2.10 − 0.80) + 2 × 1.20.
+    assert close(_by(r, "เสาเอ็นและคานทับหลัง")[0]["net"], 2 * 1.3 + 2 * 1.2)
+    d["settings"]["tile"] = "R3"
+    d["settings"]["roof"] = "gable"
+    r = Q.compute(d)
+    sheet = _by(r, "กระเบื้องไฟเบอร์ซีเมนต์ลอนคู่ 0.50×1.20")[0]
+    lab = _by(r, "ค่าแรงมุงกระเบื้องไฟเบอร์")[0]
+    assert sheet["waste"] == 3 and lab["lab"] == 46
+    assert close(sheet["net"], lab["net"] / (0.44 * 1.00))
+    assert _by(r, "ครอบข้าง/ครอบปั้นลม")
+    d["settings"]["tiles_m2"] = 2.5
+    r = Q.compute(d)
+    sheet = _by(r, "กระเบื้องไฟเบอร์ซีเมนต์ลอนคู่ 0.50×1.20")[0]
+    assert close(sheet["net"], lab["net"] * 2.5)

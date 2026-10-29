@@ -187,6 +187,7 @@ def test_doors_and_windows_cut_the_walls():
     ]
     _g, count = B.structure_members(d)
     assert count["door"] == 1 and count["window"] == 1
+    assert count["band"] == 2                       # concrete round both
     # 12 spans: the door span → 2 sides + 1 over; the window span → 2 sides
     # + 1 under + 1 over.
     assert count["wall"] == 12 - 2 + 3 + 4
@@ -312,5 +313,11 @@ def test_panel_door_types_fixtures_fascia(monkeypatch):
     panel.build(("structure", "roof"))
     kinds = {((g.ext or {}).get("wanic_building") or {}).get("kind")
              for g in B.generated(scene)}
-    assert {"fixture", "fascia", "window"} <= kinds
+    assert {"fixture", "fascia", "window", "band", "cap"} <= kinds
+    win = [g for g in B.generated(scene)
+           if ((g.ext or {}).get("wanic_building") or {}).get("kind")
+           == "window"][0]
+    colors = {tuple(f.attrs.get("color", ())) for f in win.mesh.faces}
+    assert len(colors) >= 2                           # frame and glass
+    assert any(f.attrs.get("opacity") for f in win.mesh.faces)
     panel.canvas.grab()

@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "door_w": 0.9, "door_h": 2.0, "win_w": 1.2, "win_h": 1.1,
     "win_sill": 0.9, "stair_w": 1.0, "riser_max": 0.18, "going": 0.25,
     "stair_t": 0.15, "fascia": True, "fascia_h": 0.20, "fascia_t": 0.025,
+    "band": 0.10, "tile": "R1", "tiles_m2": 0.0, "caps": True,
 }
 
 
@@ -629,25 +630,204 @@ def _walls(E, add):
                             dict(b=wt, h=_mm(height)),
                             [at(a, z), at(b, z)], anchor="bc",
                             ifc="IfcWall"), "wall")
+        band = float(s.get("band", 0.10))
+        wtm = float(s["wall_t"])
         cur = half
         for sdist, op in _openings_on(p0, p1, wl["openings"]):
             ow, oh, sill = opening_size(op, s)
-            a = max(half, sdist - ow / 2)
-            b = min(L - half, sdist + ow / 2)
+            door = op.get("type") != "window"
+            a = max(half + band, sdist - ow / 2)
+            b = min(L - half - band, sdist + ow / 2)
             if b - a < 0.1:
                 continue
             top = min(sill + oh, wh)
-            piece(cur, a, z0, wh)
-            piece(a, b, z0, sill)                       # under a window
-            piece(a, b, z0 + top, wh - top)             # over the opening
-            kind = "window" if op.get("type") == "window" else "door"
-            add(_member("structure", kind, opening_name(op, s), "rect",
-                        dict(b=40.0, h=_mm(top - sill)),
-                        [at(a, z0 + sill), at(b, z0 + sill)], anchor="bc",
-                        ifc="IfcWindow" if kind == "window" else "IfcDoor",
-                        name=opening_name(op, s)), kind)
-            cur = max(cur, b)
+            lo = 0.0 if door else max(sill - band, 0.0)
+            piece(cur, a - band, z0, wh)
+            piece(a - band, b + band, z0, lo)           # under a window
+            hi = min(top + band, wh)
+            piece(a - band, b + band, z0 + hi, wh - hi)  # over the opening
+            if band > 0:
+                add(opening_band(p0, (ux, uy), z0, a, b, sill if not door
+                                 else 0.0, top, wtm, band, wh, door), "band")
+            kind = "door" if door else "window"
+            add(opening_set(op, s, p0, (ux, uy), z0, a, b, sill, top, wtm),
+                kind)
+            cur = max(cur, b + band)
         piece(cur, L - half, z0, wh)
+
+
+# ---------------------------------------------------------------------------
+# Doors and windows as real sets, and the concrete band round them
+# ---------------------------------------------------------------------------
+
+class _Boxes:
+    """Oriented boxes in one mesh, in wall coordinates: ``s`` along the
+    wall from ``p0``, ``d`` across it (0 = wall centre), ``z`` up."""
+
+    def __init__(self, p0, u, z0=0.0):
+        from core.mesh import Mesh
+        self.mesh = Mesh()
+        self.p0, self.u, self.z0 = p0, u, z0
+        self.n = (-u[1], u[0])
+
+    def P(self, s, d, z):
+        from PySide6.QtGui import QVector3D
+        return QVector3D(self.p0[0] + self.u[0] * s + self.n[0] * d,
+                         self.p0[1] + self.u[1] * s + self.n[1] * d,
+                         self.z0 + z)
+
+    def box(self, s0, s1, d0, d1, z0, z1, attrs=None):
+        if s1 - s0 < 1e-4 or d1 - d0 < 1e-4 or z1 - z0 < 1e-4:
+            return
+        from PySide6.QtGui import QVector3D
+        c = self.P((s0 + s1) / 2, (d0 + d1) / 2, (z0 + z1) / 2)
+        quads = [
+            [(s0, d0, z0), (s1, d0, z0), (s1, d1, z0), (s0, d1, z0)],
+            [(s0, d0, z1), (s1, d0, z1), (s1, d1, z1), (s0, d1, z1)],
+            [(s0, d0, z0), (s1, d0, z0), (s1, d0, z1), (s0, d0, z1)],
+            [(s0, d1, z0), (s1, d1, z0), (s1, d1, z1), (s0, d1, z1)],
+            [(s0, d0, z0), (s0, d1, z0), (s0, d1, z1), (s0, d0, z1)],
+            [(s1, d0, z0), (s1, d1, z0), (s1, d1, z1), (s1, d0, z1)],
+        ]
+        for q in quads:
+            pts = [self.P(*v) for v in q]
+            nrm = QVector3D.crossProduct(pts[1] - pts[0], pts[2] - pts[0])
+            mid = (pts[0] + pts[2]) * 0.5
+            if QVector3D.dotProduct(nrm, mid - c) < 0:
+                pts = pts[::-1]
+            f = self.mesh.add_face(pts)
+            if attrs and f is not None:
+                f.attrs.update(attrs)
+
+    def group(self, name, part, kind, mark, ifc):
+        from core.group import Group
+        if not self.mesh.faces:
+            return None
+        g = Group(self.mesh, name=name)
+        g.ifc = {"class": ifc, "name": name}
+        return _tag(g, part, kind, mark)
+
+
+def _paint(key, opacity=None):
+    from core.wanic_catalog import COLORS
+    a = {"color": COLORS[key]}
+    if opacity is not None:
+        a["opacity"] = opacity
+    return a
+
+
+def opening_set(op, s, p0, u, z, a, b, sill, top, wt):
+    """One door or window as a set: frame (วงกบ), leaves (บาน), glass and a
+    handle, painted — a single group (one IfcDoor / IfcWindow)."""
+    from core.wanic_catalog import opening_type
+    code, spec = opening_type(op)
+    bx = _Boxes(p0, u, z)
+    alu = spec["frame"] == "alu"
+    fw = 0.04 if alu else 0.05                  # frame face
+    fd = min(0.10, wt) / 2                      # frame depth (half)
+    gap = 0.002
+    frame = _paint("alu" if alu else "wood_dark")
+    door = spec["kind"] == "door"
+    bottom = 0.0 if door else sill
+    # Frame: two jambs and a head; a sill on a window.
+    bx.box(a, a + fw, -fd, fd, bottom, top, frame)
+    bx.box(b - fw, b, -fd, fd, bottom, top, frame)
+    bx.box(a + fw + gap, b - fw - gap, -fd, fd, top - fw, top, frame)
+    if not door:
+        bx.box(a + fw + gap, b - fw - gap, -fd, fd, sill, sill + fw, frame)
+    i0, i1 = a + fw + gap, b - fw - gap
+    j0, j1 = (bottom + 0.01 if door else sill + fw + gap), top - fw - gap
+    n = max(int(spec["leaves"]), 0)
+    glass = _paint("glass", 0.35)
+    if n == 0:                                   # fixed glass
+        bx.box(i0, i1, -0.003, 0.003, j0, j1, glass)
+    else:
+        lw = (i1 - i0) / n
+        leaf_col = _paint("pvc" if spec["leaf"] == "prefab" else
+                          "alu" if spec["leaf"] == "alu" else "wood")
+        for k in range(n):
+            s0 = i0 + k * lw + gap
+            s1 = i0 + (k + 1) * lw - gap
+            d_off = (0.02 if k % 2 else -0.02) if spec["slide"] else 0.0
+            if code == "W5":                     # louvres
+                zz = j0
+                while zz + 0.09 <= j1:
+                    bx.box(s0, s1, -0.03, 0.03, zz, zz + 0.006, glass)
+                    zz += 0.10
+                bx.box(s0, s0 + 0.03, -0.03, 0.03, j0, j1, leaf_col)
+                bx.box(s1 - 0.03, s1, -0.03, 0.03, j0, j1, leaf_col)
+                continue
+            if spec["glass"] > 0:
+                st = 0.04 if spec["leaf"] == "alu" else 0.06
+                d0, d1 = -0.0175 + d_off, 0.0175 + d_off
+                bx.box(s0, s0 + st, d0, d1, j0, j1, leaf_col)
+                bx.box(s1 - st, s1, d0, d1, j0, j1, leaf_col)
+                bx.box(s0 + st, s1 - st, d0, d1, j1 - st, j1, leaf_col)
+                bx.box(s0 + st, s1 - st, d0, d1, j0, j0 + st, leaf_col)
+                if door and spec["glass"] < 0.9 and j1 - j0 > 1.2:
+                    # A kick rail low on a glazed door.
+                    bx.box(s0 + st, s1 - st, d0, d1, j0 + st + 0.001,
+                           j0 + 0.30, leaf_col)
+                    g0 = j0 + 0.301
+                else:
+                    g0 = j0 + st + 0.001
+                bx.box(s0 + st, s1 - st, -0.003 + d_off, 0.003 + d_off,
+                       g0, j1 - st, glass)
+            else:
+                bx.box(s0, s1, -0.0175 + d_off, 0.0175 + d_off, j0, j1,
+                       leaf_col)
+                # Two raised panels so a solid leaf reads as a door.
+                if door and j1 - j0 > 1.2:
+                    pc = _paint("wood_dark") if spec["leaf"] == "wood" \
+                        else _paint("alu")
+                    for z0p, z1p in ((j0 + 0.15, j0 + 0.85),
+                                     (j0 + 1.05, j1 - 0.15)):
+                        bx.box(s0 + 0.08, s1 - 0.08, 0.0175 + d_off,
+                               0.0215 + d_off, z0p, z1p, pc)
+                        bx.box(s0 + 0.08, s1 - 0.08, -0.0215 + d_off,
+                               -0.0175 + d_off, z0p, z1p, pc)
+            if door and not spec["slide"]:
+                hx = s1 - 0.07 if k == n - 1 else s0 + 0.07
+                hz = bottom + 1.0
+                metal = _paint("metal")
+                bx.box(hx - 0.015, hx + 0.015, 0.0175 + d_off,
+                       0.07 + d_off, hz - 0.015, hz + 0.015, metal)
+                bx.box(hx - 0.015, hx + 0.015, -0.07 + d_off,
+                       -0.0175 + d_off, hz - 0.015, hz + 0.015, metal)
+    kind = "door" if door else "window"
+    name = opening_name(op, s)
+    return bx.group(name, "structure", kind, name,
+                    "IfcDoor" if door else "IfcWindow")
+
+
+def opening_band(p0, u, z, a, b, sill, top, wt, band, wh, door):
+    """The reinforced-concrete band (เสาเอ็น–ทับหลัง) round an opening:
+    two posts and a lintel, and a sill beam under a window."""
+    bx = _Boxes(p0, u, z)
+    conc = _paint("concrete")
+    d0, d1 = -wt / 2, wt / 2
+    lo = 0.0 if door else max(sill - band, 0.0)
+    hi = min(top + band, wh)
+    bx.box(a - band, a, d0, d1, lo, hi, conc)
+    bx.box(b, b + band, d0, d1, lo, hi, conc)
+    if top + band <= wh + 1e-6:
+        bx.box(a + 0.001, b - 0.001, d0, d1, top, top + band, conc)
+    if not door and sill - band >= -1e-6:
+        bx.box(a + 0.001, b - 0.001, d0, d1, sill - band, sill, conc)
+    return bx.group("เสาเอ็น-ทับหลัง ค.ส.ล.", "structure", "band",
+                    "เสาเอ็น-ทับหลัง", "IfcBeam")
+
+
+def band_length(w, h, sill, door, band, wh) -> float:
+    """Metres of เสาเอ็น/ทับหลัง round one opening (as the 3D band)."""
+    lo = 0.0 if door else max(sill - band, 0.0)
+    hi = min(sill + h + band, wh) if not door else min(h + band, wh)
+    L = 2 * (hi - lo)
+    if (0.0 if door else sill) + h + band <= wh + 1e-6:
+        L += w
+    if not door and sill - band >= -1e-6:
+        L += w
+    return L
 
 
 def stair_member(stp, s, z):
@@ -934,11 +1114,32 @@ def roof_members(data) -> tuple[list, dict]:
             add(_member("roof", "barge", "ปั้นลม", "rect", fp, path,
                         anchor="tc", ifc="IfcMember", name="ปั้นลม"),
                 "barge")
+    from core.wanic_catalog import COLORS, roof_tile
+    _tc, tile = roof_tile(s)
+    for g in out:
+        k = ((g.ext or {}).get(EXT_KEY) or {}).get("kind")
+        if k in ("fascia", "barge"):
+            g.material = {"color": COLORS["fascia"]}
+    lift = float(params.get("H", params.get("D", params.get("A", 80)))) / 1000.0
     if s.get("skin") and lines["skin"]:
-        lift = float(params.get("H", params.get("D", params.get("A", 80))))
-        g = roof_skin(lines["skin"], lift / 1000.0)
+        g = roof_skin(lines["skin"], lift)
         if g is not None:
+            g.material = {"color": tile["color"], "mat": tile["name"]}
             add(_tag(g, "roof", "skin", "หลังคา"), "skin")
+    if s.get("caps", True) and s.get("skin"):
+        # Ridge and hip caps (ครอบสัน / ครอบตะเข้สัน) and, on a gable, the
+        # verge caps (ครอบข้าง/ครอบปั้นลม), sitting on the covering.
+        cap = dict(b=250.0, h=80.0)
+        for kind, paths, name in (("ridge", lines["ridge"], "ครอบสัน"),
+                                  ("hip", lines["hip"], "ครอบตะเข้สัน"),
+                                  ("barge", lines["barge"], "ครอบข้าง")):
+            for path in paths:
+                up = [(p[0], p[1], p[2] + lift + 0.01) for p in path]
+                g = _member("roof", "cap", name, "rect", cap, up,
+                            anchor="c", ifc="IfcCovering", name=name)
+                if g is not None:
+                    g.material = {"color": tile["color"], "mat": tile["name"]}
+                add(g, "cap")
     return out, count
 
 
@@ -988,7 +1189,8 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("fascia", "เชิงชาย"),
-           ("barge", "ปั้นลม"), ("fixture", "สุขภัณฑ์"),
+           ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
+           ("band", "เสาเอ็น-ทับหลัง"), ("fixture", "สุขภัณฑ์"),
            ("skin", "แผ่นหลังคา")]
 
 

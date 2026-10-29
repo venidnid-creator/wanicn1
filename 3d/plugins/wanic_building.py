@@ -941,11 +941,9 @@ class BoqDialog(QDialog):
             c.setChecked(bool(o[key]))
             self.opt[key] = c
             f.addRow(c)
-        self.roofing = QComboBox()
-        self.roofing.addItem("กระเบื้องคอนกรีต", "tile")
-        self.roofing.addItem("เหล็กรีดลอน (Metal Sheet)", "metal")
-        self.roofing.setCurrentIndex(max(self.roofing.findData(o["roofing"]), 0))
-        f.addRow("วัสดุมุงหลังคา", self.roofing)
+        roof_note = QLabel("วัสดุมุงหลังคา เลือกที่กลุ่ม «หลังคา» ในแท็บออกแบบอาคาร")
+        roof_note.setStyleSheet("color: palette(mid);")
+        f.addRow(roof_note)
         self.recipe = {}
         for key, prefix, th in (("wall_recipe", "6.", "ผนัง (สูตรวัสดุ)"),
                                 ("plaster_recipe", "7.", "ฉาบปูน (สูตรวัสดุ)"),
@@ -1112,7 +1110,6 @@ class BoqDialog(QDialog):
 
     def save_options(self):
         o = {k: c.isChecked() for k, c in self.opt.items()}
-        o["roofing"] = self.roofing.currentData()
         o.update({k: c.currentData() for k, c in self.recipe.items()})
         o.update({k: sp.value() for k, sp in self.sand.items()})
         self._write("boq_options", o)
@@ -1344,6 +1341,7 @@ class BuildingPanel(QWidget):
         self.walls.toggled.connect(lambda _v: self._save_settings())
         sf.addRow(self.walls)
         num("wall_t", "ผนังหนา", 0.05, 0.5, 0.01)
+        num("band", "เสาเอ็น-ทับหลังรอบประตู/หน้าต่าง (0 = ไม่มี)", 0.0, 0.3, 0.01)
         lay.addWidget(st)
         self.library = LibraryBox(self)
         lay.addWidget(self.library)
@@ -1393,11 +1391,23 @@ class BuildingPanel(QWidget):
         self.skin = QCheckBox("สร้างแผ่นหลังคา (คิดพื้นที่มุงหลังคา)")
         self.skin.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.skin)
+        self.tile = QComboBox()
+        for code, spec in CAT.ROOF_TILES.items():
+            per = CAT.tiles_per_m2(spec)
+            extra = "" if spec["unit"] == "ตร.ม." else f" (~{per:.1f} แผ่น/ตร.ม.)"
+            self.tile.addItem(f"{code} {spec['name']}{extra}", code)
+        self.tile.currentIndexChanged.connect(lambda _i: self._save_settings())
+        rff.addRow("วัสดุมุง", self.tile)
+        self.caps = QCheckBox("ครอบสัน ครอบตะเข้สัน ครอบข้าง")
+        self.caps.toggled.connect(lambda _v: self._save_settings())
+        rff.addRow(self.caps)
         self.fascia = QCheckBox("สร้างเชิงชาย (และปั้นลมหน้าจั่ว)")
         self.fascia.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.fascia)
         sf_keep = sf
         sf = rff
+        num("tiles_m2", "จำนวนแผ่น/ตร.ม. ตามคู่มือผู้ผลิต (0 = คิดจากระยะซ้อน)",
+            0.0, 40.0, 0.1, 1, "")
         num("fascia_h", "เชิงชาย หน้ากว้าง", 0.10, 0.40, 0.025)
         num("fascia_t", "เชิงชาย หนา", 0.01, 0.06, 0.005)
         sf = sf_keep
@@ -1926,6 +1936,8 @@ class BuildingPanel(QWidget):
         s["walls"] = self.walls.isChecked()
         s["skin"] = self.skin.isChecked()
         s["fascia"] = self.fascia.isChecked()
+        s["caps"] = self.caps.isChecked()
+        s["tile"] = self.tile.currentData()
         s["roof"] = self.roof.currentData()
         s["roof_mode"] = self.roof_mode.currentData()
         for k, c in self.steel.items():
@@ -1949,6 +1961,9 @@ class BuildingPanel(QWidget):
             self.walls.setChecked(bool(s["walls"]))
             self.skin.setChecked(bool(s["skin"]))
             self.fascia.setChecked(bool(s.get("fascia", True)))
+            self.caps.setChecked(bool(s.get("caps", True)))
+            self.tile.setCurrentIndex(max(self.tile.findData(
+                s.get("tile", CAT.DEFAULT_TILE)), 0))
             self.roof.setCurrentIndex(max(self.roof.findData(s["roof"]), 0))
             self.roof_mode.setCurrentIndex(
                 max(self.roof_mode.findData(s.get("roof_mode", "plan")), 0))

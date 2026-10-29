@@ -179,3 +179,79 @@ def wall_tile_labour_code(name) -> str:
     if s >= 18:
         return "2.3.3c"
     return "2.3.3a"
+
+
+# ---------------------------------------------------------------------------
+# Roof coverings (หลักเกณฑ์ 4.2 ข้อ 1, ว480 2.1)
+# ---------------------------------------------------------------------------
+
+#: code → spec. ``eff`` is the covering one piece gives after the side and
+#: end laps (width, length in m) — pieces per m² = 1 / (w × l), as the
+#: criteria say (หักความกว้างที่ซ้อนทับตามคู่มือผู้ผลิต); ``cap`` the
+#: effective length of one ridge/hip cap; ``lab`` the ว480 rows (area,
+#: ridge/hip caps, verge caps) and ``color`` the 3D colour.
+ROOF_TILES = {
+    "R1": dict(name="กระเบื้องคอนกรีต ซีแพคโมเนีย (ลอนสเปน) 33×42 ซม.",
+               size=(0.33, 0.42), eff=(0.30, 0.32), cap=0.33,
+               cap_name="ครอบสันโค้ง/ครอบตะเข้สัน กระเบื้องคอนกรีต",
+               lab=("2.1.3", "2.1.3r", "2.1.3v"), color=(0.62, 0.30, 0.22),
+               unit="แผ่น"),
+    "R2": dict(name="กระเบื้องคอนกรีต ซีแพคโมเนีย (ลอนเรียบ/ผิวเรียบ) 33×42 ซม.",
+               size=(0.33, 0.42), eff=(0.30, 0.32), cap=0.33,
+               cap_name="ครอบสันโค้ง/ครอบตะเข้สัน กระเบื้องคอนกรีต",
+               lab=("2.1.3", "2.1.3r", "2.1.3v"), color=(0.35, 0.36, 0.40),
+               unit="แผ่น"),
+    "R3": dict(name="กระเบื้องไฟเบอร์ซีเมนต์ลอนคู่ 0.50×1.20 ม.",
+               size=(0.50, 1.20), eff=(0.44, 1.00), cap=0.25,
+               cap_name="ครอบสันปรับมุม กระเบื้องลอนคู่",
+               lab=("2.1.1", "2.1.1r", "2.1.1r"), color=(0.62, 0.62, 0.60),
+               unit="แผ่น"),
+    "R4": dict(name="กระเบื้องไฟเบอร์ซีเมนต์ลอนคู่ 0.50×1.50 ม.",
+               size=(0.50, 1.50), eff=(0.44, 1.30), cap=0.25,
+               cap_name="ครอบสันปรับมุม กระเบื้องลอนคู่",
+               lab=("2.1.1", "2.1.1r", "2.1.1r"), color=(0.62, 0.62, 0.60),
+               unit="แผ่น"),
+    "R5": dict(name="กระเบื้องไฟเบอร์ซีเมนต์ลอนเล็ก 0.54×1.20 ม.",
+               size=(0.54, 1.20), eff=(0.47, 1.00), cap=0.25,
+               cap_name="ครอบสันปรับมุม กระเบื้องลอนเล็ก",
+               lab=("2.1.1", "2.1.1r", "2.1.1r"), color=(0.66, 0.64, 0.60),
+               unit="แผ่น"),
+    "R6": dict(name="กระเบื้องดินเผาเคลือบเซรามิค 30×40 ซม.",
+               size=(0.30, 0.40), eff=(0.26, 0.31), cap=0.30,
+               cap_name="ครอบสัน/ครอบตะเข้สัน กระเบื้องเซรามิค",
+               lab=("2.1.7", "2.1.7r", "2.1.7v"), color=(0.55, 0.18, 0.15),
+               unit="แผ่น"),
+    "R7": dict(name="หลังคาเหล็กรีดลอน (Metal Sheet) 0.35 มม.",
+               size=(0.76, 1.00), eff=(0.76, 1.00), cap=1.00,
+               cap_name="ครอบสัน/ครอบข้าง (Flashing) เหล็กรีดลอน",
+               lab=("2.1.8", "2.1.8f", "2.1.8f"), color=(0.20, 0.33, 0.45),
+               unit="ตร.ม."),
+}
+DEFAULT_TILE = "R1"
+
+
+def roof_tile(s) -> tuple[str, dict]:
+    code = (s or {}).get("tile") or DEFAULT_TILE
+    if code not in ROOF_TILES:
+        code = DEFAULT_TILE
+    return code, ROOF_TILES[code]
+
+
+def tiles_per_m2(spec, s=None) -> float:
+    """Pieces per m² of slope: the user's figure, else from the effective
+    cover of one piece."""
+    own = float((s or {}).get("tiles_m2") or 0)
+    if own > 0:
+        return own
+    w, l = spec["eff"]
+    return 1.0 / (w * l)
+
+
+#: Colours of the 3D parts (RGB 0–1).
+COLORS = {
+    "wood": (0.55, 0.36, 0.20), "wood_dark": (0.40, 0.25, 0.14),
+    "pvc": (0.93, 0.92, 0.88), "alu": (0.78, 0.80, 0.82),
+    "glass": (0.62, 0.80, 0.90), "concrete": (0.80, 0.80, 0.78),
+    "metal": (0.30, 0.30, 0.32), "fascia": (0.95, 0.95, 0.93),
+    "sanitary": (0.97, 0.97, 0.97),
+}

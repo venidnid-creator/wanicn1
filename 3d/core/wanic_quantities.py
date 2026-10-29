@@ -116,11 +116,24 @@ class _Bill:
         return ln
 
 
+#: Recipe item names that mean a price-list key under another name.
+ALIASES = {"เหล็กเสริม RB Ø 6 มม.": "RB6", "เหล็กเสริม RB Ø 9 มม.": "RB9",
+           "ตะปู": "ตะปูตอกไม้ 3\"", "น้ำผสมคอนกรีต": None}
+
+
 def recipe_price(code, prices) -> tuple[float, str]:
     rc = RC.find(code)
     if rc is None:
         return 0.0, f"ไม่พบสูตร {code}"
-    cost, missing = RC.unit_cost(rc, prices)
+    p = dict(prices)
+    for name, key in ALIASES.items():
+        if not p.get(name):
+            p[name] = prices.get(key, 0.0) if key else 0.0164
+    # «ไม้แบบคิด 50 %» is formwork per m² (A·B·C formula).
+    for it in rc["items"]:
+        if it["name"].startswith("ไม้แบบ") and it["unit"] == "ตร.ม.":
+            p.setdefault(it["name"], S.formwork_unit_price(prices))
+    cost, missing = RC.unit_cost(rc, p)
     note = ""
     if missing:
         note = "ยังไม่มีราคา: " + ", ".join(missing[:3]) + \
@@ -472,6 +485,17 @@ def compute(data) -> dict:
             area = max(per * th - cut, 0.0)
             tiles[fin["wall_tile"]] = tiles.get(fin["wall_tile"], 0.0) + area
         tile_a = sum(tiles.values())
+        # เสาเอ็น–ทับหลัง ค.ส.ล. round every opening (4 sides; a door has
+        # none at the floor), as the 3D band.
+        band = float(s.get("band", 0.10))
+        band_m = 0.0
+        if band > 0:
+            for op in E["openings"]:
+                above = "RB1" if op["floor"] == n - 1 else "B1"
+                wh = H - float(lib[above]["h"])
+                band_m += B.band_length(op["w"], op["h"], op["sill"],
+                                        op["type"] != "window", band, wh)
+        wall_a -= band_m * band
         wp, wnote = rprice(o["wall_recipe"], prices)
         rc = RC.find(o["wall_recipe"])
         bill.add(g, rc["name"] if rc else "ผนังก่ออิฐ", wall_a, "ตร.ม.",
@@ -480,6 +504,15 @@ def compute(data) -> dict:
                        "ลึกคาน) − ช่องเปิด",
                  ref=f"หลักเกณฑ์ 4.2 ข้อ 3.1 · สูตรวัสดุ {o['wall_recipe']}"
                      " · ว480 2.3.1", note=wnote)
+        if band_m:
+            full = float(s["wall_t"]) >= 0.15
+            code = "4.2" if full else "4.1"
+            bp_, bn_ = rprice(code, prices)
+            bill.add(g, f"เสาเอ็นและคานทับหลัง ค.ส.ล. รอบประตู-หน้าต่าง "
+                        f"(กว้าง {band * 100:.0f} ซม.)", band_m, "ม.", mat=bp_,
+                     lab_code="2.3.1f" if full else "2.3.1e",
+                     basis="รอบช่องเปิดทั้ง 4 ด้าน (ประตูไม่มีด้านพื้น)",
+                     ref=f"สูตรวัสดุ {code} · ว480 2.3.1", note=bn_)
         pp, pnote = rprice(o["plaster_recipe"], prices)
         bill.add(g, "ฉาบปูนเรียบ ผนังภายใน", int_face - tile_a, "ตร.ม.",
                  mat=pp, lab_code="2.3.2a",
@@ -609,6 +642,7 @@ def compute(data) -> dict:
     lines = B.roof_lines(data)
     if lines:
         roof = s["roof"]
+        tcode, tile = CAT.roof_tile(s)
         per: dict[str, float] = {}
         for kind in ("ridge", "hip", "rafter", "post"):
             for path in lines[kind]:
@@ -645,24 +679,54 @@ def compute(data) -> dict:
                      "ม.", mat_key=fk, lab_code="2.1.10a",
                      basis="ความยาวตามแนวลาดหน้าจั่ว",
                      ref="ว480 2.1.10")
-            if o["roofing"] != "metal":
+            if tcode != "R7":
                 bill.add(g, "ปิดนก (P.V.C) สำเร็จรูป", eave, "ม.",
                          mat_key="ปิดนก P.V.C สำเร็จรูป", lab_code="2.1.10b",
                          basis="ความยาวตามแนวชายคา", ref="ว480 2.1.10")
         slope = sum(_area3(p) for p in lines["skin"])
-        if o["roofing"] == "metal":
-            bill.add(g, "มุงหลังคาเหล็กรีดลอน (Metal Sheet)", slope, "ตร.ม.",
-                     waste=S.ROOFING_WASTE.get(roof, 3.0),
-                     mat_key="กระเบื้องคอนกรีต (รวมอุปกรณ์)",
-                     lab_code="2.1.8", basis="พื้นที่ตามแนวลาดเอียง",
-                     ref="หลักเกณฑ์ 4.2 ข้อ 1.4 · ว480 2.1.8")
+        waste = S.ROOFING_WASTE.get(roof, 3.0)
+        la, lr, lv = tile["lab"]
+        if la == "2.1.1" and roof == "hip":
+            la = "2.1.1h"
+        if tile["unit"] == "ตร.ม.":
+            bill.add(g, tile["name"], slope, "ตร.ม.", waste=waste,
+                     mat_key=tile["name"], lab_code=la,
+                     basis="พื้นที่ตามแนวลาดเอียง",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 1.4 · ว480 {la[:5]}")
         else:
-            bill.add(g, "มุงกระเบื้องคอนกรีต (รวมครอบและอุปกรณ์)", slope,
-                     "ตร.ม.", waste=S.ROOFING_WASTE.get(roof, 3.0),
-                     mat_key="กระเบื้องคอนกรีต (รวมอุปกรณ์)",
-                     lab_code="2.1.3", basis="พื้นที่ตามแนวลาดเอียง",
-                     ref="หลักเกณฑ์ 4.2 ข้อ 1.1, 1.4 (เผื่อ 3%/5%) · "
-                         "ว480 2.1.3")
+            per = CAT.tiles_per_m2(tile, s)
+            ew, el = tile["eff"]
+            bill.add(g, tile["name"], slope * per, "แผ่น", waste=waste,
+                     mat_key=tile["name"],
+                     basis=f"พื้นที่ลาดเอียง {slope:.2f} ตร.ม. × {per:.2f} แผ่น/"
+                           f"ตร.ม. (ระยะซ้อนทับเหลือ {ew:.2f}×{el:.2f} ม./แผ่น)",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 1.1 (เผื่อ {waste:g}%)")
+            bill.add(g, f"ค่าแรงมุง{tile['name']}", slope, "ตร.ม.",
+                     lab_code=la, basis="พื้นที่ตามแนวลาดเอียง",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 1.4 · ว480 {la[:5]}")
+        if s.get("caps", True):
+            ridge = sum(P.path_length(p) for p in lines["ridge"])
+            hips = sum(P.path_length(p) for p in lines["hip"])
+            cap_unit = "ม." if tile["unit"] == "ตร.ม." else "แผ่น"
+            for label, length, lc in (("ครอบสัน", ridge, lr),
+                                      ("ครอบตะเข้สัน", hips, lr),
+                                      ("ครอบข้าง/ครอบปั้นลม", barge, lv)):
+                if length <= 0:
+                    continue
+                if cap_unit == "แผ่น":
+                    pieces = length / tile["cap"]
+                    bill.add(g, f"{label} — {tile['cap_name']}", pieces,
+                             "แผ่น", waste=3.0, mat_key=tile["cap_name"],
+                             basis=f"ยาว {length:.2f} ม. ÷ {tile['cap']:.2f} ม./แผ่น",
+                             ref="หลักเกณฑ์ 4.2 ข้อ 1.2 (เผื่อ 3%)")
+                else:
+                    bill.add(g, f"{label} — {tile['cap_name']}", length, "ม.",
+                             waste=3.0, mat_key=tile["cap_name"],
+                             basis=f"ยาว {length:.2f} ม.",
+                             ref="หลักเกณฑ์ 4.2 ข้อ 1.2 (เผื่อ 3%)")
+                bill.add(g, f"ค่าแรง{label}", length, "ม.", lab_code=lc,
+                         basis="ความยาวตามแนวสัน/ตะเข้/ปั้นลม",
+                         ref=f"ว480 {lc[:5]}")
 
     # Formwork labour tier by the project's total formwork area.
     tier = "1.8.1a" if form_total[0] >= 5000 else "1.8.1b"
