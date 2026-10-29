@@ -14,6 +14,7 @@ UPSTREAM = "IngeTrazo"
 UPSTREAM_AUTHOR = "Marco Sumari Tellez"
 DEVELOPER = "นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ"
 YEAR = "2569"
+COPYRIGHT = "ลิขสิทธิ์ © 2569 (2026) นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ — WANICNSURVEY"
 DEFAULT_LANGUAGE = "th"
 
 # The other half of the suite (2D <-> 3D menu).

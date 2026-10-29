@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 """BOQ ตามหลักเกณฑ์ 2569: the measuring rules, waste, labour and hand-off.
 
 Expected numbers are worked by hand from the criteria (กรมบัญชีกลาง 2569,

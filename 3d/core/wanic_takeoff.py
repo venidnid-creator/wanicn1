@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — "WANIC ถอดปริมาณ": quantity takeoff and Thai BOQ pricing.
 """Unit-rate pricing on top of the model's geometry (no GUI here).
 

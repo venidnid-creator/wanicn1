@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — หลักเกณฑ์การถอดแบบคำนวณราคากลาง พ.ศ. 2569 (งานอาคาร)
 """The measuring rules, waste allowances and labour rates of the 2569
 Thai government price-estimate criteria, as data the tools can use.

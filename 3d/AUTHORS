@@ -305,3 +305,10 @@ Every source file carries an SPDX header and copyright notice; these must be
 preserved in any redistribution or derivative work, per the license terms.
 
 Later contributors may add their names below.
+
+WANICNSURVEY (Thai distribution)
+---------------------------------
+นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ / survey engineer) — Copyright (C) 2026.
+    Thai translation, WANICNSURVEY branding and start screen, the WANIC
+    extensions (takeoff, profiles, building design, 2569 government BOQ)
+    and the Thai installer. See NOTICE.md at the top of the repository.

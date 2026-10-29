@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 """WANIC ถอดปริมาณ: measuring, matching, pricing, Thai baht text, exports."""
 from __future__ import annotations
 

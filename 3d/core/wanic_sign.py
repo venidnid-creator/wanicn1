@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — ลายเซ็นกำกับงานพัฒนา
 """The developer's signature carried by every WANIC tool: the forms it
 prints, the BOQ it exports and the panels it shows.

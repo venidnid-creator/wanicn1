@@ -24,6 +24,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} เวอร์ชัน {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppCopyright=Copyright (C) 2569 (2026) นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ
 VersionInfoVersion=1.0.0.0
 VersionInfoProductName={#MyAppName}
 VersionInfoDescription=WANICNSURVEY Setup
@@ -91,6 +92,7 @@ Source: "..\branding\wanicnsurvey-cad.ico"; DestDir: "{app}"; Flags: ignoreversi
 Source: "..\branding\wanicnsurvey-3d.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "license-th.txt"; DestDir: "{app}"; DestName: "อ่านก่อน-ข้อตกลง.txt"; Flags: ignoreversion
+Source: "..\NOTICE.md"; DestDir: "{app}"; DestName: "ลิขสิทธิ์-NOTICE.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}\WANICNSURVEY"; Filename: "{app}\{#LauncherExe}"; IconFilename: "{app}\wanicnsurvey.ico"

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — "WANIC โปรไฟล์": parametric profiles swept along paths.
 """Parametric cross-sections (steel, concrete, civil / survey work) swept
 along a path of edges into one group that remembers how it was made.

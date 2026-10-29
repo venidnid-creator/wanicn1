@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — ถอดปริมาณงานอาคารตามหลักเกณฑ์กรมบัญชีกลาง พ.ศ. 2569
 """Bill of quantities of a WANIC ออกแบบอาคาร plan, measured the way the
 2569 criteria say (:mod:`core.wanic_std2569`) rather than from the 3D mesh:

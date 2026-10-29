@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 """WANIC โปรไฟล์: section outlines, sweeping along paths, schedule, panel."""
 from __future__ import annotations
 

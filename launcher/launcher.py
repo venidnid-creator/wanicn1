@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 """WANICNSURVEY start screen: pick 2D drafting or the 3D model.
 
 The suite installs as::
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout,
 
 PRODUCT = "WANICNSURVEY"
 TAGLINE = "สำรวจ · เขียนแบบ 2 มิติ · ขึ้นโมเดล 3 มิติ — ใช้งานได้ฟรี"
-DEVELOPER = "พัฒนาโดย นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ · 2569"
+DEVELOPER = "ลิขสิทธิ์ © 2569 นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ"
 CREDIT = ("พัฒนาต่อยอดจากซอฟต์แวร์เสรี IngeCAD และ IngeTrazo "
           "ของ Marco Sumari Tellez · GPL-3.0 · ใช้งานได้ฟรี")
 

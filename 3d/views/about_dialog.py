@@ -422,7 +422,9 @@ class AboutDialog(QDialog):
         from core import branding
         para(f"<b style='font-size:15px'>{branding.APP_NAME}</b><br>"
              f"พัฒนาต่อยอดโดย <b>{branding.DEVELOPER}</b> ({branding.YEAR})<br>"
-             f"<small>สร้างจากซอฟต์แวร์เสรี {branding.UPSTREAM} — GPL-3.0</small>")
+             f"<small>{branding.COPYRIGHT}<br>"
+             f"สร้างจากซอฟต์แวร์เสรี {branding.UPSTREAM} — GPL-3.0-or-later · "
+             "ไม่มีการรับประกันใด ๆ</small>")
         para("<b style='font-size:15px'>IngeTrazo</b> "
              f"{tr('Version')} {version}{gl}<br>"
              f"{tr('Free 3D modeler for architecture, engineering and 3D design.')}<br>"

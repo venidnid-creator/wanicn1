@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — สูตรค่าวัสดุมวลรวมต่อหน่วย งานก่อสร้างอาคาร (หลักเกณฑ์ 2569)
 """Unit-material recipes (วัสดุมวลรวมต่อหน่วย) of building work, transcribed
 automatically from «แนวทางและวิธีปฏิบัติเกี่ยวกับหลักเกณฑ์การคำนวณราคากลาง

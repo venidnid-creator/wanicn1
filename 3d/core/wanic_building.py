@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — "WANIC ออกแบบอาคาร": room plan → structure → roof.
 """From a plan of rectangular rooms (per floor) to a 3D reinforced-concrete
 frame and a steel roof frame, ready for the takeoff.

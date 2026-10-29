@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
 # WANICNSURVEY 3D — "WANIC โปรไฟล์" (parametric profiles along paths).
 # Developed for WANICNSURVEY by นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ, 2569.
 """สร้างชิ้นส่วนจากรูปตัดสำเร็จรูปตามเส้นที่เลือก.
