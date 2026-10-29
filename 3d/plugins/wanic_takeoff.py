@@ -59,6 +59,8 @@ class PrDialog(QDialog):
         ("chair", "ประธานกรรมการกำหนดราคากลาง", "text"),
         ("member1", "กรรมการกำหนดราคากลาง คนที่ 1", "text"),
         ("member2", "กรรมการกำหนดราคากลาง คนที่ 2", "text"),
+        ("preparer", "ผู้ถอดแบบและคำนวณราคา", "text"),
+        ("preparer_role", "ตำแหน่งผู้ถอดแบบ", "text"),
     ]
 
     def __init__(self, settings, parent=None):
@@ -208,6 +210,10 @@ class TakeoffPanel(QWidget):
         self.summary.setWordWrap(True)
         self.summary.setStyleSheet("color: palette(mid);")
         lay.addWidget(self.summary)
+        from core.wanic_sign import label_html
+        _sig = QLabel(label_html("WANIC ถอดปริมาณ"))
+        _sig.setWordWrap(True)
+        lay.addWidget(_sig)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)

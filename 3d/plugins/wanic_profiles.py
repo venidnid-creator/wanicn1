@@ -241,6 +241,10 @@ class ProfilePanel(QWidget):
         note.setWordWrap(True)
         note.setStyleSheet("color: palette(mid);")
         lay.addWidget(note)
+        from core.wanic_sign import label_html
+        _sig = QLabel(label_html("WANIC โปรไฟล์"))
+        _sig.setWordWrap(True)
+        lay.addWidget(_sig)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)

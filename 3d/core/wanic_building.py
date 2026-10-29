@@ -62,6 +62,63 @@ DEFAULT_SETTINGS = {
 }
 
 
+#: Room types and standard sizes, chosen separately (as in the plan tools
+#: designers know): a type names the room, a size sets w × d.
+ROOM_TYPES = ["ห้องนอน", "ห้องนอนใหญ่", "ห้องนั่งเล่น", "ห้องรับแขก",
+              "ห้องครัว", "ห้องรับประทานอาหาร", "ห้องน้ำ", "ห้องทำงาน",
+              "ห้องเก็บของ", "ห้องซักล้าง", "ห้องพระ", "โถงทางเดิน",
+              "บันได", "ระเบียง", "ชานพัก", "ที่จอดรถ"]
+ROOM_SIZES = [(3.0, 3.0), (3.0, 2.0), (2.0, 3.0), (4.0, 4.0), (4.0, 3.0),
+              (3.0, 4.0), (4.0, 2.0), (3.5, 3.5), (3.5, 3.0), (3.5, 2.0),
+              (4.5, 4.0), (5.0, 4.0), (1.5, 2.0), (1.5, 1.5), (1.5, 3.0),
+              (2.0, 2.0), (2.5, 2.0), (3.0, 1.5), (3.0, 5.5), (6.0, 3.0)]
+
+# ---------------------------------------------------------------------------
+# Member library (เบอร์ชิ้นส่วน): sizes in metres, bars as "4-DB12" /
+# "RB6@0.15". Every footing / stump / column / beam / slab carries a mark;
+# a mark can be set per column point or per beam span.
+# ---------------------------------------------------------------------------
+
+LIB_KINDS = {"footing": "ฐานราก", "stump": "เสาตอม่อ", "column": "เสา",
+             "beam": "คาน", "slab": "พื้น"}
+LIB_FIELDS = {
+    "footing": [("w", "กว้าง (ม.)"), ("l", "ยาว (ม.)"), ("t", "หนา (ม.)"),
+                ("depth", "ลึกถึงใต้ฐาน (ม.)"), ("bars", "เหล็กตะแกรง"),
+                ("sand", "ทรายรอง (ม.)"), ("lean", "คอนกรีตหยาบ (ม.)"),
+                ("piles", "เสาเข็ม/ฐาน (ต้น)"), ("pile_b", "เข็มกว้าง (ม.)"),
+                ("pile_len", "เข็มยาว (ม.)")],
+    "stump": [("b", "กว้าง (ม.)"), ("h", "ลึก (ม.)"), ("main", "เหล็กยืน"),
+              ("tie", "เหล็กปลอก")],
+    "column": [("b", "กว้าง (ม.)"), ("h", "ลึก (ม.)"), ("main", "เหล็กยืน"),
+               ("tie", "เหล็กปลอก")],
+    "beam": [("b", "กว้าง (ม.)"), ("h", "ลึก (ม.)"), ("top", "เหล็กบน"),
+             ("bot", "เหล็กล่าง"), ("stir", "เหล็กปลอก")],
+    "slab": [("t", "หนา (ม.)"), ("bars", "เหล็กเสริม 2 ทาง"),
+             ("ground", "พื้นวางบนดิน (1/0)")],
+}
+DEFAULT_LIB = {
+    "F1": {"kind": "footing", "w": 1.0, "l": 1.0, "t": 0.3, "depth": 1.5,
+           "bars": "DB12@0.15", "sand": 0.05, "lean": 0.05, "piles": 0,
+           "pile_b": 0.18, "pile_len": 6.0},
+    "PC1": {"kind": "stump", "b": 0.2, "h": 0.2, "main": "4-DB12",
+            "tie": "RB6@0.15"},
+    "C1": {"kind": "column", "b": 0.2, "h": 0.2, "main": "4-DB12",
+           "tie": "RB6@0.15"},
+    "GB1": {"kind": "beam", "b": 0.2, "h": 0.4, "top": "2-DB12",
+            "bot": "2-DB12", "stir": "RB6@0.15"},
+    "B1": {"kind": "beam", "b": 0.2, "h": 0.4, "top": "2-DB12",
+           "bot": "2-DB12", "stir": "RB6@0.15"},
+    "RB1": {"kind": "beam", "b": 0.2, "h": 0.4, "top": "2-DB12",
+            "bot": "2-DB12", "stir": "RB6@0.15"},
+    "S1": {"kind": "slab", "t": 0.10, "bars": "RB9@0.20", "ground": 1},
+    "S2": {"kind": "slab", "t": 0.10, "bars": "RB9@0.20", "ground": 0},
+}
+#: Default mark per role (F, PC, C at a column point; beams per level).
+ROLE_DEFAULT = {"F": "F1", "PC": "PC1", "C": "C1", "GB": "GB1", "B": "B1",
+                "RB": "RB1", "S1": "S1", "S2": "S2"}
+ROLE_KIND = {"F": "footing", "PC": "stump", "C": "column"}
+
+
 def new_floor() -> dict:
     return {"rooms": [], "openings": [], "stairs": []}
 
@@ -93,6 +150,168 @@ def settings_of(data) -> dict:
     s = dict(DEFAULT_SETTINGS)
     s.update((data or {}).get("settings") or {})
     return s
+
+
+def library_of(data) -> dict:
+    """mark → member spec: the defaults, sized from the older settings,
+    then the user's own library entries on top."""
+    import copy
+    s = settings_of(data)
+    lib = copy.deepcopy(DEFAULT_LIB)
+    lib["F1"].update(w=float(s["footing_w"]), l=float(s["footing_w"]),
+                     t=float(s["footing_t"]), depth=float(s["footing_depth"]))
+    lib["PC1"].update(b=float(s["stump"]), h=float(s["stump"]))
+    lib["C1"].update(b=float(s["col"]), h=float(s["col"]))
+    for mark, pre in (("GB1", "gb"), ("B1", "b"), ("RB1", "rb")):
+        lib[mark].update(b=float(s[f"{pre}_b"]), h=float(s[f"{pre}_h"]))
+    lib["S1"]["t"] = lib["S2"]["t"] = float(s["slab_t"])
+    for mark, spec in ((data or {}).get("library") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        base = dict(lib.get(mark) or {})
+        base.update(spec)
+        if base.get("kind") in LIB_KINDS:
+            lib[str(mark)] = base
+    return lib
+
+
+def marks_of(lib, kind) -> list[str]:
+    def key(m):
+        digits = "".join(ch for ch in m if ch.isdigit())
+        return (m.rstrip("0123456789"), int(digits) if digits else 0, m)
+    return sorted((m for m, v in lib.items() if v.get("kind") == kind),
+                  key=key)
+
+
+def node_key(x, y) -> str:
+    return f"N:{_r(x):.3f},{_r(y):.3f}"
+
+
+def span_key(level, p0, p1) -> str:
+    a, b = sorted(((_r(p0[0]), _r(p0[1])), (_r(p1[0]), _r(p1[1]))))
+    return f"S:{int(level)}:{a[0]:.3f},{a[1]:.3f},{b[0]:.3f},{b[1]:.3f}"
+
+
+def node_mark(data, lib, x, y, role) -> str:
+    """The F / PC / C mark at a column point."""
+    rec = ((data or {}).get("assign") or {}).get(node_key(x, y)) or {}
+    mark = rec.get(role)
+    if mark in lib and lib[mark].get("kind") == ROLE_KIND[role]:
+        return mark
+    return ROLE_DEFAULT[role]
+
+
+def beam_mark(data, lib, level, n, p0, p1) -> str:
+    rec = ((data or {}).get("assign") or {}).get(span_key(level, p0, p1))
+    if rec in lib and lib[rec].get("kind") == "beam":
+        return rec
+    return ROLE_DEFAULT["GB" if level == 0 else "RB" if level == n else "B"]
+
+
+def slab_mark(lib, room, floor) -> str:
+    m = room.get("slab")
+    if m in lib and lib[m].get("kind") == "slab":
+        return m
+    return ROLE_DEFAULT["S1" if floor == 0 else "S2"]
+
+
+def _on_edge(room, px, py, tol=1e-6) -> bool:
+    x0, y0 = float(room["x"]), float(room["y"])
+    x1, y1 = x0 + float(room["w"]), y0 + float(room["d"])
+    inside_x = x0 - tol <= px <= x1 + tol
+    inside_y = y0 - tol <= py <= y1 + tol
+    return ((abs(px - x0) < tol or abs(px - x1) < tol) and inside_y) or \
+           ((abs(py - y0) < tol or abs(py - y1) < tol) and inside_x)
+
+
+def elements(data) -> dict:
+    """Every structural and architectural element of the plan, with its
+    mark and position — the one inventory both the 3D build and the
+    standard quantities (:mod:`core.wanic_quantities`) read."""
+    s = settings_of(data)
+    lib = library_of(data)
+    floors, _skipped = stacked(data)
+    n = len(floors)
+    H = float(s["floor_h"])
+    E = {"footings": [], "stumps": [], "columns": [], "beams": [],
+         "slabs": [], "walls": [], "openings": [], "stairs": [], "n": n,
+         "H": H, "lib": lib, "settings": s, "floors": floors}
+    if not floors:
+        return E
+    rooms_of = [f["rooms"] for f in floors]
+    ground = set()
+    for rooms in rooms_of:
+        ground |= set(nodes(rooms))
+    for (x, y) in sorted(ground):
+        fm = node_mark(data, lib, x, y, "F")
+        f = lib[fm]
+        base = -float(f["depth"])
+        top = base + float(f["t"])
+        E["footings"].append({"mark": fm, "x": x, "y": y, "z0": base,
+                              "z1": top})
+        E["stumps"].append({"mark": node_mark(data, lib, x, y, "PC"),
+                            "x": x, "y": y, "z0": top, "z1": 0.0})
+    for k in range(n):
+        pts = set()
+        for j in range(k, n):
+            pts |= set(nodes(rooms_of[j]))
+        for (x, y) in sorted(pts):
+            E["columns"].append({"mark": node_mark(data, lib, x, y, "C"),
+                                 "x": x, "y": y, "z0": k * H,
+                                 "z1": (k + 1) * H, "floor": k})
+    beam_at = {}
+    for lvl in range(n + 1):
+        rooms = []
+        if lvl < n:
+            rooms += rooms_of[lvl]
+        if lvl > 0:
+            rooms += rooms_of[lvl - 1]
+        for p0, p1 in segments(rooms):
+            mark = beam_mark(data, lib, lvl, n, p0, p1)
+            E["beams"].append({"mark": mark, "level": lvl, "p0": p0,
+                               "p1": p1, "z": lvl * H, "ground": lvl == 0,
+                               "roof": lvl == n})
+            beam_at[(lvl, p0, p1)] = mark
+    for k, rooms in enumerate(rooms_of):
+        for rm in rooms:
+            E["slabs"].append({"mark": slab_mark(lib, rm, k), "room": rm,
+                               "floor": k, "z": k * H})
+    for k, f in enumerate(floors):
+        for p0, p1 in segments(f["rooms"]):
+            mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+            sides = sum(1 for rm in f["rooms"] if _on_edge(rm, mx, my))
+            above = beam_at.get((k + 1, p0, p1)) or ROLE_DEFAULT[
+                "RB" if k == n - 1 else "B"]
+            E["walls"].append({
+                "floor": k, "p0": p0, "p1": p1,
+                "L": math.hypot(p1[0] - p0[0], p1[1] - p0[1]),
+                "exterior": sides <= 1, "beam": above,
+                "openings": [op for _s, op in
+                             _openings_on(p0, p1, f["openings"])]})
+        for op in f["openings"]:
+            w, h, sill = opening_size(op, s)
+            E["openings"].append({"floor": k, "op": op, "w": w, "h": h,
+                                  "sill": sill, "type": op.get("type", "door"),
+                                  "name": opening_name(op, s)})
+        for stp in f["stairs"]:
+            E["stairs"].append({"floor": k, "st": stp})
+    return E
+
+
+def pile_points(f, x, y):
+    """Pile centres under a footing (1–4 piles, else none)."""
+    n = int(f.get("piles") or 0)
+    if n <= 0:
+        return []
+    dx, dy = float(f["w"]) / 4, float(f["l"]) / 4
+    if n == 1:
+        return [(x, y)]
+    if n == 2:
+        return [(x - dx, y), (x + dx, y)]
+    if n == 3:
+        return [(x - dx, y - dy), (x + dx, y - dy), (x, y + dy)]
+    return [(x - dx, y - dy), (x + dx, y - dy), (x + dx, y + dy),
+            (x - dx, y + dy)][:4]
 
 
 def steel_presets() -> list[tuple[str, str, dict]]:
@@ -189,32 +408,6 @@ def snap_room(room, others, grid=0.5, reach=0.3):
     out = dict(room)
     out["x"], out["y"] = _r(best(x, w, xs)), _r(best(y, d, ys))
     return out
-
-
-# ---------------------------------------------------------------------------
-# Members
-# ---------------------------------------------------------------------------
-
-def _tag(g, part, kind, mark):
-    ext = dict(g.ext or {})
-    ext[EXT_KEY] = {"part": part, "kind": kind, "mark": mark}
-    g.ext = ext
-    return g
-
-
-def _member(part, kind, mark, family, params, path, anchor="c", ifc="",
-            name=None, closed=False, offset=(0.0, 0.0)):
-    g = P.build_member({"family": family, "params": params, "path": path,
-                        "anchor": anchor, "ifc": ifc, "name": name or mark,
-                        "closed": closed, "offset": offset})
-    if isinstance(g, str):
-        return None
-    return _tag(g, part, kind, mark)
-
-
-def _mm(v):
-    return float(v) * 1000.0
-
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +517,10 @@ def _mm(v):
 
 
 def structure_members(data) -> tuple[list, dict]:
-    """The concrete frame, walls, doors, windows and stairs as groups, and
-    a count per kind."""
-    s = settings_of(data)
-    floors, _skipped = stacked(data)
+    """The concrete frame, piles, walls, doors, windows and stairs as
+    groups, and a count per kind — sized from the member library."""
+    E = elements(data)
+    s, lib = E["settings"], E["lib"]
     out, count = [], {}
 
     def add(g, kind):
@@ -335,120 +528,97 @@ def structure_members(data) -> tuple[list, dict]:
             out.append(g)
             count[kind] = count.get(kind, 0) + 1
 
-    if not floors:
+    if not E["n"]:
         return out, count
-    rooms_of = [f["rooms"] for f in floors]
-    H = float(s["floor_h"])
-    n = len(floors)
-    base = -float(s["footing_depth"])
-    ft = float(s["footing_t"])
-    fw = _mm(s["footing_w"])
-    st, col = _mm(s["stump"]), _mm(s["col"])
-    # Every column needs a footing: the ground floor's, and any upper-floor
-    # column with nothing under it.
-    ground = set(nodes(rooms_of[0]))
-    for k in range(1, n):
-        ground |= set(nodes(rooms_of[k]))
-    for (x, y) in sorted(ground):
-        add(_member("structure", "footing", "F1", "rect", dict(b=fw, h=fw),
-                    [(x, y, base), (x, y, base + ft)], ifc="IfcFooting"),
-            "footing")
-        add(_member("structure", "stump", "PC1", "rect", dict(b=st, h=st),
-                    [(x, y, base + ft), (x, y, 0.0)], ifc="IfcColumn"),
-            "stump")
-    # Columns: a floor's columns, and the columns below an upper floor's.
-    for k in range(n):
-        z0, z1 = k * H, (k + 1) * H
-        pts = set()
-        for j in range(k, n):
-            pts |= set(nodes(rooms_of[j]))
-        for (x, y) in sorted(pts):
-            add(_member("structure", "column", "C1", "rect",
-                        dict(b=col, h=col), [(x, y, z0), (x, y, z1)],
-                        ifc="IfcColumn"), "column")
-    # Beams per level: the rooms below and above that level share them.
-    for lvl in range(n + 1):
-        z = lvl * H
-        rooms = []
-        if lvl < n:
-            rooms += rooms_of[lvl]
-        if lvl > 0:
-            rooms += rooms_of[lvl - 1]
-        if lvl == 0:
-            mark, b, h = "GB1", s["gb_b"], s["gb_h"]
-        elif lvl == n:
-            mark, b, h = "RB1", s["rb_b"], s["rb_h"]
-        else:
-            mark, b, h = "B1", s["b_b"], s["b_h"]
-        for p0, p1 in segments(rooms):
-            add(_member("structure", "beam", mark, "rect",
-                        dict(b=_mm(b), h=_mm(h)),
-                        [(p0[0], p0[1], z), (p1[0], p1[1], z)], anchor="tc",
-                        ifc="IfcBeam"), "beam")
-    t = float(s["slab_t"])
-    for k, rooms in enumerate(rooms_of):
-        z = k * H
-        mark = "S1" if k == 0 else "S2"
-        for rm in rooms:
-            cx = float(rm["x"]) + float(rm["w"]) / 2
-            cy = float(rm["y"]) + float(rm["d"]) / 2
-            add(_member("structure", "slab", mark, "rect",
-                        dict(b=_mm(rm["w"]), h=_mm(rm["d"])),
-                        [(cx, cy, z - t), (cx, cy, z)], ifc="IfcSlab"),
-                "slab")
+    for e in E["footings"]:
+        f = lib[e["mark"]]
+        add(_member("structure", "footing", e["mark"], "rect",
+                    dict(b=_mm(f["w"]), h=_mm(f["l"])),
+                    [(e["x"], e["y"], e["z0"]), (e["x"], e["y"], e["z1"])],
+                    ifc="IfcFooting"), "footing")
+        for px, py in pile_points(f, e["x"], e["y"]):
+            pb = _mm(f.get("pile_b") or 0.18)
+            add(_member("structure", "pile", "เสาเข็ม", "rect",
+                        dict(b=pb, h=pb),
+                        [(px, py, e["z0"] - float(f.get("pile_len") or 6.0)),
+                         (px, py, e["z0"])], ifc="IfcPile",
+                        name=f"เสาเข็ม {e['mark']}"), "pile")
+    for e in E["stumps"]:
+        c = lib[e["mark"]]
+        add(_member("structure", "stump", e["mark"], "rect",
+                    dict(b=_mm(c["b"]), h=_mm(c["h"])),
+                    [(e["x"], e["y"], e["z0"]), (e["x"], e["y"], e["z1"])],
+                    ifc="IfcColumn"), "stump")
+    for e in E["columns"]:
+        c = lib[e["mark"]]
+        add(_member("structure", "column", e["mark"], "rect",
+                    dict(b=_mm(c["b"]), h=_mm(c["h"])),
+                    [(e["x"], e["y"], e["z0"]), (e["x"], e["y"], e["z1"])],
+                    ifc="IfcColumn"), "column")
+    for e in E["beams"]:
+        b = lib[e["mark"]]
+        p0, p1, z = e["p0"], e["p1"], e["z"]
+        add(_member("structure", "beam", e["mark"], "rect",
+                    dict(b=_mm(b["b"]), h=_mm(b["h"])),
+                    [(p0[0], p0[1], z), (p1[0], p1[1], z)], anchor="tc",
+                    ifc="IfcBeam"), "beam")
+    for e in E["slabs"]:
+        rm, t = e["room"], float(lib[e["mark"]]["t"])
+        cx = float(rm["x"]) + float(rm["w"]) / 2
+        cy = float(rm["y"]) + float(rm["d"]) / 2
+        add(_member("structure", "slab", e["mark"], "rect",
+                    dict(b=_mm(rm["w"]), h=_mm(rm["d"])),
+                    [(cx, cy, e["z"] - t), (cx, cy, e["z"])], ifc="IfcSlab"),
+            "slab")
     if s.get("walls"):
-        _walls(floors, s, H, n, add)
-    for k, f in enumerate(floors):
-        for stp in f["stairs"]:
-            g = stair_member(stp, s, k * H)
-            add(g, "stair")
+        _walls(E, add)
+    for e in E["stairs"]:
+        add(stair_member(e["st"], s, e["floor"] * E["H"]), "stair")
     return out, count
 
 
-def _walls(floors, s, H, n, add):
+def _walls(E, add):
+    s, lib, H = E["settings"], E["lib"], E["H"]
     wt = _mm(s["wall_t"])
-    half = float(s["col"]) / 2
-    for k, f in enumerate(floors):
-        z0 = k * H
-        above_h = s["rb_h"] if k == n - 1 else s["b_h"]
-        wh = H - float(above_h)
+    half = float(lib["C1"]["b"]) / 2
+    for wl in E["walls"]:
+        z0 = wl["floor"] * H
+        wh = H - float(lib[wl["beam"]]["h"])
         if wh <= 0.05:
             continue
-        for p0, p1 in segments(f["rooms"]):
-            dx, dy = p1[0] - p0[0], p1[1] - p0[1]
-            L = math.hypot(dx, dy)
-            if L <= 2 * half + 0.05:
+        p0, p1, L = wl["p0"], wl["p1"], wl["L"]
+        if L <= 2 * half + 0.05:
+            continue
+        ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+
+        def at(dist, z):
+            return (p0[0] + ux * dist, p0[1] + uy * dist, z)
+
+        def piece(a, b, z, height):
+            if b - a > 0.02 and height > 0.02:
+                add(_member("structure", "wall", "ผนังก่ออิฐ", "rect",
+                            dict(b=wt, h=_mm(height)),
+                            [at(a, z), at(b, z)], anchor="bc",
+                            ifc="IfcWall"), "wall")
+        cur = half
+        for sdist, op in _openings_on(p0, p1, wl["openings"]):
+            ow, oh, sill = opening_size(op, s)
+            a = max(half, sdist - ow / 2)
+            b = min(L - half, sdist + ow / 2)
+            if b - a < 0.1:
                 continue
-            ux, uy = dx / L, dy / L
-
-            def at(dist, z):
-                return (p0[0] + ux * dist, p0[1] + uy * dist, z)
-
-            def piece(a, b, z, height):
-                if b - a > 0.02 and height > 0.02:
-                    add(_member("structure", "wall", "ผนังก่ออิฐ", "rect",
-                                dict(b=wt, h=_mm(height)),
-                                [at(a, z), at(b, z)], anchor="bc",
-                                ifc="IfcWall"), "wall")
-            cur = half
-            for sdist, op in _openings_on(p0, p1, f["openings"]):
-                ow, oh, sill = opening_size(op, s)
-                a = max(half, sdist - ow / 2)
-                b = min(L - half, sdist + ow / 2)
-                if b - a < 0.1:
-                    continue
-                top = min(sill + oh, wh)
-                piece(cur, a, z0, wh)
-                piece(a, b, z0, sill)                       # under a window
-                piece(a, b, z0 + top, wh - top)             # over the opening
-                kind = "window" if op.get("type") == "window" else "door"
-                add(_member("structure", kind, opening_name(op, s), "rect",
-                            dict(b=40.0, h=_mm(top - sill)),
-                            [at(a, z0 + sill), at(b, z0 + sill)], anchor="bc",
-                            ifc="IfcWindow" if kind == "window" else "IfcDoor",
-                            name=opening_name(op, s)), kind)
-                cur = max(cur, b)
-            piece(cur, L - half, z0, wh)
+            top = min(sill + oh, wh)
+            piece(cur, a, z0, wh)
+            piece(a, b, z0, sill)                       # under a window
+            piece(a, b, z0 + top, wh - top)             # over the opening
+            kind = "window" if op.get("type") == "window" else "door"
+            add(_member("structure", kind, opening_name(op, s), "rect",
+                        dict(b=40.0, h=_mm(top - sill)),
+                        [at(a, z0 + sill), at(b, z0 + sill)], anchor="bc",
+                        ifc="IfcWindow" if kind == "window" else "IfcDoor",
+                        name=opening_name(op, s)), kind)
+            cur = max(cur, b)
+        piece(cur, L - half, z0, wh)
 
 
 def stair_member(stp, s, z):
@@ -700,7 +870,7 @@ def build(data, parts=("structure", "roof")):
     return groups, count
 
 
-KIND_TH = [("footing", "ฐานราก"), ("stump", "ตอม่อ"), ("column", "เสา"),
+KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"), ("stump", "ตอม่อ"), ("column", "เสา"),
            ("beam", "คาน"), ("slab", "พื้น"), ("wall", "ผนัง"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),

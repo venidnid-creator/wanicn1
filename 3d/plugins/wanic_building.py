@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import copy
 
+import math
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QVBoxLayout,
-    QWidget,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from core import wanic_building as B
+from core.wanic_sign import label_html
 
 TITLE = "ออกแบบอาคาร"
 NAVY = QColor("#0F2A44")
@@ -31,6 +33,21 @@ ROOM = QColor(64, 170, 110, 70)
 ROOM_EDGE = QColor(30, 120, 70)
 SEL = QColor("#E8772E")
 GHOST = QColor(120, 130, 140, 60)
+FOOT = QColor(150, 120, 210, 90)
+FOOT_EDGE = QColor(120, 90, 190)
+AXIS = QColor(90, 120, 160)
+AXIS_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def axis_name(i: int) -> str:
+    """A, B, … Z, AA, AB … (I and O skipped, as on drawings)."""
+    n = len(AXIS_LETTERS)
+    out = ""
+    i += 1
+    while i > 0:
+        i, r = divmod(i - 1, n)
+        out = AXIS_LETTERS[r] + out
+    return out
 
 
 class PlanCanvas(QWidget):
@@ -44,8 +61,10 @@ class PlanCanvas(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.scale = 40.0                       # pixels per metre
         self.origin = QPointF(40, 280)          # screen point of (0, 0)
-        self.selected = None                    # room id
-        self._drag = None                       # (room id, dx, dy, rooms copy)
+        self.selected = None                    # room / item id
+        self.multi: set = set()                 # several selected rooms
+        self._drag = None                       # ("rooms", …) or ("stair", …)
+        self._band = None                       # rubber band (start, now)
         self._pan = None
         self._hover = None
 
@@ -80,17 +99,22 @@ class PlanCanvas(QWidget):
         self.update()
 
     # ---- painting -----------------------------------------------------------
+    def is_selected(self, rid) -> bool:
+        return rid == self.selected or rid in self.multi
+
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor("#FBFAF6"))
-        grid = float(B.settings_of(self.panel.data()).get("grid", 0.5)) or 0.5
+        data = self.panel.data()
+        st = B.settings_of(data)
+        lib = B.library_of(data)
+        grid = float(st.get("grid", 0.5)) or 0.5
         x0, y1 = self.to_world(QPointF(0, 0))
         x1, y0 = self.to_world(QPointF(self.width(), self.height()))
         step = grid
         while step * self.scale < 8:
             step *= 2
-        import math
         p.setPen(QPen(QColor(225, 222, 212), 1))
         i = math.floor(x0 / step)
         while i * step <= x1:
@@ -107,6 +131,8 @@ class PlanCanvas(QWidget):
         p.drawLine(o, o + QPointF(30, 0))
         p.setPen(QPen(QColor(60, 150, 60), 1))
         p.drawLine(o, o + QPointF(0, -30))
+        rooms = self.rooms()
+        self._paint_axes(p, rooms)
 
         def rect_of(rm):
             a = self.to_screen(rm["x"], rm["y"] + rm["d"])
@@ -120,23 +146,39 @@ class PlanCanvas(QWidget):
         f = QFont(self.font())
         f.setPointSizeF(max(7.0, min(11.0, self.scale / 5)))
         p.setFont(f)
-        for rm in self.rooms():
+        # Footings under the ground floor (purple, sized by their mark).
+        if self.panel.floor == 0 and self.panel.show_footings():
+            for x, y in B.nodes(rooms):
+                fm = B.node_mark(data, lib, x, y, "F")
+                fw, fl = float(lib[fm]["w"]), float(lib[fm]["l"])
+                q = self.to_screen(x, y)
+                r = QRectF(q.x() - fw * self.scale / 2,
+                           q.y() - fl * self.scale / 2,
+                           fw * self.scale, fl * self.scale)
+                p.setPen(QPen(FOOT_EDGE, 1))
+                p.setBrush(FOOT)
+                p.drawRect(r)
+                if self.scale >= 25:
+                    p.setPen(FOOT_EDGE)
+                    cm = B.node_mark(data, lib, x, y, "C")
+                    p.drawText(r.topRight() + QPointF(2, 10), f"{fm}/{cm}")
+        for rm in rooms:
             r = rect_of(rm)
-            sel = rm["id"] == self.selected
+            sel = self.is_selected(rm["id"])
             p.setPen(QPen(SEL if sel else ROOM_EDGE, 2.5 if sel else 1.5))
-            p.setBrush(ROOM)
+            p.setBrush(QColor(232, 119, 46, 40) if sel else ROOM)
             p.drawRect(r)
             p.setPen(NAVY)
+            mark = B.slab_mark(lib, rm, self.panel.floor)
             p.drawText(r, Qt.AlignCenter,
-                       f"{rm.get('name', '')}\n{rm['w']:g} × {rm['d']:g} ม.")
-        st = B.settings_of(self.panel.data())
+                       f"{rm.get('name', '')}\n{rm['w']:g} × {rm['d']:g} ม."
+                       f"\n{mark}")
         # Stairs: the flight's outline, its treads and the way up.
         for stp in self.panel.items("stairs"):
             pts = [self.to_screen(*q) for q in B.stair_rect(stp, st)]
             sel = stp["id"] == self.selected
             p.setPen(QPen(SEL if sel else NAVY, 2 if sel else 1.2))
             p.setBrush(QColor(255, 255, 255, 200))
-            from PySide6.QtGui import QPolygonF
             p.drawPolygon(QPolygonF(pts))
             n, _L, _H = B.stair_geometry(stp, st)
             a, b, c, d = pts
@@ -149,15 +191,14 @@ class PlanCanvas(QWidget):
             p.drawLine(mid0, mid1)
             p.drawText(mid1 + QPointF(4, -4), "ขึ้น")
         # Doors and windows on the walls.
+        segs = B.segments(rooms)
         for op in self.panel.items("openings"):
             w, _h, _sill = B.opening_size(op, st)
-            segs = B.segments(self.rooms())
             hit = B.snap_to_segment(op["x"], op["y"], segs, 0.1)
             if hit is None:
                 continue
             (p0, p1) = hit[2]
-            import math as _m
-            L = _m.hypot(p1[0] - p0[0], p1[1] - p0[1]) or 1.0
+            L = math.hypot(p1[0] - p0[0], p1[1] - p0[1]) or 1.0
             ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
             a = self.to_screen(op["x"] - ux * w / 2, op["y"] - uy * w / 2)
             b = self.to_screen(op["x"] + ux * w / 2, op["y"] + uy * w / 2)
@@ -168,19 +209,71 @@ class PlanCanvas(QWidget):
                           max(5.0, st["wall_t"] * self.scale * 1.6),
                           Qt.SolidLine, Qt.FlatCap))
             p.drawLine(a, b)
-        # Columns where the build will put them.
+        # Columns where the build will put them, sized by their mark.
         p.setPen(Qt.NoPen)
-        p.setBrush(NAVY)
-        c = max(4.0, B.settings_of(self.panel.data())["col"] * self.scale)
-        for x, y in B.nodes(self.rooms()):
+        for x, y in B.nodes(rooms):
+            cm = lib[B.node_mark(data, lib, x, y, "C")]
+            cw = max(4.0, float(cm["b"]) * self.scale)
+            ch = max(4.0, float(cm["h"]) * self.scale)
             q = self.to_screen(x, y)
-            p.drawRect(QRectF(q.x() - c / 2, q.y() - c / 2, c, c))
+            p.setBrush(SEL if self.selected == B.node_key(x, y) else NAVY)
+            p.drawRect(QRectF(q.x() - cw / 2, q.y() - ch / 2, cw, ch))
+        if self._band is not None:
+            a, b = self._band
+            p.setPen(QPen(QColor("#3B6FB6"), 1, Qt.DashLine))
+            p.setBrush(QColor(59, 111, 182, 30))
+            p.drawRect(QRectF(a, b).normalized())
         if self._hover is not None:
             p.setPen(QColor(85, 101, 122))
+            extra = f" · เลือก {len(self.multi)} ห้อง" if self.multi else ""
             p.drawText(QPointF(6, self.height() - 6),
                        f"X {self._hover[0]:.2f} · Y {self._hover[1]:.2f} ม. · "
-                       f"ชั้น {self.panel.floor + 1}")
+                       f"ชั้น {self.panel.floor + 1}{extra}")
         p.end()
+
+    def _paint_axes(self, p, rooms):
+        """Grid lines 1, 2, 3 … / A, B, C … through the column lines, with
+        the spacing between them written along the top and the left."""
+        pts = B.nodes(rooms)
+        if not pts:
+            return
+        xs = sorted({x for x, _y in pts})
+        ys = sorted({y for _x, y in pts}, reverse=True)
+        f = QFont(self.font())
+        f.setPointSizeF(8.0)
+        p.setFont(f)
+        top, left = 18.0, 24.0
+        p.setPen(QPen(AXIS, 1, Qt.DashDotLine))
+        for i, x in enumerate(xs):
+            sx = self.to_screen(x, 0).x()
+            p.drawLine(QPointF(sx, top + 14), QPointF(sx, self.height()))
+        for j, y in enumerate(ys):
+            sy = self.to_screen(0, y).y()
+            p.drawLine(QPointF(left + 14, sy), QPointF(self.width(), sy))
+        p.setPen(QPen(AXIS, 1))
+        p.setBrush(QColor("#FFFFFF"))
+        for i, x in enumerate(xs):
+            sx = self.to_screen(x, 0).x()
+            p.drawEllipse(QPointF(sx, top), 8, 8)
+            p.drawText(QRectF(sx - 8, top - 8, 16, 16), Qt.AlignCenter,
+                       str(i + 1))
+            if i:
+                px = self.to_screen(xs[i - 1], 0).x()
+                p.drawText(QRectF(px, top + 10, sx - px, 14), Qt.AlignCenter,
+                           f"{x - xs[i - 1]:.2f} m")
+        for j, y in enumerate(ys):
+            sy = self.to_screen(0, y).y()
+            p.drawEllipse(QPointF(left, sy), 8, 8)
+            p.drawText(QRectF(left - 8, sy - 8, 16, 16), Qt.AlignCenter,
+                       axis_name(j))
+            if j:
+                py = self.to_screen(0, ys[j - 1]).y()
+                p.save()
+                p.translate(left + 18, (py + sy) / 2)
+                p.rotate(-90)
+                p.drawText(QRectF(-30, -7, 60, 14), Qt.AlignCenter,
+                           f"{ys[j - 1] - y:.2f} m")
+                p.restore()
 
     # ---- mouse ----------------------------------------------------------------
     def mousePressEvent(self, ev):
@@ -190,18 +283,32 @@ class PlanCanvas(QWidget):
             return
         rm = self.room_at(x, y)
         item = self.panel.item_at(x, y)
+        node = self.panel.node_at(x, y)
         tool = self.panel.tool()
+        ctrl = bool(ev.modifiers() & Qt.ControlModifier)
         if ev.button() == Qt.RightButton:
             if item is not None:
                 self.selected = item["id"]
                 self.update()
                 self._item_menu(item, ev.globalPosition().toPoint())
+            elif node is not None and (tool == "node" or rm is None):
+                self.selected = B.node_key(*node)
+                self.update()
+                self._node_menu(node, ev.globalPosition().toPoint())
             elif rm is not None:
+                if not self.is_selected(rm["id"]):
+                    self.multi = set()
                 self.selected = rm["id"]
                 self.update()
                 self._menu(rm, ev.globalPosition().toPoint())
             return
         if ev.button() != Qt.LeftButton:
+            return
+        if tool == "node":
+            if node is not None:
+                self.selected = B.node_key(*node)
+                self.update()
+                self.panel.edit_node(node)
             return
         if item is not None and item["id"].startswith("s"):
             self.selected = item["id"]
@@ -221,10 +328,27 @@ class PlanCanvas(QWidget):
         if item is not None:
             self.selected = item["id"]
         elif rm is not None:
+            if ctrl:                                # toggle in the selection
+                ids = self.multi | ({self.selected} if self.selected and
+                                    self.selected.startswith("r") else set())
+                ids ^= {rm["id"]}
+                self.multi = ids
+                self.selected = rm["id"] if rm["id"] in ids else None
+                self.update()
+                return
+            if rm["id"] not in self.multi:
+                self.multi = set()
             self.selected = rm["id"]
-            self._drag = (rm["id"], x - rm["x"], y - rm["y"],
+            ids = self.multi | {rm["id"]}
+            self._drag = ("rooms", rm["id"], ids, (x, y),
                           copy.deepcopy(self.rooms()))
+            self._moved = None
+        elif tool == "select" or ctrl:
+            self.selected = None
+            self.multi = set()
+            self._band = (ev.position(), ev.position())
         else:
+            self.multi = set()
             self.selected = self.panel.place_room(x, y)
         self.update()
 
@@ -234,6 +358,8 @@ class PlanCanvas(QWidget):
         if self._pan is not None:
             start, org = self._pan
             self.origin = org + (ev.position() - start)
+        elif self._band is not None:
+            self._band = (self._band[0], ev.position())
         elif self._drag is not None and self._drag[0] == "stair":
             _k, sid, dx, dy = self._drag
             g = float(B.settings_of(self.panel.data())["grid"]) or 0.5
@@ -241,30 +367,62 @@ class PlanCanvas(QWidget):
             ny = round((y - dy) / (g / 2)) * (g / 2)
             self.panel.preview_stair(sid, nx, ny)
         elif self._drag is not None:
-            rid, dx, dy, rooms = self._drag
-            for rm in rooms:
-                if rm["id"] == rid:
-                    moved = dict(rm, x=x - dx, y=y - dy)
-                    others = [o for o in rooms if o["id"] != rid]
-                    s = B.settings_of(self.panel.data())
-                    snapped = B.snap_room(moved, others, s["grid"])
-                    rm["x"], rm["y"] = snapped["x"], snapped["y"]
-            self.panel.preview_rooms(rooms)
+            _k, anchor, ids, (sx, sy), rooms = self._drag
+            orig = {r["id"]: (r["x"], r["y"]) for r in rooms}
+            a = next(r for r in rooms if r["id"] == anchor)
+            ax, ay = orig[anchor]
+            others = [r for r in self.panel.rooms() if r["id"] not in ids]
+            grid = B.settings_of(self.panel.data())["grid"]
+            moved = dict(a, x=ax + x - sx, y=ay + y - sy)
+            snapped = B.snap_room(moved, others, grid)
+            dx, dy = snapped["x"] - ax, snapped["y"] - ay
+            out = []
+            for r in rooms:
+                if r["id"] in ids:
+                    ox, oy = orig[r["id"]]
+                    r = dict(r, x=B._r(ox + dx), y=B._r(oy + dy))
+                out.append(r)
+            self._drag = ("rooms", anchor, ids, (sx, sy), rooms)
+            self._moved = out
+            self.panel.preview_rooms(out)
         self.update()
 
     def mouseReleaseEvent(self, ev):
         if ev.button() == Qt.MiddleButton:
             self._pan = None
             return
+        if self._band is not None:
+            a, b = self._band
+            self._band = None
+            ax, ay = self.to_world(a)
+            bx, by = self.to_world(b)
+            lo_x, hi_x = sorted((ax, bx))
+            lo_y, hi_y = sorted((ay, by))
+            self.multi = {rm["id"] for rm in self.rooms()
+                          if rm["x"] < hi_x and rm["x"] + rm["w"] > lo_x
+                          and rm["y"] < hi_y and rm["y"] + rm["d"] > lo_y}
+            self.selected = next(iter(self.multi), None)
+            self.update()
+            return
         if self._drag is not None and self._drag[0] == "stair":
             self._drag = None
             self.panel.commit_stair()
         elif self._drag is not None:
-            rooms = self._drag[3]
+            moved = getattr(self, "_moved", None)
             self._drag = None
-            self.panel.set_rooms(rooms)
+            self._moved = None
+            if moved is not None:
+                self.panel.set_rooms(moved)
+            else:
+                self.panel.preview_rooms(None)
 
     def mouseDoubleClickEvent(self, ev):
+        if ev.button() == Qt.RightButton:          # cancel: back to select
+            self.panel.set_tool("select")
+            self.selected = None
+            self.multi = set()
+            self.update()
+            return
         x, y = self.to_world(ev.position())
         item = self.panel.item_at(x, y)
         if item is not None:
@@ -283,31 +441,69 @@ class PlanCanvas(QWidget):
                               pos.y() + wy * self.scale)
         self.update()
 
+    def selected_rooms(self) -> set:
+        ids = set(self.multi)
+        if self.selected and self.selected.startswith("r"):
+            ids.add(self.selected)
+        return ids
+
     def keyPressEvent(self, ev):
         sel = self.selected or ""
-        if ev.key() in (Qt.Key_Delete, Qt.Key_Backspace) and sel:
-            if sel.startswith("r"):
-                self.panel.delete_room(sel)
-            else:
+        ctrl = bool(ev.modifiers() & Qt.ControlModifier)
+        key = ev.key()
+        if ctrl and key == Qt.Key_Z:
+            self.panel.undo()
+        elif ctrl and key == Qt.Key_Y:
+            self.panel.redo()
+        elif ctrl and key == Qt.Key_C:
+            self.panel.copy_rooms(self.selected_rooms())
+        elif ctrl and key == Qt.Key_V:
+            got = self.panel.paste_rooms(self._hover)
+            if got:
+                self.multi, self.selected = set(got), got[0]
+        elif ctrl and key == Qt.Key_A:
+            self.multi = {rm["id"] for rm in self.rooms()}
+        elif key == Qt.Key_Escape:
+            self.selected, self.multi = None, set()
+            self.panel.set_tool("select")
+        elif key in (Qt.Key_Delete, Qt.Key_Backspace) and (sel or self.multi):
+            rooms = self.selected_rooms()
+            if rooms:
+                self.panel.delete_rooms(rooms)
+            elif sel and not sel.startswith("N:"):
                 self.panel.delete_item(sel)
-            self.selected = None
-        elif ev.key() == Qt.Key_R and sel:
+            self.selected, self.multi = None, set()
+        elif key == Qt.Key_R and sel:
             if sel.startswith("r"):
                 self.panel.rotate_room(sel)
             elif sel.startswith("s"):
                 self.panel.rotate_stair(sel)
         else:
             super().keyPressEvent(ev)
+            return
+        self.update()
 
     def _menu(self, rm, at):
         m = QMenu(self)
-        m.addAction("แก้ไขชื่อ/ขนาด…", lambda: self.panel.edit_room(rm["id"]))
+        ids = self.selected_rooms() or {rm["id"]}
+        m.addAction("แก้ไขชื่อ/ขนาด/เบอร์พื้น…",
+                    lambda: self.panel.edit_room(rm["id"]))
         m.addAction("หมุน 90° (R)", lambda: self.panel.rotate_room(rm["id"]))
         m.addAction("ทำสำเนา", lambda: self.panel.duplicate_room(rm["id"]))
+        m.addAction(f"คัดลอก {len(ids)} ห้อง (Ctrl+C)",
+                    lambda: self.panel.copy_rooms(ids))
         m.addSeparator()
-        m.addAction("ลบห้อง (Delete)", lambda: self.panel.delete_room(rm["id"]))
+        m.addAction(f"ลบ {len(ids)} ห้อง (Delete)",
+                    lambda: self.panel.delete_rooms(ids))
         m.exec(at)
 
+    def _node_menu(self, node, at):
+        m = QMenu(self)
+        m.addAction("กำหนดเบอร์ฐานราก / ตอม่อ / เสา…",
+                    lambda: self.panel.edit_node(node))
+        m.addAction("กลับเป็นค่าเริ่มต้น (F1 / PC1 / C1)",
+                    lambda: self.panel.reset_node(node))
+        m.exec(at)
 
     def _item_menu(self, item, at):
         m = QMenu(self)
@@ -348,11 +544,14 @@ class ItemDialog(QDialog):
 
 
 class RoomDialog(QDialog):
-    def __init__(self, room, parent=None):
+    def __init__(self, room, parent=None, slabs=()):
         super().__init__(parent)
         self.setWindowTitle("แก้ไขห้อง")
         f = QFormLayout(self)
-        self.name = QLineEdit(room.get("name", ""))
+        self.name = QComboBox()
+        self.name.setEditable(True)
+        self.name.addItems(B.ROOM_TYPES)
+        self.name.setCurrentText(room.get("name", ""))
         self.w = QDoubleSpinBox()
         self.d = QDoubleSpinBox()
         for sp, v in ((self.w, room["w"]), (self.d, room["d"])):
@@ -361,13 +560,56 @@ class RoomDialog(QDialog):
             sp.setSingleStep(0.5)
             sp.setSuffix(" ม.")
             sp.setValue(float(v))
-        f.addRow("ชื่อห้อง", self.name)
+        self.slab = QComboBox()
+        self.slab.addItem("ตามชั้น (S1 ชั้นล่าง / S2 ชั้นบน)", "")
+        for m in slabs:
+            self.slab.addItem(m, m)
+        self.slab.setCurrentIndex(max(self.slab.findData(room.get("slab", "")),
+                                      0))
+        f.addRow("ชื่อ/ประเภทห้อง", self.name)
         f.addRow("กว้าง X", self.w)
         f.addRow("ลึก Y", self.d)
+        f.addRow("เบอร์พื้น", self.slab)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         f.addRow(bb)
+
+
+class NodeDialog(QDialog):
+    """The footing, stump and column marks at one column point."""
+
+    def __init__(self, data, node, parent=None):
+        super().__init__(parent)
+        lib = B.library_of(data)
+        x, y = node
+        self.setWindowTitle(f"เสาที่ X {x:.2f} · Y {y:.2f} ม.")
+        f = QFormLayout(self)
+        self.box = {}
+        for role, kind, th in (("F", "footing", "ฐานราก"),
+                               ("PC", "stump", "เสาตอม่อ"),
+                               ("C", "column", "เสา")):
+            c = QComboBox()
+            for m in B.marks_of(lib, kind):
+                spec = lib[m]
+                size = (f"{spec['w']:g}×{spec['l']:g}×{spec['t']:g} ม."
+                        if kind == "footing" else
+                        f"{spec['b']:g}×{spec['h']:g} ม.")
+                c.addItem(f"{m}  ({size})", m)
+            c.setCurrentIndex(max(c.findData(
+                B.node_mark(data, lib, x, y, role)), 0))
+            self.box[role] = c
+            f.addRow(th, c)
+        hint = QLabel("เพิ่ม/แก้เบอร์ได้ที่กลุ่ม «คลังชิ้นส่วน» ด้านล่าง")
+        hint.setStyleSheet("color: palette(mid);")
+        f.addRow(hint)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        f.addRow(bb)
+
+    def marks(self) -> dict:
+        return {k: c.currentData() for k, c in self.box.items()}
 
 
 def _spin(lo, hi, val, step=0.05, dec=2, suffix=" ม."):
@@ -378,6 +620,445 @@ def _spin(lo, hi, val, step=0.05, dec=2, suffix=" ม."):
     sp.setSuffix(suffix)
     sp.setValue(val)
     return sp
+
+
+class LibraryBox(QGroupBox):
+    """คลังชิ้นส่วน: choose a mark, edit its sizes and bars, add new marks."""
+
+    def __init__(self, panel):
+        super().__init__("คลังชิ้นส่วน — ฐานราก เสาตอม่อ เสา คาน พื้น (เบอร์ F / PC / C / "
+                         "GB / B / RB / S)")
+        self.panel = panel
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        self.mark = QComboBox()
+        self.mark.currentIndexChanged.connect(lambda _i: self._show())
+        row.addWidget(self.mark, 1)
+        self.kind = QComboBox()
+        for k, th in B.LIB_KINDS.items():
+            self.kind.addItem(th, k)
+        row.addWidget(self.kind)
+        add = QPushButton("＋ เบอร์ใหม่")
+        add.setToolTip("เพิ่มเบอร์ใหม่ของชนิดที่เลือก (คัดลอกขนาดจากเบอร์แรก)")
+        add.clicked.connect(lambda _=False: self.add_mark())
+        row.addWidget(add)
+        lay.addLayout(row)
+        self.form = QFormLayout()
+        lay.addLayout(self.form)
+        self.edits = {}
+        b = QPushButton("💾 บันทึกเบอร์นี้")
+        b.clicked.connect(lambda _=False: self.save())
+        lay.addWidget(b)
+        hint = QLabel("เหล็กเสริมเขียนแบบ 4-DB12 (จำนวน-ขนาด) หรือ RB6@0.15 (ระยะห่าง ม.) "
+                      "· ใช้คิดน้ำหนักเหล็กตามหลักเกณฑ์ (ยาวตามแนวเส้นตรง + เผื่อตามขนาด) "
+                      "· กำหนดเบอร์รายต้น: เครื่องมือ «📍 กำหนดเบอร์เสา/ฐานราก» แล้วคลิกที่เสา")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(mid);")
+        lay.addWidget(hint)
+
+    def refresh(self):
+        lib = B.library_of(self.panel.data())
+        cur = self.mark.currentData()
+        self.mark.blockSignals(True)
+        self.mark.clear()
+        for kind, th in B.LIB_KINDS.items():
+            for m in B.marks_of(lib, kind):
+                self.mark.addItem(f"{m} — {th}", m)
+        i = self.mark.findData(cur)
+        self.mark.setCurrentIndex(max(i, 0))
+        self.mark.blockSignals(False)
+        self._show()
+
+    def _show(self):
+        while self.form.rowCount():
+            self.form.removeRow(0)
+        self.edits = {}
+        m = self.mark.currentData()
+        lib = B.library_of(self.panel.data())
+        if not m or m not in lib:
+            return
+        spec = lib[m]
+        for key, th in B.LIB_FIELDS[spec["kind"]]:
+            e = QLineEdit(str(spec.get(key, "")))
+            self.edits[key] = e
+            self.form.addRow(th, e)
+
+    def save(self):
+        m = self.mark.currentData()
+        if not m:
+            return
+        lib = B.library_of(self.panel.data())
+        spec = dict(lib[m])
+        for key, e in self.edits.items():
+            text = e.text().strip()
+            if key in ("bars", "main", "tie", "top", "bot", "stir"):
+                spec[key] = text
+                continue
+            try:
+                spec[key] = float(text) if "." in text or key not in (
+                    "piles", "ground") else int(text)
+            except ValueError:
+                QMessageBox.warning(self, TITLE, f"«{text}» ไม่ใช่ตัวเลข")
+                return
+        self.panel.set_library(m, spec)
+
+    def add_mark(self):
+        kind = self.kind.currentData()
+        lib = B.library_of(self.panel.data())
+        have = B.marks_of(lib, kind)
+        prefix = {"footing": "F", "stump": "PC", "column": "C", "beam": "B",
+                  "slab": "S"}[kind]
+        n = 1
+        while f"{prefix}{n}" in lib:
+            n += 1
+        new = f"{prefix}{n}"
+        spec = dict(lib[have[0]]) if have else {"kind": kind}
+        self.panel.set_library(new, spec)
+        self.mark.setCurrentIndex(max(self.mark.findData(new), 0))
+
+
+class BoqDialog(QDialog):
+    """BOQ ตามหลักเกณฑ์ 2569: the bill by หมวด, the price list, options."""
+
+    COLS = ["ลำดับ", "รายการ", "ปริมาณสุทธิ", "เผื่อ %", "ปริมาณ", "หน่วย",
+            "ค่าวัสดุ/หน่วย", "ค่าวัสดุ", "ค่าแรง/หน่วย", "ค่าแรง", "รวม (บาท)",
+            "ที่มา / การคำนวณ"]
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        from PySide6.QtWidgets import QTabWidget
+        self.panel = panel
+        self.setWindowTitle("BOQ ตามหลักเกณฑ์กรมบัญชีกลาง พ.ศ. 2569 — WANIC ออกแบบอาคาร")
+        self.resize(1180, 760)
+        lay = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        lay.addWidget(self.tabs, 1)
+        self._bill_tab()
+        self._price_tab()
+        self._option_tab()
+        row = QHBoxLayout()
+        for text, color, fn in (
+                ("📤 ส่งเข้า ถอดปริมาณ (ปร.1–ปร.4)", "#2E7D4F", self.send),
+                ("📊 บันทึก Excel (ปร.1–ปร.4 + BOQ)", "#0F2A44",
+                 self.save_xlsx),
+                ("📄 บันทึก CSV", "#3B6FB6", self.save_csv)):
+            b = QPushButton(text)
+            b.setStyleSheet(f"QPushButton{{background:{color};color:white;"
+                            "font-weight:bold;padding:6px;border-radius:6px}}")
+            b.clicked.connect(lambda _=False, f=fn: f())
+            row.addWidget(b)
+        close = QPushButton("ปิด")
+        close.clicked.connect(self.accept)
+        row.addStretch(1)
+        row.addWidget(close)
+        lay.addLayout(row)
+        sig = QLabel(label_html("WANIC ออกแบบอาคาร · BOQ ตามหลักเกณฑ์ 2569"))
+        lay.addWidget(sig)
+        self.recompute()
+
+    # ---- tabs ---------------------------------------------------------------
+    def _bill_tab(self):
+        from PySide6.QtWidgets import QTreeWidget
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(len(self.COLS))
+        self.tree.setHeaderLabels(self.COLS)
+        self.tree.setAlternatingRowColors(True)
+        widths = [52, 330, 90, 56, 90, 56, 90, 100, 90, 100, 110, 420]
+        for i, px in enumerate(widths):
+            self.tree.setColumnWidth(i, px)
+        v.addWidget(self.tree, 1)
+        self.total = QLabel()
+        self.total.setWordWrap(True)
+        v.addWidget(self.total)
+        self.tabs.addTab(w, "ใบ BOQ")
+
+    def _price_tab(self):
+        from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+        from core import wanic_std2569 as S
+        w = QWidget()
+        v = QVBoxLayout(w)
+        note = QLabel("ราคาวัสดุ: ใช้ราคาจากสำนักงานพาณิชย์จังหวัด (ราคาไม่รวม VAT) · "
+                      "ค่าแรง: บัญชีค่าแรงงาน ว480 ลงวันที่ 26 มิ.ย. 2569 (แก้ได้) · "
+                      "ค่าวัสดุมวลรวมคิดจากสูตรต่อหน่วยในหลักเกณฑ์ (เผื่อเสียหายแล้ว)")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        h = QHBoxLayout()
+        self.prices = QTableWidget(0, 3)
+        self.prices.setHorizontalHeaderLabels(["วัสดุ", "หน่วย", "ราคา/หน่วย (บาท)"])
+        self.prices.setColumnWidth(0, 330)
+        self.labour = QTableWidget(0, 4)
+        self.labour.setHorizontalHeaderLabels(["ข้อ ว480", "รายการ", "หน่วย",
+                                               "ค่าแรง/หน่วย (บาท)"])
+        self.labour.setColumnWidth(1, 300)
+        h.addWidget(self.prices, 1)
+        h.addWidget(self.labour, 1)
+        v.addLayout(h, 1)
+        row = QHBoxLayout()
+        for text, fn in (("ราคาตัวอย่าง (ทดลองใช้)", self.sample_prices),
+                         ("ล้างราคาวัสดุ", self.clear_prices),
+                         ("ค่าแรงตาม ว480", self.reset_labour),
+                         ("นำเข้าราคา CSV…", self.import_prices),
+                         ("ส่งออกราคา CSV…", self.export_prices),
+                         ("💾 บันทึกราคาและคำนวณใหม่", self.save_prices)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, f=fn: f())
+            row.addWidget(b)
+        v.addLayout(row)
+        self.tabs.addTab(w, "ฐานข้อมูลราคา")
+        self._QTI = QTableWidgetItem
+        self._S = S
+        self._fill_prices()
+
+    def _fill_prices(self):
+        from core import wanic_quantities as Q
+        S, QTI = self._S, self._QTI
+        d = self.panel.data()
+        prices = Q.prices_of(d)
+        keys = [k for k, _u in S.PRICE_KEYS] + sorted(
+            k for k in prices if k not in dict(S.PRICE_KEYS))
+        self.prices.setRowCount(len(keys))
+        for r, k in enumerate(keys):
+            a, b = QTI(k), QTI(S.price_unit(k))
+            for it in (a, b):
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+            self.prices.setItem(r, 0, a)
+            self.prices.setItem(r, 1, b)
+            self.prices.setItem(r, 2, QTI(f"{float(prices.get(k) or 0):g}"))
+        labour = Q.labour_of(d)
+        codes = list(S.LABOUR)
+        self.labour.setRowCount(len(codes))
+        for r, c in enumerate(codes):
+            desc, unit, _rate, cond = S.LABOUR[c]
+            cells = [c, f"{desc} ({cond})", unit]
+            for col, text in enumerate(cells):
+                it = QTI(text)
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                self.labour.setItem(r, col, it)
+            self.labour.setItem(r, 3, QTI(f"{labour[c]:g}"))
+
+    def _option_tab(self):
+        from core import wanic_quantities as Q
+        from core import wanic_recipes2569 as RC
+        w = QWidget()
+        f = QFormLayout(w)
+        o = Q.options_of(self.panel.data())
+        self.opt = {}
+        for key, th in (("finishes", "คิดงานปูพื้นและฝ้าเพดาน"),
+                        ("paint", "คิดงานทาสีผนัง"),
+                        ("ready_mix", "คอนกรีตผสมเสร็จ (ไม่ติ๊ก = ผสมเองตามสูตร ค.3)")):
+            c = QCheckBox(th)
+            c.setChecked(bool(o[key]))
+            self.opt[key] = c
+            f.addRow(c)
+        self.roofing = QComboBox()
+        self.roofing.addItem("กระเบื้องคอนกรีต", "tile")
+        self.roofing.addItem("เหล็กรีดลอน (Metal Sheet)", "metal")
+        self.roofing.setCurrentIndex(max(self.roofing.findData(o["roofing"]), 0))
+        f.addRow("วัสดุมุงหลังคา", self.roofing)
+        self.recipe = {}
+        for key, prefix, th in (("wall_recipe", "6.", "ผนัง (สูตรวัสดุ)"),
+                                ("plaster_recipe", "7.", "ฉาบปูน (สูตรวัสดุ)"),
+                                ("floor_recipe", "9.", "พื้นผิว (สูตรวัสดุ)")):
+            c = QComboBox()
+            for rc in RC.RECIPES:
+                if rc["code"].startswith(prefix) and rc["items"]:
+                    c.addItem(f"{rc['code']} {rc['name'][:70]}", rc["code"])
+            c.setCurrentIndex(max(c.findData(o[key]), 0))
+            self.recipe[key] = c
+            f.addRow(th, c)
+        self.sand = {}
+        for key, th in (("slab_sand", "ทรายรองใต้พื้นวางบนดิน หนา (ม.)"),
+                        ("gb_sand", "ทรายรองใต้คานคอดิน หนา (ม.)")):
+            sp = _spin(0.0, 0.5, float(o[key]), 0.01)
+            self.sand[key] = sp
+            f.addRow(th, sp)
+        b = QPushButton("💾 บันทึกตัวเลือกและคำนวณใหม่")
+        b.clicked.connect(lambda _=False: self.save_options())
+        f.addRow(b)
+        src = QLabel("ที่มา: หลักเกณฑ์การคำนวณราคากลางงานก่อสร้าง พ.ศ. 2569 ส่วนที่ 4 "
+                     "(การคำนวณปริมาณงาน การเผื่อ) และวัสดุมวลรวมของงานก่อสร้างอาคาร "
+                     f"({len(RC.RECIPES)} สูตร แยกข้อความอัตโนมัติ — ตรวจทานกับเล่มก่อนใช้งานจริง)")
+        src.setWordWrap(True)
+        src.setStyleSheet("color: palette(mid);")
+        f.addRow(src)
+        self.tabs.addTab(w, "ตัวเลือก")
+
+    # ---- data ---------------------------------------------------------------
+    def recompute(self):
+        from PySide6.QtWidgets import QTreeWidgetItem
+        from core import wanic_quantities as Q
+        self.result = Q.compute(self.panel.data())
+        self.tree.clear()
+        bold = QFont(self.font())
+        bold.setBold(True)
+        for gi, (_k, th, rows) in enumerate(self.result["groups"], 1):
+            top = QTreeWidgetItem([str(gi), th])
+            for c in range(2):
+                top.setFont(c, bold)
+            tm = sum(r["mat_total"] for r in rows)
+            tl = sum(r["lab_total"] for r in rows)
+            top.setText(7, f"{tm:,.2f}")
+            top.setText(9, f"{tl:,.2f}")
+            top.setText(10, f"{tm + tl:,.2f}")
+            top.setFont(10, bold)
+            self.tree.addTopLevelItem(top)
+            for li, ln in enumerate(rows, 1):
+                it = QTreeWidgetItem([
+                    f"{gi}.{li}", ln["desc"], f"{ln['net']:,.3f}",
+                    f"{ln['waste']:g}" if ln["waste"] else "",
+                    f"{ln['qty']:,.2f}", ln["unit"], f"{ln['mat']:,.2f}",
+                    f"{ln['mat_total']:,.2f}", f"{ln['lab']:,.2f}",
+                    f"{ln['lab_total']:,.2f}", f"{ln['total']:,.2f}",
+                    ln["ref"]])
+                tip = f"{ln['basis']}\n{ln['ref']}" + (
+                    f"\n{ln['note']}" if ln["note"] else "")
+                for c in range(len(self.COLS)):
+                    it.setToolTip(c, tip)
+                    if 2 <= c <= 10 and c != 5:
+                        it.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                if ln["note"]:
+                    it.setForeground(1, QColor("#B26A00"))
+                top.addChild(it)
+            top.setExpanded(True)
+        t = self.result["totals"]
+        notes = " · ".join(self.result["notes"])
+        self.total.setText(
+            f"<b>รวมค่างานต้นทุน {t['total']:,.2f} บาท</b> (ค่าวัสดุ {t['mat']:,.2f} + "
+            f"ค่าแรง {t['lab']:,.2f}) — ยังไม่คูณ Factor F · ส่งเข้า «ถอดปริมาณ» "
+            f"เพื่อคิด Factor F และพิมพ์แบบ ปร.<br><span style='color:#B26A00'>{notes}"
+            "</span>")
+
+    def _write(self, key, value):
+        d = self.panel.data()
+        d[key] = value
+        self.panel._write(d)
+
+    def save_prices(self):
+        prices, labour = {}, {}
+        for r in range(self.prices.rowCount()):
+            k = self.prices.item(r, 0).text()
+            try:
+                prices[k] = float(self.prices.item(r, 2).text().replace(",", ""))
+            except (ValueError, AttributeError):
+                prices[k] = 0.0
+        S = self._S
+        for r in range(self.labour.rowCount()):
+            c = self.labour.item(r, 0).text()
+            try:
+                v = float(self.labour.item(r, 3).text().replace(",", ""))
+            except (ValueError, AttributeError):
+                continue
+            if abs(v - float(S.LABOUR[c][2])) > 1e-9:
+                labour[c] = v
+        d = self.panel.data()
+        d["prices"], d["labour"] = prices, labour
+        self.panel._write(d)
+        self.recompute()
+
+    def sample_prices(self):
+        d = self.panel.data()
+        d["prices"] = dict(self._S.SAMPLE_PRICES)
+        self.panel._write(d)
+        self._fill_prices()
+        self.recompute()
+        self.panel.status.setText("ใส่ราคาตัวอย่างแล้ว — ไม่ใช่ราคาทางราชการ "
+                                  "ให้แทนด้วยราคาพาณิชย์จังหวัดก่อนใช้งานจริง")
+
+    def clear_prices(self):
+        self._write("prices", {})
+        self._fill_prices()
+        self.recompute()
+
+    def reset_labour(self):
+        self._write("labour", {})
+        self._fill_prices()
+        self.recompute()
+
+    def import_prices(self):
+        import csv
+        import io
+        from PySide6.QtWidgets import QFileDialog
+        path, _f = QFileDialog.getOpenFileName(self, "นำเข้าราคา", "",
+                                               "CSV (*.csv)")
+        if not path:
+            return
+        with open(path, encoding="utf-8-sig") as fh:
+            rows = list(csv.reader(io.StringIO(fh.read())))
+        d = self.panel.data()
+        prices = dict(d.get("prices") or {})
+        n = 0
+        for row in rows:
+            if len(row) >= 2:
+                try:
+                    prices[row[0].strip()] = float(row[-1].replace(",", ""))
+                    n += 1
+                except ValueError:
+                    continue
+        d["prices"] = prices
+        self.panel._write(d)
+        self._fill_prices()
+        self.recompute()
+        QMessageBox.information(self, TITLE, f"นำเข้าราคา {n} รายการ")
+
+    def export_prices(self):
+        import csv
+        import io
+        from PySide6.QtWidgets import QFileDialog
+        from core import wanic_quantities as Q
+        path, _f = QFileDialog.getSaveFileName(self, "ส่งออกราคา",
+                                               "ราคาวัสดุ.csv", "CSV (*.csv)")
+        if not path:
+            return
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["วัสดุ", "หน่วย", "ราคา/หน่วย"])
+        for k, v in Q.prices_of(self.panel.data()).items():
+            w.writerow([k, self._S.price_unit(k), f"{v:g}"])
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write(buf.getvalue())
+
+    def save_options(self):
+        o = {k: c.isChecked() for k, c in self.opt.items()}
+        o["roofing"] = self.roofing.currentData()
+        o.update({k: c.currentData() for k, c in self.recipe.items()})
+        o.update({k: sp.value() for k, sp in self.sand.items()})
+        self._write("boq_options", o)
+        self.recompute()
+
+    # ---- output -------------------------------------------------------------
+    def send(self):
+        n = self.panel.send_standard_boq(self.result)
+        QMessageBox.information(
+            self, TITLE, f"ส่ง {n} รายการเข้าแท็บ «ถอดปริมาณ» แล้ว (แทนชุดเดิมที่ส่งจาก"
+            "หน้านี้) — กด «ข้อมูลราคากลาง (ปร.)» ที่นั่นเพื่อกำหนด Factor F แล้วส่งออก "
+            "ปร.1–ปร.4")
+
+    def save_xlsx(self):
+        from PySide6.QtWidgets import QFileDialog
+        from core import wanic_quantities as Q
+        from core import wanic_takeoff as T
+        path, _f = QFileDialog.getSaveFileName(
+            self, "บันทึก Excel", "BOQ_ปร.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        td = self.panel.takeoff_data()
+        td["rates"] = Q.to_rates(self.result)
+        res = T.compute([], td)
+        with open(path, "wb") as fh:
+            fh.write(T.boq_xlsx_bytes(res, T.settings_of(td)))
+        self.panel.status.setText(f"บันทึก {path} แล้ว")
+
+    def save_csv(self):
+        from PySide6.QtWidgets import QFileDialog
+        from core import wanic_quantities as Q
+        path, _f = QFileDialog.getSaveFileName(self, "บันทึก CSV", "BOQ.csv",
+                                               "CSV (*.csv)")
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write(Q.csv_text(self.result))
 
 
 class BuildingPanel(QWidget):
@@ -421,27 +1102,37 @@ class BuildingPanel(QWidget):
             fb.addWidget(b)
         lay.addLayout(fb)
 
-        # Room palette.
+        # Room palette: a room type and a standard size, chosen apart.
         rp = QGridLayout()
-        self.preset = QComboBox()
-        for name, w, d in B.ROOM_PRESETS:
-            self.preset.addItem(f"{name} {w:g}×{d:g} ม.", (name, w, d))
-        self.preset.currentIndexChanged.connect(self._preset_changed)
-        self.room_name = QLineEdit()
+        self.room_name = QComboBox()
+        self.room_name.setEditable(True)
+        self.room_name.addItems(B.ROOM_TYPES)
+        self.size_box = QComboBox()
+        for w, d in B.ROOM_SIZES:
+            self.size_box.addItem(f"{w:g} × {d:g} ม.", (w, d))
+        self.size_box.addItem("กำหนดเอง", None)
+        self.size_box.currentIndexChanged.connect(self._preset_changed)
         self.room_w = _spin(0.5, 100, 3.0, 0.5)
         self.room_d = _spin(0.5, 100, 3.0, 0.5)
-        rp.addWidget(QLabel("ห้องสำเร็จรูป"), 0, 0)
-        rp.addWidget(self.preset, 0, 1, 1, 3)
-        rp.addWidget(QLabel("ชื่อ"), 1, 0)
-        rp.addWidget(self.room_name, 1, 1, 1, 3)
+        rot = QPushButton("↻ หมุน 90°")
+        rot.setToolTip("สลับกว้าง/ลึก ของห้องที่จะวาง (ห้องที่เลือกบนผังกด R)")
+        rot.clicked.connect(lambda _=False: self._swap_size())
+        rp.addWidget(QLabel("ประเภทห้อง"), 0, 0)
+        rp.addWidget(self.room_name, 0, 1, 1, 3)
+        rp.addWidget(QLabel("ขนาดมาตรฐาน"), 1, 0)
+        rp.addWidget(self.size_box, 1, 1, 1, 2)
+        rp.addWidget(rot, 1, 3)
         rp.addWidget(QLabel("กว้าง X"), 2, 0)
         rp.addWidget(self.room_w, 2, 1)
         rp.addWidget(QLabel("ลึก Y"), 2, 2)
         rp.addWidget(self.room_d, 2, 3)
         lay.addLayout(rp)
-        hint = QLabel("คลิกที่ว่างบนผัง = วางห้อง · ลากห้อง = ย้าย (ดูดติดขอบห้องอื่น"
-                      "และกริด) · ดับเบิลคลิก = แก้ขนาด · R = หมุน · Delete = ลบ · "
-                      "ล้อเมาส์ = ซูม · ปุ่มกลาง = เลื่อน")
+        hint = QLabel("คลิกที่ว่าง = วางห้อง · ลากห้อง = ย้าย (ดูดติดขอบห้องอื่นและกริด) · "
+                      "Ctrl+คลิก / ลากครอบ (เครื่องมือ «เลือก») = เลือกหลายห้อง · "
+                      "Ctrl+C / Ctrl+V = คัดลอก/วาง · Ctrl+Z / Ctrl+Y = ย้อน/ทำซ้ำ · "
+                      "ดับเบิลคลิก = แก้ขนาด · R = หมุน · Delete = ลบ · "
+                      "ดับเบิลคลิกขวา/Esc = ยกเลิกคำสั่ง · ล้อเมาส์ = ซูม · "
+                      "ปุ่มกลาง = เลื่อน")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(mid);")
         lay.addWidget(hint)
@@ -449,7 +1140,10 @@ class BuildingPanel(QWidget):
         tl = QHBoxLayout()
         tl.addWidget(QLabel("เครื่องมือ"))
         self.tool_box = QComboBox()
-        for k, v in (("room", "🟩 วางห้อง"), ("door", "🚪 ประตู (คลิกที่แนวผนัง)"),
+        for k, v in (("room", "🟩 วางห้อง"),
+                     ("select", "↖ เลือก / ลากครอบ"),
+                     ("node", "📍 กำหนดเบอร์เสา/ฐานราก (คลิกที่เสา)"),
+                     ("door", "🚪 ประตู (คลิกที่แนวผนัง)"),
                      ("window", "🪟 หน้าต่าง (คลิกที่แนวผนัง)"),
                      ("stair", "🪜 บันได (คลิกวาง · ลากย้าย · R หมุน)")):
             self.tool_box.addItem(v, k)
@@ -459,10 +1153,15 @@ class BuildingPanel(QWidget):
         lay.addWidget(self.canvas, 1)
         cb = QHBoxLayout()
         for text, fn in (("⤢ พอดีหน้าจอ", self.canvas.fit),
+                         ("↶ ย้อน", self.undo), ("↷ ทำซ้ำ", self.redo),
                          ("🗑 ล้างห้องชั้นนี้", self.clear_floor)):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, f=fn: f())
             cb.addWidget(b)
+        self.foot_chk = QCheckBox("แสดงฐานราก")
+        self.foot_chk.setChecked(True)
+        self.foot_chk.toggled.connect(lambda _v: self.canvas.update())
+        cb.addWidget(self.foot_chk)
         cb.addStretch(1)
         lay.addLayout(cb)
 
@@ -482,9 +1181,12 @@ class BuildingPanel(QWidget):
             lambda: self.build(("roof",)), 0, 1, "#C46420")
         btn("✅ สร้างทั้งหมด", "โครงสร้าง + หลังคา",
             lambda: self.build(("structure", "roof")), 1, 0, "#0F2A44")
-        btn("💰 ส่งรายการราคาไป ถอดปริมาณ",
-            "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ",
-            self.send_rates, 1, 1, "#3B6FB6")
+        btn("📊 BOQ ตามหลักเกณฑ์ 2569…",
+            "ถอดปริมาณตามหลักเกณฑ์กรมบัญชีกลาง (เผื่อตามมาตรฐาน ค่าแรง ว480) "
+            "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 1, 1, "#7B3FA0")
+        btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
+            "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
+            "(วัดจากโมเดล 3D)", self.send_rates, 2, 1, "#3B6FB6")
         lay.addLayout(bb)
         rm = QPushButton("ลบสิ่งที่สร้างโดย ออกแบบอาคาร")
         rm.clicked.connect(lambda _=False: self.remove_built())
@@ -495,7 +1197,7 @@ class BuildingPanel(QWidget):
 
         # Settings.
         self.fields = {}
-        st = QGroupBox("ขนาดชิ้นส่วน (ค่าเริ่มต้น — ให้วิศวกรกำหนดขนาดจริง)")
+        st = QGroupBox("ชั้นและผนัง")
         sf = QFormLayout(st)
 
         def num(key, label, lo, hi, step=0.05, dec=2, suffix=" ม."):
@@ -513,22 +1215,15 @@ class BuildingPanel(QWidget):
                 self.fields[k] = sp
                 row.addWidget(sp)
             sf.addRow(label, row)
-        num("floor_h", "ความสูงชั้น", 2.0, 10.0, 0.1)
+        num("floor_h", "ความสูงชั้น (พื้นถึงพื้น)", 2.0, 10.0, 0.1)
         num("grid", "ระยะกริดผัง", 0.05, 5.0, 0.05)
-        num("footing_w", "ฐานราก F1 กว้าง × ยาว", 0.3, 5.0)
-        num("footing_t", "ฐานราก F1 หนา", 0.1, 2.0)
-        num("footing_depth", "ความลึกท้องฐานราก", 0.3, 10.0, 0.1)
-        num("stump", "ตอม่อ PC1 (สี่เหลี่ยมจัตุรัส)", 0.1, 2.0)
-        num("col", "เสา C1 (สี่เหลี่ยมจัตุรัส)", 0.1, 2.0)
-        pair("gb_b", "gb_h", "คานคอดิน GB1 กว้าง × ลึก")
-        pair("b_b", "b_h", "คานชั้นบน B1 กว้าง × ลึก")
-        pair("rb_b", "rb_h", "คานหลังคา RB1 กว้าง × ลึก")
-        num("slab_t", "พื้น S หนา", 0.05, 1.0, 0.01)
         self.walls = QCheckBox("สร้างผนังก่ออิฐรอบห้อง")
         self.walls.toggled.connect(lambda _v: self._save_settings())
         sf.addRow(self.walls)
         num("wall_t", "ผนังหนา", 0.05, 0.5, 0.01)
         lay.addWidget(st)
+        self.library = LibraryBox(self)
+        lay.addWidget(self.library)
 
         ow = QGroupBox("ประตู หน้าต่าง บันได (ค่าเริ่มต้น)")
         sf = QFormLayout(ow)
@@ -568,6 +1263,10 @@ class BuildingPanel(QWidget):
                         ("rafter", "จันทัน"), ("purlin", "แป"), ("post", "ดั้ง")):
             c = QComboBox()
             c.addItems(labels)
+            for i, (lab, fam, prm) in enumerate(B.steel_presets()):
+                from core import wanic_profiles as P
+                c.setItemData(i, f"{lab} — {P.weight_per_m(fam, prm):.2f} กก./ม.",
+                              Qt.ToolTipRole)
             c.currentIndexChanged.connect(lambda _i: self._save_settings())
             self.steel[key] = c
             rff.addRow(th, c)
@@ -575,12 +1274,15 @@ class BuildingPanel(QWidget):
         self.skin.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.skin)
         lay.addWidget(rf)
-        note = QLabel("หลังคาตามรูปผังซ้อนกันตรงรางน้ำ จึงนับพื้นที่มุง/แปซ้ำบางส่วน "
-                      "· ปริมาณคอนกรีตนับรอยต่อเสา-คานซ้ำเล็กน้อย "
-                      "· ชั้นที่ไม่มีห้องจะถูกข้าม")
+        note = QLabel("ขนาดชิ้นส่วนและเหล็กเสริมเป็นค่าเริ่มต้น — วิศวกรผู้ออกแบบต้องกำหนด"
+                      "ตามแบบจริง (โปรแกรมไม่ได้ออกแบบ/ตรวจกำลังโครงสร้าง) · "
+                      "หลังคาตามรูปผังซ้อนกันตรงรางน้ำ · ชั้นที่ไม่มีห้องจะถูกข้าม")
         note.setWordWrap(True)
         note.setStyleSheet("color: palette(mid);")
         lay.addWidget(note)
+        sig = QLabel(label_html("WANIC ออกแบบอาคาร"))
+        sig.setWordWrap(True)
+        lay.addWidget(sig)
 
         self._preset_changed()
         self.refresh()
@@ -632,17 +1334,42 @@ class BuildingPanel(QWidget):
 
     # ---- rooms ------------------------------------------------------------------
     def _preset_changed(self, *_):
-        name, w, d = self.preset.currentData()
-        self.room_name.setText(name)
-        self.room_w.setValue(w)
-        self.room_d.setValue(d)
+        size = self.size_box.currentData()
+        if size:
+            self.room_w.setValue(size[0])
+            self.room_d.setValue(size[1])
+
+    def _swap_size(self):
+        w, d = self.room_w.value(), self.room_d.value()
+        self.room_w.setValue(d)
+        self.room_d.setValue(w)
+
+    def set_tool(self, key):
+        self.tool_box.setCurrentIndex(max(self.tool_box.findData(key), 0))
+
+    def show_footings(self) -> bool:
+        return self.foot_chk.isChecked()
+
+    def undo(self):
+        h = self.app.viewport.history
+        if getattr(h, "can_undo", lambda: True)():
+            h.undo()
+        self.app.viewport.update()
+        self.refresh()
+
+    def redo(self):
+        h = self.app.viewport.history
+        if getattr(h, "can_redo", lambda: True)():
+            h.redo()
+        self.app.viewport.update()
+        self.refresh()
 
     def place_room(self, x, y):
         d = self.data()
         rooms = d["floors"][self.floor]["rooms"]
         w, dd = self.room_w.value(), self.room_d.value()
-        rm = {"id": self._next_id(d), "name": self.room_name.text().strip()
-              or "ห้อง", "x": x - w / 2, "y": y - dd / 2, "w": w, "d": dd}
+        rm = {"id": self._next_id(d), "name": self.room_name.currentText()
+              .strip() or "ห้อง", "x": x - w / 2, "y": y - dd / 2, "w": w, "d": dd}
         rm = B.snap_room(rm, rooms, d["settings"]["grid"])
         rooms.append(rm)
         self._write(d)
@@ -659,12 +1386,18 @@ class BuildingPanel(QWidget):
                 return
 
     def edit_room(self, rid):
+        lib = B.library_of(self.data())
+
         def fn(rooms, i, rm):
-            dlg = RoomDialog(rm, self)
+            dlg = RoomDialog(rm, self, B.marks_of(lib, "slab"))
             if dlg.exec() != QDialog.Accepted:
                 return False
-            rm.update(name=dlg.name.text().strip() or rm.get("name", ""),
+            rm.update(name=dlg.name.currentText().strip() or rm.get("name", ""),
                       w=dlg.w.value(), d=dlg.d.value())
+            if dlg.slab.currentData():
+                rm["slab"] = dlg.slab.currentData()
+            else:
+                rm.pop("slab", None)
         self._edit(rid, fn)
 
     def rotate_room(self, rid):
@@ -687,6 +1420,46 @@ class BuildingPanel(QWidget):
         def fn(rooms, i, rm):
             del rooms[i]
         self._edit(rid, fn)
+
+    def delete_rooms(self, ids):
+        ids = set(ids)
+        if not ids:
+            return
+        d = self.data()
+        f = d["floors"][self.floor]
+        f["rooms"] = [r for r in f["rooms"] if r["id"] not in ids]
+        self._write(d)
+
+    def copy_rooms(self, ids):
+        rooms = [copy.deepcopy(r) for r in self.rooms() if r["id"] in set(ids)]
+        self._clip = rooms
+        if rooms:
+            self.status.setText(f"คัดลอก {len(rooms)} ห้องแล้ว — Ctrl+V เพื่อวาง "
+                                "(ที่ตำแหน่งเมาส์)")
+        return len(rooms)
+
+    def paste_rooms(self, at=None):
+        rooms = getattr(self, "_clip", None) or []
+        if not rooms:
+            return []
+        d = self.data()
+        fp = B.footprint(rooms)
+        if at is not None:
+            dx, dy = at[0] - fp[0], at[1] - fp[1]
+        else:
+            dx, dy = fp[2] - fp[0], 0.0
+        g = float(d["settings"]["grid"]) or 0.5
+        dx, dy = round(dx / g) * g, round(dy / g) * g
+        target = d["floors"][self.floor]["rooms"]
+        out = []
+        for r in rooms:
+            nid = self._next_id(d)
+            new = dict(copy.deepcopy(r), id=nid, x=B._r(r["x"] + dx),
+                       y=B._r(r["y"] + dy))
+            target.append(new)
+            out.append(nid)
+        self._write(d)
+        return out
 
     def clear_floor(self):
         d = self.data()
@@ -809,6 +1582,82 @@ class BuildingPanel(QWidget):
                 it[k] = sp.value()
         self._with_item(iid, fn)
 
+    # ---- column points and the member library ---------------------------------
+    def node_at(self, x, y, reach=None):
+        """The column point nearest (x, y) on this floor, or None."""
+        reach = reach if reach is not None else max(0.25, 12.0 /
+                                                     self.canvas.scale)
+        best = None
+        for nx, ny in B.nodes(self.rooms()):
+            dist = ((nx - x) ** 2 + (ny - y) ** 2) ** 0.5
+            if dist <= reach and (best is None or dist < best[0]):
+                best = (dist, (nx, ny))
+        return None if best is None else best[1]
+
+    def set_node_marks(self, node, marks):
+        d = self.data()
+        assign = dict(d.get("assign") or {})
+        key = B.node_key(*node)
+        rec = {k: v for k, v in (marks or {}).items()
+               if v and v != B.ROLE_DEFAULT[k]}
+        if rec:
+            assign[key] = rec
+        else:
+            assign.pop(key, None)
+        d["assign"] = assign
+        self._write(d)
+
+    def edit_node(self, node):
+        dlg = NodeDialog(self.data(), node, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.set_node_marks(node, dlg.marks())
+
+    def reset_node(self, node):
+        self.set_node_marks(node, {})
+
+    def set_library(self, mark, spec):
+        d = self.data()
+        lib = dict(d.get("library") or {})
+        lib[mark] = dict(spec)
+        d["library"] = lib
+        self._write(d)
+        self.status.setText(f"บันทึกเบอร์ {mark} แล้ว — กด «สร้าง/อัปเดต» เพื่อปรับโมเดล")
+
+    # ---- standard BOQ -------------------------------------------------------------
+    def open_boq(self):
+        d = self.data()
+        if not any(f.get("rooms") for f in d["floors"]):
+            QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง — วางห้องก่อน")
+            return
+        dlg = BoqDialog(self)
+        dlg.exec()
+
+    def takeoff_data(self) -> dict:
+        import json
+        from core.wanic_takeoff import default_data as tk_default
+        cur = (getattr(self.app.scene, "plugin_data", {}) or {}).get(
+            B.TAKEOFF_KEY)
+        return json.loads(json.dumps(cur)) if cur else tk_default()
+
+    def send_standard_boq(self, result=None) -> int:
+        """Put the standard BOQ into WANIC ถอดปริมาณ, replacing the lines an
+        earlier send made (ids ``std…``)."""
+        from core import wanic_quantities as Q
+        from core.history import SetPluginDataCommand
+        result = result or Q.compute(self.data())
+        tk = self.takeoff_data()
+        tk["rates"] = [r for r in tk.get("rates", [])
+                       if not str(r.get("id", "")).startswith("std")]
+        new = Q.to_rates(result)
+        tk["rates"] += new
+        self.app.viewport.history.execute(
+            SetPluginDataCommand(B.TAKEOFF_KEY, tk))
+        n = getattr(self.app.viewport, "notify_scene_changed", None)
+        if callable(n):
+            n()
+        self.status.setText(f"ส่ง BOQ ตามหลักเกณฑ์ {len(new)} รายการเข้า «ถอดปริมาณ» แล้ว")
+        return len(new)
+
     # ---- floors -----------------------------------------------------------------
     def add_floor(self):
         d = self.data()
@@ -882,6 +1731,7 @@ class BuildingPanel(QWidget):
             for k, c in self.steel.items():
                 i = c.findText(s[k])
                 c.setCurrentIndex(max(i, 0))
+            self.library.refresh()
         finally:
             self._loading = False
         self.canvas.update()

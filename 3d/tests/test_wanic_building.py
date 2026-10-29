@@ -220,3 +220,53 @@ def test_l_shaped_plan_gets_two_roofs_meeting_in_a_valley():
     assert len(lines["ridge"]) == 2
     d["settings"]["roof_mode"] = "bbox"
     assert len(B.roof_lines(d)["rects"]) == 1
+
+
+def test_panel_select_copy_marks_library_and_standard_boq(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    QApplication.instance() or QApplication([])
+    from plugins.wanic_building import BoqDialog, BuildingPanel, axis_name
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    scene = Scene()
+    app = _App(scene)
+    panel = BuildingPanel(app)
+    panel.resize(500, 900)
+    panel.place_room(1.5, 1.5)
+    panel.place_room(4.6, 1.4)
+    ids = {r["id"] for r in panel.rooms()}
+    assert panel.copy_rooms(ids) == 2
+    got = panel.paste_rooms((0.0, 3.0))
+    assert len(got) == 2 and len(panel.rooms()) == 4
+    assert len(B.nodes(panel.rooms())) == 9          # pasted edge to edge
+    panel.delete_rooms(set(got))
+    assert len(panel.rooms()) == 2
+    panel.undo()
+    assert len(panel.rooms()) == 4
+    panel.redo()
+    assert len(panel.rooms()) == 2
+    # Marks at a column point and a new library mark.
+    node = panel.node_at(0.02, -0.03)
+    assert node == (0.0, 0.0)
+    spec = dict(B.library_of(panel.data())["F1"], w=1.5, l=1.5)
+    panel.set_library("F2", spec)
+    panel.set_node_marks(node, {"F": "F2", "PC": "PC1", "C": "C1"})
+    assert panel.data()["assign"] == {B.node_key(0, 0): {"F": "F2"}}
+    E = B.elements(panel.data())
+    assert sorted(e["mark"] for e in E["footings"]).count("F2") == 1
+    panel.reset_node(node)
+    assert not panel.data()["assign"]
+    # The standard BOQ: dialog fills, sending replaces its own lines only.
+    dlg = BoqDialog(panel)
+    assert dlg.tree.topLevelItemCount() >= 5
+    dlg.sample_prices()
+    assert dlg.result["totals"]["total"] > 0
+    n = panel.send_standard_boq(dlg.result)
+    tk = scene_data(scene)["wanic_takeoff"]
+    assert len(tk["rates"]) == n
+    panel.send_rates()                                 # model-bound lines
+    m = len(scene_data(scene)["wanic_takeoff"]["rates"])
+    assert panel.send_standard_boq() == n
+    assert len(scene_data(scene)["wanic_takeoff"]["rates"]) == m
+    assert axis_name(0) == "A" and axis_name(8) == "J"  # no I
+    panel.canvas.grab()                                 # paints axes etc.

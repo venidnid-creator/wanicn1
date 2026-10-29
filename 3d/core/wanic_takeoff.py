@@ -81,6 +81,7 @@ DEFAULT_SETTINGS = {
     "date": "", "area_m2": 0.0, "factor_f": 1.0, "vat": 7.0,
     "method": "gov", "adv_pay": 0.0, "retention": 0.0, "interest": 6.0,
     "chair": "", "member1": "", "member2": "",
+    "preparer": "นายเวนิช ธัมมะวงษ์", "preparer_role": "วิศวกรสำรวจ",
 }
 
 
@@ -690,6 +691,7 @@ def _boq_sheet(result, settings) -> _Sheet:
         r = sh.add(cells, styles=styles)
         if kind == "words":
             sh.merges.append(f"B{r}:I{r}")
+    _sign(sh, settings, 10)
     return sh
 
 
@@ -765,6 +767,18 @@ def _sign(sh, st, ncols):
         r = sh.add([f"( {name} )"] + [""] * (ncols - 1), style=10)
         sh.merges.append(f"A{r}:{last}{r}")
         sh.add([""] * ncols)
+    # The person who measured and priced the drawings, and the program's
+    # signature (WANIC tools carry their developer's name on every form).
+    from core.wanic_sign import NAME, ROLE, footer
+    prep = st.get("preparer") or NAME
+    role = st.get("preparer_role") or ROLE
+    for text in ("(ลงชื่อ) ......................................  "
+                 "ผู้ถอดแบบและคำนวณราคา", f"( {prep} )", f"ตำแหน่ง {role}"):
+        r = sh.add([text] + [""] * (ncols - 1), style=10)
+        sh.merges.append(f"A{r}:{last}{r}")
+    sh.add([""] * ncols)
+    r = sh.add([footer("WANIC ถอดปริมาณ")] + [""] * (ncols - 1), style=0)
+    sh.merges.append(f"A{r}:{last}{r}")
 
 
 def _two_row_head(sh, top, sub, spans):
