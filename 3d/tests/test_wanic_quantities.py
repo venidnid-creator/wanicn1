@@ -255,3 +255,52 @@ def test_window_band_and_tile_choice():
     r = Q.compute(d)
     sheet = _by(r, "กระเบื้องไฟเบอร์ซีเมนต์ลอนคู่ 0.50×1.20")[0]
     assert close(sheet["net"], lab["net"] * 2.5)
+
+
+def test_l_roofs_are_trimmed_not_overlapping():
+    from core import wanic_roofclip as RCL
+    from core.wanic_roofclip import _area
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(id="a", x=0, y=0, w=8, d=4),
+                               dict(id="b", x=0, y=4, w=3, d=4)]
+    s = B.settings_of(d)
+    plan = (9.2 * 5.2) + (4.2 * 4.0)                 # L plan with eaves
+    slope = plan / math.cos(math.radians(s["pitch"]))
+    for kind in ("hip", "gable"):
+        d["settings"]["roof"] = kind
+        lines = B.roof_lines(d)
+        # The covering is the L once — nothing doubled under a neighbour.
+        assert close(sum(_area(p) for p in lines["skin"]), slope, 1e-6)
+        assert lines["valley"] > 1.0
+        rects = lines["rects"]
+        ov = s["overhang"]
+        parts = [B._roof_rect(r, lines["z0"], s) for r in rects]
+        roofs = [RCL.Roof((r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
+                          p["skin"]) for r, p in zip(rects, parts)]
+        # No member pokes through the other roof: every kept rafter's
+        # middle is on or above every roof surface there.
+        for a, b in lines["rafter"] + lines["hip"] + lines["ridge"]:
+            m = tuple((a[k] + b[k]) / 2 for k in range(3))
+            for r in roofs:
+                h = r.height(m[0], m[1])
+                assert h is None or h <= m[2] + 0.01
+    acc = RCL.accessories(B.roof_lines(d))           # gable L
+    assert acc["gable_end"] == 3 and acc["verge_end"] == 6
+    d["settings"]["roof"] = "hip"
+    acc = RCL.accessories(B.roof_lines(d))
+    assert acc["three_way"] == 3 and acc["hip_end"] == 6
+
+
+def test_monier_accessories_and_valley_in_boq():
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(id="a", x=0, y=0, w=8, d=4),
+                               dict(id="b", x=0, y=4, w=3, d=4)]
+    r = Q.compute(d)
+    assert _by(r, "ครอบโค้งสามทาง")[0]["qty"] == 3
+    assert _by(r, "ครอบโค้งหางมน")[0]["qty"] == 6
+    valley = _by(r, "รางน้ำตะเข้สำเร็จรูป")[0]
+    assert valley["lab"] == 26 and valley["net"] > 1
+    ridge = _by(r, "ครอบสัน —")[0]
+    assert close(ridge["net"], _by(r, "ค่าแรงครอบสัน")[0]["net"] * 3.3)
+    sq = _one_room()                                 # 3×3 hip: a pyramid
+    assert _by(Q.compute(sq), "ครอบโค้งสี่ทาง")[0]["qty"] == 1

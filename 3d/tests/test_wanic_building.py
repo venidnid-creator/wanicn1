@@ -313,7 +313,7 @@ def test_panel_door_types_fixtures_fascia(monkeypatch):
     panel.build(("structure", "roof"))
     kinds = {((g.ext or {}).get("wanic_building") or {}).get("kind")
              for g in B.generated(scene)}
-    assert {"fixture", "fascia", "window", "band", "cap"} <= kinds
+    assert {"fixture", "fascia", "window", "band", "cap", "tiles"} <= kinds
     win = [g for g in B.generated(scene)
            if ((g.ext or {}).get("wanic_building") or {}).get("kind")
            == "window"][0]

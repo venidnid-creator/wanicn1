@@ -61,6 +61,7 @@ DEFAULT_SETTINGS = {
     "win_sill": 0.9, "stair_w": 1.0, "riser_max": 0.18, "going": 0.25,
     "stair_t": 0.15, "fascia": True, "fascia_h": 0.20, "fascia_t": 0.025,
     "band": 0.10, "tile": "R1", "tiles_m2": 0.0, "caps": True,
+    "tile_color": "ตามวัสดุ", "tiles_3d": True,
 }
 
 
@@ -900,8 +901,12 @@ def plan_rectangles(rooms):
     return rects
 
 
-def _roof_rect(rect, z0, s):
-    """The frame lines of one rectangular roof (see :func:`roof_lines`)."""
+def _roof_rect(rect, z0, s, others=()):
+    """The frame lines of one rectangular roof (see :func:`roof_lines`).
+
+    A gable end that runs into another roof (``others``: their eave boxes)
+    is hipped instead, so it dives under that roof rather than poking a
+    gable out through it — the usual way an L or T wing is framed."""
     ov = float(s["overhang"])
     tan = math.tan(math.radians(float(s["pitch"])))
     x0, y0, x1, y1 = rect[0] - ov, rect[1] - ov, rect[2] + ov, rect[3] + ov
@@ -917,73 +922,102 @@ def _roof_rect(rect, z0, s):
     def P3(x, y, z):
         return (y, x, z) if swap else (x, y, z)
 
+    def covered(xx):
+        px, py, _z = P3(xx, y0 + half, 0.0)
+        return any(o[0] - 1e-6 <= px <= o[2] + 1e-6 and
+                   o[1] - 1e-6 <= py <= o[3] + 1e-6 for o in others)
+
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
            "skin": [], "eave": [], "barge": []}
     zr = h(half)
     yc = y0 + half
-    hip = s["roof"] == "hip"
-    rx0, rx1 = (x0 + half, x1 - half) if hip else (x0, x1)
+    if s["roof"] == "hip":
+        h0 = h1 = True
+    else:
+        h0, h1 = covered(x0), covered(x1)
+    rx0 = x0 + half if h0 else x0
+    rx1 = x1 - half if h1 else x1
+    if rx1 < rx0:
+        rx0 = rx1 = (x0 + x1) / 2
     if rx1 - rx0 > 1e-6:
         out["ridge"].append([P3(rx0, yc, zr), P3(rx1, yc, zr)])
-    if hip:
-        for cx, cy, ex in ((x0, y0, rx0), (x0, y1, rx0), (x1, y0, rx1),
-                           (x1, y1, rx1)):
-            out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
+    for hipped, cx, ex in ((h0, x0, rx0), (h1, x1, rx1)):
+        if hipped:
+            for cy in (y0, y1):
+                out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
     sp = max(float(s["rafter_sp"]), 0.2)
+    big = 1e9
     count = max(int(math.floor(L / sp + 1e-9)), 1)
     for i in range(count + 1):
         x = x0 + L * i / count
-        reach = min(half, x - x0, x1 - x) if hip else half
+        reach = min(half, (x - x0) if h0 else big, (x1 - x) if h1 else big)
         if reach <= 0.05:
             continue
         out["rafter"].append([P3(x, y0, h(0)), P3(x, y0 + reach, h(reach))])
         out["rafter"].append([P3(x, y1, h(0)), P3(x, y1 - reach, h(reach))])
-    if hip:                                  # jack rafters on the ends
-        cnt = max(int(math.floor(W / sp + 1e-9)), 1)
+    cnt = max(int(math.floor(W / sp + 1e-9)), 1)
+    for hipped, ex, sgn in ((h0, x0, 1), (h1, x1, -1)):
+        if not hipped:                       # jack rafters on a hipped end
+            continue
         for i in range(cnt + 1):
             y = y0 + W * i / cnt
             reach = min(half, y - y0, y1 - y)
             if reach <= 0.05:
                 continue
-            out["rafter"].append([P3(x0, y, h(0)), P3(x0 + reach, y, h(reach))])
-            out["rafter"].append([P3(x1, y, h(0)), P3(x1 - reach, y, h(reach))])
+            out["rafter"].append([P3(ex, y, h(0)),
+                                  P3(ex + sgn * reach, y, h(reach))])
     psp = max(float(s["purlin_sp"]), 0.1) * math.cos(math.radians(
         float(s["pitch"])))
     d = 0.05
     while d < half - 0.05:
-        if hip:
-            if L - 2 * d > 1e-6 and W - 2 * d > 1e-6:
+        a0 = x0 + d if h0 else x0
+        a1 = x1 - d if h1 else x1
+        if a1 - a0 > 1e-6:
+            if h0 and h1:
                 out["purlin"].append({"closed": True, "path": [
-                    P3(x0 + d, y0 + d, h(d)), P3(x1 - d, y0 + d, h(d)),
-                    P3(x1 - d, y1 - d, h(d)), P3(x0 + d, y1 - d, h(d))]})
-        else:
-            for yy in (y0 + d, y1 - d):
+                    P3(a0, y0 + d, h(d)), P3(a1, y0 + d, h(d)),
+                    P3(a1, y1 - d, h(d)), P3(a0, y1 - d, h(d))]})
+            elif h0:
                 out["purlin"].append({"closed": False, "path": [
-                    P3(x0, yy, h(d)), P3(x1, yy, h(d))]})
+                    P3(a1, y0 + d, h(d)), P3(a0, y0 + d, h(d)),
+                    P3(a0, y1 - d, h(d)), P3(a1, y1 - d, h(d))]})
+            elif h1:
+                out["purlin"].append({"closed": False, "path": [
+                    P3(a0, y0 + d, h(d)), P3(a1, y0 + d, h(d)),
+                    P3(a1, y1 - d, h(d)), P3(a0, y1 - d, h(d))]})
+            else:
+                for yy in (y0 + d, y1 - d):
+                    out["purlin"].append({"closed": False, "path": [
+                        P3(a0, yy, h(d)), P3(a1, yy, h(d))]})
         d += psp
     if zr - z0 > 0.1:
         for xx in ((rx0, rx1) if rx1 - rx0 > 1e-6 else (rx0,)):
             out["post"].append([P3(xx, yc, z0), P3(xx, yc, zr)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
-    # Eave lines (เชิงชาย) and, on a gable, the rakes (ปั้นลม).
+    # Eave lines (เชิงชาย) and, on a gable end, the rakes (ปั้นลม).
     out["eave"] = [[e[0], e[1]], [e[3], e[2]]]
-    if hip:
-        out["eave"] += [[e[1], e[2]], [e[0], e[3]]]
-    else:
-        for xx in (x0, x1):
+    for hipped, xx, pair in ((h0, x0, (e[0], e[3])), (h1, x1, (e[1], e[2]))):
+        if hipped:
+            out["eave"].append(list(pair))
+        else:
             out["barge"].append([P3(xx, y0, h(0)), P3(xx, yc, zr)])
             out["barge"].append([P3(xx, y1, h(0)), P3(xx, yc, zr)])
     r0, r1 = P3(rx0, yc, zr), P3(rx1, yc, zr)
-    if hip:
-        if abs(rx1 - rx0) < 1e-6:                   # square plan: a pyramid
-            out["skin"] = [[e[0], e[1], r0], [e[1], e[2], r0],
-                           [e[2], e[3], r0], [e[3], e[0], r0]]
-        else:
-            out["skin"] = [[e[0], e[1], r1, r0], [e[1], e[2], r1],
-                           [e[2], e[3], r0, r1], [e[3], e[0], r0]]
-    else:
-        out["skin"] = [[e[0], e[1], r1, r0], [e[2], e[3], r0, r1]]
+
+    def poly(*pts):
+        outp = []
+        for p in pts:
+            if not outp or math.dist(outp[-1], p) > 1e-9:
+                outp.append(p)
+        if len(outp) > 1 and math.dist(outp[0], outp[-1]) < 1e-9:
+            outp.pop()
+        return outp
+    out["skin"] = [poly(e[0], e[1], r1, r0), poly(e[2], e[3], r0, r1)]
+    if h1:
+        out["skin"].append(poly(e[1], e[2], r1))
+    if h0:
+        out["skin"].append(poly(e[3], e[0], r0))
     return out
 
 
@@ -1004,22 +1038,44 @@ def roof_lines(data):
     else:
         rects = plan_rectangles(top)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0}
+           "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0,
+           "valley": 0.0}
     ov = float(s["overhang"])
-    for i, rect in enumerate(rects):
-        part = _roof_rect(rect, z0, s)
-        for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
-            out[k] += part[k]
-        others = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov)
-                  for j, r in enumerate(rects) if j != i]
-        for a, b in part["eave"]:
-            out["eave"] += _outside(a, b, others)
-        for a, b in part["barge"]:
-            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-            if not any(o[0] - 1e-6 <= mx <= o[2] + 1e-6 and
-                       o[1] - 1e-6 <= my <= o[3] + 1e-6 for o in others):
-                out["barge"].append([a, b])
+    from core import wanic_roofclip as RC
+    boxes = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov) for r in rects]
+    # A wing's gable end that runs into an earlier (larger) roof is hipped.
+    parts = [_roof_rect(rect, z0, s, boxes[:i]) for i, rect in
+             enumerate(rects)]
+    roofs = [RC.Roof((r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
+                     part["skin"]) for r, part in zip(rects, parts)]
+    many = len(rects) > 1
+    kept = {}
+    for i, (rect, part) in enumerate(zip(rects, parts)):
+        if not many:
+            for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
+                out[k] += part[k]
+        else:
+            # Trim what lies under a neighbouring roof (L / T plans).
+            for k in ("ridge", "hip", "rafter"):
+                for a, b in part[k]:
+                    out[k] += RC.clip_segment(a, b, i, roofs)
+            for pl in part["purlin"]:
+                for seg in RC.clip_path(pl["path"], i, roofs, pl["closed"]):
+                    out["purlin"].append({"closed": False, "path": seg})
+            for a, b in part["post"]:
+                if not RC.hidden(b, i, roofs):
+                    out["post"].append([a, b])
+            kept[i] = []
+            for poly in part["skin"]:
+                kept[i] += RC.clip_facet(poly, i, roofs)
+            out["skin"] += kept[i]
+        for k in ("eave", "barge"):
+            for a, b in part[k]:
+                out[k] += RC.clip_segment(a, b, i, roofs) if many \
+                    else [[a, b]]
     out["eave"] = _merge_collinear(out["eave"])
+    if many:
+        out["valley"] = RC.valley_length(kept, roofs)
     return out
 
 
@@ -1114,8 +1170,9 @@ def roof_members(data) -> tuple[list, dict]:
             add(_member("roof", "barge", "ปั้นลม", "rect", fp, path,
                         anchor="tc", ifc="IfcMember", name="ปั้นลม"),
                 "barge")
-    from core.wanic_catalog import COLORS, roof_tile
+    from core.wanic_catalog import COLORS, roof_tile, tile_color
     _tc, tile = roof_tile(s)
+    tcolor = tile_color(s)
     for g in out:
         k = ((g.ext or {}).get(EXT_KEY) or {}).get("kind")
         if k in ("fascia", "barge"):
@@ -1124,23 +1181,225 @@ def roof_members(data) -> tuple[list, dict]:
     if s.get("skin") and lines["skin"]:
         g = roof_skin(lines["skin"], lift)
         if g is not None:
-            g.material = {"color": tile["color"], "mat": tile["name"]}
+            g.material = {"color": tuple(c * 0.55 for c in tcolor),
+                          "mat": "แผ่นรองหลังคา"}
             add(_tag(g, "roof", "skin", "หลังคา"), "skin")
+        if s.get("tiles_3d", True):
+            add(roof_tiles(lines, s, lift + 0.01), "tiles")
     if s.get("caps", True) and s.get("skin"):
         # Ridge and hip caps (ครอบสัน / ครอบตะเข้สัน) and, on a gable, the
         # verge caps (ครอบข้าง/ครอบปั้นลม), sitting on the covering.
-        cap = dict(b=250.0, h=80.0)
+        amp = tile["wave"][2]
         for kind, paths, name in (("ridge", lines["ridge"], "ครอบสัน"),
                                   ("hip", lines["hip"], "ครอบตะเข้สัน"),
                                   ("barge", lines["barge"], "ครอบข้าง")):
             for path in paths:
-                up = [(p[0], p[1], p[2] + lift + 0.01) for p in path]
-                g = _member("roof", "cap", name, "rect", cap, up,
-                            anchor="c", ifc="IfcCovering", name=name)
-                if g is not None:
-                    g.material = {"color": tile["color"], "mat": tile["name"]}
-                add(g, "cap")
+                add(cap_barrel(path, 0.13, tcolor, name, lift + amp + 0.02),
+                    "cap")
     return out, count
+
+
+# ---------------------------------------------------------------------------
+# The covering as tiles you can see, and the cap pieces
+# ---------------------------------------------------------------------------
+
+def _wave(kind, period, amp, u):
+    t = (u / period) % 1.0
+    if kind == "trap":                              # metal-sheet ribs
+        if t < 0.10:
+            f = 1.0
+        elif t < 0.20:
+            f = 1.0 - (t - 0.10) / 0.10
+        elif t < 0.90:
+            f = 0.0
+        else:
+            f = (t - 0.90) / 0.10
+        return amp * f
+    f = 0.5 - 0.5 * math.cos(2 * math.pi * t)
+    if kind == "s":                                 # Spanish S: pan + roll
+        f += 0.18 * math.sin(4 * math.pi * t)
+    return amp * f
+
+
+def _clip2(cell, poly):
+    """Sutherland–Hodgman: a 2D polygon clipped by a convex one (CCW)."""
+    out = cell
+    n = len(poly)
+    for k in range(n):
+        if not out:
+            break
+        (ax, ay), (bx, by) = poly[k], poly[(k + 1) % n]
+
+        def inside(p):
+            return (bx - ax) * (p[1] - ay) - (by - ay) * (p[0] - ax) >= -1e-12
+        src, out = out, []
+        for i in range(len(src)):
+            p, q = src[i], src[(i + 1) % len(src)]
+            ip, iq = inside(p), inside(q)
+            if ip:
+                out.append(p)
+            if ip != iq:
+                dx, dy = q[0] - p[0], q[1] - p[1]
+                ex, ey = bx - ax, by - ay
+                den = ex * dy - ey * dx
+                if abs(den) > 1e-15:
+                    t = (ex * (ay - p[1]) - ey * (ax - p[0])) / den
+                    out.append((p[0] + dx * t, p[1] + dy * t))
+    clean = []
+    for p in out:
+        if not clean or abs(p[0] - clean[-1][0]) + abs(p[1] - clean[-1][1]) \
+                > 1e-9:
+            clean.append(p)
+    while len(clean) > 1 and abs(clean[0][0] - clean[-1][0]) + \
+            abs(clean[0][1] - clean[-1][1]) <= 1e-9:
+        clean.pop()
+    return clean
+
+
+def roof_tiles(lines, s, lift):
+    """The covering as rows of tiles (or sheets) following the chosen
+    profile, laid on every visible piece of the roof — one painted group.
+    Pure display: the takeoff bills the flat covering's area."""
+    from PySide6.QtGui import QVector3D
+
+    from core.group import Group
+    from core.mesh import Mesh
+    from core.wanic_catalog import roof_tile, tile_color
+    _code, tile = roof_tile(s)
+    kind, period, amp, course, step = tile["wave"]
+    color = tile_color(s)
+    pitch = math.radians(float(s["pitch"]))
+    sin_p = math.sin(pitch) or 1.0
+    eave_z = min((p[2] for poly in lines["skin"] for p in poly),
+                 default=0.0)
+    cw = max(period / 6.0, 0.03)
+    mesh = Mesh()
+    attrs = {"color": tuple(color)}
+    for poly in lines["skin"]:
+        if len(poly) < 3:
+            continue
+        a3 = [QVector3D(*p) for p in poly]
+        nrm = QVector3D.crossProduct(a3[1] - a3[0], a3[2] - a3[0])
+        if nrm.length() < 1e-12:
+            continue
+        nrm = nrm.normalized()
+        if nrm.z() < 0:
+            nrm = -nrm
+        u = QVector3D(-nrm.y(), nrm.x(), 0.0)
+        if u.length() < 1e-9:
+            continue
+        u = u.normalized()
+        v = QVector3D.crossProduct(nrm, u).normalized()
+        if v.z() < 0:
+            u, v = -u, -v
+        ref = a3[0]
+        uu0 = QVector3D.dotProduct(ref, u)
+        vr0 = (ref.z() - eave_z) / sin_p
+
+        def to2(p):
+            return (QVector3D.dotProduct(p, u),
+                    (p.z() - eave_z) / sin_p)
+
+        def to3(uu, vr, off):
+            return ref + u * (uu - uu0) + v * (vr - vr0) + nrm * off
+        p2 = [to2(p) for p in a3]
+        # CCW in (u, v)
+        area2 = sum(p2[i][0] * p2[(i + 1) % len(p2)][1] -
+                    p2[(i + 1) % len(p2)][0] * p2[i][1]
+                    for i in range(len(p2)))
+        if area2 < 0:
+            p2 = p2[::-1]
+        umin, umax = min(p[0] for p in p2), max(p[0] for p in p2)
+        vmin, vmax = min(p[1] for p in p2), max(p[1] for p in p2)
+        rows = []
+        if course > 0:
+            k0 = int(math.floor(vmin / course))
+            k = k0
+            while k * course < vmax:
+                rows.append((max(k * course, vmin),
+                             min((k + 1) * course, vmax), k))
+                k += 1
+        else:
+            rows.append((vmin, vmax, 0))
+
+        def off(uu, vr, k):
+            o = lift + _wave(kind, period, amp, uu)
+            if course > 0 and step > 0:
+                o += step * (1.0 - (vr - k * course) / course)
+            return o
+        c0 = int(math.floor(umin / cw))
+        c1 = int(math.ceil(umax / cw))
+        for va, vb, k in rows:
+            for c in range(c0, c1):
+                ua, ub = c * cw, (c + 1) * cw
+                cell = _clip2([(ua, va), (ub, va), (ub, vb), (ua, vb)], p2)
+                if len(cell) < 3:
+                    continue
+                f = mesh.add_face([to3(x, y, off(x, y, k)) for x, y in cell])
+                if f is not None:
+                    f.attrs.update(attrs)
+                # The lip where this course laps over the one below.
+                if course > 0 and step > 0 and abs(va - k * course) < 1e-9 \
+                        and k * course > vmin + 1e-6:
+                    bot = [p for p in cell if abs(p[1] - va) < 1e-9]
+                    if len(bot) >= 2:
+                        (xa, _), (xb, _) = sorted(bot)[0], sorted(bot)[-1]
+                        if xb - xa > 1e-4:
+                            hi = step
+                            lo_a = off(xa, va, k) - hi
+                            lo_b = off(xb, va, k) - hi
+                            g = mesh.add_face([
+                                to3(xa, va, lo_a), to3(xb, va, lo_b),
+                                to3(xb, va, off(xb, va, k)),
+                                to3(xa, va, off(xa, va, k))])
+                            if g is not None:
+                                g.attrs.update(attrs)
+    if not mesh.faces:
+        return None
+    g = Group(mesh, name=f"กระเบื้องหลังคา — {tile['name']}")
+    g.ifc = {"class": "IfcCovering", "name": tile["name"]}
+    return _tag(g, "roof", "tiles", tile["name"])
+
+
+def cap_barrel(path, radius, color, name, lift):
+    """A half-round cap (ครอบสันโค้ง) along a ridge, hip or verge."""
+    from PySide6.QtGui import QVector3D
+
+    from core.group import Group
+    from core.mesh import Mesh
+    a = QVector3D(*path[0])
+    b = QVector3D(*path[1])
+    t = b - a
+    if t.length() < 0.05:
+        return None
+    t = t.normalized()
+    side = QVector3D.crossProduct(t, QVector3D(0, 0, 1))
+    if side.length() < 1e-9:
+        return None
+    side = side.normalized()
+    up = QVector3D.crossProduct(side, t).normalized()
+    if up.z() < 0:
+        up = -up
+    a = a + up * lift
+    b = b + up * lift
+    n = 8
+    ring = [side * (radius * math.cos(math.pi * k / n)) +
+            up * (radius * 0.75 * math.sin(math.pi * k / n))
+            for k in range(n + 1)]
+    mesh = Mesh()
+    attrs = {"color": tuple(color)}
+    for k in range(n):
+        f = mesh.add_face([a + ring[k], b + ring[k], b + ring[k + 1],
+                           a + ring[k + 1]])
+        if f is not None:
+            f.attrs.update(attrs)
+    for end in (a, b):
+        f = mesh.add_face([end + r for r in ring])
+        if f is not None:
+            f.attrs.update(attrs)
+    g = Group(mesh, name=name)
+    g.ifc = {"class": "IfcCovering", "name": name}
+    return _tag(g, "roof", "cap", name)
 
 
 def roof_skin(polys, lift=0.0):
@@ -1191,6 +1450,7 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("fascia", "เชิงชาย"),
            ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
            ("band", "เสาเอ็น-ทับหลัง"), ("fixture", "สุขภัณฑ์"),
+           ("tiles", "กระเบื้อง"),
            ("skin", "แผ่นหลังคา")]
 
 

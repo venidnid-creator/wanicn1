@@ -1398,6 +1398,22 @@ class BuildingPanel(QWidget):
             self.tile.addItem(f"{code} {spec['name']}{extra}", code)
         self.tile.currentIndexChanged.connect(lambda _i: self._save_settings())
         rff.addRow("วัสดุมุง", self.tile)
+        self.tile_color = QComboBox()
+        for name, rgb in CAT.TILE_COLORS.items():
+            self.tile_color.addItem(name, name)
+            if rgb:
+                from PySide6.QtGui import QPixmap
+                pm = QPixmap(14, 14)
+                pm.fill(QColor.fromRgbF(*rgb))
+                from PySide6.QtGui import QIcon
+                self.tile_color.setItemIcon(self.tile_color.count() - 1,
+                                            QIcon(pm))
+        self.tile_color.currentIndexChanged.connect(
+            lambda _i: self._save_settings())
+        rff.addRow("สีกระเบื้อง", self.tile_color)
+        self.tiles_3d = QCheckBox("แสดงลอนกระเบื้องเป็นแผ่น ๆ ในโมเดล 3D")
+        self.tiles_3d.toggled.connect(lambda _v: self._save_settings())
+        rff.addRow(self.tiles_3d)
         self.caps = QCheckBox("ครอบสัน ครอบตะเข้สัน ครอบข้าง")
         self.caps.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.caps)
@@ -1938,6 +1954,8 @@ class BuildingPanel(QWidget):
         s["fascia"] = self.fascia.isChecked()
         s["caps"] = self.caps.isChecked()
         s["tile"] = self.tile.currentData()
+        s["tile_color"] = self.tile_color.currentData()
+        s["tiles_3d"] = self.tiles_3d.isChecked()
         s["roof"] = self.roof.currentData()
         s["roof_mode"] = self.roof_mode.currentData()
         for k, c in self.steel.items():
@@ -1964,6 +1982,9 @@ class BuildingPanel(QWidget):
             self.caps.setChecked(bool(s.get("caps", True)))
             self.tile.setCurrentIndex(max(self.tile.findData(
                 s.get("tile", CAT.DEFAULT_TILE)), 0))
+            self.tile_color.setCurrentIndex(max(self.tile_color.findData(
+                s.get("tile_color", "ตามวัสดุ")), 0))
+            self.tiles_3d.setChecked(bool(s.get("tiles_3d", True)))
             self.roof.setCurrentIndex(max(self.roof.findData(s["roof"]), 0))
             self.roof_mode.setCurrentIndex(
                 max(self.roof_mode.findData(s.get("roof_mode", "plan")), 0))

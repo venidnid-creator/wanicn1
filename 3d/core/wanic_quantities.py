@@ -704,6 +704,27 @@ def compute(data) -> dict:
             bill.add(g, f"ค่าแรงมุง{tile['name']}", slope, "ตร.ม.",
                      lab_code=la, basis="พื้นที่ตามแนวลาดเอียง",
                      ref=f"หลักเกณฑ์ 4.2 ข้อ 1.4 · ว480 {la[:5]}")
+        # Special cap pieces where ridges, hips and verges meet (SCG/CPAC).
+        if s.get("caps", True) and tile["unit"] != "ตร.ม.":
+            from core import wanic_roofclip as RCL
+            acc = RCL.accessories(lines)
+            for key in ("gable_end", "verge_end", "hip_end", "two_way",
+                        "three_way", "four_way"):
+                if acc.get(key):
+                    nm = f"{CAT.ACCESSORIES[key]} ({tile['name'].split(' ')[0]})"
+                    bill.add(g, nm, acc[key], "แผ่น", mat_key=nm,
+                             basis="นับจากจุดต่อของสัน ตะเข้ และปั้นลม",
+                             ref="หลักเกณฑ์ 4.2 ข้อ 1.2 (ค่าแรงรวมในงานครอบ)")
+        valley = float(lines.get("valley") or 0.0)
+        if valley > 0.05:
+            bill.add(g, "รางน้ำตะเข้สำเร็จรูป (สแตนเลส)", valley, "ม.",
+                     mat_key="รางน้ำตะเข้สำเร็จรูป (สแตนเลส)",
+                     lab_code="2.1.10c", basis="ความยาวแนวตะเข้ราง (หลังคาตัว L/T)",
+                     ref="ว480 2.1.10")
+            cut = {"2.1.3": "2.1.3c", "2.1.7": "2.1.7r"}.get(tile["lab"][0])
+            if cut:
+                bill.add(g, "ตัดกระเบื้องตะเข้ราง", valley, "ม.", lab_code=cut,
+                         basis="ความยาวแนวตะเข้ราง", ref=f"ว480 {cut[:5]}")
         if s.get("caps", True):
             ridge = sum(P.path_length(p) for p in lines["ridge"])
             hips = sum(P.path_length(p) for p in lines["hip"])
@@ -714,10 +735,11 @@ def compute(data) -> dict:
                 if length <= 0:
                     continue
                 if cap_unit == "แผ่น":
-                    pieces = length / tile["cap"]
+                    each = tile["verge"] if lc == lv else tile["cap"]
+                    pieces = length / each
                     bill.add(g, f"{label} — {tile['cap_name']}", pieces,
                              "แผ่น", waste=3.0, mat_key=tile["cap_name"],
-                             basis=f"ยาว {length:.2f} ม. ÷ {tile['cap']:.2f} ม./แผ่น",
+                             basis=f"ยาว {length:.2f} ม. × {1 / each:.1f} แผ่น/ม.",
                              ref="หลักเกณฑ์ 4.2 ข้อ 1.2 (เผื่อ 3%)")
                 else:
                     bill.add(g, f"{label} — {tile['cap_name']}", length, "ม.",
