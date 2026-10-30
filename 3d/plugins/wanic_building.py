@@ -1513,6 +1513,203 @@ class BoqDialog(QDialog):
             fh.write(Q.csv_text(self.result))
 
 
+def render_pdf(sheets, path: str) -> int:
+    """Print the drawing set (:mod:`core.wanic_drawings`) to a PDF, one A3
+    landscape page per sheet. Returns the page count."""
+    from PySide6.QtCore import QMarginsF, QPointF, QRectF
+    from PySide6.QtGui import (QBrush, QPageLayout, QPageSize, QPdfWriter,
+                               QPolygonF)
+    from core import wanic_drawings as D
+    W, H = D.PAPER
+    wr = QPdfWriter(path)
+    wr.setResolution(300)
+    wr.setPageSize(QPageSize(QPageSize.A3))
+    wr.setPageOrientation(QPageLayout.Landscape)
+    wr.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Millimeter)
+    wr.setTitle("แบบก่อสร้าง — WANICNSURVEY")
+    wr.setCreator("WANICNSURVEY · นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ")
+    k = wr.resolution() / 25.4
+    painter = QPainter(wr)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+
+    def P(x, y):
+        return QPointF(x * k, (H - y) * k)
+    fonts = {}
+
+    def font(h, bold):
+        key = (round(h, 2), bold)
+        if key not in fonts:
+            f = QFont("Tahoma")
+            f.setStyleHint(QFont.SansSerif)
+            f.setPixelSize(max(1, int(round(h * k * 1.3))))
+            f.setBold(bool(bold))
+            fonts[key] = f
+        return fonts[key]
+    try:
+        for i, sh in enumerate(sheets):
+            if i:
+                wr.newPage()
+            for it in sh.items:
+                kind = it[0]
+                if kind == "fill":
+                    g = int(255 * it[3])
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(QBrush(QColor(g, g, g)))
+                    painter.drawPolygon(QPolygonF([P(*p) for p in it[1]]))
+            painter.setBrush(Qt.NoBrush)
+            for it in sh.items:
+                kind = it[0]
+                if kind in ("line", "poly"):
+                    dash = it[4] if kind == "line" else it[5]
+                    pen = QPen(QColor(0, 0, 0), max(0.13, it[3]) * k)
+                    pen.setStyle(Qt.DashLine if dash else Qt.SolidLine)
+                    pen.setCapStyle(Qt.FlatCap)
+                    painter.setPen(pen)
+                    if kind == "line":
+                        x0, y0, x1, y1 = it[1]
+                        painter.drawLine(P(x0, y0), P(x1, y1))
+                    else:
+                        pts = QPolygonF([P(*p) for p in it[1]])
+                        if it[4]:
+                            painter.drawPolygon(pts)
+                        else:
+                            painter.drawPolyline(pts)
+                elif kind == "circle":
+                    cx, cy, r = it[1]
+                    painter.setPen(QPen(QColor(0, 0, 0), max(0.13, it[3]) * k))
+                    painter.drawEllipse(P(cx, cy), r * k, r * k)
+                elif kind == "arc":
+                    cx, cy, r, a0, a1 = it[1]
+                    painter.setPen(QPen(QColor(0, 0, 0), max(0.13, it[3]) * k))
+                    c = P(cx, cy)
+                    painter.drawArc(QRectF(c.x() - r * k, c.y() - r * k,
+                                           2 * r * k, 2 * r * k),
+                                    int(a0 * 16), int((a1 - a0) * 16))
+                elif kind == "text":
+                    (x, y), t, h, al, _layer, bold, ang = it[1:]
+                    f = font(h, bold)
+                    painter.setFont(f)
+                    painter.setPen(QColor(0, 0, 0))
+                    w = painter.fontMetrics().horizontalAdvance(t)
+                    dx = 0 if al == "left" else -w / 2 if al == "center" else -w
+                    p = P(x, y)
+                    painter.save()
+                    painter.translate(p)
+                    if ang:
+                        painter.rotate(-ang)
+                    painter.drawText(QPointF(dx, 0), t)
+                    painter.restore()
+    finally:
+        painter.end()
+    return len(sheets)
+
+
+class DrawingDialog(QDialog):
+    """Project data for the title block, the sheet families, PDF / DXF."""
+
+    GROUPS = [("A", "แบบสถาปัตยกรรม (A)"), ("S", "แบบวิศวกรรมโครงสร้าง (S)"),
+              ("SN", "แบบวิศวกรรมสุขาภิบาล (SN)"), ("EE", "แบบวิศวกรรมไฟฟ้า (EE)"),
+              ("M", "แบบวิศวกรรมเครื่องกล (M)")]
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel = panel
+        self.setWindowTitle("ส่งออกแบบก่อสร้าง 2D — WANIC ออกแบบอาคาร")
+        info = dict(panel.data().get("drawing_info") or {})
+        tk = (panel.takeoff_data().get("settings") or {})
+        f = QFormLayout(self)
+        self.fields = {}
+        for key, th, default in (
+                ("project", "ชื่อโครงการ", tk.get("project") or "บ้านพักอาศัย"),
+                ("owner", "เจ้าของ / หน่วยงาน", tk.get("owner") or ""),
+                ("location", "สถานที่ก่อสร้าง", tk.get("location") or (
+                    "จังหวัด" + panel.data().get("province")
+                    if panel.data().get("province") else "")),
+                ("office", "ชื่อสำนักงาน (หัวตาราง)", "WANICNSURVEY"),
+                ("drawing_no", "เลขที่แบบ", tk.get("drawing_no") or "")):
+            e = QLineEdit(str(info.get(key) or default))
+            self.fields[key] = e
+            f.addRow(th, e)
+        self.setback = _spin(0.5, 20.0, float(info.get("setback") or 3.0), 0.5)
+        f.addRow("ระยะร่นรอบอาคาร (ผังบริเวณ)", self.setback)
+        self.checks = {}
+        for g, th in self.GROUPS:
+            c = QCheckBox(th)
+            c.setChecked(g in (info.get("groups") or [x for x, _t in
+                                                       self.GROUPS]))
+            self.checks[g] = c
+            f.addRow(c)
+        self.pdf = QCheckBox("PDF (พิมพ์ A3)")
+        self.pdf.setChecked(True)
+        self.dxf = QCheckBox("DXF (เปิดใน WANICNSURVEY CAD / AutoCAD — ทุกแผ่นเรียงกัน)")
+        self.dxf.setChecked(True)
+        f.addRow(self.pdf)
+        f.addRow(self.dxf)
+        note = QLabel("หัวกระดาษแต่ละแผ่นมีช่องลงนามสถาปนิก/วิศวกร และลายเซ็นผู้จัดทำ"
+                      "โปรแกรม · ขนาดชิ้นส่วนและงานระบบเป็นค่าเริ่มต้นจากโปรแกรม "
+                      "ผู้ออกแบบต้องตรวจสอบและลงนามก่อนใช้งานจริง")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: palette(mid);")
+        f.addRow(note)
+        row = QHBoxLayout()
+        go = QPushButton("📐 ส่งออกแบบ")
+        go.setStyleSheet("QPushButton{background:#8A5A00;color:white;"
+                         "font-weight:bold;padding:6px;border-radius:6px}")
+        go.clicked.connect(lambda _=False: _safe(self, self.export))
+        close = QPushButton("ปิด")
+        close.clicked.connect(self.reject)
+        row.addStretch(1)
+        row.addWidget(go)
+        row.addWidget(close)
+        f.addRow(row)
+        f.addRow(QLabel(label_html("WANIC ออกแบบอาคาร · แบบก่อสร้าง 2D")))
+        self.saved = []
+
+    def info(self) -> dict:
+        i = {k: e.text().strip() for k, e in self.fields.items()}
+        i["setback"] = self.setback.value()
+        i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
+        return i
+
+    def export(self):
+        import os
+        from PySide6.QtWidgets import QFileDialog
+        from core import wanic_drawings as D
+        info = self.info()
+        d = self.panel.data()
+        d["drawing_info"] = info
+        self.panel._write(d)
+        if not info["groups"]:
+            QMessageBox.information(self, TITLE, "เลือกหมวดแบบอย่างน้อย 1 หมวด")
+            return []
+        sheets = D.build_set(self.panel.data(), info, info["groups"])
+        if not sheets:
+            QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
+            return []
+        name = (info.get("project") or "แบบก่อสร้าง").replace(" ", "_")
+        path, _f = QFileDialog.getSaveFileName(
+            self, "บันทึกแบบก่อสร้าง", f"{name}_แบบ2D.pdf",
+            "PDF (*.pdf);;DXF (*.dxf)")
+        if not path:
+            return []
+        stem = os.path.splitext(path)[0]
+        self.saved = []
+        if self.pdf.isChecked():
+            render_pdf(sheets, stem + ".pdf")
+            self.saved.append(stem + ".pdf")
+        if self.dxf.isChecked():
+            with open(stem + ".dxf", "wb") as fh:
+                fh.write(D.dxf_bytes(sheets))
+            self.saved.append(stem + ".dxf")
+        groups = ", ".join(f"{g} {sum(1 for s in sheets if s.group == g)} แผ่น"
+                           for g in info["groups"])
+        self.panel.status.setText(f"ส่งออกแบบ {len(sheets)} แผ่น ({groups})")
+        QMessageBox.information(
+            self, TITLE, f"ส่งออกแบบก่อสร้าง {len(sheets)} แผ่น ({groups})\n" +
+            "\n".join(self.saved))
+        return self.saved
+
+
 class BuildingPanel(QWidget):
     def __init__(self, app, parent=None):
         super().__init__(parent)
@@ -1668,6 +1865,10 @@ class BuildingPanel(QWidget):
         btn("📊 BOQ ตามหลักเกณฑ์ 2569…",
             "ถอดปริมาณตามหลักเกณฑ์กรมบัญชีกลาง (เผื่อตามมาตรฐาน ค่าแรง ว480) "
             "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 1, 1, "#7B3FA0")
+        btn("📐 ส่งออกแบบ 2D (A · S · SN · EE · M)…",
+            "แบบก่อสร้างครบชุดจากโมเดล: แปลน รูปด้าน รูปตัด ตาราง โครงสร้าง "
+            "สุขาภิบาล ไฟฟ้า เครื่องกล — กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)",
+            self.open_drawings, 2, 0, "#8A5A00")
         btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
             "(วัดจากโมเดล 3D)", self.send_rates, 2, 1, "#3B6FB6")
@@ -2234,6 +2435,15 @@ class BuildingPanel(QWidget):
         d["library"] = lib
         self._write(d)
         self.status.setText(f"บันทึกเบอร์ {mark} แล้ว — กด «สร้าง/อัปเดต» เพื่อปรับโมเดล")
+
+    # ---- 2D drawing set -----------------------------------------------------------
+    def open_drawings(self):
+        d = self.data()
+        if not any(f.get("rooms") for f in d["floors"]):
+            QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง — วางห้องก่อน")
+            return
+        dlg = DrawingDialog(self)
+        dlg.exec()
 
     # ---- standard BOQ -------------------------------------------------------------
     def open_boq(self):

@@ -145,8 +145,16 @@ def test_every_button_of_the_building_panel_and_boq(ui):
     tk = (scene.plugin_data or {}).get("wanic_takeoff")
     assert tk and any(str(r["id"]).startswith("std") for r in tk["rates"])
     assert tk["settings"]["location"] == "จังหวัดขอนแก่น"
+    # The 2D drawing set: PDF + DXF written.
+    from plugins.wanic_building import DrawingDialog
+    dd = DrawingDialog(panel)
+    done = _click_all(dd)
+    assert any("ส่งออกแบบ" in t for t in done)
+    pdf = [p for p in ui["saved"] if p.endswith(".pdf")]
+    assert pdf and open(pdf[-1], "rb").read(5) == b"%PDF-"
+    assert os.path.exists(pdf[-1][:-4] + ".dxf")
     # The destructive ones last.
-    _click_all(panel, skip=("สร้าง", "BOQ", "รายการราคา"))
+    _click_all(panel, skip=("สร้าง", "BOQ", "รายการราคา", "แบบ 2D"))
 
 
 def test_every_button_of_the_takeoff_panel_and_pr_export(ui):

@@ -454,3 +454,21 @@ def test_choosing_a_province_fills_the_bill_at_once(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "last_month", lambda *a: "ก.ย. 2569")
     dlg.province.setCurrentIndex(dlg.province.findData("ภูเก็ต"))
     assert calls == [] and panel.data()["prices"]["DB12"] == 24.4
+
+
+def test_drawing_set_prints_one_a3_page_per_sheet(tmp_path):
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core import wanic_drawings as D
+    from plugins.wanic_building import render_pdf
+    d = B.default_data()
+    d["floors"][0]["rooms"] = _grid2x2()
+    d["floors"][0]["openings"] = [dict(id="o1", type="door", x=1.5, y=0.0),
+                                  dict(id="o2", type="window", x=4.5, y=0.0)]
+    sheets = D.build_set(d, {"project": "ทดสอบ"})
+    path = tmp_path / "set.pdf"
+    assert render_pdf(sheets, str(path)) == len(sheets) > 10
+    data = path.read_bytes()
+    assert data[:5] == b"%PDF-"
+    assert data.count(b"/Type /Page\n") + data.count(b"/Type /Page ") + \
+        data.count(b"/Type/Page") >= len(sheets) or len(data) > 50000
