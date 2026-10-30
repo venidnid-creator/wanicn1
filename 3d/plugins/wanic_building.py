@@ -988,11 +988,13 @@ class BoqDialog(QDialog):
                     return 0                     # the saved book stays in use
             QMessageBox.warning(self, TITLE, text)
             return 0
+        asked = self.month.text().strip()
         if month:
             self.month.setText(month)
-        latest = month == P.last_month()
+        latest = month == asked
         origin = (f"กระทรวงพาณิชย์ จังหวัด{prov} ราคาเดือน {month}" +
-                  ("" if latest else " (เดือนล่าสุดที่ประกาศ)"))
+                  ("" if latest else f" (เดือน {asked} ยังไม่ประกาศ — ใช้เดือน"
+                   "ล่าสุดที่จังหวัดประกาศ)"))
         return self._apply_items(items, origin, quiet=auto)
 
     def _fetch_in_background(self, prov):
@@ -1002,12 +1004,19 @@ class BoqDialog(QDialog):
         import time
         from PySide6.QtWidgets import QApplication, QProgressDialog
         from core import wanic_province as P
+        from core import wanic_std2569 as S
         state = {"text": "เชื่อมต่อกระทรวงพาณิชย์ …", "done": False}
+        keys = self._need_keys()
+        need = dict((self.result or {}).get("need") or {})
+        units = {k: need.get(k) or S.price_unit(k) for k in keys}
+        target = P.parse_month(self.month.text()) or P.parse_month(
+            P.last_month())
 
         def work():
             try:
                 state["result"] = P.fetch_online(
-                    prov, progress=lambda t: state.__setitem__("text", t))
+                    prov, keys=keys, units=units, target=target,
+                    progress=lambda t: state.__setitem__("text", t))
             except Exception as e:                      # noqa: BLE001
                 state["error"] = e
             state["done"] = True

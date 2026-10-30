@@ -509,33 +509,36 @@ def match(items, keys, units=None, cutoff: float = 0.8) -> dict:
         return best is not None
 
     for key in dict.fromkeys(keys):
-        nk = _norm(key)
-        bar = _bar(key)
-        if bar:
-            cands = [r for r in rows if _bar(r[0]) == bar]
-            take(key, cands, r"sd\.?\s*40|sr\.?\s*24")
-            continue
-        rule = next((r for r in _RULES if re.search(r[0], nk)), None)
-        if rule:
-            if rule[1] is None:                    # ready-mixed by strength
-                st = _strength(nk)
-                cands = [r for r in rows if r[3].startswith("คอนกรีต")
-                         and "ผสมเสร็จ" in r[3] and _strength(r[3]) == st]
-                take(key, cands, r"ซีแพค|cpac")
-            else:
-                cands = [r for r in rows if re.search(rule[1], r[3])]
-                take(key, cands, rule[2])
-            continue
-        same = [r for r in rows if r[3] == nk]
-        if same:
-            take(key, same)
-            continue
-        scored = [(difflib.SequenceMatcher(None, r[3], nk).ratio(), r)
-                  for r in rows]
-        scored = [t for t in scored if t[0] >= cutoff]
-        if scored:
-            take(key, [max(scored, key=lambda t: t[0])[1]])
+        found = candidates(key, rows, cutoff)
+        if found:
+            take(key, *found)
     return out
+
+
+def candidates(key: str, rows, cutoff: float = 0.8):
+    """``(rows, preferred-pattern)`` that may price ``key``; ``rows`` are
+    ``(name, unit, price, normalised name)``.  None when no rule applies."""
+    nk = _norm(key)
+    bar = _bar(key)
+    if bar:
+        return [r for r in rows if _bar(r[0]) == bar], r"sd\.?\s*40|sr\.?\s*24"
+    rule = next((r for r in _RULES if re.search(r[0], nk)), None)
+    if rule:
+        if rule[1] is None:                        # ready-mixed by strength
+            st = _strength(nk)
+            return [r for r in rows if r[3].startswith("คอนกรีต")
+                    and "ผสมเสร็จ" in r[3] and _strength(r[3]) == st], \
+                r"ซีแพค|cpac"
+        return [r for r in rows if re.search(rule[1], r[3])], rule[2]
+    same = [r for r in rows if r[3] == nk]
+    if same:
+        return same, None
+    scored = [(difflib.SequenceMatcher(None, r[3], nk).ratio(), r)
+              for r in rows]
+    scored = [t for t in scored if t[0] >= cutoff]
+    if scored:
+        return [max(scored, key=lambda t: t[0])[1]], None
+    return None
 
 
 def coverage(prices: dict, need) -> tuple[int, list[str]]:
@@ -598,56 +601,153 @@ def latest_items(records) -> tuple[list, str]:
     return items, (month_label(*ym) if ym[0] else "")
 
 
-def fetch_online(province: str, today=None, opener=None,
-                 timeout: float = 120.0, progress=None,
-                 years_back: int = 3) -> tuple[list, str, str]:
-    """Download the province's prices for the latest announced month from
-    the MOC Open Data API.
+def parse_month(label: str):
+    """``ก.ย. 2569`` / ``กันยายน 2569`` → ``(2026, 9)`` (None if unreadable)."""
+    label = str(label or "")
+    y = re.search(r"(25\d\d|20\d\d)", label)
+    for names in (_TH_MONTHS, _FULL_MONTHS):
+        for mi, n in enumerate(names):
+            if n in label and y:
+                yr = int(y.group(1))
+                return (yr - 543 if yr > 2400 else yr, mi + 1)
+    return None
 
-    The API answers a whole year at a time; this year is asked first and,
-    when it holds nothing yet (early in the year, or not announced), the
-    year before, and so on — the newest month found is the one used.
 
-    Returns ``(items, month, url)``; raises :class:`FetchError` with a Thai
-    message the panel shows as is.  ``opener(url, timeout)`` → bytes is for
-    tests; ``progress(text)`` reports each try; ``WANIC_OFFLINE`` turns the
-    network off."""
+def _default_opener(url, timeout):
+    import urllib.request
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "WANICNSURVEY", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def fetch_online(province: str, keys=None, units=None, target=None,
+                 today=None, opener=None, timeout: float = 45.0,
+                 progress=None, workers: int = 6, years_back: int = 2):
+    """The province's announced prices for the BOQ materials, from the MOC
+    Open Data API, one small request per product code.
+
+    For each material the newest month **on or before** ``target``
+    (``(year, month)``, default last month) that the province announced is
+    used — September not announced yet → August → July … back to the year
+    before.  Returns ``(items, month, url)`` where ``items`` are
+    ``(name, unit, price)`` (the name ends in ``[ราคา ส.ค. 2569]`` when an
+    older month had to be used) and ``month`` the newest month found.
+
+    ``opener(url, timeout)`` → bytes is for tests; ``progress(text)``
+    reports; ``WANIC_OFFLINE`` turns the network off."""
+    import concurrent.futures as cf
+    import threading
+    from core.wanic_moc_codes import CODES as MOC
     if os.environ.get("WANIC_OFFLINE"):
         raise FetchError("ปิดการเชื่อมต่อออนไลน์ไว้ (WANIC_OFFLINE)")
-    code = CODES.get(province)
-    if not code:
+    pcode = CODES.get(province)
+    if not pcode:
         raise FetchError(f"ไม่รู้จักรหัสจังหวัด «{province}»")
-    if opener is None:
-        def opener(url, timeout):
-            import urllib.request
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "WANICNSURVEY", "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read()
+    opener = opener or _default_opener
     say = progress or (lambda _t: None)
     d = today or datetime.date.today()
-    errors: list = []
+    if target is None:
+        target = parse_month(last_month(d))
+    units = units or {}
+    rows = [(n, u, 1.0, _norm(n), c) for c, n, u in MOC]
+    keys = list(dict.fromkeys(keys or []))
+    plan = []                                        # (key, [codes])
+    for k in keys:
+        f = candidates(k, rows, 0.95)
+        if not f:
+            continue
+        cands, pref = f
+        cands = [r for r in cands
+                 if unit_factor(r[0], r[1], units.get(k, "")) is not None]
+        cands.sort(key=lambda r: 0 if pref and re.search(pref, r[3]) else 1)
+        if cands:
+            plan.append((k, cands[:4]))
+    if not plan:
+        raise FetchError("ไม่มีรายการวัสดุที่ค้นจากรหัสสินค้าพาณิชย์ได้")
+    cache: dict = {}
+    lock = threading.Lock()
+    state = {"path": None, "ok": 0, "errors": [], "done": 0, "url": ""}
     paths = ["csi-product-indexes", "csi-indexes"]
-    for y in range(d.year, d.year - years_back, -1):
-        for path in list(paths):
-            url = (f"{API}/{path}?province_code={code}"
-                   f"&from_year={y}&to_year={y}")
-            say(f"กำลังขอราคาจังหวัด{province} ปี {y + 543} …")
+
+    def year_records(code, year):
+        ck = (code, year)
+        with lock:
+            if ck in cache:
+                return cache[ck]
+        recs = None
+        for path in ([state["path"]] if state["path"] else paths):
+            url = (f"{API}/{path}?province_code={pcode}&com_code={code}"
+                   f"&from_year={year}&to_year={year}")
             try:
-                raw = opener(url, timeout)
-                payload = json.loads(raw.decode("utf-8-sig"))
+                recs = _records(json.loads(opener(url, timeout)
+                                           .decode("utf-8-sig")))
             except Exception as e:                      # noqa: BLE001
-                errors.append(f"{path} ปี {y + 543}: {e}")
+                with lock:
+                    if len(state["errors"]) < 6:
+                        state["errors"].append(f"{path}: {e}")
                 continue
-            # This path answers: keep using it for the earlier years.
-            paths = [path]
-            items, month = latest_items(payload)
-            if items:
-                return items, month, url
-            errors.append(f"ปี {y + 543}: ยังไม่มีราคาประกาศ")
+            with lock:
+                state["path"], state["ok"], state["url"] = \
+                    path, state["ok"] + 1, url
             break
-        if not any("ยังไม่มีราคาประกาศ" in e for e in errors[-1:]) and \
-                len(paths) > 1:
-            break                    # neither path answered: stop trying
-    detail = "; ".join(errors) or "ไม่มีข้อมูลราคาของจังหวัดนี้"
-    raise FetchError("ดึงราคาจากกระทรวงพาณิชย์ไม่สำเร็จ — " + detail)
+        with lock:
+            cache[ck] = recs or []
+        return recs or []
+
+    def newest(recs):
+        best = None
+        for rec in recs if isinstance(recs, list) else []:
+            if not isinstance(rec, dict):
+                continue
+            price = _num(_field(rec, "price", "price_value", "avg_price",
+                                "value"))
+            y = int(_num(_field(rec, "year", "yr")) or 0)
+            m = int(_num(_field(rec, "month", "mn")) or 0)
+            if not price or price <= 0 or not y or (y, m) > tuple(target):
+                continue
+            if best is None or (y, m) > best[0]:
+                best = ((y, m), price, rec)
+        return best
+
+    def one(task):
+        key, cands = task
+        for n, u, _p, _nn, code in cands:
+            for y in range(target[0], target[0] - years_back, -1):
+                hit = newest(year_records(code, y))
+                if hit:
+                    (yy, mm), price, rec = hit
+                    name = str(_field(rec, "com_name_th", "commodity_name_th",
+                                      "com_name", "name") or n)
+                    unit = str(_field(rec, "units", "unit") or u)
+                    return key, (re.sub(r"\s+", " ", name).strip(), unit,
+                                 price, (yy, mm))
+        with lock:
+            state["done"] += 1
+        return key, None
+
+    found = []
+    with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        futs = [ex.submit(one, t) for t in plan]
+        for i, fut in enumerate(cf.as_completed(futs), 1):
+            say(f"กำลังขอราคาจังหวัด{province} ({i}/{len(plan)} รายการ)")
+            _k, hit = fut.result()
+            if hit:
+                found.append(hit)
+    if not found:
+        if not state["ok"]:
+            raise FetchError("ดึงราคาจากกระทรวงพาณิชย์ไม่สำเร็จ — " +
+                             "; ".join(state["errors"][:3]))
+        raise FetchError(f"จังหวัด{province}ยังไม่มีราคาประกาศถึงเดือน "
+                         f"{month_label(*target)} (ย้อนหลัง {years_back} ปี)")
+    newest_ym = max(h[3] for h in found)
+    items = []
+    seen = set()
+    for name, unit, price, ym in found:
+        if (name, unit) in seen:
+            continue
+        seen.add((name, unit))
+        if ym != newest_ym:
+            name = f"{name} [ราคา {month_label(*ym)}]"
+        items.append((name, unit, price))
+    return items, month_label(*newest_ym), state["url"]

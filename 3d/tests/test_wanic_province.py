@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 
 import pytest
@@ -207,62 +208,6 @@ def test_latest_items_take_the_newest_month():
     assert P.latest_items({"data": API_JSON})[1] == "ก.ย. 2569"
 
 
-def test_fetch_online_with_a_fake_api(monkeypatch):
-    import datetime
-    import json
-    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
-    seen = []
-
-    def opener(url, timeout):
-        seen.append(url)
-        return json.dumps(API_JSON).encode()
-    items, month, url = P.fetch_online("ภูเก็ต", datetime.date(2026, 10, 30),
-                                       opener)
-    assert month == "ก.ย. 2569" and len(items) == 2
-    assert "province_code=83" in seen[0] and "from_year=2026" in seen[0]
-
-    def broken(url, timeout):
-        raise OSError("no network")
-    with pytest.raises(P.FetchError, match="ไม่สำเร็จ"):
-        P.fetch_online("ภูเก็ต", opener=broken)
-    monkeypatch.setenv("WANIC_OFFLINE", "1")
-    with pytest.raises(P.FetchError):
-        P.fetch_online("ภูเก็ต", opener=opener)
-
-
-def test_fetch_falls_back_to_the_latest_announced_month(monkeypatch):
-    """Nothing announced this year yet → last year's newest month."""
-    import datetime
-    import json
-    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
-    last_year = [dict(r, year=2025, month=12) for r in API_JSON]
-    seen, said = [], []
-
-    def opener(url, timeout):
-        seen.append(url)
-        if "csi-indexes" in url:
-            raise TimeoutError("The read operation timed out")
-        return json.dumps(last_year if "from_year=2025" in url else []).encode()
-    items, month, url = P.fetch_online("ภูเก็ต", datetime.date(2026, 1, 3),
-                                       opener, progress=said.append)
-    assert month == "ธ.ค. 2568" and "from_year=2025" in url
-    # Once one path answers, the other is not asked again.
-    assert sum("csi-indexes" in u for u in seen) == 0
-    assert any("2569" in t for t in said) and any("2568" in t for t in said)
-
-
-def test_fetch_reports_timeouts_of_both_paths(monkeypatch):
-    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
-    seen = []
-
-    def slow(url, timeout):
-        seen.append(url)
-        raise TimeoutError("The read operation timed out")
-    with pytest.raises(P.FetchError, match="timed out"):
-        P.fetch_online("ภูเก็ต", opener=slow)
-    assert len(seen) == 2                    # one year, both paths, then stop
-
-
 #: The ministry's table (index.tpso.go.th) as downloaded/copied: a title,
 #: the period line, a header row, rows whose category name is longer than
 #: the item name, and an item wrapped over two lines.
@@ -409,3 +354,103 @@ def test_the_bill_note_names_the_commerce_item():
     from core import wanic_quantities as Q
     assert Q.market_note("ภูเก็ต", "พาณิชย์", 3020, "", "คอนกรีต … ตราซีแพค") == \
         "ราคาพาณิชย์จ.ภูเก็ต: คอนกรีต … ตราซีแพค"
+
+
+def _api(prices_by_code, calls=None, fail_path=None):
+    """A fake MOC API: ``{code: {(y, m): price}}``."""
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    def opener(url, timeout):
+        if calls is not None:
+            calls.append(url)
+        if fail_path and f"/{fail_path}?" in url:
+            raise TimeoutError("The read operation timed out")
+        q = parse_qs(urlparse(url).query)
+        code, y = q["com_code"][0], int(q["from_year"][0])
+        recs = [{"com_code": code, "com_name_th": f"สินค้า {code}",
+                 "province_code": q["province_code"][0], "year": yy,
+                 "month": mm, "units": "x", "price": p}
+                for (yy, mm), p in prices_by_code.get(code, {}).items()
+                if yy == y]
+        return json.dumps(recs).encode()
+    return opener
+
+
+def _codes(pattern):
+    from core.wanic_moc_codes import CODES
+    return [c for c, n, _u in CODES if re.search(pattern, n)]
+
+
+def test_the_bundled_codes_cover_the_main_materials():
+    from core.wanic_moc_codes import CODES
+    names = " | ".join(n for _c, n, _u in CODES)
+    for word in ("ทรายหยาบ", "หินย่อย", "ปูนซีเมนต์ผสม", "อิฐมอญ", "ลวดผูกเหล็ก",
+                 "SD.40", "SR.24", "ผสมเสร็จรูปลูกบาศก์ 240", "กระจกใส"):
+        assert word in names, word
+    assert all(len(c) == 16 and c.isdigit() for c, _n, _u in CODES)
+
+
+def test_parse_month():
+    assert P.parse_month("ก.ย. 2569") == (2026, 9)
+    assert P.parse_month("ระยะเวลา สิงหาคม 2569") == (2026, 8)
+    assert P.parse_month("") is None
+
+
+def test_fetch_asks_by_product_code_and_steps_back_by_month(monkeypatch):
+    """September not announced: sand uses August, the concrete July."""
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    sand = _codes(r"^ทรายหยาบ")[0]
+    c240 = [c for c in _codes(r"ผสมเสร็จ") if "240" in dict(
+        (c, n) for c, n, _u in __import__("core.wanic_moc_codes",
+                                          fromlist=["CODES"]).CODES)[c]
+        .split("และ")[0]][0]
+    calls = []
+    api = _api({sand: {(2026, 8): 640.0, (2026, 10): 700.0},
+                c240: {(2026, 7): 3020.0}}, calls)
+    keys = ["ทรายหยาบ", "คอนกรีตผสมเสร็จ 240 กก./ตร.ซม. (ลูกบาศก์)"]
+    units = {keys[0]: "ลบ.ม.", keys[1]: "ลบ.ม."}
+    items, month, url = P.fetch_online("ลพบุรี", keys, units, (2026, 9),
+                                       opener=api, workers=1)
+    assert month == "ส.ค. 2569"                 # the newest month used
+    by = {n.split(" [")[0]: (p, n) for n, _u, p in items}
+    assert by[f"สินค้า {sand}"][0] == 640.0       # not October (after target)
+    assert by[f"สินค้า {c240}"] == (3020.0, f"สินค้า {c240} [ราคา ก.ค. 2569]")
+    assert all("province_code=16" in u and "com_code=" in u for u in calls)
+
+
+def test_fetch_goes_back_to_last_year(monkeypatch):
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    sand = _codes(r"^ทรายหยาบ")[0]
+    api = _api({sand: {(2025, 12): 600.0}})
+    items, month, _u = P.fetch_online("ลพบุรี", ["ทรายหยาบ"],
+                                      {"ทรายหยาบ": "ลบ.ม."}, (2026, 1),
+                                      opener=api)
+    assert month == "ธ.ค. 2568" and items[0][2] == 600.0
+
+
+def test_fetch_reports_why_nothing_came(monkeypatch):
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    with pytest.raises(P.FetchError, match="ยังไม่มีราคาประกาศ"):
+        P.fetch_online("ลพบุรี", ["ทรายหยาบ"], {"ทรายหยาบ": "ลบ.ม."},
+                       (2026, 9), opener=_api({}))
+
+    def down(url, timeout):
+        raise OSError("HTTP Error 504: Gateway Time-out")
+    with pytest.raises(P.FetchError, match="504"):
+        P.fetch_online("ลพบุรี", ["ทรายหยาบ"], {"ทรายหยาบ": "ลบ.ม."},
+                       (2026, 9), opener=down)
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
+    with pytest.raises(P.FetchError):
+        P.fetch_online("ลพบุรี", ["ทรายหยาบ"], opener=_api({}))
+
+
+def test_a_slow_path_is_left_for_the_one_that_answers(monkeypatch):
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    sand = _codes(r"^ทรายหยาบ")[0]
+    calls = []
+    api = _api({sand: {(2026, 9): 650.0}}, calls, fail_path="csi-product-indexes")
+    items, month, url = P.fetch_online("ลพบุรี", ["ทรายหยาบ"],
+                                       {"ทรายหยาบ": "ลบ.ม."}, (2026, 9),
+                                       opener=api)
+    assert items[0][2] == 650.0 and "/csi-indexes?" in url
