@@ -148,6 +148,59 @@ jobs:
           ./dist/ingetrazo/ingetrazo.exe --check
           du -sh dist/*
 
+      - name: Code-signing certificate
+        # The publisher's certificate: a purchased one when the repository
+        # has the secrets SIGN_PFX_BASE64 / SIGN_PFX_PASSWORD (the warning
+        # "Windows protected your PC" goes away only with a certificate from
+        # a trusted CA), otherwise a self-signed one in the publisher's name,
+        # which signs every file but Windows does not trust by itself.
+        shell: pwsh
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+          SIGN_SUBJECT: "CN=นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ 112/2568, O=WANICNSURVEY, C=TH"
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "wanic-sign.pfx"
+          if ($env:SIGN_PFX_BASE64) {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+            $password = $env:SIGN_PFX_PASSWORD
+            Write-Host "Signing with the certificate from the repository secrets"
+          } else {
+            $password = [guid]::NewGuid().ToString("N")
+            $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $env:SIGN_SUBJECT `
+                      -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 `
+                      -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5)
+            Export-PfxCertificate -Cert $cert -FilePath $pfx `
+              -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
+            Write-Host "::warning::No SIGN_PFX_BASE64 secret: signed with a self-signed certificate ($($env:SIGN_SUBJECT))"
+          }
+          Write-Host "::add-mask::$password"
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+                      Sort-Object FullName -Descending | Select-Object -First 1
+          $c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $password)
+          Write-Host "Publisher: $($c.Subject)  valid to $($c.NotAfter)  thumbprint $($c.Thumbprint)"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $env:GITHUB_WORKSPACE "dist\wanicnsurvey-publisher.cer"), $c.Export("Cert"))
+          "SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+          "SIGN_PASSWORD=$password" >> $env:GITHUB_ENV
+          "SIGNTOOL=$($signtool.FullName)" >> $env:GITHUB_ENV
+
+      - name: Sign the programs
+        shell: pwsh
+        run: |
+          $files = "dist\launcher\wanicnsurvey.exe", "dist\ingecad\ingecad.exe", "dist\ingetrazo\ingetrazo.exe"
+          foreach ($f in $files) {
+            for ($i = 1; $i -le 4; $i++) {
+              & $env:SIGNTOOL sign /f $env:SIGN_PFX /p $env:SIGN_PASSWORD /fd SHA256 `
+                /tr http://timestamp.digicert.com /td SHA256 /d "WANICNSURVEY" $f
+              if ($LASTEXITCODE -eq 0) { break }
+              Start-Sleep -Seconds (2 * $i)
+            }
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::cannot sign $f"; exit 1 }
+            $sig = Get-AuthenticodeSignature $f
+            Write-Host "$f : $($sig.SignerCertificate.Subject) ($($sig.Status))"
+          }
+
       - name: Version
         id: ver
         shell: bash
@@ -169,7 +222,9 @@ jobs:
                  Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending
           $all | ForEach-Object { Write-Host "$($_.FullName)  $($_.VersionInfo.FileVersion)" }
           $iscc = $all[0].FullName
-          $out = & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer\wanicnsurvey.iss 2>&1
+          # Inno Setup signs the installer and the uninstaller it writes
+          $sign = "wanicsign=`$q$env:SIGNTOOL`$q sign /f `$q$env:SIGN_PFX`$q /p $env:SIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d `$qWANICNSURVEY Setup`$q `$f"
+          $out = & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" "/DSignIt" "/S$sign" installer\wanicnsurvey.iss 2>&1
           $code = $LASTEXITCODE
           $out | ForEach-Object { Write-Host $_ }
           if ($code -ne 0) {
@@ -182,12 +237,18 @@ jobs:
             $out | Where-Object { "$_" -notmatch 'Compressing:' } | Select-Object -Last 8 | ForEach-Object { Write-Host "::error::$_" }
             exit $code
           }
-          Get-ChildItem dist\*.exe
+          Get-ChildItem dist\*.exe | ForEach-Object {
+            $sig = Get-AuthenticodeSignature $_.FullName
+            Write-Host "$($_.Name) : $($sig.SignerCertificate.Subject) ($($sig.Status))"
+            if (-not $sig.SignerCertificate) { Write-Host "::error::$($_.Name) is not signed"; exit 1 }
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: wanicnsurvey-setup-${{ steps.ver.outputs.version }}
-          path: dist/wanicnsurvey-setup-*.exe
+          path: |
+            dist/wanicnsurvey-setup-*.exe
+            dist/wanicnsurvey-publisher.cer
           if-no-files-found: error
 
       - name: Publish the GitHub Release
@@ -198,4 +259,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: WANICNSURVEY ${{ steps.ver.outputs.version }}
           body_path: installer/release-notes.md
-          files: dist/wanicnsurvey-setup-*.exe
+          files: |
+            dist/wanicnsurvey-setup-*.exe
+            dist/wanicnsurvey-publisher.cer

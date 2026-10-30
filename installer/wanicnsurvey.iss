@@ -28,6 +28,12 @@ AppCopyright=Copyright (C) 2569 (2026) นายเวนิช ธัมมะ�
 VersionInfoVersion=1.0.0.0
 VersionInfoProductName={#MyAppName}
 VersionInfoDescription=WANICNSURVEY Setup
+VersionInfoCompany=นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ 112/2568
+#ifdef SignIt
+; ISCC /DSignIt "/Swanicsign=signtool sign ... $f" (the build workflow)
+SignTool=wanicsign
+SignedUninstaller=yes
+#endif
 
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
