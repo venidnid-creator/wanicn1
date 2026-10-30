@@ -451,5 +451,12 @@ def test_pimport_in_the_window_goes_through_the_dialog(qapp, tmp_path, monkeypat
         # N before E: the file's second column is the northing
         assert (first.dxf.location.x, first.dxf.location.y) \
             == pytest.approx((2003.143, 1037.454))
+        # and a button straight to the cross sections
+        from PySide6.QtWidgets import QMessageBox
+
+        offer = win.findChild(QMessageBox, "topografia_offer_sections")
+        assert offer is not None
+        assert any("cross sections" in b.text() for b in offer.buttons())
+        offer.close()
     finally:
         win.close()

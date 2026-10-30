@@ -48,6 +48,10 @@ LAYERS = {
     "daylight": ("TOPO-LINEA-CERO", 6),
     "hachures": ("TOPO-TALUDES", 8),
     "design_tin": ("TOPO-TIN-DISENO", 4),
+    "axis": ("TOPO-EJE", 6),
+    "stations": ("TOPO-ESTACIONES", 7),
+    "cut": ("TOPO-CORTE", 1),
+    "fill": ("TOPO-RELLENO", 3),
 }
 ALL_LABELS = ("number", "elevation", "description")
 
@@ -1564,3 +1568,176 @@ def lots_table(document, lots, insert, text_height: float = 1.0) -> CompositeCom
         command.layer = LAYERS["table"][0]
     commands.extend(table.commands)
     return CompositeCommand("areas by lot", commands)
+
+
+# ======================================================================
+# Cross sections from the imported points (XSECTIONS)
+# ======================================================================
+
+from . import xsections as _xsec
+
+XSEC_TAG = "TOPO-XSEC"
+
+
+def _nice_step(minimum: float) -> float:
+    """The smallest of 1, 2, 2.5, 5 x 10^n not below ``minimum``."""
+    minimum = max(minimum, 1e-6)
+    base = 10.0 ** _math.floor(_math.log10(minimum))
+    for k in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if k * base >= minimum - 1e-12:
+            return k * base
+    return 10.0 * base
+
+
+def _hatch_cmd(poly, layer: str, aci: int, pattern: str, scale: float) -> Command:
+    def make(msp):
+        from ezdxf.lldxf.const import BOUNDARY_PATH_EXTERNAL
+
+        ensure_appid(msp.doc)
+        hatch = msp.add_hatch(color=aci)
+        hatch.set_pattern_fill(pattern, color=aci, scale=scale)
+        hatch.paths.add_polyline_path(poly, is_closed=True, flags=BOUNDARY_PATH_EXTERNAL)
+        hatch.set_xdata(APPID, [(1000, XSEC_TAG)])
+        return hatch
+    return AddEntityCommand("TOPO-XSEC", make, layer=layer)
+
+
+def _xsec_polyline(pts, layer: str, closed: bool = False) -> Command:
+    def make(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_lwpolyline(pts, close=closed)
+        entity.set_xdata(APPID, [(1000, XSEC_TAG)])
+        return entity
+    return AddEntityCommand("TOPO-XSEC", make, layer=layer)
+
+
+def xsection_layout(sections, half_width: float, text_height: float, vscale: float = 1.0,
+                    grid: float = 1.0) -> tuple[float, float]:
+    """(width, height) of one section's cell, the same for every cell."""
+    h = text_height
+    tall = 0.0
+    for sec in sections:
+        zs = [z for _o, z in sec.ground] + [z for _o, z in sec.design]
+        lo = _math.floor(min(zs) / grid) * grid - grid
+        hi = _math.ceil(max(zs) / grid) * grid + grid
+        tall = max(tall, (hi - lo) * vscale)
+    width = 2.0 * half_width + 16.0 * h
+    height = tall + 3.0 * h + 3 * 2.0 * h + 5 * 1.6 * h + 4.0 * h
+    return width, height
+
+
+def draw_xsections(document, sections, half_width: float, insert, text_height: float = 0.5,
+                   vscale: float = 1.0, grid: float = 1.0, columns: int = 3,
+                   name: str = "EJE") -> CompositeCommand:
+    """Every section in a grid of cells from ``insert`` (top-left): a frame,
+    the elevation grid in metres above mean sea level with its labels, the
+    offset grid, the ground and the design, the cut and fill hatched, the
+    bands of offset / ground / design under it, and the areas and volumes."""
+    h = text_height
+    commands = layer_commands(document, ("sections", "sections_grid", "profile_text", "grade",
+                                         "cut", "fill"))
+    grid_layer, text = LAYERS["sections_grid"][0], LAYERS["profile_text"][0]
+    cell_w, cell_h = xsection_layout(sections, half_width, h, vscale, grid)
+    ostep = _nice_step(6.0 * h)
+    hatch_scale = max(h * 0.25, 0.01)
+    for k, sec in enumerate(sections):
+        col, row = k % columns, k // columns
+        left = insert[0] + col * (cell_w + 2.0 * h)
+        top = insert[1] - row * (cell_h + 2.0 * h)
+        zs = [z for _o, z in sec.ground] + [z for _o, z in sec.design]
+        datum = _math.floor(min(zs) / grid) * grid - grid
+        roof = _math.ceil(max(zs) / grid) * grid + grid
+        bands_top = top - cell_h + 5 * 1.6 * h + 3 * 2.0 * h + 1.0 * h
+        ox = left + 13.0 * h + half_width           # the centreline
+
+        def xy(o, z, ox=ox, datum=datum, base=bands_top + 1.0 * h):
+            return (ox + o, base + (z - datum) * vscale)
+        commands.append(_xsec_polyline([(left, top), (left + cell_w, top),
+                                        (left + cell_w, top - cell_h), (left, top - cell_h)],
+                                       grid_layer, closed=True))
+        commands.append(_text_cmd(_tr("SECTION STA. {sta}", sta=_alignment.format_station(sec.chainage)),
+                                  (ox, top - 1.5 * h), 1.4 * h, text, tag=XSEC_TAG))
+        # the elevation grid, labelled in metres above MSL
+        level = datum
+        while level <= roof + 1e-9:
+            a, b = xy(-half_width, level), xy(half_width, level)
+            commands.append(_line_cmd(a, b, grid_layer, XSEC_TAG))
+            commands.append(_text_cmd(f"{level:+.2f}", (a[0] - 0.6 * h, a[1]), 0.8 * h, text,
+                                      align="MIDDLE_RIGHT", tag=XSEC_TAG))
+            level += grid
+        commands.append(_text_cmd(_tr("Elev. MSL (m)"), (left + 0.5 * h, xy(0, roof)[1] + 1.0 * h),
+                                  0.8 * h, text, align="MIDDLE_LEFT", tag=XSEC_TAG))
+        # the offset grid and the bands under the plot
+        offsets = []
+        o = -_math.floor(half_width / ostep) * ostep
+        while o <= half_width + 1e-9:
+            offsets.append(o)
+            o += ostep
+        band = 2.0 * h
+        y_band = [bands_top - (i + 1) * band for i in range(3)]
+        for o in offsets:
+            a, b = xy(o, datum), xy(o, roof)
+            commands.append(_line_cmd((a[0], y_band[-1]), b, grid_layer, XSEC_TAG))
+            zg = _xsec._z_on(sec.ground, o)
+            zd = _xsec._z_on(sec.design, o)
+            values = (f"{o:+g}" if o else "CL", "" if zg is None else f"{zg:.2f}",
+                      "" if zd is None else f"{zd:.2f}")
+            for value, y in zip(values, y_band):
+                if value:
+                    commands.append(_text_cmd(value, (a[0], y + band / 2.0), 0.7 * h, text,
+                                              tag=XSEC_TAG))
+        for y in [bands_top] + y_band:
+            commands.append(_line_cmd((left, y), (xy(half_width, datum)[0], y), grid_layer, XSEC_TAG))
+        commands.append(_line_cmd((xy(-half_width, datum)[0], bands_top), (xy(-half_width, datum)[0], y_band[-1]),
+                                  grid_layer, XSEC_TAG))
+        for title, y in zip((_tr("Offset (m)"), _tr("Ground"), _tr("Design")), y_band):
+            commands.append(_text_cmd(title, (left + 0.4 * h, y + band / 2.0), 0.7 * h, text,
+                                      align="MIDDLE_LEFT", tag=XSEC_TAG))
+        # cut and fill, the ground and the design over them
+        for kind, poly in _xsec.regions(sec.ground, sec.design):
+            layer, aci = LAYERS[kind]
+            commands.append(_hatch_cmd([xy(o_, z_) for o_, z_ in poly], layer, aci,
+                                       "ANSI31" if kind == "cut" else "ANSI37", hatch_scale))
+        commands.append(AddEntityCommand(
+            "TOPO-SECTION", lambda msp, pts=[xy(o_, z_) for o_, z_ in sec.ground], s_=sec.chainage:
+            _section_polyline(msp, pts, s_, name), layer=LAYERS["sections"][0]))
+        commands.append(_xsec_polyline([xy(o_, z_) for o_, z_ in sec.design], LAYERS["grade"][0]))
+        # the numbers of this station
+        lines = [
+            _tr("CL ground {g}   design {d}   ({diff})",
+                g="-" if sec.z_ground is None else f"{sec.z_ground:.3f}", d=f"{sec.z_design:.3f}",
+                diff="-" if sec.z_ground is None else f"{sec.z_design - sec.z_ground:+.3f}"),
+            _tr("Cut area {c:.2f} m²   Fill area {f:.2f} m²", c=sec.cut_area, f=sec.fill_area),
+            _tr("Cut volume {c:.2f} m³   Fill volume {f:.2f} m³", c=sec.cut_volume, f=sec.fill_volume),
+            _tr("Cumulative cut {c:.2f} m³   fill {f:.2f} m³", c=sec.cut_total, f=sec.fill_total),
+        ]
+        for i, line in enumerate(lines):
+            commands.append(_text_cmd(line, (left + 0.8 * h, y_band[-1] - (i + 1) * 1.6 * h),
+                                      0.8 * h, text, align="MIDDLE_LEFT", tag=XSEC_TAG))
+    return CompositeCommand("cross sections", commands)
+
+
+def draw_axis_stations(document, axis, sections, half_width: float, text_height: float = 0.5,
+                       with_axis: bool = True) -> CompositeCommand:
+    """The centreline on the plan (when it was found, not drawn) and a tick
+    across it at every section, with its chainage."""
+    commands = layer_commands(document, ("axis", "stations"))
+    if with_axis:
+        commands.append(_xsec_polyline(list(axis), LAYERS["axis"][0]))
+    layer = LAYERS["stations"][0]
+    for sec in sections:
+        st = sec.station
+        a, b = st.offset_point(-half_width), st.offset_point(half_width)
+        commands.append(_line_cmd(a, b, layer, XSEC_TAG))
+        angle = _math.degrees(_math.atan2(b[1] - a[1], b[0] - a[0]))
+        commands.append(_text_cmd(_alignment.format_station(sec.chainage),
+                                  st.offset_point(-half_width - 3.0 * text_height), text_height,
+                                  layer, readable_rotation(angle), tag=XSEC_TAG))
+    return CompositeCommand("stations", commands)
+
+
+def xsections_rows(sections) -> list:
+    """The sections as the earthworks table and CSV read them."""
+    return [_profile.EarthworksRow(sec.chainage, sec.z_ground, sec.z_design, sec.cut_area,
+                                   sec.fill_area, sec.cut_volume, sec.fill_volume,
+                                   sec.cut_total, sec.fill_total) for sec in sections]

@@ -27,10 +27,11 @@ PLUGIN = PluginSpec(
     version="0.5.0",
     description="Survey points, contours, profiles and volumes for the civil engineer.",
     tools=dict(TOOL_CLASSES),
-    aliases={"PIM": "PIMPORT", "PEX": "PEXPORT", "PRN": "PRENUM", "PFI": "PFIND"},
+    aliases={"XS": "XSECTIONS", "PIM": "PIMPORT", "PEX": "PEXPORT", "PRN": "PRENUM", "PFI": "PFIND"},
     menu=(
         Submenu("Points", (
             MenuItem("Import points (CSV)...", "PIMPORT"),
+            MenuItem("Cross sections from the points...", "XSECTIONS"),
             MenuItem("Export points...", "PEXPORT"),
             SEPARATOR,
             MenuItem("Point by bearing and distance", "PBY"),
@@ -64,6 +65,7 @@ PLUGIN = PluginSpec(
             MenuItem("Longitudinal profile...", "PROFILE"),
             MenuItem("Grade line", "GRADELINE"),
             MenuItem("Cross sections...", "SECTIONS"),
+            MenuItem("Cross sections from the points...", "XSECTIONS"),
             MenuItem("Earthworks (cut and fill)...", "VOLUMES"),
         )),
         SEPARATOR,
@@ -71,6 +73,7 @@ PLUGIN = PluginSpec(
     ),
     toolbar=(
         ToolbarItem("Import points (CSV)...", "PIMPORT"),
+        ToolbarItem("Cross sections from the points...", "XSECTIONS"),
         ToolbarItem("Point by bearing and distance", "PBY"),
         ToolbarItem("Annotate bearings and distances", "ANNOT"),
         ToolbarItem("Construction chart...", "CTABLE"),

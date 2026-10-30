@@ -9,6 +9,7 @@ path, and the import options fall back to their defaults.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from core.i18n import tr
@@ -19,6 +20,7 @@ from . import grading as grading_mod
 from . import memoria as memoria_mod
 from . import profile as profile_mod
 from . import tin as tin_mod
+from . import xsections as xsec_mod
 from .points import (SurveyPoint, format_points, parse_bearing, parse_points,
                      point_from_bearing, sniff_order)
 
@@ -90,6 +92,28 @@ class ImportPointsTool(Tool):
         if window is not None and hasattr(window, "viewport"):
             window.viewport.zoom_extents()
         self.ctx.finish()
+        if window is not None:
+            _offer_cross_sections(window, self.ctx.services, len(points))
+
+
+def _offer_cross_sections(window, services, n: int) -> None:
+    """After an import, a button straight to the cross sections."""
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    box = QMessageBox(window)
+    box.setObjectName("topografia_offer_sections")
+    box.setAttribute(Qt.WA_DeleteOnClose)
+    box.setWindowTitle(tr("Import points"))
+    box.setText(tr("{n} points imported.", n=n))
+    sections = box.addButton(tr("Create cross sections..."), QMessageBox.AcceptRole)
+    box.addButton(tr("Close"), QMessageBox.RejectRole)
+
+    def clicked(button):
+        if button is sections and hasattr(services, "start_tool"):
+            QTimer.singleShot(0, lambda: services.start_tool("XSECTIONS"))
+    box.buttonClicked.connect(clicked)
+    box.open()                       # not exec(): the window keeps running
 
 
 class ExportPointsTool(Tool):
@@ -1898,7 +1922,166 @@ class AreaReportTool(Tool):
         self.ctx.finish()
 
 
+# ======================================================================
+# Cross sections straight from the imported points
+# ======================================================================
+
+def _nearest_axis(document, point, reach: float = math.inf):
+    """The line or polyline nearest to ``point`` that could be a centreline
+    (not a contour, a profile, a grade line or one of these sections)."""
+    best, best_d = None, reach
+    for entity in document.current_space():
+        if entity.dxftype() not in ("LINE", "LWPOLYLINE", "POLYLINE") or actions.is_grade(entity) \
+                or actions.is_profile(entity) or actions.is_contour(entity):
+            continue
+        data = actions._xdata(entity) or []
+        if data and data[0] in (actions.XSEC_TAG, actions.SECTION_TAG):
+            continue
+        try:
+            pts = actions.axis_points(entity)
+        except Exception:
+            continue
+        for a, b in zip(pts, pts[1:]):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            l2 = dx * dx + dy * dy
+            t = 0.0 if l2 < 1e-18 else max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / l2))
+            d = math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dy)
+            if d < best_d:
+                best, best_d = entity, d
+    return best
+
+
+class XSectionsTool(Tool):
+    """XSECTIONS: from the imported points to the cross sections in one go
+    -- a surface (built if there is none), the centreline (found in the
+    points or picked), a section every N metres with the elevation grid in
+    metres above MSL, the cut and fill hatched with their areas and
+    volumes, the stations on the plan, contours and the earthworks table."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "XSECTIONS"
+        document = _document(self.ctx)
+        self._points = [(p.east, p.north, p.z) for p in actions.survey_points(document)]
+        names = actions.surface_names(document)
+        self._surface_name = names[0] if names else None
+        if self._surface_name is None and len(self._points) < 3:
+            self.ctx.echo(tr("Import the survey points first (PIMPORT): a cross section needs at least three."))
+            self.ctx.finish()
+            return
+        self._settings = xsec_mod.Settings()
+        self._axis_entity = None
+        window = _window(self.ctx)
+        if window is not None:
+            from .dialogs import XSectionDialog
+
+            dialog = XSectionDialog(window, self._settings, self._surface_name is not None)
+            if not dialog.exec():
+                self.ctx.finish()
+                return
+            self._settings = dialog.settings()
+        else:
+            answer = self.ctx.ask_text(tr("Station every (m):"), f"{self._settings.interval:g}")
+            if answer:
+                try:
+                    self._settings.interval = max(_number(answer), 0.01)
+                except ValueError:
+                    self.ctx.echo(tr("Invalid number: {text}", text=answer))
+        if self._settings.pick_axis:
+            self._stage = "axis"
+            self.prompt("Click the centreline (a line or polyline):")
+        else:
+            self._ask_insert()
+
+    def _ask_insert(self) -> None:
+        self._stage = "insert"
+        self.prompt("Specify the top-left corner of the sections (Enter: beside the points):")
+
+    def on_point(self, point) -> None:
+        if self._stage == "axis":
+            entity = _nearest_axis(_document(self.ctx), point)
+            if entity is None:
+                self.ctx.echo(tr("No line or polyline there to follow."))
+                return
+            self._axis_entity = entity
+            self._ask_insert()
+        elif self._stage == "insert":
+            self._run(point)
+
+    def on_enter(self) -> None:
+        if self._stage == "insert":
+            self._run(None)
+        else:
+            self.ctx.finish()
+
+    def _run(self, insert) -> None:
+        document = _document(self.ctx)
+        s = self._settings
+        commands = []
+        if self._surface_name is not None:
+            tin = actions.read_surface(document, self._surface_name)
+        else:
+            try:
+                tin = tin_mod.build_tin(self._points, max_edge=s.max_edge or None, name="TERRENO")
+            except ValueError as exc:
+                self.ctx.echo(tr("Cannot triangulate: {error}", error=exc))
+                self.ctx.finish()
+                return
+            commands.append(actions.build_surface(document, tin))
+        try:
+            if self._axis_entity is not None:
+                axis = actions.axis_points(self._axis_entity)
+            else:
+                axis = xsec_mod.trim_to_surface(
+                    xsec_mod.auto_axis([(x, y) for x, y, _z in (self._points or tin.points)]), tin)
+        except ValueError as exc:
+            self.ctx.echo(tr("No centreline: {error}", error=exc))
+            self.ctx.finish()
+            return
+        source = [(x, y) for x, y, _z in (self._points or tin.points)]
+        half = s.half_width or max(1.0, math.ceil(xsec_mod.half_width_of(source, axis)))
+        try:
+            sections = xsec_mod.run(tin, axis, s, half)
+        except ValueError as exc:
+            self.ctx.echo(tr("No cross sections: {error}", error=exc))
+            self.ctx.finish()
+            return
+        if not sections:
+            self.ctx.echo(tr("No station of the centreline crosses the surface."))
+            self.ctx.finish()
+            return
+        h = s.text_height_for(half)
+        if insert is None:
+            xs = [p[0] for p in source]
+            ys = [p[1] for p in source]
+            insert = (max(xs) + max(20.0 * h, 0.1 * (max(xs) - min(xs))), max(ys))
+        commands.append(actions.draw_axis_stations(document, axis, sections, half, h,
+                                                   with_axis=self._axis_entity is None))
+        commands.append(actions.draw_xsections(document, sections, half, insert, h, s.vscale,
+                                               s.grid, s.columns))
+        if s.contour_interval > 0 and not actions.contour_entities(document):
+            commands.append(actions.draw_contours(document, tin, s.contour_interval))
+        if s.table:
+            cell_w, _cell_h = actions.xsection_layout(sections, half, h, s.vscale, s.grid)
+            columns = min(s.columns, len(sections))
+            at = (insert[0] + columns * (cell_w + 2.0 * h) + 4.0 * h, insert[1])
+            commands.append(actions.earthworks_table(document, actions.xsections_rows(sections),
+                                                     at, h, name=tr("CENTRELINE")))
+        from core.commands import CompositeCommand
+
+        self.ctx.execute(CompositeCommand("XSECTIONS", commands))
+        last = sections[-1]
+        self.ctx.echo(tr("{n} cross sections every {s:g} m: cut {c:.2f} m³, fill {f:.2f} m³",
+                         n=len(sections), s=s.interval, c=last.cut_total, f=last.fill_total))
+        window = _window(self.ctx)
+        if window is not None and hasattr(window, "viewport"):
+            window.viewport.zoom_extents()
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "XSECTIONS": XSectionsTool,
     "MEMORIA": MemoriaTool,
     "AREAREPORT": AreaReportTool,
     "PLATFORM": PlatformTool,
