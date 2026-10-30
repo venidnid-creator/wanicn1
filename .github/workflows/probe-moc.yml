@@ -1,0 +1,17 @@
+name: probe-moc
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set +e
+          echo "== page links"; curl -sSL -m 30 https://data.moc.go.th/OpenData/CSIProductIndexes | grep -oE 'href="[^"]+"' | grep -iE 'download|csv|xls|province|code' | sort -u | head -40
+          for u in \
+            "https://dataapi.moc.go.th/csi-product-indexes?province_code=83&com_code=0000000000000000&from_year=2026&to_year=2026" \
+            "https://dataapi.moc.go.th/csi-indexes?province_code=83&com_code=0000000000000000&from_year=2026&to_year=2026" \
+            "https://dataapi.moc.go.th/csi-product-indexes?province_code=83&from_year=2026&to_year=2026" \
+            "https://dataapi.moc.go.th/csi-product-indexes?province_code=10&com_code=0101010100100000&from_year=2026&to_year=2026" \
+            "https://dataapi.moc.go.th/csi-product-indexes?com_code=0101010100100000&from_year=2026&to_year=2026" ; do
+            echo "== $u"; curl -sS -m 60 -w '\nHTTP %{http_code} size %{size_download}\n' "$u" | head -c 1500; echo
+          done
