@@ -228,3 +228,36 @@ def test_fetch_online_with_a_fake_api(monkeypatch):
     monkeypatch.setenv("WANIC_OFFLINE", "1")
     with pytest.raises(P.FetchError):
         P.fetch_online("ภูเก็ต", opener=opener)
+
+
+def test_fetch_falls_back_to_the_latest_announced_month(monkeypatch):
+    """Nothing announced this year yet → last year's newest month."""
+    import datetime
+    import json
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    last_year = [dict(r, year=2025, month=12) for r in API_JSON]
+    seen, said = [], []
+
+    def opener(url, timeout):
+        seen.append(url)
+        if "csi-indexes" in url:
+            raise TimeoutError("The read operation timed out")
+        return json.dumps(last_year if "from_year=2025" in url else []).encode()
+    items, month, url = P.fetch_online("ภูเก็ต", datetime.date(2026, 1, 3),
+                                       opener, progress=said.append)
+    assert month == "ธ.ค. 2568" and "from_year=2025" in url
+    # Once one path answers, the other is not asked again.
+    assert sum("csi-indexes" in u for u in seen) == 0
+    assert any("2569" in t for t in said) and any("2568" in t for t in said)
+
+
+def test_fetch_reports_timeouts_of_both_paths(monkeypatch):
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    seen = []
+
+    def slow(url, timeout):
+        seen.append(url)
+        raise TimeoutError("The read operation timed out")
+    with pytest.raises(P.FetchError, match="timed out"):
+        P.fetch_online("ภูเก็ต", opener=slow)
+    assert len(seen) == 2                    # one year, both paths, then stop

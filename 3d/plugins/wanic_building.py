@@ -963,19 +963,15 @@ class BoqDialog(QDialog):
 
     def fetch_prices(self, auto=False):
         """Latest average prices of the province from MOC Open Data."""
-        from PySide6.QtWidgets import QApplication
         from core import wanic_province as P
         prov = self.panel.data().get("province") or ""
         if not prov:
             QMessageBox.information(self, TITLE, "เลือกจังหวัดก่อน")
             return 0
         self.cover.setText(f"กำลังดึงราคาวัสดุจังหวัด{prov} จากกระทรวงพาณิชย์…")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
         try:
-            items, month, _url = P.fetch_online(prov)
+            items, month, _url = self._fetch_in_background(prov)
         except P.FetchError as e:
-            QApplication.restoreOverrideCursor()
             self._show_cover()
             text = (f"{e}\n\nใช้ทางอื่นได้: นำเข้าไฟล์ราคาพาณิชย์จังหวัด (Excel/CSV) "
                     "หรือคัดลอกตารางจากเว็บมาวาง")
@@ -986,11 +982,54 @@ class BoqDialog(QDialog):
                     return 0                     # the saved book stays in use
             QMessageBox.warning(self, TITLE, text)
             return 0
-        QApplication.restoreOverrideCursor()
         if month:
             self.month.setText(month)
-        return self._apply_items(
-            items, f"กระทรวงพาณิชย์ (จังหวัด{prov} {month})", quiet=auto)
+        latest = month == P.last_month()
+        origin = (f"กระทรวงพาณิชย์ จังหวัด{prov} ราคาเดือน {month}" +
+                  ("" if latest else " (เดือนล่าสุดที่ประกาศ)"))
+        return self._apply_items(items, origin, quiet=auto)
+
+    def _fetch_in_background(self, prov):
+        """Run :func:`fetch_online` off the UI thread, with a cancellable
+        progress box; the MOC server can take a minute or more."""
+        import threading
+        import time
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+        from core import wanic_province as P
+        state = {"text": "เชื่อมต่อกระทรวงพาณิชย์ …", "done": False}
+
+        def work():
+            try:
+                state["result"] = P.fetch_online(
+                    prov, progress=lambda t: state.__setitem__("text", t))
+            except Exception as e:                      # noqa: BLE001
+                state["error"] = e
+            state["done"] = True
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(0.3)
+        if not state["done"]:
+            box = QProgressDialog(state["text"], "ยกเลิก", 0, 0, self)
+            box.setWindowTitle("ดึงราคาวัสดุ — กระทรวงพาณิชย์")
+            box.setWindowModality(Qt.WindowModal)
+            box.setMinimumDuration(0)
+            box.show()
+            t0 = time.monotonic()
+            while not state["done"]:
+                if box.wasCanceled():
+                    box.close()
+                    raise P.FetchError("ยกเลิกการดึงราคาแล้ว")
+                box.setLabelText(f"{state['text']}  ({time.monotonic() - t0:.0f} วินาที)"
+                                 "\nเซิร์ฟเวอร์กระทรวงพาณิชย์อาจตอบช้า กรุณารอสักครู่")
+                QApplication.processEvents()
+                th.join(0.1)
+            box.close()
+        err = state.get("error")
+        if isinstance(err, P.FetchError):
+            raise err
+        if err is not None:
+            raise P.FetchError(f"ดึงราคาไม่สำเร็จ — {err}")
+        return state["result"]
 
     def _apply_items(self, items, origin, quiet=False):
         from core import wanic_province as P

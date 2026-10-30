@@ -426,12 +426,19 @@ def latest_items(records) -> tuple[list, str]:
 
 
 def fetch_online(province: str, today=None, opener=None,
-                 timeout: float = 25.0) -> tuple[list, str, str]:
-    """Download the province's latest prices from the MOC Open Data API.
+                 timeout: float = 120.0, progress=None,
+                 years_back: int = 3) -> tuple[list, str, str]:
+    """Download the province's prices for the latest announced month from
+    the MOC Open Data API.
+
+    The API answers a whole year at a time; this year is asked first and,
+    when it holds nothing yet (early in the year, or not announced), the
+    year before, and so on — the newest month found is the one used.
 
     Returns ``(items, month, url)``; raises :class:`FetchError` with a Thai
     message the panel shows as is.  ``opener(url, timeout)`` → bytes is for
-    tests; ``WANIC_OFFLINE`` turns the network off."""
+    tests; ``progress(text)`` reports each try; ``WANIC_OFFLINE`` turns the
+    network off."""
     if os.environ.get("WANIC_OFFLINE"):
         raise FetchError("ปิดการเชื่อมต่อออนไลน์ไว้ (WANIC_OFFLINE)")
     code = CODES.get(province)
@@ -444,22 +451,30 @@ def fetch_online(province: str, today=None, opener=None,
                 "User-Agent": "WANICNSURVEY", "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read()
+    say = progress or (lambda _t: None)
     d = today or datetime.date.today()
-    years = [d.year, d.year - 1] if d.month <= 2 else [d.year]
-    errors = []
-    for path in ("csi-product-indexes", "csi-indexes"):
-        records = []
-        for y in years:
+    errors: list = []
+    paths = ["csi-product-indexes", "csi-indexes"]
+    for y in range(d.year, d.year - years_back, -1):
+        for path in list(paths):
             url = (f"{API}/{path}?province_code={code}"
                    f"&com_code=0000000000000000&from_year={y}&to_year={y}")
+            say(f"กำลังขอราคาจังหวัด{province} ปี {y + 543} …")
             try:
                 raw = opener(url, timeout)
-                records += _records(json.loads(raw.decode("utf-8-sig")))
+                payload = json.loads(raw.decode("utf-8-sig"))
             except Exception as e:                      # noqa: BLE001
-                errors.append(f"{path}: {e}")
-                break
-        items, month = latest_items(records)
-        if items:
-            return items, month, url
-    detail = "; ".join(errors) or "ไม่มีข้อมูลราคาของจังหวัดนี้ในปีนี้"
+                errors.append(f"{path} ปี {y + 543}: {e}")
+                continue
+            # This path answers: keep using it for the earlier years.
+            paths = [path]
+            items, month = latest_items(payload)
+            if items:
+                return items, month, url
+            errors.append(f"ปี {y + 543}: ยังไม่มีราคาประกาศ")
+            break
+        if not any("ยังไม่มีราคาประกาศ" in e for e in errors[-1:]) and \
+                len(paths) > 1:
+            break                    # neither path answered: stop trying
+    detail = "; ".join(errors) or "ไม่มีข้อมูลราคาของจังหวัดนี้"
     raise FetchError("ดึงราคาจากกระทรวงพาณิชย์ไม่สำเร็จ — " + detail)
