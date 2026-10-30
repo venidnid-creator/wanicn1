@@ -146,7 +146,8 @@ def load_book(province: str) -> dict | None:
 
 
 def save_book(province: str, prices: dict, month: str = "",
-              source: str = "", src: dict | None = None) -> dict:
+              source: str = "", src: dict | None = None,
+              item: dict | None = None) -> dict:
     """Write the province's book; ``src`` says where each price came from
     (``พาณิชย์`` / ``กรอกเอง`` / ``ตัวอย่าง``)."""
     os.makedirs(book_dir(), exist_ok=True)
@@ -156,6 +157,7 @@ def save_book(province: str, prices: dict, month: str = "",
             "prices": {k: float(v) for k, v in prices.items()
                        if _num(v) is not None and float(v) > 0}}
     book["src"] = {k: (src or {}).get(k, "พาณิชย์") for k in book["prices"]}
+    book["item"] = {k: v for k, v in (item or {}).items() if k in book["prices"]}
     with open(_path(province), "w", encoding="utf-8") as fh:
         json.dump(book, fh, ensure_ascii=False, indent=1)
     return book
@@ -380,64 +382,159 @@ def _bar(name: str):
     return f"{'DB' if deformed else 'RB'}{d}"
 
 
-#: Words the commerce office uses → the BOQ key (checked before fuzzy).
+# Unit conversion: the commerce office's unit → the BOQ's unit.
+_SAME = [{"ม.", "เมตร", "ม"}, {"ตร.ม.", "ตารางเมตร", "ตร.ม"},
+         {"ลบ.ม.", "ลูกบาศก์เมตร", "คิว", "ลบ.ม"}, {"ตร.ฟ.", "ตร.ฟุต", "ตารางฟุต"},
+         {"ลบ.ฟ.", "ลบ.ฟุต", "ลูกบาศก์ฟุต"}, {"กก.", "กิโลกรัม", "กก"},
+         {"ต้น"}, {"แผ่น"}, {"ก้อน"}, {"ลิตร"}, {"ท่อน"}, {"ชุด"}, {"อัน"},
+         {"ตัว"}, {"บาน"}, {"เส้น"}, {"ถุง"}]
+
+
+def _u(s: str) -> str:
+    return re.sub(r"\s+", "", str(s or "")).strip()
+
+
+def unit_factor(name: str, unit: str, target: str):
+    """Multiply the commerce price by this to get the price per ``target``
+    (``ตัน``→``กก.`` 1/1000, a 50 kg bag → 1/50, 100 bricks a bag → 1/100,
+    ตร.ฟ.→ตร.ม. 10.764 …); None when it cannot be converted safely."""
+    u, t = _u(unit), _u(target)
+    if not t or not u:
+        return 1.0
+    for grp in _SAME:
+        g = {_u(x) for x in grp}
+        if u in g and t in g:
+            return 1.0
+    if t == "กก.":
+        if u == "ตัน":
+            return 0.001
+        m = (re.search(r"บรรจุ\s*([\d.]+)\s*กก", name) or
+             re.search(r"(?:นน\.?|น้ำหนัก)\s*(?:สุทธิ)?\s*([\d.]+)\s*กก", name))
+        if m and u in ("ถุง", "ลัง", "กระสอบ", "ท่อน", "ม้วน", "ถัง", "เส้น"):
+            return 1.0 / float(m.group(1))
+        m = re.search(r"น้ำหนักต่อขด\s*([\d.]+)\s*-\s*([\d.]+)\s*กก", name)
+        if m and u in ("ม้วน", "ขด"):
+            return 2.0 / (float(m.group(1)) + float(m.group(2)))
+    if t == "ก้อน":
+        m = re.search(r"(\d+)\s*ก้อน\s*/", unit + " " + name)
+        if m:
+            return 1.0 / float(m.group(1))
+    if t == "ตร.ม." and u in ("ตร.ฟ.", "ตร.ฟุต"):
+        return 10.7639
+    if t == "ตร.ฟ." and u == "ตร.ม.":
+        return 1 / 10.7639
+    if t == "ลิตร":
+        m = re.search(r"([\d.]+)\s*ลิตร", name)
+        if m and u in ("ถัง", "กระป๋อง", "แกลลอน", "ขวด"):
+            return 1.0 / float(m.group(1))
+        if u == "แกลลอน":
+            return 1 / 3.785
+    if t == "ตร.ม." and u == "กล่อง":
+        m = re.search(r"(\d+)\s*แผ่น\s*/\s*กล่อง", name)
+        z = re.search(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*(ซม|นิ้ว|\"|”)?",
+                      name)
+        if m and z:
+            a, b = float(z.group(1)), float(z.group(2))
+            cm = z.group(3) == "ซม" or max(a, b) > 24
+            area = a * b * (1e-4 if cm else 0.00064516)
+            return 1.0 / (area * float(m.group(1)))
+    return None
+
+
+#: key pattern → (commerce-name pattern, preferred pattern). The first row
+#: of the province table that fits (the preferred one if any) is used.
 _RULES = [
-    (r"ทรายหยาบ", "ทรายหยาบ"), (r"ทรายละเอียด", "ทรายละเอียด"),
-    (r"ทรายถม|ดินถม.*ทราย", "ทรายถม"),
-    (r"หิน.*(1\s*-\s*2|1/2|เบอร์ 1)|หินย่อย", "หินเบอร์ 1-2"),
-    (r"ซิลิก้า|silica", "ปูนซีเมนต์ผสม (Silica Cement)"),
-    (r"ปูนซีเมนต์ปอร์ตแลนด์|ปอร์ตแลนด์|ไฮดรอลิก",
-     "ปูนซีเมนต์ปอร์ตแลนด์ (มอก. 15-2562) หรือปูนซีเมนต์ไฮดรอลิก "
-     "(มอก. 2594-2567)"),
-    (r"ปูนซีเมนต์ผสม", "ปูนซีเมนต์ผสม (มอก. 80/2566)"),
-    (r"คอนกรีตผสมเสร็จ.*240", "คอนกรีตผสมเสร็จ 240 กก./ตร.ซม. (ลูกบาศก์)"),
-    (r"ลวดผูกเหล็ก", "ลวดผูกเหล็ก"),
-    (r"ไม้อัด.*20\s*มม", "ไม้อัดดำ หนา 20 มม."),
-    (r"ตะปู.*3", "ตะปูตอกไม้ 3\""),
-    (r"อิฐมอญ|อิฐก่อสร้างสามัญ",
-     "อิฐมอญ (อิฐก่อสร้างสามัญ) ขนาด 7 x 16 x 3.5 ซม."),
+    (r"^ทรายหยาบ", r"^ทรายหยาบ", None),
+    (r"^ทรายละเอียด", r"^ทรายละเอียด", None),
+    (r"^ทรายถม", r"^ทรายถม", None),
+    (r"^หิน(เบอร์|ย่อย)|^หิน\s*1", r"^หิน(ย่อย|\s*เบอร์|\s*1|ก่อสร้าง)",
+     r"เบอร์\s*1|1\s*-\s*2"),
+    (r"silica", r"^ปูนซีเมนต์.*(ซิลิ|silica)", None),
+    (r"^ปูนซีเมนต์ปอร์ตแลนด์", r"^ปูนซีเมนต์(ปอร์ตแลนด์|ไฮดรอลิก)",
+     r"ประเภท\s*1|มอก\.?\s*15"),
+    (r"^ปูนซีเมนต์ผสม", r"^ปูนซีเมนต์ผสม", r"มอก\.?\s*80"),
+    (r"^คอนกรีต.*ผสมเสร็จ", None, None),                     # by strength
+    (r"^ลวดผูก", r"^ลวดผูกเหล็ก", None),
+    (r"^ตะปู", r"^ตะปูตอกไม้", r"(^|\D)3\s*(นิ้ว|\")"),
+    (r"ไม้อัด", r"^(แผ่น)?ไม้อัด(?!ซีเมนต์)", r"20\s*มม|2(\.0)?\s*ซม|เบอร์\s*20"),
+    (r"^ไม้ยาง", r"^ไม้ยาง", r"(1\s*1/2|1½)\s*\"?\s*x\s*3"),
+    (r"ยูคาลิปตัส|ไม้ค้ำยัน", r"ยูคาลิปตัส", r"3\s*นิ้ว\s*ยาว\s*3"),
+    (r"^อิฐมอญ|อิฐก่อสร้างสามัญ", r"^อิฐ(มอญ|ก่อสร้างสามัญ)",
+     r"7\s*x\s*16"),
+    (r"^กระจกใส.*5", r"^กระจกใส.*(^|\D)5\s*มม", None),
+    (r"^ปูนกาว", r"^ปูนกาว", None),
+    (r"ยาแนว", r"^(ปูน)?ยาแนว", None),
+    (r"^น้ำยาผสมปูน", r"^น้ำยาผสมปูน", None),
+    (r"^กระเบื้องคอนกรีต", r"^กระเบื้องคอนกรีตมุงหลังคา", r"ซีแพค|cpac"),
+    (r"^ครอบสันโค้ง", r"^ครอบสันโค้ง.*(คอนกรีต|ซีแพค|cpac)", None),
+    (r"^เหล็กรูปพรรณ", r"^เหล็ก(ตัวซี|รางน้ำ|ฉาก)",
+     r"100\s*x\s*50\s*x\s*20.*3\.2|3\.2.*100\s*x\s*50"),
+    (r"^กระเบื้อง.*เซรามิ.*12", r"^กระเบื้อง.*(เซรามิ|ปูพื้น).*(12\s*x\s*12|30\s*x\s*30)",
+     None),
+    (r"^กระเบื้อง.*เซรามิ.*8", r"^กระเบื้อง.*(เซรามิ|ปูพื้น).*(8\s*x\s*8|20\s*x\s*20)",
+     None),
 ]
 
 
-def match(items, keys, cutoff: float = 0.62) -> dict:
-    """``{key: (price, source_name)}`` for the BOQ keys the table prices.
+def _strength(s: str):
+    m = re.search(r"ผสมเสร็จ\D*?(\d{3})", s)
+    return m.group(1) if m else None
 
-    Rebar by size and grade, a few fixed words, then the closest name."""
-    keys = list(dict.fromkeys(keys))
-    nk = {k: _norm(k) for k in keys}
-    bars: dict = {}
-    for k in keys:
-        b = _bar(k)
-        if b:
-            bars.setdefault(b, []).append(k)
+
+def match(items, keys, units=None, cutoff: float = 0.8) -> dict:
+    """``{key: (price per the key's unit, source_name)}``.
+
+    Each BOQ key looks for its rows in the province table — rebar by size
+    and grade, ready-mixed concrete by strength, the rest by the rules above
+    (a preferred brand/size first), and lastly the same name — and only a
+    row whose unit converts to the key's unit (``units[key]``) is used."""
+    units = units or {}
+    rows = [(str(n), str(u or ""), float(p), _norm(str(n)))
+            for n, u, p in items if _num(p) is not None and float(p) > 0]
     out: dict = {}
-    for name, _unit, price in items:
-        key = None
-        bar = _bar(name)
-        if bar and bar in bars:
-            for k in bars[bar]:                  # RB6 and "เหล็กเสริม RB Ø 6 มม."
-                out.setdefault(k, (float(price), name))
+
+    def take(key, cands, prefer=None):
+        best = None
+        for n, u, p, nn in cands:
+            f = unit_factor(n, u, units.get(key, ""))
+            if f is None:
+                continue
+            if prefer and re.search(prefer, nn):
+                out[key] = (round(p * f, 4), n)
+                return True
+            if best is None:
+                best = (round(p * f, 4), n)
+        if best:
+            out[key] = best
+        return best is not None
+
+    for key in dict.fromkeys(keys):
+        nk = _norm(key)
+        bar = _bar(key)
+        if bar:
+            cands = [r for r in rows if _bar(r[0]) == bar]
+            take(key, cands, r"sd\.?\s*40|sr\.?\s*24")
             continue
-        if key is None:
-            n = _norm(name)
-            for pat, k in _RULES:
-                if k in nk and re.search(pat, n):
-                    key = k
-                    break
-        if key is None:
-            n = _norm(name)
-            if n in nk.values():
-                key = next(k for k, v in nk.items() if v == n)
+        rule = next((r for r in _RULES if re.search(r[0], nk)), None)
+        if rule:
+            if rule[1] is None:                    # ready-mixed by strength
+                st = _strength(nk)
+                cands = [r for r in rows if r[3].startswith("คอนกรีต")
+                         and "ผสมเสร็จ" in r[3] and _strength(r[3]) == st]
+                take(key, cands, r"ซีแพค|cpac")
             else:
-                best, score = None, 0.0
-                for k, v in nk.items():
-                    s = difflib.SequenceMatcher(None, n, v).ratio()
-                    if s > score:
-                        best, score = k, s
-                if score >= cutoff:
-                    key = best
-        if key is not None and key not in out:
-            out[key] = (float(price), name)
+                cands = [r for r in rows if re.search(rule[1], r[3])]
+                take(key, cands, rule[2])
+            continue
+        same = [r for r in rows if r[3] == nk]
+        if same:
+            take(key, same)
+            continue
+        scored = [(difflib.SequenceMatcher(None, r[3], nk).ratio(), r)
+                  for r in rows]
+        scored = [t for t in scored if t[0] >= cutoff]
+        if scored:
+            take(key, [max(scored, key=lambda t: t[0])[1]])
     return out
 
 
@@ -534,7 +631,7 @@ def fetch_online(province: str, today=None, opener=None,
     for y in range(d.year, d.year - years_back, -1):
         for path in list(paths):
             url = (f"{API}/{path}?province_code={code}"
-                   f"&com_code=0000000000000000&from_year={y}&to_year={y}")
+                   f"&from_year={y}&to_year={y}")
             say(f"กำลังขอราคาจังหวัด{province} ปี {y + 543} …")
             try:
                 raw = opener(url, timeout)

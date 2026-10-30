@@ -767,6 +767,7 @@ def compute(data) -> dict:
     month = str((data or {}).get("price_month") or "")
     src = (data or {}).get("price_src") or {}
     where = (data or {}).get("price_note") or {}
+    items = (data or {}).get("price_item") or {}
     unpriced = set()
     if province:
         for ln in bill.lines:
@@ -774,7 +775,7 @@ def compute(data) -> dict:
             if not k:
                 continue
             note = market_note(province, src.get(k), prices.get(k) or 0,
-                               where.get(k, ""))
+                               where.get(k, ""), items.get(k, ""))
             if note:
                 ln["note"] = (ln["note"] + " · " if ln["note"] else "") + note
                 if not prices.get(k):
@@ -810,10 +811,12 @@ def compute(data) -> dict:
             "footer": footer("WANIC ออกแบบอาคาร")}
 
 
-def market_note(province: str, src, price: float, where: str = "") -> str:
-    """The หมายเหตุ of a material the province does not announce."""
+def market_note(province: str, src, price: float, where: str = "",
+                item: str = "") -> str:
+    """The หมายเหตุ of a line's material price: the commerce office's item
+    it came from, or that the province does not announce one."""
     if src == "พาณิชย์" and price:
-        return ""
+        return f"ราคาพาณิชย์จ.{province}: {item}" if item else ""
     if src == "ตัวอย่าง" and price:
         return "ราคาตัวอย่าง — ไม่ใช่ราคาที่จังหวัดประกาศ"
     if not price:

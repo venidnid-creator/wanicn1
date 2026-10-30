@@ -939,17 +939,18 @@ class BoqDialog(QDialog):
         old = d.get("province") or ""
         if old and any(float(v or 0) for v in (d.get("prices") or {}).values()):
             P.save_book(old, d.get("prices") or {}, d.get("price_month", ""),
-                        src=d.get("price_src"))
+                        src=d.get("price_src"), item=d.get("price_item"))
         d["province"] = prov
         book = P.load_book(prov) if prov else None
         if book:
             d["prices"] = dict(book["prices"])
             d["price_src"] = dict(book.get("src") or {})
+            d["price_item"] = dict(book.get("item") or {})
             d["price_month"] = book.get("month") or self.month.text().strip()
             msg = (f"ใช้ราคาวัสดุจังหวัด{prov} ประจำเดือน {d['price_month']} "
                    f"({len(d['prices'])} รายการ, บันทึกเมื่อ {book.get('updated')})")
         else:
-            d["prices"], d["price_src"] = {}, {}
+            d["prices"], d["price_src"], d["price_item"] = {}, {}, {}
             d["price_month"] = self.month.text().strip() or P.last_month()
             msg = (f"ยังไม่มีราคาของจังหวัด{prov} ในเครื่องนี้ — กด «นำเข้าราคา"
                    "พาณิชย์จังหวัด» หรือคัดลอกตารางจากเว็บมาวาง" if prov else
@@ -1044,19 +1045,24 @@ class BoqDialog(QDialog):
                                 "และราคาต่อหน่วยในแต่ละแถว")
             return 0
         d = self.panel.data()
+        from core import wanic_std2569 as S
         keys = self._need_keys() + [k for k in (d.get("prices") or {})]
-        got = P.match(items, keys)
+        need = dict((self.result or {}).get("need") or {})
+        units = {k: need.get(k) or S.price_unit(k) for k in keys}
+        got = P.match(items, keys, units)
         prices = dict(d.get("prices") or {})
         src = dict(d.get("price_src") or {})
-        for k, (price, _name) in got.items():
+        item = dict(d.get("price_item") or {})
+        for k, (price, name) in got.items():
             prices[k] = price
             src[k] = "พาณิชย์"
-        d["prices"], d["price_src"] = prices, src
+            item[k] = name
+        d["prices"], d["price_src"], d["price_item"] = prices, src, item
         d["price_month"] = self.month.text().strip()
         self.panel._write(d)
         prov = d.get("province") or ""
         if prov:
-            P.save_book(prov, prices, d["price_month"], src=src)
+            P.save_book(prov, prices, d["price_month"], src=src, item=item)
             i = self.province.findData(prov)
             if i >= 0 and "✓" not in self.province.itemText(i):
                 self.province.setItemText(i, f"{prov}  ✓")
@@ -1195,6 +1201,8 @@ class BoqDialog(QDialog):
             self.prices.setItem(r, 0, a)
             self.prices.setItem(r, 1, b)
             self.prices.setItem(r, 2, QTI(f"{v:g}"))
+            if (d.get("price_item") or {}).get(k):
+                c.setToolTip(d["price_item"][k])
             self.prices.setItem(r, 3, c)
             self.prices.setItem(r, 4, QTI(where_note.get(k, "")))
             if v <= 0 and k in need:
@@ -1349,7 +1357,8 @@ class BoqDialog(QDialog):
         self.panel._write(d)
         if d.get("province"):
             from core import wanic_province as P
-            P.save_book(d["province"], prices, d["price_month"], src=src)
+            P.save_book(d["province"], prices, d["price_month"], src=src,
+                        item=d.get("price_item"))
         self.recompute()
         self._fill_prices()
 
