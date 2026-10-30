@@ -45,7 +45,8 @@ def test_the_whole_set_numbered_like_the_standard_drawings():
     assert codes[:4] == ["A-01", "A-02", "A-03", "A-04"]
     for g in ("A-", "S-", "SN-", "EE-", "M-"):
         assert any(c.startswith(g) for c in codes), g
-    assert [s.number for s in S] == list(range(1, len(S) + 1))
+    dw = [s for s in S if s.group != "BOQ"]
+    assert [s.number for s in dw] == list(range(1, len(dw) + 1))
     titles = [s.title for s in S]
     for t in ("ผังบริเวณ", "แปลนพื้นชั้น 1", "แปลนพื้นชั้น 2", "แปลนหลังคา",
               "รูปตัด ก-ก รูปตัด ข-ข", "แปลนฐานราก", "แปลนโครงหลังคา",
@@ -60,16 +61,26 @@ def test_the_whole_set_numbered_like_the_standard_drawings():
 
 def test_every_sheet_has_the_title_block_and_signature():
     S = D.build_set(house(), INFO)
+    drawings = [s for s in S if s.group != "BOQ"]
     for s in S:
+        if s.group == "BOQ":
+            _in_bounds(s)
+            continue
         t = s.texts()
-        assert s.code in t and str(s.number) in t and f"/ {len(S)}" in t
+        assert s.code in t and str(s.number) in t and \
+            f"/ {len(drawings)}" in t
         assert "บ้านพักอาศัย 2 ชั้น" in t and "WN-001" in t
         assert "(นายเวนิช ธัมมะวงษ์)" in t and "วิศวกรสำรวจ" in t
         for role in ("สถาปัตยกรรม", "โครงสร้าง", "สุขาภิบาล", "ไฟฟ้า",
                      "เครื่องกล"):
             assert role in t
         assert s.scale in t
-        # everything inside the A3 sheet
+        _in_bounds(s)
+
+
+def _in_bounds(s):
+    """Everything inside the A3 sheet."""
+    if True:
         for it in s.items:
             pts = []
             if it[0] == "line":
@@ -141,3 +152,33 @@ def test_thai_wrap_keeps_syllables():
     assert all(x[0] not in marks for x in lines)
     assert "".join(lines) == ("การติดตั้งให้เป็นไปตามมาตรฐานการติดตั้งทางไฟฟ้า"
                               "สำหรับประเทศไทยและข้อกำหนดของการไฟฟ้าส่วนภูมิภาค")
+
+
+def test_the_book_ends_with_por4():
+    from core import wanic_std2569 as STD
+    d = house()
+    d["prices"] = {k: STD.sample_price(k) for k, _u in STD.PRICE_KEYS}
+    d.update(province="ลพบุรี", price_month="ก.ย. 2569")
+    S = D.build_set(d, dict(INFO, preparer="นายเวนิช ธัมมะวงษ์"))
+    boq = [s for s in S if s.group == "BOQ"]
+    assert boq and S[-len(boq):] == boq                   # at the end
+    assert [s.code for s in boq] == [f"ปร.4-{i}" for i in
+                                     range(1, len(boq) + 1)]
+    first = " ".join(boq[0].texts())
+    for t in ("แบบ ปร.4", "รายการประมาณราคาค่าก่อสร้าง", "สรุปงาน",
+              "หมวดงานดินและฐานราก", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ",
+              "สถานที่ก่อสร้าง  จังหวัดลพบุรี", "แบบเลขที่  WN-001",
+              "สำนักงานพาณิชย์จังหวัดลพบุรี", "หน่วย : บาท", "ราคาหน่วยละ",
+              "จำนวนเงิน", "ค่าแรงงาน", f"แผ่นที่ 1 / {len(boq)}"):
+        assert t in first, t
+    allt = " ".join(t for s in boq for t in s.texts())
+    assert "รวมข้อ 1 หมวดงานดินและฐานราก" in allt
+    assert "ผู้ประมาณราคา" in " ".join(boq[-1].texts())
+    # The summary total is the BOQ's total.
+    from core import wanic_quantities as Q
+    total = Q.compute(d)["totals"]["total"]
+    assert f"{total:,.2f}" in first
+    # Without prices: the department's blank form.
+    S2 = D.build_set(d, dict(INFO, boq_prices=False), ("BOQ",))
+    assert S2 and all(s.group == "BOQ" for s in S2)
+    assert f"{total:,.2f}" not in " ".join(S2[0].texts())

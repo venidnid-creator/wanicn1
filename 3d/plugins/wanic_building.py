@@ -1609,7 +1609,8 @@ class DrawingDialog(QDialog):
 
     GROUPS = [("A", "แบบสถาปัตยกรรม (A)"), ("S", "แบบวิศวกรรมโครงสร้าง (S)"),
               ("SN", "แบบวิศวกรรมสุขาภิบาล (SN)"), ("EE", "แบบวิศวกรรมไฟฟ้า (EE)"),
-              ("M", "แบบวิศวกรรมเครื่องกล (M)")]
+              ("M", "แบบวิศวกรรมเครื่องกล (M)"),
+              ("BOQ", "ต่อท้ายเล่มด้วยแบบ ปร.4 (บัญชีปริมาณงานและราคา)")]
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -1639,6 +1640,9 @@ class DrawingDialog(QDialog):
                                                        self.GROUPS]))
             self.checks[g] = c
             f.addRow(c)
+        self.prices = QCheckBox("แสดงราคาใน ปร.4 (ไม่ติ๊ก = เว้นช่องราคาว่างแบบเล่มกรมโยธาฯ)")
+        self.prices.setChecked(bool(info.get("boq_prices", True)))
+        f.addRow(self.prices)
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
         self.pdf.setChecked(True)
         self.dxf = QCheckBox("DXF (เปิดใน WANICNSURVEY CAD / AutoCAD — ทุกแผ่นเรียงกัน)")
@@ -1669,6 +1673,10 @@ class DrawingDialog(QDialog):
         i = {k: e.text().strip() for k, e in self.fields.items()}
         i["setback"] = self.setback.value()
         i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
+        i["boq_prices"] = self.prices.isChecked()
+        st = self.panel.takeoff_data().get("settings") or {}
+        i["preparer"] = st.get("preparer") or "นายเวนิช ธัมมะวงษ์"
+        i["preparer_role"] = st.get("preparer_role") or "วิศวกรสำรวจ"
         return i
 
     def export(self):
@@ -1701,8 +1709,10 @@ class DrawingDialog(QDialog):
             with open(stem + ".dxf", "wb") as fh:
                 fh.write(D.dxf_bytes(sheets))
             self.saved.append(stem + ".dxf")
-        groups = ", ".join(f"{g} {sum(1 for s in sheets if s.group == g)} แผ่น"
-                           for g in info["groups"])
+        groups = ", ".join(
+            f"{'ปร.4' if g == 'BOQ' else g} "
+            f"{sum(1 for s in sheets if s.group == g)} แผ่น"
+            for g in info["groups"])
         self.panel.status.setText(f"ส่งออกแบบ {len(sheets)} แผ่น ({groups})")
         QMessageBox.information(
             self, TITLE, f"ส่งออกแบบก่อสร้าง {len(sheets)} แผ่น ({groups})\n" +

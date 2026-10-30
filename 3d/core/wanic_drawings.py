@@ -1638,10 +1638,11 @@ def m_plan(sh, E, k, sheets):
 
 GROUP_TH = {"A": "แบบสถาปัตยกรรม", "S": "แบบวิศวกรรมโครงสร้าง",
             "SN": "แบบวิศวกรรมสุขาภิบาล", "EE": "แบบวิศวกรรมไฟฟ้า",
-            "M": "แบบวิศวกรรมเครื่องกล"}
+            "M": "แบบวิศวกรรมเครื่องกล", "BOQ": "บัญชีปริมาณงาน (ปร.4)"}
 
 
-def build_set(data, info=None, groups=("A", "S", "SN", "EE", "M")) -> list:
+def build_set(data, info=None,
+              groups=("A", "S", "SN", "EE", "M", "BOQ")) -> list:
     """Every sheet of the drawing set, numbered, with its title block."""
     info = dict(info or {})
     E = B.elements(data)
@@ -1724,7 +1725,219 @@ def build_set(data, info=None, groups=("A", "S", "SN", "EE", "M")) -> list:
     for s, fn in plan:
         fn(s, sheets)
         frame(s, info, len(sheets))
+    if "BOQ" in groups:
+        sheets += build_boq(data, info)
     return sheets
+
+
+# ---------------------------------------------------------------------------
+# ปร.4 — the bill of quantities at the end of the book
+# ---------------------------------------------------------------------------
+
+#: (header, sub-header, width mm, align)
+BOQ_COLS = [("ลำดับที่", "", 16, "center"), ("รายการ", "", 134, "left"),
+            ("จำนวน", "", 24, "right"), ("หน่วย", "", 18, "center"),
+            ("ราคาวัสดุ", "ราคาหน่วยละ", 26, "right"),
+            ("", "จำนวนเงิน", 32, "right"),
+            ("ค่าแรงงาน", "ราคาหน่วยละ", 26, "right"),
+            ("", "จำนวนเงิน", 32, "right"),
+            ("รวมค่าวัสดุ", "และค่าแรงงาน", 34, "right"),
+            ("หมายเหตุ", "", 44, "left")]
+BOQ_ROW = 6.0
+BOQ_DESC = 72                       # characters per line of รายการ
+
+
+def _money(v, show=True) -> str:
+    return f"{v:,.2f}" if show and v else ""
+
+
+def boq_rows(result, show_prices=True):
+    """The ปร.4 lines: (kind, cells) — kind "group" / "item" / "total";
+    the summary first, as the department's book does."""
+    groups = result.get("groups") or []
+    summary = [("head", ["", "สรุปงาน"] + [""] * 8)]
+    gm = gl = 0.0
+    for gi, (_k, th, rows) in enumerate(groups, 1):
+        m = sum(r["mat_total"] for r in rows)
+        lab = sum(r["lab_total"] for r in rows)
+        gm, gl = gm + m, gl + lab
+        summary.append(("item", [str(gi), th, "", "รวม", "",
+                                 _money(m, show_prices), "",
+                                 _money(lab, show_prices),
+                                 _money(m + lab, show_prices), ""]))
+    summary.append(("total", ["", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ", "",
+                              "", "", _money(gm, show_prices), "",
+                              _money(gl, show_prices),
+                              _money(gm + gl, show_prices),
+                              "ยังไม่รวม Factor F"]))
+    body = []
+    for gi, (_k, th, rows) in enumerate(groups, 1):
+        body.append(("head", [str(gi), th] + [""] * 8))
+        for li, ln in enumerate(rows, 1):
+            note = (ln.get("note") or "")
+            body.append(("item", [
+                f"{gi}.{li}", ln["desc"], f"{ln['qty']:,.2f}", ln["unit"],
+                _money(ln["mat"], show_prices),
+                _money(ln["mat_total"], show_prices),
+                _money(ln["lab"], show_prices),
+                _money(ln["lab_total"], show_prices),
+                _money(ln["total"], show_prices), note]))
+        m = sum(r["mat_total"] for r in rows)
+        lab = sum(r["lab_total"] for r in rows)
+        body.append(("total", ["", f"รวมข้อ {gi} {th}", "", "", "",
+                               _money(m, show_prices), "",
+                               _money(lab, show_prices),
+                               _money(m + lab, show_prices), ""]))
+    return summary, body
+
+
+def _boq_page(sh, info, result, page, pages):
+    W, H = PAPER
+    m = MARGIN
+    sh.rect(m, m, W - m, H - m, "frame", 0.5)
+    x0 = m + 5
+    y = H - m - 7
+    sh.text((W - m - 5, y), "แบบ ปร.4", 3.0, "right", "title", True)
+    proj = info.get("project") or "อาคาร"
+    sh.text((W / 2, y), f"รายการประมาณราคาค่าก่อสร้าง  {proj}", 3.6, "center",
+            "title", True)
+    y -= 6.5
+    sh.text((x0, y), f"สถานที่ก่อสร้าง  {info.get('location') or '-'}", 2.6)
+    sh.text((x0 + 150, y), f"แบบเลขที่  {info.get('drawing_no') or '-'}", 2.6)
+    sh.text((x0 + 260, y), "รายการเลขที่  -", 2.6)
+    y -= 5.5
+    sh.text((x0, y), f"หน่วยงาน  {info.get('owner') or info.get('office') or '-'}",
+            2.6)
+    sh.text((x0 + 150, y), f"ประมาณราคาเมื่อวันที่  {info.get('date') or thai_date()}",
+            2.6)
+    y -= 5.5
+    sh.text((x0, y), f"ประมาณการโดย  {info.get('preparer') or NAME}", 2.6)
+    ref = result.get("price_ref") or ""
+    if ref:
+        sh.text((x0 + 150, y), ref, 2.4)
+    sh.text((W - m - 5, y), "หน่วย : บาท", 2.6, "right")
+    # two-row header
+    y -= 3
+    top = y
+    x = x0
+    h1, h2 = 6.0, 6.0
+    sh.line((x0, top), (x0 + sum(c[2] for c in BOQ_COLS), top), "text", 0.35)
+    for i, (a, b, w, _al) in enumerate(BOQ_COLS):
+        if a and b:                                  # spans two columns
+            span = w + BOQ_COLS[i + 1][2] if i + 1 < len(BOQ_COLS) and \
+                not BOQ_COLS[i + 1][0] else w
+            if a in ("ราคาวัสดุ", "ค่าแรงงาน"):
+                sh.text((x + span / 2, top - h1 + 1.8), a, 2.4, "center",
+                        "text", True)
+                sh.line((x, top - h1), (x + span, top - h1), "text", 0.18)
+                sh.text((x + w / 2, top - h1 - h2 + 1.8), b, 2.2, "center",
+                        "text", True)
+            else:
+                sh.text((x + w / 2, top - h1 + 1.8), a, 2.4, "center", "text",
+                        True)
+                sh.text((x + w / 2, top - h1 - h2 + 1.8), b, 2.4, "center",
+                        "text", True)
+        elif b:
+            sh.text((x + w / 2, top - h1 - h2 + 1.8), b, 2.2, "center",
+                    "text", True)
+        else:
+            sh.text((x + w / 2, top - h1 - 1.2), a, 2.4, "center", "text",
+                    True)
+        x += w
+    y = top - h1 - h2
+    sh.line((x0, y), (x0 + sum(c[2] for c in BOQ_COLS), y), "text", 0.35)
+    return top, y
+
+
+def build_boq(data, info=None) -> list:
+    """The ปร.4 pages (A3, same paper as the drawings) from the BOQ of
+    :func:`core.wanic_quantities.compute`, summary first."""
+    from core import wanic_quantities as Q
+    info = dict(info or {})
+    result = Q.compute(data)
+    if not result.get("groups"):
+        return []
+    show = bool(info.get("boq_prices", True))
+    summary, body = boq_rows(result, show)
+    W, H = PAPER
+    bottom = MARGIN + 30
+    pages: list = []
+    cur = None
+
+    def new_page():
+        sh = Sheet(f"ปร.4-{len(pages) + 1}", "รายการประมาณราคาค่าก่อสร้าง (ปร.4)",
+                   "-", "BOQ")
+        pages.append(sh)
+        return sh
+
+    def emit(rows):
+        nonlocal cur
+        cur = new_page()
+        state = {"y": None, "top": None}
+        state["top"], state["y"] = _boq_page(cur, info, result, 0, 0)
+        tops = [state]
+        for kind, cells in rows:
+            desc = _wrap(cells[1], BOQ_DESC)
+            note = _wrap(cells[9], 23) if cells[9] else [""]
+            n = max(len(desc), len(note))
+            hgt = BOQ_ROW + (n - 1) * 3.8
+            if state["y"] - hgt < bottom:
+                _close_table(cur, state)
+                cur = new_page()
+                state = {}
+                state["top"], state["y"] = _boq_page(cur, info, result, 0, 0)
+                tops.append(state)
+            y = state["y"]
+            x = MARGIN + 5
+            bold = kind in ("head", "total")
+            for ci, (_a, _b, w, al) in enumerate(BOQ_COLS):
+                lines = desc if ci == 1 else note if ci == 9 else [cells[ci]]
+                for li, t in enumerate(lines):
+                    tx = x + 1.5 if al == "left" else x + w - 1.5 \
+                        if al == "right" else x + w / 2
+                    sh_al = "left" if al == "left" else al
+                    cur.text((tx, y - 4.2 - li * 3.8), t,
+                             2.0 if ci == 9 else 2.3, sh_al, "text",
+                             bold and ci != 9)
+                x += w
+            state["y"] = y - hgt
+            if kind == "total":
+                cur.line((MARGIN + 5, state["y"]), (MARGIN + 5 + sum(
+                    c[2] for c in BOQ_COLS), state["y"]), "text", 0.25)
+        _close_table(cur, state)
+        return state["y"]
+
+    emit(summary)
+    y = emit(body)
+    last = pages[-1]
+    # signatures under the last table
+    sy = max(y - 10, MARGIN + 18)
+    prep = info.get("preparer") or NAME
+    role = info.get("preparer_role") or ROLE
+    last.text((W - 120, sy), "ลงชื่อ ……………………………………… ผู้ประมาณราคา", 2.6)
+    last.text((W - 98, sy - 5), f"({prep})", 2.6, "center")
+    last.text((W - 98, sy - 10), role, 2.4, "center")
+    for i, sh in enumerate(pages, 1):
+        sh.number = i
+        sh.text((W - MARGIN - 5, MARGIN - 4.5), f"แผ่นที่ {i} / {len(pages)}",
+                2.2, "right", "title")
+        sh.text((MARGIN + 1, MARGIN - 4.5), f"จัดทำด้วย WANICNSURVEY · {FULL}",
+                1.8, "left", "title")
+        sh.text((MARGIN + 5, MARGIN + 4), "หมายเหตุ: ปริมาณตามหลักเกณฑ์การคำนวณ"
+                "ราคากลางงานก่อสร้าง พ.ศ. 2569 (เผื่อตามมาตรฐาน) ค่าแรงตามบัญชี ว480 · "
+                "ราคารวมนี้ยังไม่คูณ Factor F (ดูแบบ ปร.5)", 2.0)
+    return pages
+
+
+def _close_table(sh, state):
+    """Vertical rules of the table from its header to the last row."""
+    x = MARGIN + 5
+    top, y = state["top"], state["y"]
+    for _a, _b, w, _al in BOQ_COLS:
+        sh.line((x, top), (x, y), "text", 0.18)
+        x += w
+    sh.line((x, top), (x, y), "text", 0.18)
+    sh.line((MARGIN + 5, y), (x, y), "text", 0.35)
 
 
 def _set_scale(sh, sc):
