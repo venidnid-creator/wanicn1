@@ -261,3 +261,78 @@ def test_fetch_reports_timeouts_of_both_paths(monkeypatch):
     with pytest.raises(P.FetchError, match="timed out"):
         P.fetch_online("ภูเก็ต", opener=slow)
     assert len(seen) == 2                    # one year, both paths, then stop
+
+
+#: The ministry's table (index.tpso.go.th) as downloaded/copied: a title,
+#: the period line, a header row, rows whose category name is longer than
+#: the item name, and an item wrapped over two lines.
+TPSO = [
+    ["ราคาวัสดุก่อสร้างจังหวัดภูเก็ต (ราคาเงินสด ไม่รวมภาษีมูลค่าเพิ่ม ไม่รวมค่าขนส่ง)"],
+    ["ระยะเวลา กันยายน 2569", "", "สำนักงานพาณิชย์จังหวัดภูเก็ต"],
+    ["รหัสหมวด", "ชื่อหมวดสินค้า", "รหัส", "รายการ", "หน่วย", "กันยายน"],
+    ["01", "วัสดุถม/รองพื้น", "0101010100100000", "ทรายหยาบ", "ลบ.ม.", "650.00"],
+    ["02", "วัสดุและอุปกรณ์งานโครงสร้างเหล็ก", "0201010100100000",
+     "เหล็กข้ออ้อย SD40 ขนาด 12 มม.", "กก.", "24.90"],
+    ["03", "ชิ้นส่วนโครงสร้างสำเร็จรูป", "0303010101500000",
+     "เสาเข็มคอนกรีตอัดแรง รูปสี่เหลี่ยมตัน ขนาด 0.18\nx 0.18 ม. ยาว 10.00 ม.",
+     "ท่อน", "3,074.77"],
+]
+
+
+def test_the_ministry_table_layout_and_month():
+    items = P.parse_rows(TPSO)
+    assert items[0] == ("ทรายหยาบ", "ลบ.ม.", 650.0)
+    assert items[1] == ("เหล็กข้ออ้อย SD40 ขนาด 12 มม.", "กก.", 24.9)
+    assert items[2][0].startswith("เสาเข็มคอนกรีตอัดแรง") and \
+        items[2][0].endswith("ยาว 10.00 ม.") and items[2][2] == 3074.77
+    assert P.detect_month(TPSO) == "ก.ย. 2569"
+    assert P.match(items, ["ทรายหยาบ", "DB12"]) == {
+        "ทรายหยาบ": (650.0, "ทรายหยาบ"),
+        "DB12": (24.9, "เหล็กข้ออ้อย SD40 ขนาด 12 มม.")}
+
+
+def test_copied_web_rows_without_a_header():
+    text = ("01\tวัสดุถม/รองพื้น\t0101010100100000\tทรายหยาบ\tลบ.ม.\t650.00\n"
+            '03\tชิ้นส่วนโครงสร้างสำเร็จรูป\t0303010101500000\t"เสาเข็ม 0.18\n'
+            'x 0.18 ม."\tท่อน\t3,074.77\n')
+    items = P.parse_rows(P.rows_from_text(text))
+    assert items[0] == ("ทรายหยาบ", "ลบ.ม.", 650.0)       # not the category
+    assert items[1] == ("เสาเข็ม 0.18 x 0.18 ม.", "ท่อน", 3074.77)
+
+
+def test_xlsx_from_the_ministry(tmp_path):
+    path = tmp_path / "ภูเก็ต.xlsx"
+    path.write_bytes(_xlsx(TPSO[:5]))
+    items, month = P.read_table(str(path))
+    assert month == "ก.ย. 2569" and items[0] == ("ทรายหยาบ", "ลบ.ม.", 650.0)
+
+
+def test_pdf_is_refused_with_advice(tmp_path):
+    path = tmp_path / "x.pdf"
+    path.write_bytes(b"%PDF-1.7 ...")
+    with pytest.raises(ValueError, match="Excel"):
+        P.read_file(str(path))
+
+
+def test_market_price_notes():
+    from core import wanic_quantities as Q
+    assert Q.market_note("ภูเก็ต", "พาณิชย์", 650) == ""
+    assert "ต้องใช้ราคาตามท้องตลาด ณ จังหวัดภูเก็ต" in Q.market_note(
+        "ภูเก็ต", None, 0)
+    assert Q.market_note("ภูเก็ต", "ท้องตลาด", 55, "ร้าน ก. 29 ต.ค.") == (
+        "ไม่พบราคาที่จังหวัดภูเก็ตประกาศ — ใช้ราคาตามท้องตลาด (ร้าน ก. 29 ต.ค.)")
+    from core import wanic_building as B
+    d = B.default_data()
+    d["floors"][0]["rooms"].append(
+        {"id": "r1", "name": "ห้องนอน", "x": 0, "y": 0, "w": 3, "d": 3})
+    d.update(province="ภูเก็ต", prices={"DB12": 24.9, "RB6": 27},
+             price_src={"DB12": "พาณิชย์", "RB6": "ท้องตลาด"},
+             price_note={"RB6": "ร้าน ข."})
+    r = Q.compute(d)
+    by = {ln["mat_key"]: ln["note"] for ln in r["lines"] if ln["mat_key"]}
+    assert "ไม่พบราคา" not in by["DB12"]
+    assert "ใช้ราคาตามท้องตลาด (ร้าน ข.)" in by["RB6"]
+    assert any("ไม่พบราคาที่จังหวัดภูเก็ตประกาศ" in n for n in r["notes"])
+    rates = Q.to_rates(r)                                # ปร.4 หมายเหตุ
+    assert any("ร้าน ข." in x["note"] for x in rates)
+    assert "q=" in P.market_search_url("ทรายหยาบ", "ภูเก็ต")

@@ -52,7 +52,15 @@ PROVINCES = [p for ps in REGIONS.values() for p in ps]
 assert len(PROVINCES) == len(set(PROVINCES)) == 77
 
 #: Where the user reads the official prices (opened in the browser).
-PRICE_SITE = "https://www.price.moc.go.th"
+PRICE_SITE = ("https://index.tpso.go.th/construction-material-prices/"
+              "prices-building-materials")
+
+
+def market_search_url(item: str, province: str) -> str:
+    """A web search for the item's shop price in the province."""
+    from urllib.parse import quote_plus
+    q = f"ราคา {item} {province} ร้านวัสดุก่อสร้าง"
+    return "https://www.google.com/search?q=" + quote_plus(q)
 
 #: MOC Open Data — average construction-material prices by province
 #: (ราคาวัสดุก่อสร้าง สนค.), https://data.moc.go.th/OpenData/CSIProductIndexes
@@ -182,41 +190,96 @@ def _is_unit(s: str) -> bool:
                                              for u in _UNITS)
 
 
-def parse_rows(rows) -> list[tuple[str, str, float]]:
-    """``[(name, unit, price)]`` from table rows of any layout.
+_FULL_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม",
+                "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม",
+                "พฤศจิกายน", "ธันวาคม"]
 
-    The name is the longest text cell, the unit a cell that looks like one,
-    and the price the last number on the row (the commerce office puts the
-    price after code, name and unit; a row with ``ราคาเดือนก่อน`` and
-    ``ราคาเดือนนี้`` gives this month)."""
+
+def _header(cells):
+    """Column indices of a header row (``รายการ`` … ``หน่วย`` …), or None."""
+    name = next((i for i, c in enumerate(cells)
+                 if re.fullmatch(r"(ชื่อ)?รายการ(สินค้า|วัสดุ)?", c)), None)
+    if name is None:
+        return None
+    unit = next((i for i, c in enumerate(cells) if c.startswith("หน่วย")),
+                None)
+    return {"name": name, "unit": unit}
+
+
+def detect_month(rows) -> str:
+    """``ก.ย. 2569`` from a table's title or header (``ระยะเวลา กันยายน
+    2569`` / a ``กันยายน`` column with ``2569`` elsewhere), or ""."""
+    month = year = None
+    for row in rows[:40]:
+        for c in row:
+            c = str(c or "")
+            for mi, name in enumerate(_FULL_MONTHS):
+                if name in c:
+                    m = re.search(name + r"\s*(25\d\d)", c)
+                    if m:
+                        return f"{_TH_MONTHS[mi]} {m.group(1)}"
+                    month = month if month is not None else mi
+            y = re.search(r"\b(25[5-9]\d)\b", c)
+            if y and year is None:
+                year = y.group(1)
+    if month is not None and year:
+        return f"{_TH_MONTHS[month]} {year}"
+    return ""
+
+
+def parse_rows(rows) -> list[tuple[str, str, float]]:
+    """``[(name, unit, price)]`` from table rows.
+
+    With a header row (``รหัสหมวด · ชื่อหมวดสินค้า · รหัส · รายการ · หน่วย ·
+    กันยายน`` as the commerce ministry's table has) the columns are taken
+    from it.  Without one, the name is the text just before the unit (or the
+    longest text) and the price the last number after the name — a row with
+    last month's and this month's prices gives this month."""
     out = []
+    head = None
     for row in rows:
-        cells = [str(c if c is not None else "").strip() for c in row]
+        cells = [re.sub(r"\s+", " ", str(c if c is not None else "")).strip()
+                 for c in row]
+        h = _header(cells)
+        if h:
+            head = h
+            continue
         nums = [(i, _num(c)) for i, c in enumerate(cells)]
         nums = [(i, n) for i, n in nums if n is not None]
-        texts = [(i, c) for i, c in enumerate(cells)
-                 if c and _num(c) is None]
-        if not nums or not texts:
+        if not nums:
             continue
-        unit = next((c for _i, c in texts if _is_unit(c)), "")
-        names = [(i, c) for i, c in texts if not _is_unit(c)]
-        if not names:
-            continue
-        ni, name = max(names, key=lambda t: len(t[1]))
+        if head and head["name"] < len(cells):
+            ni, name = head["name"], cells[head["name"]]
+            u = head["unit"]
+            unit = cells[u] if u is not None and u < len(cells) else ""
+        else:
+            texts = [(i, c) for i, c in enumerate(cells)
+                     if c and _num(c) is None]
+            ui = next((i for i, c in texts if _is_unit(c)), None)
+            unit = cells[ui] if ui is not None else ""
+            names = [(i, c) for i, c in texts if not _is_unit(c)]
+            if not names:
+                continue
+            before = [t for t in names if ui is not None and t[0] < ui]
+            ni, name = before[-1] if before else max(names,
+                                                      key=lambda t: len(t[1]))
         after = [n for i, n in nums if i > ni]
-        price = (after or [nums[-1][1]])[-1]
-        if price <= 0 or len(name) < 2:
+        if not after and head:
             continue
-        out.append((re.sub(r"\s+", " ", name), unit, price))
+        price = (after or [nums[-1][1]])[-1]
+        if price <= 0 or len(name) < 2 or _num(name) is not None:
+            continue
+        out.append((name, unit, price))
     return out
 
 
 def rows_from_text(text: str) -> list[list[str]]:
-    """Rows of pasted text (tabs from a web page / Excel) or CSV."""
-    text = text.lstrip("﻿")
-    if "\t" in text:
-        return [ln.split("\t") for ln in text.splitlines() if ln.strip()]
-    return [r for r in csv.reader(io.StringIO(text)) if any(r)]
+    """Rows of pasted text (tabs from a web page / Excel) or CSV; a cell
+    wrapped over two lines in quotes stays one cell."""
+    text = text.lstrip("\ufeff")
+    delim = "\t" if "\t" in text else ","
+    return [r for r in csv.reader(io.StringIO(text), delimiter=delim)
+            if any(c.strip() for c in r)]
 
 
 def rows_from_xlsx(data: bytes) -> list[list[str]]:
@@ -257,10 +320,23 @@ def rows_from_xlsx(data: bytes) -> list[list[str]]:
 
 
 def read_file(path: str) -> list[tuple[str, str, float]]:
+    return read_table(path)[0]
+
+
+def read_table(path: str) -> tuple[list, str]:
+    """``(items, month)`` of a price file (.xlsx / .csv / text)."""
+    rows = _file_rows(path)
+    return parse_rows(rows), detect_month(rows)
+
+
+def _file_rows(path: str) -> list:
     with open(path, "rb") as fh:
         data = fh.read()
     if data[:2] == b"PK":
-        return parse_rows(rows_from_xlsx(data))
+        return rows_from_xlsx(data)
+    if data[:5] == b"%PDF-":
+        raise ValueError("ไฟล์ PDF อ่านเป็นตารางไม่ได้ — เลือกดาวน์โหลดเป็น Excel "
+                         "หรือคัดลอกตารางจากหน้าเว็บมาวาง")
     if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
         raise ValueError("ไฟล์ .xls รุ่นเก่า — เปิดใน Excel แล้วบันทึกเป็น .xlsx "
                          "หรือ CSV ก่อน หรือคัดลอกตารางมาวาง")
@@ -272,7 +348,7 @@ def read_file(path: str) -> list[tuple[str, str, float]]:
             continue
     else:
         text = data.decode("utf-8", "replace")
-    return parse_rows(rows_from_text(text))
+    return rows_from_text(text)
 
 
 # ---------------------------------------------------------------------------

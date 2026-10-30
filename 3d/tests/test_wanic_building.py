@@ -378,7 +378,13 @@ def test_boq_prices_by_province(monkeypatch, tmp_path):
          if dlg.prices.item(i, 0).text() == "DB16"][0]
     dlg.prices.item(r, 2).setText("23.5")
     dlg.save_prices()
-    assert P.load_book("ขอนแก่น")["src"]["DB16"] == "กรอกเอง"
+    assert P.load_book("ขอนแก่น")["src"]["DB16"] == "ท้องตลาด"
+    # Unannounced materials say so in the หมายเหตุ column.
+    notes = []
+    for i in range(dlg.tree.topLevelItemCount()):
+        top = dlg.tree.topLevelItem(i)
+        notes += [top.child(j).text(11) for j in range(top.childCount())]
+    assert any("ไม่พบราคาที่จังหวัดขอนแก่นประกาศ" in n for n in notes)
     # Another province has its own (empty) prices; coming back restores.
     dlg.province.setCurrentIndex(dlg.province.findData("เชียงใหม่"))
     assert not any(panel.data()["prices"].values())

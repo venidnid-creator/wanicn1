@@ -765,6 +765,24 @@ def compute(data) -> dict:
             ln["total"] = round(ln["mat_total"] + ln["lab_total"], 2)
     province = str((data or {}).get("province") or "")
     month = str((data or {}).get("price_month") or "")
+    src = (data or {}).get("price_src") or {}
+    where = (data or {}).get("price_note") or {}
+    unpriced = set()
+    if province:
+        for ln in bill.lines:
+            k = ln["mat_key"]
+            if not k:
+                continue
+            note = market_note(province, src.get(k), prices.get(k) or 0,
+                               where.get(k, ""))
+            if note:
+                ln["note"] = (ln["note"] + " · " if ln["note"] else "") + note
+                if not prices.get(k):
+                    unpriced.add(k)
+        if unpriced:
+            notes.append(f"ไม่พบราคาที่จังหวัด{province}ประกาศ {len(unpriced)} "
+                         "รายการ — ให้สืบราคาตามท้องตลาด ณ จังหวัดนี้ แล้วกรอกใน"
+                         "แท็บ «ฐานข้อมูลราคา»")
     if not province:
         notes.append("ยังไม่ได้เลือกจังหวัด — เลือกจังหวัดด้านบนเพื่อใช้ราคาวัสดุ"
                      "ของสำนักงานพาณิชย์จังหวัดนั้น")
@@ -790,6 +808,21 @@ def compute(data) -> dict:
             "province": province, "price_month": month,
             "price_ref": price_ref(province, month),
             "footer": footer("WANIC ออกแบบอาคาร")}
+
+
+def market_note(province: str, src, price: float, where: str = "") -> str:
+    """The หมายเหตุ of a material the province does not announce."""
+    if src == "พาณิชย์" and price:
+        return ""
+    if src == "ตัวอย่าง" and price:
+        return "ราคาตัวอย่าง — ไม่ใช่ราคาที่จังหวัดประกาศ"
+    if not price:
+        return (f"ไม่พบราคาที่จังหวัด{province}ประกาศ — ต้องใช้ราคาตามท้องตลาด "
+                f"ณ จังหวัด{province}")
+    if src in ("ท้องตลาด", "กรอกเอง", None):
+        return (f"ไม่พบราคาที่จังหวัด{province}ประกาศ — ใช้ราคาตามท้องตลาด"
+                + (f" ({where})" if where else ""))
+    return ""
 
 
 def price_ref(province: str, month: str = "") -> str:

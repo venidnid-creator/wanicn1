@@ -16,6 +16,7 @@ from __future__ import annotations
 from core.wanic_ui import safe as _safe
 
 import copy
+import os
 
 import math
 
@@ -808,7 +809,7 @@ class BoqDialog(QDialog):
 
     COLS = ["ลำดับ", "รายการ", "ปริมาณสุทธิ", "เผื่อ %", "ปริมาณ", "หน่วย",
             "ค่าวัสดุ/หน่วย", "ค่าวัสดุ", "ค่าแรง/หน่วย", "ค่าแรง", "รวม (บาท)",
-            "ที่มา / การคำนวณ"]
+            "ที่มา / หมายเหตุ"]
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -896,7 +897,8 @@ class BoqDialog(QDialog):
                 ("📋 วางตารางราคาที่คัดลอกจากเว็บ",
                  "คัดลอกตารางราคาจากหน้าเว็บกระทรวงพาณิชย์ (Ctrl+C) แล้วกดปุ่มนี้",
                  self.paste_prices),
-                ("🌐 เว็บราคาพาณิชย์", P.PRICE_SITE, self.open_price_site))):
+                ("🌐 เปิดเว็บราคาจังหวัด (สนค.)", P.PRICE_SITE,
+                 self.open_price_site))):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
@@ -973,8 +975,11 @@ class BoqDialog(QDialog):
             items, month, _url = self._fetch_in_background(prov)
         except P.FetchError as e:
             self._show_cover()
-            text = (f"{e}\n\nใช้ทางอื่นได้: นำเข้าไฟล์ราคาพาณิชย์จังหวัด (Excel/CSV) "
-                    "หรือคัดลอกตารางจากเว็บมาวาง")
+            text = (f"{e}\n\nบริการข้อมูลของกระทรวงพาณิชย์ไม่ตอบในขณะนี้ — ใช้ราคาจาก"
+                    "เว็บ สนค. แทนได้:\n1) กด «🌐 เปิดเว็บราคาจังหวัด (สนค.)» "
+                    f"แล้วเลือกจังหวัด{prov}\n2) กด «ดาวน์โหลดข้อมูล» เป็น Excel\n"
+                    "3) กลับมากด «📥 นำเข้าราคาพาณิชย์จังหวัด» (หรือคัดลอกตารางจากเว็บ "
+                    "แล้วกด «📋 วางตาราง»)\nโปรแกรมใช้เดือนที่อยู่ในไฟล์ให้เอง")
             if auto:
                 self.panel.status.setText(str(e))
                 book = P.load_book(prov)
@@ -1084,14 +1089,22 @@ class BoqDialog(QDialog):
                 self, TITLE, "คลิปบอร์ดว่าง — เปิดหน้าราคาวัสดุก่อสร้างของจังหวัด "
                 "เลือกตาราง แล้วกด Ctrl+C ก่อน")
             return 0
-        return self._apply_items(P.parse_rows(P.rows_from_text(text)),
-                                 "ตารางที่วาง")
+        rows = P.rows_from_text(text)
+        month = P.detect_month(rows)
+        if month:
+            self.month.setText(month)
+        return self._apply_items(P.parse_rows(rows), "ตารางที่วาง")
 
     def open_price_site(self):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
         from core import wanic_province as P
-        QDesktopServices.openUrl(QUrl(P.PRICE_SITE))
+        prov = self.panel.data().get("province") or ""
+        if not os.environ.get("WANIC_OFFLINE"):
+            QDesktopServices.openUrl(QUrl(P.PRICE_SITE))
+        self.panel.status.setText(
+            f"เลือกจังหวัด{prov or '…'} บนเว็บ → «ดาวน์โหลดข้อมูล» เป็น Excel → "
+            "กลับมากด «📥 นำเข้าราคาพาณิชย์จังหวัด»")
 
     # ---- tabs ---------------------------------------------------------------
     def _bill_tab(self):
@@ -1122,11 +1135,13 @@ class BoqDialog(QDialog):
         note.setWordWrap(True)
         v.addWidget(note)
         h = QHBoxLayout()
-        self.prices = QTableWidget(0, 4)
+        self.prices = QTableWidget(0, 5)
         self.prices.setHorizontalHeaderLabels(["วัสดุ (รายการที่ใช้ในแบบนี้อยู่บน)", "หน่วย",
-                                               "ราคา/หน่วย (บาท)", "ที่มา"])
+                                               "ราคา/หน่วย (บาท)", "ที่มา",
+                                               "แหล่งราคาท้องตลาด / หมายเหตุ"])
         self.prices.setColumnWidth(0, 330)
         self.prices.setColumnWidth(3, 150)
+        self.prices.setColumnWidth(4, 220)
         self.labour = QTableWidget(0, 4)
         self.labour.setHorizontalHeaderLabels(["ข้อ ว480", "รายการ", "หน่วย",
                                                "ค่าแรง/หน่วย (บาท)"])
@@ -1135,7 +1150,8 @@ class BoqDialog(QDialog):
         h.addWidget(self.labour, 1)
         v.addLayout(h, 1)
         row = QHBoxLayout()
-        for text, fn in (("ราคาตัวอย่าง (ทดลองใช้)", self.sample_prices),
+        for text, fn in (("🔎 หาราคาท้องตลาด (แถวที่เลือก)", self.search_market),
+                         ("ราคาตัวอย่าง (ทดลองใช้)", self.sample_prices),
                          ("ล้างราคาวัสดุ", self.clear_prices),
                          ("ค่าแรงตาม ว480", self.reset_labour),
                          ("ส่งออกราคา CSV…", self.export_prices),
@@ -1155,6 +1171,7 @@ class BoqDialog(QDialog):
         d = self.panel.data()
         prices = Q.prices_of(d)
         src = d.get("price_src") or {}
+        where_note = d.get("price_note") or {}
         prov = d.get("province") or ""
         need = dict(getattr(self, "result", {}).get("need") or {})
         keys = list(need) + [k for k, _u in S.PRICE_KEYS if k not in need]
@@ -1166,9 +1183,12 @@ class BoqDialog(QDialog):
         for r, k in enumerate(keys):
             v = float(prices.get(k) or 0)
             self._shown[k] = v
-            where = src.get(k, "กรอกเอง") if v > 0 else "— ไม่มีราคา"
+            where = src.get(k, "ท้องตลาด") if v > 0 else (
+                f"ไม่พบราคาที่จ.{prov}ประกาศ" if prov else "— ไม่มีราคา")
             if where == "พาณิชย์":
                 where = f"พาณิชย์จ.{prov}" if prov else "ไฟล์พาณิชย์"
+            elif where == "กรอกเอง":
+                where = "ท้องตลาด"
             a, b, c = QTI(k), QTI(self._units.get(k, "")), QTI(where)
             for it in (a, b, c):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
@@ -1176,8 +1196,9 @@ class BoqDialog(QDialog):
             self.prices.setItem(r, 1, b)
             self.prices.setItem(r, 2, QTI(f"{v:g}"))
             self.prices.setItem(r, 3, c)
+            self.prices.setItem(r, 4, QTI(where_note.get(k, "")))
             if v <= 0 and k in need:
-                for col in range(4):
+                for col in range(5):
                     self.prices.item(r, col).setBackground(warn)
         labour = Q.labour_of(d)
         codes = list(S.LABOUR)
@@ -1262,7 +1283,7 @@ class BoqDialog(QDialog):
                     f"{ln['qty']:,.2f}", ln["unit"], f"{ln['mat']:,.2f}",
                     f"{ln['mat_total']:,.2f}", f"{ln['lab']:,.2f}",
                     f"{ln['lab_total']:,.2f}", f"{ln['total']:,.2f}",
-                    ln["ref"]])
+                    ln["ref"] + (f" · {ln['note']}" if ln["note"] else "")])
                 tip = f"{ln['basis']}\n{ln['ref']}" + (
                     f"\n{ln['note']}" if ln["note"] else "")
                 for c in range(len(self.COLS)):
@@ -1316,8 +1337,14 @@ class BoqDialog(QDialog):
         shown = getattr(self, "_shown", {})
         for k, v in prices.items():
             if abs(v - float(shown.get(k, 0) or 0)) > 1e-9:
-                src[k] = "กรอกเอง"
+                src[k] = "ท้องตลาด"
+        notes = {}
+        for r in range(self.prices.rowCount()):
+            it = self.prices.item(r, 4)
+            if it is not None and it.text().strip():
+                notes[self.prices.item(r, 0).text()] = it.text().strip()
         d["prices"], d["labour"], d["price_src"] = prices, labour, src
+        d["price_note"] = notes
         d["price_month"] = self.month.text().strip()
         self.panel._write(d)
         if d.get("province"):
@@ -1350,21 +1377,46 @@ class BoqDialog(QDialog):
         self._fill_prices()
         self.recompute()
 
+    def search_market(self):
+        """Open a web search for the selected material's shop price in the
+        province (the criteria: no announced price → the market price)."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from core import wanic_province as P
+        prov = self.panel.data().get("province") or ""
+        r = self.prices.currentRow()
+        if r < 0 or not prov:
+            QMessageBox.information(self, TITLE, "เลือกจังหวัด แล้วคลิกแถววัสดุที่ต้องการ"
+                                    "หาราคาท้องตลาดก่อน")
+            return ""
+        item = self.prices.item(r, 0).text()
+        url = P.market_search_url(item, prov)
+        if not os.environ.get("WANIC_OFFLINE"):
+            QDesktopServices.openUrl(QUrl(url))
+        self.panel.status.setText(
+            f"หาราคา «{item}» ที่จังหวัด{prov} — ได้ราคาแล้วกรอกในช่องราคา และใส่"
+            "ชื่อร้าน/แหล่งที่มาในช่อง «แหล่งราคาท้องตลาด» แล้วกดบันทึก")
+        return url
+
     def import_prices(self):
         from PySide6.QtWidgets import QFileDialog
         from core import wanic_province as P
+        start = os.path.join(os.path.expanduser("~"), "Downloads")
         path, _f = QFileDialog.getOpenFileName(
-            self, "นำเข้าราคาวัสดุ สำนักงานพาณิชย์จังหวัด", "",
+            self, "นำเข้าราคาวัสดุ สำนักงานพาณิชย์จังหวัด (ไฟล์ที่ดาวน์โหลดจากเว็บ)",
+            start if os.path.isdir(start) else "",
             "ตารางราคา (*.xlsx *.csv *.txt);;ทุกไฟล์ (*)")
         if not path:
             return 0
         try:
-            items = P.read_file(path)
+            items, month = P.read_table(path)
         except (ValueError, OSError, KeyError) as e:
             QMessageBox.warning(self, TITLE, f"อ่านไฟล์ไม่ได้: {e}")
             return 0
-        import os
-        return self._apply_items(items, os.path.basename(path))
+        if month:
+            self.month.setText(month)
+        return self._apply_items(items, os.path.basename(path) +
+                                 (f" (ราคาเดือน {month})" if month else ""))
 
     def export_prices(self):
         import csv
