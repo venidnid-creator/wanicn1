@@ -166,3 +166,65 @@ def test_the_pr_header_prints_the_price_reference():
             z.read(n).decode("utf-8") for n in z.namelist()
             if n.startswith("xl/worksheets/"))
     assert "สำนักงานพาณิชย์จังหวัดขอนแก่น" in strings
+
+
+def test_province_codes():
+    assert len(P.CODES) == 77
+    assert P.CODES["กรุงเทพมหานคร"] == "10" and P.CODES["ภูเก็ต"] == "83"
+    assert P.month_label(2026, 9) == "ก.ย. 2569"
+
+
+def test_recipe_rebar_names_match_too():
+    keys = ["RB6", "เหล็กเสริม RB Ø 6 มม.", "DB12", "เหล็กเสริม DB Ø 12 มม.",
+            "เหล็กรูปพรรณ (ทั่วไป)"]
+    got = P.match([("เหล็กเส้นกลม SR24 ขนาด 6 มม.", "กก.", 26.0),
+                   ("เหล็กข้ออ้อย SD40 ขนาด 12 มม.", "กก.", 23.8),
+                   ("ตะแกรงเหล็กสำเร็จรูป 4 มม.", "ตร.ม.", 30.0)], keys)
+    assert got["RB6"][0] == got["เหล็กเสริม RB Ø 6 มม."][0] == 26.0
+    assert got["DB12"][0] == got["เหล็กเสริม DB Ø 12 มม."][0] == 23.8
+    assert P._bar("ตะแกรงเหล็กสำเร็จรูป 4 มม.") is None
+
+
+API_JSON = [
+    {"com_code": "A1", "com_name_th": "ทรายหยาบ", "province_code": "83",
+     "province_name": "ภูเก็ต", "year": 2026, "month": 8, "units": "ลบ.ม.",
+     "price": 600.0},
+    {"com_code": "A1", "com_name_th": "ทรายหยาบ", "province_code": "83",
+     "province_name": "ภูเก็ต", "year": 2026, "month": 9, "units": "ลบ.ม.",
+     "price": 620.0},
+    {"com_code": "B2", "com_name_th": "เหล็กข้ออ้อย SD40 ขนาด 12 มม.",
+     "year": 2026, "month": 9, "units": "กก.", "price": 24.4},
+    {"com_code": "C3", "com_name_th": "ของไม่มีราคา", "year": 2026,
+     "month": 9, "units": "ชิ้น", "price": 0},
+]
+
+
+def test_latest_items_take_the_newest_month():
+    items, month = P.latest_items(API_JSON)
+    assert month == "ก.ย. 2569"
+    assert sorted(items) == [("ทรายหยาบ", "ลบ.ม.", 620.0),
+                             ("เหล็กข้ออ้อย SD40 ขนาด 12 มม.", "กก.", 24.4)]
+    assert P.latest_items({"data": API_JSON})[1] == "ก.ย. 2569"
+
+
+def test_fetch_online_with_a_fake_api(monkeypatch):
+    import datetime
+    import json
+    monkeypatch.delenv("WANIC_OFFLINE", raising=False)
+    seen = []
+
+    def opener(url, timeout):
+        seen.append(url)
+        return json.dumps(API_JSON).encode()
+    items, month, url = P.fetch_online("ภูเก็ต", datetime.date(2026, 10, 30),
+                                       opener)
+    assert month == "ก.ย. 2569" and len(items) == 2
+    assert "province_code=83" in seen[0] and "from_year=2026" in seen[0]
+
+    def broken(url, timeout):
+        raise OSError("no network")
+    with pytest.raises(P.FetchError, match="ไม่สำเร็จ"):
+        P.fetch_online("ภูเก็ต", opener=broken)
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
+    with pytest.raises(P.FetchError):
+        P.fetch_online("ภูเก็ต", opener=opener)

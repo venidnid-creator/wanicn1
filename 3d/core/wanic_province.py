@@ -54,6 +54,35 @@ assert len(PROVINCES) == len(set(PROVINCES)) == 77
 #: Where the user reads the official prices (opened in the browser).
 PRICE_SITE = "https://www.price.moc.go.th"
 
+#: MOC Open Data — average construction-material prices by province
+#: (ราคาวัสดุก่อสร้าง สนค.), https://data.moc.go.th/OpenData/CSIProductIndexes
+API = "https://dataapi.moc.go.th"
+
+#: Province codes (มาตรฐานรหัสจังหวัด) the MOC API uses.
+CODES = {
+    "กรุงเทพมหานคร": "10", "สมุทรปราการ": "11", "นนทบุรี": "12",
+    "ปทุมธานี": "13", "พระนครศรีอยุธยา": "14", "อ่างทอง": "15", "ลพบุรี": "16",
+    "สิงห์บุรี": "17", "ชัยนาท": "18", "สระบุรี": "19", "ชลบุรี": "20",
+    "ระยอง": "21", "จันทบุรี": "22", "ตราด": "23", "ฉะเชิงเทรา": "24",
+    "ปราจีนบุรี": "25", "นครนายก": "26", "สระแก้ว": "27", "นครราชสีมา": "30",
+    "บุรีรัมย์": "31", "สุรินทร์": "32", "ศรีสะเกษ": "33", "อุบลราชธานี": "34",
+    "ยโสธร": "35", "ชัยภูมิ": "36", "อำนาจเจริญ": "37", "บึงกาฬ": "38",
+    "หนองบัวลำภู": "39", "ขอนแก่น": "40", "อุดรธานี": "41", "เลย": "42",
+    "หนองคาย": "43", "มหาสารคาม": "44", "ร้อยเอ็ด": "45", "กาฬสินธุ์": "46",
+    "สกลนคร": "47", "นครพนม": "48", "มุกดาหาร": "49", "เชียงใหม่": "50",
+    "ลำพูน": "51", "ลำปาง": "52", "อุตรดิตถ์": "53", "แพร่": "54", "น่าน": "55",
+    "พะเยา": "56", "เชียงราย": "57", "แม่ฮ่องสอน": "58", "นครสวรรค์": "60",
+    "อุทัยธานี": "61", "กำแพงเพชร": "62", "ตาก": "63", "สุโขทัย": "64",
+    "พิษณุโลก": "65", "พิจิตร": "66", "เพชรบูรณ์": "67", "ราชบุรี": "70",
+    "กาญจนบุรี": "71", "สุพรรณบุรี": "72", "นครปฐม": "73", "สมุทรสาคร": "74",
+    "สมุทรสงคราม": "75", "เพชรบุรี": "76", "ประจวบคีรีขันธ์": "77",
+    "นครศรีธรรมราช": "80", "กระบี่": "81", "พังงา": "82", "ภูเก็ต": "83",
+    "สุราษฎร์ธานี": "84", "ระนอง": "85", "ชุมพร": "86", "สงขลา": "90",
+    "สตูล": "91", "ตรัง": "92", "พัทลุง": "93", "ปัตตานี": "94", "ยะลา": "95",
+    "นราธิวาส": "96",
+}
+assert sorted(CODES) == sorted(PROVINCES)
+
 _TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.",
               "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
 
@@ -63,6 +92,12 @@ def region_of(province: str) -> str:
         if province in ps:
             return r
     return ""
+
+
+def month_label(year: int, month: int) -> str:
+    """``(2026, 9)`` → ``ก.ย. 2569`` (a Buddhist-era year is kept)."""
+    y = year + 543 if year < 2400 else year
+    return f"{_TH_MONTHS[(month - 1) % 12]} {y}"
 
 
 def last_month(today=None) -> str:
@@ -253,13 +288,19 @@ def _norm(s: str) -> str:
 def _bar(name: str):
     """``RB6`` / ``DB16`` from a commerce-office rebar name, or None."""
     n = _norm(name)
-    if "เหล็ก" not in n or not re.search(r"เส้น|sr|sd|ข้ออ้อย|กลม", n):
+    m = re.fullmatch(r"(rb|db)\s*(\d{1,2})", n)
+    if m:
+        return f"{m.group(1).upper()}{int(m.group(2))}"
+    if "เหล็ก" not in n or not re.search(
+            r"เส้น|เสริม|sr|sd|rb|db|ข้ออ้อย|กลม", n):
         return None
-    m = re.search(r"(?:ø|ขนาด|dia\.?|⌀)?\s*(\d{1,2})\s*(?:มม|mm)", n)
+    if re.search(r"ตะแกรง|wire|รูปพรรณ|กล่อง|แผ่น|ฉาก|ท่อ", n):
+        return None
+    m = re.search(r"(\d{1,2})\s*(?:มม|mm)", n)
     if not m:
         return None
     d = int(m.group(1))
-    deformed = "ข้ออ้อย" in n or "sd" in n
+    deformed = bool(re.search(r"ข้ออ้อย|sd|\bdb", n))
     return f"{'DB' if deformed else 'RB'}{d}"
 
 
@@ -288,12 +329,19 @@ def match(items, keys, cutoff: float = 0.62) -> dict:
     Rebar by size and grade, a few fixed words, then the closest name."""
     keys = list(dict.fromkeys(keys))
     nk = {k: _norm(k) for k in keys}
+    bars: dict = {}
+    for k in keys:
+        b = _bar(k)
+        if b:
+            bars.setdefault(b, []).append(k)
     out: dict = {}
     for name, _unit, price in items:
         key = None
         bar = _bar(name)
-        if bar and bar in nk:
-            key = bar
+        if bar and bar in bars:
+            for k in bars[bar]:                  # RB6 and "เหล็กเสริม RB Ø 6 มม."
+                out.setdefault(k, (float(price), name))
+            continue
         if key is None:
             n = _norm(name)
             for pat, k in _RULES:
@@ -322,3 +370,96 @@ def coverage(prices: dict, need) -> tuple[int, list[str]]:
     need = list(need)
     missing = [k for k in need if not (_num(prices.get(k)) or 0) > 0]
     return len(need) - len(missing), missing
+
+
+# ---------------------------------------------------------------------------
+# Online: MOC Open Data API (run on the user's computer)
+# ---------------------------------------------------------------------------
+
+class FetchError(Exception):
+    pass
+
+
+def _records(payload):
+    if isinstance(payload, dict):
+        for k in ("data", "result", "results", "items", "records"):
+            if isinstance(payload.get(k), list):
+                return payload[k]
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _field(rec, *names):
+    for n in names:
+        if n in rec and rec[n] not in (None, ""):
+            return rec[n]
+    low = {str(k).lower(): v for k, v in rec.items()}
+    for n in names:
+        if low.get(n.lower()) not in (None, ""):
+            return low[n.lower()]
+    return None
+
+
+def latest_items(records) -> tuple[list, str]:
+    """``([(name, unit, price)], "ก.ย. 2569")`` — each item's newest price."""
+    best: dict = {}
+    for rec in _records(records):
+        if not isinstance(rec, dict):
+            continue
+        name = _field(rec, "com_name_th", "commodity_name_th", "com_name",
+                      "product_name", "name_th", "name")
+        price = _num(_field(rec, "price", "price_value", "avg_price", "value"))
+        if not name or price is None or price <= 0:
+            continue
+        y = int(_num(_field(rec, "year", "yr")) or 0)
+        m = int(_num(_field(rec, "month", "mn")) or 0)
+        unit = str(_field(rec, "units", "unit", "unit_th") or "")
+        code = str(_field(rec, "com_code", "code") or name)
+        if code not in best or (y, m) > best[code][0]:
+            best[code] = ((y, m), (re.sub(r"\s+", " ", str(name)).strip(),
+                                   unit, price))
+    if not best:
+        return [], ""
+    ym = max(v[0] for v in best.values())
+    items = [v[1] for v in best.values()]
+    return items, (month_label(*ym) if ym[0] else "")
+
+
+def fetch_online(province: str, today=None, opener=None,
+                 timeout: float = 25.0) -> tuple[list, str, str]:
+    """Download the province's latest prices from the MOC Open Data API.
+
+    Returns ``(items, month, url)``; raises :class:`FetchError` with a Thai
+    message the panel shows as is.  ``opener(url, timeout)`` → bytes is for
+    tests; ``WANIC_OFFLINE`` turns the network off."""
+    if os.environ.get("WANIC_OFFLINE"):
+        raise FetchError("ปิดการเชื่อมต่อออนไลน์ไว้ (WANIC_OFFLINE)")
+    code = CODES.get(province)
+    if not code:
+        raise FetchError(f"ไม่รู้จักรหัสจังหวัด «{province}»")
+    if opener is None:
+        def opener(url, timeout):
+            import urllib.request
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "WANICNSURVEY", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+    d = today or datetime.date.today()
+    years = [d.year, d.year - 1] if d.month <= 2 else [d.year]
+    errors = []
+    for path in ("csi-product-indexes", "csi-indexes"):
+        records = []
+        for y in years:
+            url = (f"{API}/{path}?province_code={code}"
+                   f"&com_code=0000000000000000&from_year={y}&to_year={y}")
+            try:
+                raw = opener(url, timeout)
+                records += _records(json.loads(raw.decode("utf-8-sig")))
+            except Exception as e:                      # noqa: BLE001
+                errors.append(f"{path}: {e}")
+                break
+        items, month = latest_items(records)
+        if items:
+            return items, month, url
+    detail = "; ".join(errors) or "ไม่มีข้อมูลราคาของจังหวัดนี้ในปีนี้"
+    raise FetchError("ดึงราคาจากกระทรวงพาณิชย์ไม่สำเร็จ — " + detail)

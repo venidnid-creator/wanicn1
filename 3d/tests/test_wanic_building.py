@@ -332,6 +332,7 @@ def test_boq_prices_by_province(monkeypatch, tmp_path):
     from plugins.wanic_building import BoqDialog, BuildingPanel
 
     monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path / "books"))
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
     msgs = []
     for name in ("information", "warning"):
         monkeypatch.setattr(QMessageBox, name,
@@ -395,3 +396,55 @@ def test_boq_prices_by_province(monkeypatch, tmp_path):
     assert "สำนักงานพาณิชย์จังหวัดขอนแก่น" in st["price_ref"]
     assert "ขอนแก่น" in msgs[-1]
     assert not wanic_ui.LAST_ERROR
+
+
+def test_choosing_a_province_fills_the_bill_at_once(monkeypatch, tmp_path):
+    """Pick ภูเก็ต: its latest MOC prices arrive and every line reads
+    ค่าวัสดุ = ปริมาณ × ค่าวัสดุ/หน่วย, ค่าแรง = ปริมาณ × ค่าแรง/หน่วย,
+    รวม = ค่าวัสดุ + ค่าแรง."""
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    QApplication.instance() or QApplication([])
+    from core import wanic_province as P
+    from plugins.wanic_building import BoqDialog, BuildingPanel
+
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path))
+    for name in ("information", "warning"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: 0))
+    calls = []
+
+    def fake(province, *a, **k):
+        calls.append(province)
+        return ([("ทรายหยาบ", "ลบ.ม.", 620.0),
+                 ("เหล็กข้ออ้อย SD40 ขนาด 12 มม.", "กก.", 24.4),
+                 ("เหล็กเส้นกลม SR24 ขนาด 6 มม.", "กก.", 27.1),
+                 ("คอนกรีตผสมเสร็จ 240 ksc. (ลูกบาศก์)", "ลบ.ม.", 2450.0)],
+                "ก.ย. 2569", "https://dataapi.moc.go.th/…")
+    monkeypatch.setattr(P, "fetch_online", fake)
+    panel = BuildingPanel(_App(Scene()))
+    panel.place_room(1.5, 1.5)
+    panel.place_room(4.5, 1.5)
+    dlg = BoqDialog(panel)
+    dlg.province.setCurrentIndex(dlg.province.findData("ภูเก็ต"))
+    assert calls == ["ภูเก็ต"]
+    assert dlg.month.text() == "ก.ย. 2569"
+    lines = dlg.result["lines"]
+    db12 = [ln for ln in lines if ln["mat_key"] == "DB12"][0]
+    assert db12["mat"] == 24.4
+    for ln in lines:
+        assert abs(ln["mat_total"] - round(ln["qty"] * ln["mat"], 2)) < 0.011
+        assert abs(ln["lab_total"] - round(ln["qty"] * ln["lab"], 2)) < 0.011
+        assert abs(ln["total"] - (ln["mat_total"] + ln["lab_total"])) < 0.011
+    # The tree shows it: the DB12 row's ค่าวัสดุ/หน่วย column.
+    found = []
+    for i in range(dlg.tree.topLevelItemCount()):
+        top = dlg.tree.topLevelItem(i)
+        for j in range(top.childCount()):
+            if "DB12" in top.child(j).text(1):
+                found.append(top.child(j).text(6))
+    assert found == ["24.40"]
+    # Saved for next time: choosing it again does not fetch again.
+    dlg.province.setCurrentIndex(dlg.province.findData("เชียงใหม่"))
+    calls.clear()
+    monkeypatch.setattr(P, "last_month", lambda *a: "ก.ย. 2569")
+    dlg.province.setCurrentIndex(dlg.province.findData("ภูเก็ต"))
+    assert calls == [] and panel.data()["prices"]["DB12"] == 24.4

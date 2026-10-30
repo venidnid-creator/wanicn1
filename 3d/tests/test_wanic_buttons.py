@@ -59,6 +59,7 @@ def ui(monkeypatch, tmp_path):
     QApplication.instance() or QApplication([])
     saved, msgs = [], []
     monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path / "books"))
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
     prices = tmp_path / "prices.csv"
     prices.write_text("วัสดุ,หน่วย,ราคา\nทรายหยาบ,ลบ.ม.,480\n",
                       encoding="utf-8-sig")

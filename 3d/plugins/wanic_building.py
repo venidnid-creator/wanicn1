@@ -887,6 +887,9 @@ class BoqDialog(QDialog):
         self.cover.setWordWrap(True)
         g.addWidget(self.cover, 0, 4, 1, 3)
         for col, (text, tip, fn) in enumerate((
+                ("🔄 ดึงราคาจากกระทรวงพาณิชย์ (ออนไลน์)",
+                 "ดึงราคาวัสดุก่อสร้างเฉลี่ยรายจังหวัดเดือนล่าสุด จาก MOC Open Data "
+                 "(dataapi.moc.go.th) — ต้องต่ออินเทอร์เน็ต", self.fetch_prices),
                 ("📥 นำเข้าราคาพาณิชย์จังหวัด (Excel/CSV)…",
                  "ไฟล์ตารางราคาวัสดุก่อสร้างของสำนักงานพาณิชย์จังหวัด (.xlsx/.csv) — "
                  "จับคู่ชื่อวัสดุกับรายการในใบ BOQ ให้อัตโนมัติ", self.import_prices),
@@ -897,7 +900,7 @@ class BoqDialog(QDialog):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
-            g.addWidget(b, 1, col * 2, 1, 2 if col < 2 else 3)
+            g.addWidget(b, 1, [0, 2, 4, 6][col], 1, 2 if col < 3 else 1)
         lay.addWidget(box)
 
     def _need_keys(self):
@@ -954,8 +957,42 @@ class BoqDialog(QDialog):
         self.recompute()
         self._fill_prices()
         self.panel.status.setText(msg)
+        # No prices yet, or older than last month: fetch them now.
+        if prov and (not book or book.get("month") != P.last_month()):
+            self.fetch_prices(auto=True)
 
-    def _apply_items(self, items, origin):
+    def fetch_prices(self, auto=False):
+        """Latest average prices of the province from MOC Open Data."""
+        from PySide6.QtWidgets import QApplication
+        from core import wanic_province as P
+        prov = self.panel.data().get("province") or ""
+        if not prov:
+            QMessageBox.information(self, TITLE, "เลือกจังหวัดก่อน")
+            return 0
+        self.cover.setText(f"กำลังดึงราคาวัสดุจังหวัด{prov} จากกระทรวงพาณิชย์…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            items, month, _url = P.fetch_online(prov)
+        except P.FetchError as e:
+            QApplication.restoreOverrideCursor()
+            self._show_cover()
+            text = (f"{e}\n\nใช้ทางอื่นได้: นำเข้าไฟล์ราคาพาณิชย์จังหวัด (Excel/CSV) "
+                    "หรือคัดลอกตารางจากเว็บมาวาง")
+            if auto:
+                self.panel.status.setText(str(e))
+                book = P.load_book(prov)
+                if book:
+                    return 0                     # the saved book stays in use
+            QMessageBox.warning(self, TITLE, text)
+            return 0
+        QApplication.restoreOverrideCursor()
+        if month:
+            self.month.setText(month)
+        return self._apply_items(
+            items, f"กระทรวงพาณิชย์ (จังหวัด{prov} {month})", quiet=auto)
+
+    def _apply_items(self, items, origin, quiet=False):
         from core import wanic_province as P
         from core import wanic_quantities as Q
         if not items:
@@ -992,7 +1029,10 @@ class BoqDialog(QDialog):
         if not prov:
             lines.append("ยังไม่ได้เลือกจังหวัด — ราคานี้ใช้กับงานนี้เท่านั้น "
                          "(เลือกจังหวัดก่อนเพื่อเก็บไว้ใช้ครั้งต่อไป)")
-        QMessageBox.information(self, TITLE, "\n".join(lines))
+        if quiet:
+            self.panel.status.setText(" · ".join(lines[:2]))
+        else:
+            QMessageBox.information(self, TITLE, "\n".join(lines))
         return len(got)
 
     def paste_prices(self):
