@@ -79,6 +79,7 @@ def new_rate(**kw) -> dict:
 
 DEFAULT_SETTINGS = {
     "project": "", "owner": "", "location": "", "drawing_no": "",
+    "price_ref": "",
     "date": "", "area_m2": 0.0, "factor_f": 1.0, "vat": 7.0,
     "method": "gov", "adv_pay": 0.0, "retention": 0.0, "interest": 6.0,
     "chair": "", "member1": "", "member2": "",
@@ -757,6 +758,8 @@ def _hdr(sh, code, title, st, ncols, attach=None):
              f"หน่วยงานเจ้าของโครงการงานก่อสร้าง  {st.get('owner') or _DOTS}"]
     if attach:
         lines.append(attach)
+    if st.get("price_ref"):
+        lines.append(st["price_ref"])
     lines.append(f"คำนวณราคากลาง เมื่อวันที่  {st.get('date') or thai_date()}")
     for text in lines:
         r = sh.add([text] + [""] * (ncols - 1), style=0)

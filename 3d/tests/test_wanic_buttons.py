@@ -58,6 +58,7 @@ def ui(monkeypatch, tmp_path):
         QMessageBox
     QApplication.instance() or QApplication([])
     saved, msgs = [], []
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path / "books"))
     prices = tmp_path / "prices.csv"
     prices.write_text("วัสดุ,หน่วย,ราคา\nทรายหยาบ,ลบ.ม.,480\n",
                       encoding="utf-8-sig")
@@ -132,7 +133,9 @@ def test_every_button_of_the_building_panel_and_boq(ui):
     done = _click_all(panel, skip=("ลบชั้น", "ล้างห้อง"))
     assert len(done) >= 12, done
     dlg = BoqDialog(panel)
-    done = _click_all(dlg)
+    dlg.province.setCurrentIndex(dlg.province.findData("ขอนแก่น"))
+    done = _click_all(dlg, skip=("เว็บ",))
+    assert any("พาณิชย์จังหวัด" in t for t in done)
     assert any("Excel" in t for t in done)
     xlsx = [p for p in ui["saved"] if p.endswith(".xlsx")]
     assert xlsx and zipfile.is_zipfile(xlsx[-1])
@@ -140,6 +143,7 @@ def test_every_button_of_the_building_panel_and_boq(ui):
     assert csvs
     tk = (scene.plugin_data or {}).get("wanic_takeoff")
     assert tk and any(str(r["id"]).startswith("std") for r in tk["rates"])
+    assert tk["settings"]["location"] == "จังหวัดขอนแก่น"
     # The destructive ones last.
     _click_all(panel, skip=("สร้าง", "BOQ", "รายการราคา"))
 

@@ -94,7 +94,7 @@ jobs:
         run: |
           pip install pytest
           set +e
-          python -m pytest -q -rfE --tb=line -p no:cacheprovider tests/test_wanic_takeoff.py tests/test_wanic_profiles.py tests/test_wanic_building.py tests/test_wanic_quantities.py tests/test_wanic_buttons.py tests/test_bim.py > "$RUNNER_TEMP/pt.txt" 2>&1
+          python -m pytest -q -rfE --tb=line -p no:cacheprovider tests/test_wanic_takeoff.py tests/test_wanic_profiles.py tests/test_wanic_building.py tests/test_wanic_quantities.py tests/test_wanic_buttons.py tests/test_wanic_province.py tests/test_bim.py > "$RUNNER_TEMP/pt.txt" 2>&1
           code=$?
           cat "$RUNNER_TEMP/pt.txt"
           if [ $code -ne 0 ]; then

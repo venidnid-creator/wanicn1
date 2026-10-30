@@ -321,3 +321,77 @@ def test_panel_door_types_fixtures_fascia(monkeypatch):
     assert len(colors) >= 2                           # frame and glass
     assert any(f.attrs.get("opacity") for f in win.mesh.faces)
     panel.canvas.grab()
+
+
+def test_boq_prices_by_province(monkeypatch, tmp_path):
+    """Pick a province, import its commerce-office table, see the prices in
+    the bill, switch away and back, then send: ปร. names the province."""
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    QApplication.instance() or QApplication([])
+    from core import wanic_province as P
+    from plugins.wanic_building import BoqDialog, BuildingPanel
+
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path / "books"))
+    msgs = []
+    for name in ("information", "warning"):
+        monkeypatch.setattr(QMessageBox, name,
+                            staticmethod(lambda *a, **k: msgs.append(a[2])))
+
+    def critical(*a, **k):
+        raise AssertionError(a[2] if len(a) > 2 else a)
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(critical))
+    from core import wanic_ui
+    wanic_ui.LAST_ERROR.clear()
+    table = tmp_path / "ขอนแก่น.csv"
+    table.write_text("รหัส,รายการ,หน่วย,ราคาเดือนก่อน,ราคาเดือนนี้\n"
+                     "01,ทรายหยาบ,ลบ.ม.,520,530\n"
+                     "05,เหล็กเส้นกลม SR24 ขนาด 6 มม.,กก.,26.5,26\n"
+                     "07,เหล็กข้ออ้อย SD40 ขนาด 12 มม.,กก.,24,23.8\n",
+                     encoding="utf-8-sig")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (str(table), "")))
+    scene = Scene()
+    app = _App(scene)
+    panel = BuildingPanel(app)
+    panel.place_room(1.5, 1.5)
+    panel.place_room(4.5, 1.5)
+    dlg = BoqDialog(panel)
+    assert "ยังไม่ได้เลือกจังหวัด" in dlg.cover.text()
+    assert dlg.province.count() >= 78
+    dlg.province.setCurrentIndex(dlg.province.findData("ขอนแก่น"))
+    assert panel.data()["province"] == "ขอนแก่น"
+    assert "มีราคา 0/" in dlg.cover.text()
+    assert dlg.import_prices() == 3
+    d = panel.data()
+    assert d["prices"]["ทรายหยาบ"] == 530 and d["prices"]["DB12"] == 23.8
+    assert d["price_src"]["RB6"] == "พาณิชย์"
+    assert P.load_book("ขอนแก่น")["prices"]["ทรายหยาบ"] == 530
+    rows = {dlg.prices.item(r, 0).text(): dlg.prices.item(r, 3).text()
+            for r in range(dlg.prices.rowCount())}
+    assert rows["ทรายหยาบ"] == "พาณิชย์จ.ขอนแก่น"
+    db12 = [ln for ln in dlg.result["lines"] if ln["mat_key"] == "DB12"]
+    assert db12 and db12[0]["mat"] == 23.8
+    assert "สำนักงานพาณิชย์จังหวัดขอนแก่น" in dlg.total.text()
+    # A typed price is kept as the user's own, in the book too.
+    r = [i for i in range(dlg.prices.rowCount())
+         if dlg.prices.item(i, 0).text() == "DB16"][0]
+    dlg.prices.item(r, 2).setText("23.5")
+    dlg.save_prices()
+    assert P.load_book("ขอนแก่น")["src"]["DB16"] == "กรอกเอง"
+    # Another province has its own (empty) prices; coming back restores.
+    dlg.province.setCurrentIndex(dlg.province.findData("เชียงใหม่"))
+    assert not any(panel.data()["prices"].values())
+    dlg.province.setCurrentIndex(dlg.province.findData("ขอนแก่น"))
+    assert panel.data()["prices"]["DB16"] == 23.5
+    assert "✓" in dlg.province.itemText(dlg.province.findData("ขอนแก่น"))
+    # Rows copied from the web page.
+    QApplication.clipboard().setText("ทรายละเอียด\tลบ.ม.\t480\t490")
+    assert dlg.paste_prices() == 1
+    assert panel.data()["prices"]["ทรายละเอียด"] == 490
+    # Sending names the province in the takeoff's ปร. header.
+    dlg.send()
+    st = scene_data(scene)["wanic_takeoff"]["settings"]
+    assert st["location"] == "จังหวัดขอนแก่น"
+    assert "สำนักงานพาณิชย์จังหวัดขอนแก่น" in st["price_ref"]
+    assert "ขอนแก่น" in msgs[-1]
+    assert not wanic_ui.LAST_ERROR

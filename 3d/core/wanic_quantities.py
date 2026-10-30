@@ -184,7 +184,12 @@ def compute(data) -> dict:
 
     if not n:
         return {"lines": [], "groups": [], "totals": _totals([]),
-                "rebar": {}, "need": {}, "notes": ["ยังไม่มีห้องในแปลน"]}
+                "rebar": {}, "need": {}, "notes": ["ยังไม่มีห้องในแปลน"],
+                "province": str((data or {}).get("province") or ""),
+                "price_month": str((data or {}).get("price_month") or ""),
+                "price_ref": price_ref(str((data or {}).get("province") or ""),
+                                       str((data or {}).get("price_month")
+                                           or ""))}
 
     form_price = S.formwork_unit_price(prices)
     multi = n > 1
@@ -758,6 +763,11 @@ def compute(data) -> dict:
             ln["lab"] = round(labour.get(tier, 0.0), 2)
             ln["lab_total"] = round(ln["qty"] * ln["lab"], 2)
             ln["total"] = round(ln["mat_total"] + ln["lab_total"], 2)
+    province = str((data or {}).get("province") or "")
+    month = str((data or {}).get("price_month") or "")
+    if not province:
+        notes.append("ยังไม่ได้เลือกจังหวัด — เลือกจังหวัดด้านบนเพื่อใช้ราคาวัสดุ"
+                     "ของสำนักงานพาณิชย์จังหวัดนั้น")
     if not any(prices.values()):
         notes.append("ยังไม่มีราคาวัสดุ — กรอกราคาจากสำนักงานพาณิชย์จังหวัด "
                      "(หรือกด «ราคาตัวอย่าง» เพื่อทดลอง)")
@@ -777,7 +787,18 @@ def compute(data) -> dict:
             need.setdefault(k, u)
     return {"lines": bill.lines, "groups": groups, "need": need,
             "totals": _totals(bill.lines), "rebar": rebar, "notes": notes,
+            "province": province, "price_month": month,
+            "price_ref": price_ref(province, month),
             "footer": footer("WANIC ออกแบบอาคาร")}
+
+
+def price_ref(province: str, month: str = "") -> str:
+    """``ราคาวัสดุ: สำนักงานพาณิชย์จังหวัด… ประจำเดือน …`` (or "")."""
+    if not province:
+        return ""
+    office = ("สำนักงานพาณิชย์จังหวัด" + province if province != "กรุงเทพมหานคร"
+              else "กระทรวงพาณิชย์ (กรุงเทพมหานคร)")
+    return f"ราคาวัสดุ: {office}" + (f" ประจำเดือน {month}" if month else "")
 
 
 def ROLE_beam(floor, n) -> str:  # noqa: N802 — reads as a lookup
