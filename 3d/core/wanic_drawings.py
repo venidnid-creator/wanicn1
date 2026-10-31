@@ -311,13 +311,16 @@ def table(sh, x, y, cols, rows, h=2.3, row_h=6.0, head_h=7.0):
     below it."""
     W = sum(c[1] for c in cols)
     y0 = y
-    sh.rect(x, y - head_h, x + W, y, "text", 0.35)
-    cx = x
-    for head, w, _al in cols:
-        sh.text((cx + w / 2, y - head_h + 2.3), head, h, "center", "text",
-                True)
-        cx += w
-    y -= head_h
+    if head_h > 0:                       # 0: rows only (a total under a table)
+        sh.rect(x, y - head_h, x + W, y, "text", 0.35)
+        cx = x
+        for head, w, _al in cols:
+            sh.text((cx + w / 2, y - head_h + 2.3), head, h, "center", "text",
+                    True)
+            cx += w
+        y -= head_h
+    else:
+        sh.line((x, y), (x + W, y), "text", 0.35)
     for row in rows:
         sh.line((x, y - row_h), (x + W, y - row_h), "text", 0.18)
         cx = x

@@ -71,7 +71,7 @@ def test_plan_and_profile_sheet_content():
     pp = next(s for s in S if s.code == "PP-01")
     t = " ".join(pp.texts())
     for word in ("แปลน", "รูปตัดตามยาว", "ระดับดินเดิม", "ระดับออกแบบ", "ความสูงขุด",
-                 "ความสูงถม", "แนวราบ", "แนวดิ่ง", "ผังสังเขป", "0+020", "N="):
+                 "ความสูงถม", "แนวราบ", "แนวดิ่ง", "ผังสังเขป", "0+020", "N 1,"):
         assert word in t, word
     assert re.search(r"[+-]\d+\.\d\d%", t)                       # grades
     assert "BM-1" in t                                           # benchmark in the plan
@@ -97,7 +97,44 @@ def test_tables_sections_and_volumes():
     vt = [s for c, s in S.items() if c.startswith("VT-")]
     allt = " ".join(x for s in vt for x in s.texts())
     assert f"{an.cut_total:,.2f}" in allt and f"{an.fill_total:,.2f}" in allt
-    assert "ปริมาณงานโครงสร้างทาง" in allt
+    qs = S["QS-01"]
+    assert list(S)[-1] == "QS-01"                                  # the last sheet
+    q = " ".join(qs.texts())
+    for word in ("สรุปปริมาณงานทั้งหมด", "งานดินขุด", "งานดินถมบดอัดแน่น", "งานโครงสร้างทาง",
+                 "งานถางป่าขุดตอ", "กม.", "ตร.ม.", "ลบ.ม.", "(นายเวนิช ธัมมะวงษ์)",
+                 f"{an.cut_total:,.2f}", f"{an.fill_total:,.2f}"):
+        assert word in q, word
+    for name, _t, _w, vol, _a in an.layer_quantities()[1:]:
+        assert name in q and f"{vol:,.2f}" in q
+    assert RS.clearing_area(an) > an.settings.finished_width * an.length * 0.9
+
+
+def test_tables_never_overlap():
+    """Each text sits in its own row: no two texts share a baseline and
+    overlap left to right (the VT total once landed on the table)."""
+    an, shots = _analysis(1400)
+    for sh in RS.build_road_set(an, {}, shots, ("VT", "QS")):
+        boxes = [(it[1][0], it[1][1], it[2], it[3], it[4]) for it in sh.items
+                 if it[0] == "text" and not it[7]]
+        for i, (x, y, t, h, al) in enumerate(boxes):
+            w = len(t) * h * 0.5
+            a0 = x - (w / 2 if al == "center" else w if al == "right" else 0)
+            for x2, y2, t2, h2, al2 in boxes[i + 1:]:
+                if abs(y - y2) < min(h, h2) * 0.8:
+                    w2 = len(t2) * h2 * 0.5
+                    b0 = x2 - (w2 / 2 if al2 == "center" else w2 if al2 == "right" else 0)
+                    assert a0 + w <= b0 + 0.3 or b0 + w2 <= a0 + 0.3, (sh.code, t, t2)
+
+
+def test_every_plan_is_on_the_grid_with_its_directions():
+    an, shots = _analysis()
+    S = RS.build_road_set(an, {}, shots, ("G", "PP"))
+    for sh in S:
+        t = sh.texts()
+        if sh.code == "G-01" or sh.group == "PP":
+            assert any(x.startswith("E 7") for x in t) and any(x.startswith("N 1,4") for x in t), \
+                sh.code
+            assert {"N", "E", "S", "W"} <= set(t), sh.code
 
 
 def test_dxf_of_the_sheets():

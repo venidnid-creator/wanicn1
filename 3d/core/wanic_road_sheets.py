@@ -150,6 +150,75 @@ def bench_marks(shots):
             BM_CODES.match(s.name or "")]
 
 
+GRID_STEPS = (10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000)
+
+
+def grid_step(ground_span: float, lines: int = 5) -> float:
+    """A round grid interval giving about ``lines`` lines over the span."""
+    want = ground_span / max(1, lines)
+    return min(GRID_STEPS, key=lambda g: abs(math.log(g / want)))
+
+
+def compass(sh, c, r=5.0, north=math.pi / 2, plate=False):
+    """A north arrow with the four directions (เหนือ N, E, S, W) -- turned
+    so the arrow points to grid north at angle ``north`` (radians CCW from
+    the paper's x axis)."""
+    if plate:
+        q = r + 4.2
+        sh.fill([(c[0] - q, c[1] - q), (c[0] + q, c[1] - q), (c[0] + q, c[1] + q),
+                 (c[0] - q, c[1] + q)], "halo", 0.1, (255, 255, 255))
+    sh.circle(c, r, "text", 0.25)
+
+    def at(a, d):
+        return (c[0] + d * math.cos(a), c[1] + d * math.sin(a))
+    for k in range(4):
+        a = north + k * math.pi / 2
+        sh.line(at(a, r * 0.75), at(a, r * 1.12), "text", 0.25)
+    tip, back = at(north, r), at(north + math.pi, r * 0.3)
+    sh.fill([tip, at(north + 2.6, r * 0.42), back], "text", 0.0, (0, 0, 0))
+    sh.poly([tip, at(north - 2.6, r * 0.42), back], "text", 0.25)
+    for k, word in enumerate(("N", "W", "S", "E")):
+        p = at(north + k * math.pi / 2, r + 2.4)
+        sh.text((p[0], p[1] - 1.0), word, 2.4 if word == "N" else 1.9, "center", "text",
+                word == "N")
+
+
+def coordinate_grid(sh, box, to_paper, centre, half, step=None, layer="hidden",
+                    plate=False, h=1.6, outside=False):
+    """UTM grid lines (constant E and constant N) over a map ``box``, with
+    E and N written where they leave the box (bottom and left edges):
+    ``to_paper(e, n)`` places a point; ``centre`` and ``half`` (m) bound
+    the ground the box can show; ``outside``: E written under the box."""
+    ce, cn = centre
+    step = step or grid_step(2 * half, 5)
+    x0, y0, x1, y1 = box
+
+    def label(p, text, align):
+        if plate:
+            _label(sh, p, text, h, align)
+        else:
+            sh.text(p, text, h, align, "dim")
+    e = math.ceil((ce - half) / step) * step
+    while e <= ce + half:
+        c = clip(to_paper(e, cn - half), to_paper(e, cn + half), box)
+        if c:
+            sh.line(c[0], c[1], layer, 0.13, True)
+            low = c[0] if c[0][1] < c[1][1] else c[1]
+            if abs(low[1] - y0) < 0.5 and x0 + 8 < low[0] < x1 - 8:
+                label((low[0], y0 - h - 1.0 if outside else y0 + 1.6), f"E {e:,.0f}", "center")
+        e += step
+    n = math.ceil((cn - half) / step) * step
+    while n <= cn + half:
+        c = clip(to_paper(ce - half, n), to_paper(ce + half, n), box)
+        if c:
+            sh.line(c[0], c[1], layer, 0.13, True)
+            west = c[0] if c[0][0] < c[1][0] else c[1]
+            if abs(west[0] - x0) < 0.5 and y0 + 6 < west[1] < y1 - 4:
+                label((x0 + 1.4, west[1] + 0.9), f"N {n:,.0f}", "left")
+        n += step
+    return step
+
+
 # ---------------------------------------------------------------------------
 # G — general sheet: key plan, design data, curve tables, control points
 # ---------------------------------------------------------------------------
@@ -167,6 +236,10 @@ def key_plan(sh, an, box, chunks=None, mark=None, bms=(), labels=True):
     def v(x, y):
         return (ox + (x - min(xs)) * k, oy + (y - min(ys)) * k)
     sh.rect(bx0, by0, bx1, by1, "text", 0.25)
+    if labels:
+        span = max((bx1 - bx0) / k, (by1 - by0) / k)
+        coordinate_grid(sh, box, v, ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2),
+                        span * 0.75, grid_step(span, 6), outside=True)
     sh.poly([v(*p) for p in an.axis], "roof", 0.5, closed=False)
     for i, (s0, s1) in enumerate(chunks or [], 1):
         a = A.point_at(an.axis, s0)
@@ -191,7 +264,10 @@ def key_plan(sh, an, box, chunks=None, mark=None, bms=(), labels=True):
     e = A.point_at(an.axis, an.length)
     q = v(e.x, e.y)
     sh.text((q[0] + 1.5, q[1] - 3), f"สิ้นสุด {sta(an.length)}", 1.8, "left")
-    D.north(sh, (bx1 - 7, by1 - 9), 4)
+    if labels:
+        compass(sh, (bx1 - 10, by1 - 11), 4.5, plate=True)
+    else:
+        D.north(sh, (bx1 - 7, by1 - 9), 4)
 
 
 def curve_rows(an):
@@ -269,7 +345,7 @@ def g_sheets(an, info, chunks, shots):
     out.append(sh)
     bms = bench_marks(shots)
     key_plan(sh, an, (X0, Y1 - 120, X0 + 150, Y1), chunks, None, bms)
-    sh.text((X0 + 75, Y1 - 125), "ผังสังเขป (แผนที่แสดงตำแหน่งแผ่น PP)", 2.6,
+    sh.text((X0 + 75, Y1 - 127.5), "ผังสังเขป (แผนที่แสดงตำแหน่งแผ่น PP)", 2.6,
             "center", "text", True)
     y = Y1 - 3
     sh.text((X0 + 160, y), "ข้อมูลการออกแบบ", 3.4, "left", "text", True)
@@ -396,6 +472,12 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         major = abs(lvl / (interval * 5) - round(lvl / (interval * 5))) < 1e-6
         seg(p, q, "grid", 0.25 if major else 0.1)
     # grid ticks every 50/100 m with coordinate labels on the box edge
+    # (none under the caption in the lower left corner)
+    cap = f"แปลน  STA {sta(s0, 0)} – {sta(s1, 0)}   มาตราส่วน 1:{scale}"
+    cap_x = bx[0] + 6 + len(cap) * 2.8 * 0.55
+
+    def free(p):
+        return not (p[0] < cap_x + 14 and p[1] < bx[1] + 8)
     gstep = 50.0 if scale <= 1000 else 100.0
     lo = [min(pp[0] for pp in axis_part) - 200, min(pp[1] for pp in axis_part) - 200]
     hi = [max(pp[0] for pp in axis_part) + 200, max(pp[1] for pp in axis_part) + 200]
@@ -405,7 +487,8 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         if c:
             sh.line(c[0], c[1], "hidden", 0.1, True)
             end = c[1] if c[1][1] > c[0][1] else c[0]
-            sh.text((end[0] + 0.8, end[1] - 3), f"E={e:,.0f}", 1.6, "left", "hidden")
+            if free(end):
+                sh.text((end[0] + 0.8, end[1] - 3), f"E {e:,.0f}", 1.6, "left", "dim")
         e += gstep
     n = math.ceil(lo[1] / gstep) * gstep
     while n <= hi[1]:
@@ -413,7 +496,8 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         if c:
             sh.line(c[0], c[1], "hidden", 0.1, True)
             end = c[0] if c[0][0] < c[1][0] else c[1]
-            sh.text((end[0] + 0.8, end[1] + 0.8), f"N={n:,.0f}", 1.6, "left", "hidden")
+            if free(end):
+                sh.text((end[0] + 0.8, end[1] + 0.8), f"N {n:,.0f}", 1.6, "left", "dim")
         n += gstep
     # road
     ed = edges_of(an, s0, s1)
@@ -465,26 +549,18 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         if inner[0] < q[0] < inner[2] and inner[1] < q[1] < inner[3]:
             sh.poly([(q[0], q[1] + 2.0), (q[0] - 1.7, q[1] - 1.0),
                      (q[0] + 1.7, q[1] - 1.0)], "grid", 0.35)
-            sh.text((q[0] + 2.2, q[1] - 0.6), f"{bm.name} ±{bm.z:.3f}", 1.8, "left", "grid")
+            if q[0] < inner[2] - 22:
+                sh.text((q[0] + 2.2, q[1] - 0.6), f"{bm.name} ±{bm.z:.3f}", 1.8, "left", "grid")
+            else:
+                sh.text((q[0] - 2.2, q[1] - 0.6), f"{bm.name} ±{bm.z:.3f}", 1.8, "right", "grid")
     # north arrow turned with the plan
-    na = (bx[0] + 10, bx[3] - 12)
-    r = 5.0
-    north = math.pi / 2 - ang
-    tip = (na[0] + r * math.cos(north), na[1] + r * math.sin(north))
-    left = (na[0] + r * 0.45 * math.cos(north + 2.5), na[1] + r * 0.45 * math.sin(north + 2.5))
-    right = (na[0] + r * 0.45 * math.cos(north - 2.5), na[1] + r * 0.45 * math.sin(north - 2.5))
-    sh.circle(na, r, "text", 0.25)
-    sh.fill([tip, left, na], "text", 0.0)
-    sh.poly([tip, right, na], "text", 0.25)
-    sh.text((tip[0] + 1.0 * math.cos(north), tip[1] + 1.5 * math.sin(north)), "N",
-            2.6, "center", "text", True)
+    compass(sh, (bx[0] + 12, bx[3] - 13), 5.0, math.pi / 2 - ang, plate=True)
     # key plan in the corner
     key_plan(sh, an, (bx[2] - 52, bx[3] - 34, bx[2] - 1, bx[3] - 1), chunks, idx,
              labels=False)
     sh.text((bx[2] - 26, bx[3] - 37), "ผังสังเขป", 1.8, "center")
     # caption
-    sh.text((bx[0] + 4, bx[1] + 3), f"แปลน  STA {sta(s0, 0)} – {sta(s1, 0)}   มาตราส่วน 1:{scale}",
-            2.8, "left", "text", True)
+    sh.text((bx[0] + 4, bx[1] + 3), cap, 2.8, "left", "text", True)
     return scale
 
 
@@ -814,17 +890,122 @@ def vt_sheets(an, info):
     tot = [("รวม", "", "", "", "", f"{sum(r.cut_volume for r in an.rows):,.2f}",
             f"{sum(r.fill_volume for r in an.rows):,.2f}", f"{an.cut_total:,.2f}",
             f"{an.fill_total:,.2f}", f"{an.cut_total - an.fill_total:,.2f}")]
-    y = D.table(last, X0, y - 2, VT_COLS, tot, 2.0, 6.0, 6.0)
-    q = an.layer_quantities() if callable(an.layer_quantities) else an.layer_quantities
-    if q:
-        y0 = max(y - 10, Y0 + 40)
-        last.text((X0, y0), "ปริมาณงานโครงสร้างทาง", 3.0, "left", "text", True)
-        D.table(last, X0, y0 - 3, [("ชั้นทาง", 70, "left"), ("หนา (ม.)", 24, "right"),
-                                   ("กว้าง (ม.)", 24, "right"), ("ปริมาตร ลบ.ม.", 34, "right"),
-                                   ("พื้นที่ ตร.ม.", 34, "right")],
-                [(n, f"{t:.3f}", f"{w:.2f}", f"{v:,.2f}", f"{a:,.2f}") for n, t, w, v, a in q],
-                2.0, 5.4, 6.0)
+    if y - 8 < Y0 + 2:                                   # no room for the total: a new sheet
+        last = D.Sheet(f"VT-{len(out) + 1:02d}", "ตารางปริมาณงานดินขุด-ถม", "-", "VT")
+        out.append(last)
+        y = Y1 - 4
+    D.table(last, X0, y, VT_COLS, tot, 2.0, 6.0, 0.0)
+    last.text((X0, Y0 + 3), "ปริมาณงานโครงสร้างทางและสรุปปริมาณงานทั้งหมด ดูแผ่น QS "
+              "(แผ่นสุดท้าย)", 2.2)
     return out
+
+
+# ---------------------------------------------------------------------------
+# QS — สรุปปริมาณงานทั้งหมดของโครงการ (the last sheet)
+# ---------------------------------------------------------------------------
+
+QS_COLS = [("ลำดับ", 14, "center"), ("รายการ", 128, "left"), ("หน่วย", 18, "center"),
+           ("ปริมาณ", 34, "right"), ("หมายเหตุ", 108, "left")]
+
+
+def clearing_area(an) -> float:
+    """Ground taken by the road: the width between the daylight points
+    (toe of fill / top of cut) integrated along the axis, ตร.ม."""
+    pts = []
+    for sec in an.sections:
+        d = sec.design or []
+        w = (d[-1][0] - d[0][0]) if len(d) >= 2 else an.settings.finished_width
+        pts.append((sec.s, w))
+    pts.sort()
+    return sum((b[0] - a[0]) * (a[1] + b[1]) / 2 for a, b in zip(pts, pts[1:]))
+
+
+def summary_rows(an, info=None, shots=None) -> list:
+    """Every quantity of the job, grouped like a bill of quantities:
+    (number, item, unit, quantity, note); a heading row has no unit."""
+    st = an.settings
+    L = an.designed_length or an.length
+    rows = []
+
+    def head(no, text):
+        rows.append((no, text, "", "", ""))
+
+    def item(no, text, unit, q, note=""):
+        rows.append((no, "    " + text, unit, f"{q:,.2f}", note))
+    head("1", "งานสำรวจและเตรียมพื้นที่")
+    item("1.1", "งานสำรวจวางแนวและผังก่อสร้าง", "กม.", L / 1000.0,
+         f"ความยาวทาง {L:,.3f} ม.")
+    item("1.2", "งานถางป่าขุดตอและปรับพื้นที่", "ตร.ม.", clearing_area(an),
+         "ภายในแนวตีนลาดดินตัด-ถม")
+    head("2", "งานดิน")
+    cut, fill = an.cut_total, an.fill_total
+    item("2.1", "งานดินขุด", "ลบ.ม.", cut, "ปริมาตรตามรูปตัด (ดินแน่น)")
+    item("2.2", "งานดินถมบดอัดแน่น", "ลบ.ม.", fill, "ปริมาตรแน่นตามรูปตัด ไม่รวมการยุบตัว")
+    if cut >= fill:
+        item("2.3", "ดินขุดเหลือ ต้องขนทิ้ง", "ลบ.ม.", cut - fill, "ดินขุด − ดินถม")
+    else:
+        item("2.3", "ดินถมที่ต้องนำมาจากแหล่งอื่น", "ลบ.ม.", fill - cut, "ดินถม − ดินขุด")
+    head("3", "งานโครงสร้างทาง")
+    for i, (name, t, w, vol, area) in enumerate(an.layer_quantities(), 1):
+        top = i == 1
+        item(f"3.{i}", name, "ตร.ม." if top else "ลบ.ม.", area if top else vol,
+             f"หนา {t:.3f} ม. กว้าง {w:.2f} ม."
+             + (f" (ปริมาตร {vol:,.2f} ลบ.ม.)" if top else ""))
+    n = len(an.layer_quantities())
+    if st.shoulder > 0:
+        item(f"3.{n + 1}", "ไหล่ทาง (รวมอยู่ในชั้นทางข้างบน)", "ตร.ม.", 2 * st.shoulder * L,
+             f"กว้างข้างละ {st.shoulder:.2f} ม.")
+    head("4", "ข้อมูลแนวทาง")
+    bms = bench_marks(shots)
+    rows.append(("4.1", "    โค้งราบ / จุดหักมุม", "แห่ง",
+                 f"{sum(1 for c in an.hcurves if c.radius > 0)} / "
+                 f"{sum(1 for c in an.hcurves if c.radius <= 0)}", ""))
+    rows.append(("4.2", "    โค้งดิ่ง", "แห่ง", f"{len(an.curves)}", ""))
+    rows.append(("4.3", "    หมุดหลักฐาน / หมุดควบคุม", "หมุด", f"{len(bms)}", "BM PI POT GNSS"))
+    rows.append(("4.4", "    รูปตัดขวาง", "รูป", f"{len(an.sections)}",
+                 f"ทุก {st.step:g} ม."))
+    return rows
+
+
+def qs_sheet(an, info, shots):
+    sh = D.Sheet("QS-01", "สรุปปริมาณงานทั้งหมดของโครงการ", "-", "QS")
+    sh.text((X0, Y1 - 4), "สรุปปริมาณงานทั้งหมดของโครงการ", 4.0, "left", "text", True)
+    if info.get("project"):
+        sh.text((X0, Y1 - 10), f"โครงการ {info['project']}"
+                + (f"   ที่ตั้ง {info['location']}" if info.get("location") else ""), 2.6)
+    rows = summary_rows(an, info, shots)
+    y = D.table(sh, X0, Y1 - 14, QS_COLS, rows, 2.2, 6.2, 7.0)
+    for i, r in enumerate(rows):                           # headings in bold
+        if not r[2]:
+            for it in sh.items:
+                if it[0] == "text" and it[2] == r[1] and not it[6]:
+                    sh.items[sh.items.index(it)] = it[:6] + (True,) + it[7:]
+                    break
+    y -= 6
+    st = an.settings
+    notes = [f"ผิวจราจรกว้าง {st.width:.2f} ม. ไหล่ทางข้างละ {st.shoulder:.2f} ม. "
+             f"ลาดดินตัด 1:{st.cut_hv:g} ลาดดินถม 1:{st.fill_hv:g} "
+             f"(แนวดิ่ง:แนวราบ) ความหนาโครงสร้างทาง {st.structure:.3f} ม.",
+             "ปริมาณดินขุด-ถมคำนวณถึงใต้ชั้นโครงสร้างทาง วิธี "
+             + ("Prismoidal" if st.method == "prismoidal" else "Average end area")
+             + " จากรูปตัดขวางในแผ่น ST และตาราง VT",
+             "ปริมาณนี้ใช้ประกอบการถอดแบบและจัดทำบัญชีปริมาณงานและราคา (ปร.4) "
+             "ผู้ใช้ต้องตรวจสอบกับแบบและข้อกำหนดของหน่วยงาน"]
+    sh.text((X0, y), "หมายเหตุ", 2.6, "left", "text", True)
+    for k, t in enumerate(notes, 1):
+        y -= 5
+        sh.text((X0 + 3, y), f"{k}. {t}", 2.2)
+    # signature
+    sx = X1 - 80
+    sy = Y0 + 22
+    sh.text((sx + 40, sy + 10), "ลงชื่อ ......................................... ผู้คำนวณ",
+            2.4, "center")
+    sh.text((sx + 40, sy + 4), "(นายเวนิช ธัมมะวงษ์)", 2.4, "center", "text", True)
+    sh.text((sx + 40, sy - 1.5), "วิศวกรสำรวจ", 2.2, "center")
+    sh.text((sx - 70, sy + 10), "ลงชื่อ ......................................... ผู้ตรวจ",
+            2.4, "center")
+    sh.text((sx - 70, sy + 4), "(.........................................)", 2.4, "center")
+    return sh
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +1020,7 @@ def vt_sheets(an, info):
 SITE_BOX = (X0, Y0 + 16.0, X1 - 100.0, Y1 - 9.0)
 VICINITY_BOX = (X1 - 95.0, Y1 - 95.0, X1, Y1 - 9.0)
 SAT_COLORS = {"sat": (255, 214, 0), "halo": (20, 20, 20), "sattext": (255, 255, 255),
+              "satgrid": (235, 235, 235),
               "satpi": (0, 215, 255), "satred": (230, 30, 30)}
 
 
@@ -874,6 +1056,22 @@ def _label(sh, p, text, h=2.0, align="left"):
     sh.fill([(x, p[1] - 0.8), (x + w, p[1] - 0.8), (x + w, p[1] + h + 0.2),
              (x, p[1] + h + 0.2)], "halo", 0.1, (25, 25, 25))
     sh.text(p, text, h, align, "sattext", True)
+
+
+def _site_grid(sh, an, view, box, zone, datum, lines=5, h=1.7):
+    """UTM grid lines with E / N on a picture (white on dark plates)."""
+    from core import wanic_road as R
+    xs = [p[0] for p in an.axis]
+    ys = [p[1] for p in an.axis]
+    g = view.ground_per_mm()
+    half = max(box[2] - box[0], box[3] - box[1]) * g * 0.75
+
+    def v(e, n):
+        la, lo = R.utm_to_wgs84(e, n, zone, datum)
+        x, y = view.to_box(la, lo)
+        return (box[0] + x, box[1] + y)
+    return coordinate_grid(sh, box, v, ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2),
+                           half, grid_step((box[2] - box[0]) * g, lines), "satgrid", True, h)
 
 
 def _site_overlay(sh, an, view, box, zone, datum):
@@ -959,12 +1157,13 @@ def location_sheet(an, info, site) -> "D.Sheet":
                     "ต่ออินเทอร์เน็ตแล้วส่งออกใหม่ หรือแนบภาพที่บันทึกจาก Google Earth Pro", 2.2,
                     "center")
         if main is not None:
+            _site_grid(sh, an, main, SITE_BOX, zone, datum)
             _site_overlay(sh, an, main, SITE_BOX, zone, datum)
             # scale bar and north (Web Mercator: north is up)
             g = main.ground_per_mm()
             bar = M.nice_bar(g, 50.0)
             L = bar / g
-            x, y = bx0 + 5, by0 + 5
+            x, y = bx0 + 5, by0 + 9
             sh.fill([(x - 2, y - 2), (x + L + 14, y - 2), (x + L + 14, y + 6.5),
                      (x - 2, y + 6.5)], "halo", 0.1, (255, 255, 255))
             for i in range(4):
@@ -974,9 +1173,7 @@ def location_sheet(an, info, site) -> "D.Sheet":
             sh.rect(x, y, x + L, y + 1.4, "text", 0.2)
             sh.text((x, y + 2.4), "0", 1.8, "center")
             sh.text((x + L, y + 2.4), f"{bar:,.0f} ม.", 1.8, "center")
-            sh.fill([(bx1 - 15, by1 - 17), (bx1 - 2, by1 - 17), (bx1 - 2, by1 - 2),
-                     (bx1 - 15, by1 - 2)], "halo", 0.1, (255, 255, 255))
-            D.north(sh, (bx1 - 8.5, by1 - 11.5), 4)
+            compass(sh, (bx1 - 11, by1 - 11), 4.5, plate=True)
         sh.text((bx0, by0 - 4.5), site.get("credit") or M.SOURCES["esri"][2], 2.0)
     sh.rect(bx0, by0, bx1, by1, "text", 0.35)
     # vicinity
@@ -990,6 +1187,7 @@ def location_sheet(an, info, site) -> "D.Sheet":
             la, lo = R.utm_to_wgs84(e, n, zone, datum)
             x, y = vic.to_box(la, lo)
             return (vx0 + x, vy0 + y)
+        _site_grid(sh, an, vic, VICINITY_BOX, zone, datum, lines=3, h=1.5)
         sh.poly([vv(*p) for p in an.axis], "satred", 0.9, closed=False)
         if main is not None:
             corners = [M.lat_lon(main.x0 + dx, main.y0 + dy, main.z)
@@ -1052,7 +1250,7 @@ def location_sheet(an, info, site) -> "D.Sheet":
 
 
 def build_road_set(an, info=None, shots=None,
-                   groups=("G", "PP", "ST", "VT"), site=None) -> list:
+                   groups=("G", "PP", "ST", "VT", "QS"), site=None) -> list:
     """Every sheet of the road drawing set, numbered, with its title
     column.  ``an`` is :func:`core.wanic_road.analyse`'s result; with
     ``site`` (:func:`location_sheet`) the set opens with the site map."""
@@ -1074,6 +1272,8 @@ def build_road_set(an, info=None, shots=None,
         sheets += st_sheets(an, info)
     if "VT" in groups and an.rows:
         sheets += vt_sheets(an, info)
+    if "QS" in groups:
+        sheets.append(qs_sheet(an, info, shots))
     for i, s in enumerate(sheets, 1):
         s.number = i
     info.setdefault("project", "งานออกแบบถนน")
