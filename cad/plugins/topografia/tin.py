@@ -288,12 +288,18 @@ class Delaunay:
     def _key(x: int, y: int) -> tuple[int, int]:
         return (x, y) if x < y else (y, x)
 
-    def constrain(self, u: int, v: int, max_flips: int = 100000) -> bool:
-        """Force the segment u-v to be an edge (Sloan 1993). True when it is."""
+    def constrain(self, u: int, v: int, max_flips: int = 100000, edges=None) -> bool:
+        """Force the segment u-v to be an edge (Sloan 1993). True when it is.
+
+        ``edges`` is an edge map from :meth:`_edge_map` to keep up to date
+        across many calls: rebuilding it twice per breakline segment made
+        a road's four breaklines (1 100 segments) take 16 s to triangulate.
+        """
         if u == v:
             return True
         pu, pv = self.pts[u], self.pts[v]
-        edges = self._edge_map()
+        if edges is None:
+            edges = self._edge_map()
         key = self._key(u, v)
         if key in edges:
             return True
@@ -331,7 +337,7 @@ class Delaunay:
             if nk != key and u not in nk and v not in nk and \
                     _segments_cross(pu, pv, self.pts[nk[0]], self.pts[nk[1]]):
                 queue.append(nk)
-        return key in self._edge_map()
+        return key in edges
 
 
 # -- the surface --------------------------------------------------------------------------
@@ -354,18 +360,85 @@ class Tin:
     def triangle_points(self, t):
         return tuple(self.points[i] for i in t)
 
+    def _grid(self):
+        """A bucket grid over the triangles' bounding boxes, built on the
+        first lookup and rebuilt when the triangle list changes.
+
+        z_at used to test every triangle: a cross section samples the
+        surface sixty times, earthworks twice per station, and on a 2.3 km
+        road of 5 700 points VOLUMES took 44 s with the window frozen
+        ("not responding" on Windows, read as a crash). With the grid a
+        lookup tests the handful of triangles in one cell.
+        """
+        key = (id(self.triangles), len(self.triangles), len(self.points))
+        cached = getattr(self, "_grid_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        pts = self.points
+        if not self.triangles:
+            grid = None
+        else:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x0, y0 = min(xs), min(ys)
+            w = max(max(xs) - x0, 1e-9)
+            h = max(max(ys) - y0, 1e-9)
+            # about two triangles per cell
+            cells = max(1, int(math.sqrt(len(self.triangles) / 2.0)))
+            size = max(w, h) / cells
+            nx, ny = int(w / size) + 1, int(h / size) + 1
+            buckets: dict[int, list[int]] = {}
+            for t, (a, b, c) in enumerate(self.triangles):
+                pa, pb, pc = pts[a], pts[b], pts[c]
+                # a sliver of three shots on one section line (collinear
+                # but for a rounding hair) covers nothing and its weights
+                # are noise: it used to answer for its neighbours
+                longest2 = max((pb[0] - pa[0]) ** 2 + (pb[1] - pa[1]) ** 2,
+                               (pc[0] - pb[0]) ** 2 + (pc[1] - pb[1]) ** 2,
+                               (pa[0] - pc[0]) ** 2 + (pa[1] - pc[1]) ** 2)
+                if abs(orient(pa, pb, pc)) <= 1e-9 * longest2:
+                    continue
+                i0 = int((min(pa[0], pb[0], pc[0]) - x0) / size)
+                i1 = int((max(pa[0], pb[0], pc[0]) - x0) / size)
+                j0 = int((min(pa[1], pb[1], pc[1]) - y0) / size)
+                j1 = int((max(pa[1], pb[1], pc[1]) - y0) / size)
+                for j in range(j0, j1 + 1):
+                    for i in range(i0, i1 + 1):
+                        buckets.setdefault(j * nx + i, []).append(t)
+            grid = (x0, y0, size, nx, ny, buckets)
+        self._grid_cache = (key, grid)
+        return grid
+
     def z_at(self, x: float, y: float) -> Optional[float]:
         """Elevation of the surface at (x, y), or None outside it."""
-        for a, b, c in self.triangles:
-            pa, pb, pc = self.points[a], self.points[b], self.points[c]
-            d1, d2, d3 = orient(pa, pb, (x, y)), orient(pb, pc, (x, y)), orient(pc, pa, (x, y))
-            if d1 >= -1e-9 and d2 >= -1e-9 and d3 >= -1e-9:
-                total = orient(pa, pb, pc)
-                if abs(total) < 1e-12:
-                    continue
-                wa, wb, wc = d2 / total, d3 / total, d1 / total
-                return wa * pa[2] + wb * pb[2] + wc * pc[2]
-        return None
+        grid = self._grid()
+        if grid is None:
+            return None
+        x0, y0, size, nx, ny, buckets = grid
+        i, j = int((x - x0) // size), int((y - y0) // size)
+        if not (0 <= i < nx and 0 <= j < ny):
+            return None
+        pts = self.points
+        q = (x, y)
+        fallback, best = None, -math.inf
+        for t in buckets.get(j * nx + i, ()):
+            a, b, c = self.triangles[t]
+            pa, pb, pc = pts[a], pts[b], pts[c]
+            total = orient(pa, pb, pc)
+            d1, d2, d3 = orient(pa, pb, q), orient(pb, pc, q), orient(pc, pa, q)
+            if total < 0:
+                d1, d2, d3, total = -d1, -d2, -d3, -total
+            worst = min(d1, d2, d3) / total
+            if worst >= 0.0:
+                return (d2 * pa[2] + d3 * pb[2] + d1 * pc[2]) / total
+            # outside by a rounding hair (a sample on a shared edge of
+            # UTM-sized coordinates): the triangle it is least outside of,
+            # only if no triangle holds it outright -- a long hull triangle
+            # grazing a shot must not answer for the triangles at the shot
+            if worst >= -1e-9 and worst > best:
+                best = worst
+                fallback = (d2 * pa[2] + d3 * pb[2] + d1 * pc[2]) / total
+        return fallback
 
     def stats(self) -> dict:
         zs = [p[2] for p in self.points]
@@ -426,8 +499,9 @@ def build_tin(points, breaklines: Iterable = (), boundary: Optional[list[Point]]
             constraints.append((start + k, start + k + 1))
     pts3, index = _dedupe(raw)
     tri = Delaunay([(p[0], p[1]) for p in pts3])
+    edges = tri._edge_map() if constraints else None
     for u, v in constraints:
-        tri.constrain(index[u], index[v])
+        tri.constrain(index[u], index[v], edges=edges)
     triangles = tri.triangles()
     if boundary is not None:
         triangles = [t for t in triangles if polygon_contains(boundary, _centre(pts3, t))]

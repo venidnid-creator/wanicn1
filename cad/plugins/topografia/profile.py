@@ -39,10 +39,13 @@ def grade_at(grade: list[Point], s: float) -> Optional[float]:
     vertices, or None outside its span."""
     if len(grade) < 2:
         return None
-    if s < grade[0][0] - 1e-9 or s > grade[-1][0] + 1e-9:
+    # a micrometre of slack: the stations are rounded to 1e-6 and the
+    # grade comes back from drawing coordinates, so the last station
+    # used to fall just past the grade's end and lose its design section
+    if s < grade[0][0] - 1e-6 or s > grade[-1][0] + 1e-6:
         return None
     for (s0, z0), (s1, z1) in zip(grade, grade[1:]):
-        if s0 - 1e-9 <= s <= s1 + 1e-9:
+        if s0 - 1e-6 <= s <= s1 + 1e-6:
             if s1 - s0 < 1e-12:
                 return z1
             t = (s - s0) / (s1 - s0)
@@ -55,6 +58,88 @@ def grade_slopes(grade: list[Point]) -> list[float]:
     out = []
     for (s0, z0), (s1, z1) in zip(grade, grade[1:]):
         out.append(0.0 if s1 - s0 < 1e-12 else (z1 - z0) / (s1 - s0) * 100.0)
+    return out
+
+
+# -- vertical curves ---------------------------------------------------------------------
+
+@dataclass
+class VerticalCurve:
+    """A symmetric parabola at a PVI of the grade line, the way a road
+    profile is labelled: PVI station and elevation, curve length (VC),
+    grades in and out (percent) and the middle ordinate (MO, + for a sag,
+    - for a crest)."""
+
+    s: float                      # PVI station
+    z: float                      # PVI elevation
+    length: float                 # VC, horizontal
+    g1: float                     # grade in, percent
+    g2: float                     # grade out, percent
+
+    @property
+    def bvc(self) -> float:
+        return self.s - self.length / 2.0
+
+    @property
+    def evc(self) -> float:
+        return self.s + self.length / 2.0
+
+    @property
+    def middle_ordinate(self) -> float:
+        return (self.g2 - self.g1) * self.length / 800.0
+
+    def z_at(self, s: float) -> float:
+        x = s - self.bvc
+        z_bvc = self.z - self.g1 / 100.0 * self.length / 2.0
+        return z_bvc + self.g1 / 100.0 * x + (self.g2 - self.g1) / 100.0 / (2.0 * self.length) * x * x
+
+
+def vertical_curves(pvis: list[Point], lengths) -> list[VerticalCurve]:
+    """The curves at the interior PVIs of ``pvis`` with a positive length.
+
+    ``lengths`` is one length for every interior PVI or one per vertex
+    (the ends are ignored). A curve longer than the tangents allow is cut
+    down so it never reaches past the middle of either adjacent segment
+    -- two curves then meet but never overlap.
+    """
+    n = len(pvis)
+    if n < 3:
+        return []
+    if isinstance(lengths, (int, float)):
+        lengths = [0.0] + [float(lengths)] * (n - 2) + [0.0]
+    lengths = list(lengths) + [0.0] * max(0, n - len(lengths))
+    slopes = grade_slopes(pvis)
+    out = []
+    for i in range(1, n - 1):
+        length = float(lengths[i] or 0.0)
+        if length <= 0:
+            continue
+        room = min(pvis[i][0] - pvis[i - 1][0], pvis[i + 1][0] - pvis[i][0])
+        length = min(length, room)
+        if length <= 1e-9 or abs(slopes[i] - slopes[i - 1]) < 1e-12:
+            continue
+        out.append(VerticalCurve(pvis[i][0], pvis[i][1], length, slopes[i - 1], slopes[i]))
+    return out
+
+
+def grade_with_curves(pvis: list[Point], lengths, step: float = 1.0) -> list[Point]:
+    """The grade line as (s, z) with each vertical curve sampled every
+    ``step`` metres (and at its BVC and EVC), tangents kept as they are --
+    so grade_at, the sections and the earthworks follow the curves."""
+    curves = vertical_curves(pvis, lengths)
+    if not curves:
+        return list(pvis)
+    by_s = {round(c.s, 9): c for c in curves}
+    out: list[Point] = []
+    for s, z in pvis:
+        curve = by_s.get(round(s, 9))
+        if curve is None:
+            out.append((s, z))
+            continue
+        k = max(2, int(math.ceil(curve.length / max(step, 1e-3))))
+        for j in range(k + 1):
+            sj = curve.bvc + curve.length * j / k
+            out.append((sj, curve.z_at(sj)))
     return out
 
 
@@ -126,26 +211,40 @@ class Template:
     width: float = 6.0            # platform, total
     cut_hv: float = 1.0           # cut slope H:V (1.0 = 1:1)
     fill_hv: float = 1.5          # fill slope H:V
+    crown: float = 0.0            # cross slope of the platform, percent, down from the axis
+    shoulder: float = 0.0         # shoulder width each side
+    shoulder_slope: float = 4.0   # shoulder cross slope, percent, down and outwards
+
+    def top(self, z_design: float) -> list[Point]:
+        """The finished surface across the axis, edge to edge: shoulder,
+        platform edge, the axis (when crowned), and back out."""
+        half = self.width / 2.0
+        z_edge = z_design - self.crown / 100.0 * half
+        right = [(half, z_edge)]
+        if self.shoulder > 0:
+            right.append((half + self.shoulder, z_edge - self.shoulder_slope / 100.0 * self.shoulder))
+        left = [(-o, z) for o, z in reversed(right)]
+        middle = [(0.0, z_design)] if abs(self.crown) > 1e-12 else []
+        return left + middle + right
 
 
 def design_section(ground: list[Point], z_design: float, template: Template) -> list[Point]:
-    """The design across the axis: a flat platform at ``z_design`` and a
-    side slope each way to daylight (cut up, fill down); where the ground
-    ends before daylight the slope is stopped at the ground's end."""
-    half = template.width / 2.0
-    left = (-half, z_design)
-    right = (half, z_design)
-    out = [left, right]
+    """The design across the axis: the platform at ``z_design`` on the
+    axis (crowned and with shoulders when the template says so) and a side
+    slope each way to daylight (cut up, fill down); where the ground ends
+    before daylight the slope is stopped at the ground's end."""
+    out = template.top(z_design)
+    left, right = out[0], out[-1]
     for edge, direction in ((right, 1), (left, -1)):
         zg = _z_on(ground, edge[0])
         if zg is None:
             continue
-        rising = zg > z_design                                  # ground above: cut
+        rising = zg > edge[1]                                   # ground above: cut
         hv = template.cut_hv if rising else template.fill_hv
         day = _daylight(ground, edge, hv, direction, rising)
         if day is None:
             end = ground[-1] if direction > 0 else ground[0]
-            day = (end[0], z_design + (1.0 if rising else -1.0) / max(hv, 1e-9) * abs(end[0] - edge[0]))
+            day = (end[0], edge[1] + (1.0 if rising else -1.0) / max(hv, 1e-9) * abs(end[0] - edge[0]))
         if direction > 0:
             out.append(day)
         else:

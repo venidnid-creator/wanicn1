@@ -75,8 +75,8 @@ def test_a_polyline_on_the_profile_becomes_the_grade_line_and_the_volumes_follow
     assert actions.is_grade(design) and design.dxf.layer == "TOPO-RASANTE"
     assert actions.grade_profile_anchor(document, design) is anchor
     grade = actions.grade_of(design, frame)
-    assert grade == pytest.approx([(0.0, 101.0), (100.0, 99.0)])
-    assert "-2.00 %" in _texts(document)
+    assert [c for p in grade for c in p] == pytest.approx([0.0, 101.0, 100.0, 99.0])
+    assert "G = -2.000 %" in _texts(document)
     template = profile.Template(width=6.0, cut_hv=1.0, fill_hv=1.0)
     rows = actions.earthworks_rows(tin, axis, grade, frame.step, template)
     assert len(rows) == 11 and rows[0].fill_area == pytest.approx(7.0)
@@ -104,7 +104,8 @@ def test_sections_are_drawn_one_per_station_with_the_design_when_given():
     sections = [e for e in document.doc.modelspace()
                 if e.dxftype() == "LWPOLYLINE" and e.dxf.layer == "TOPO-SECCIONES"]
     assert len(sections) == 3                                       # 0, 50, 100
-    assert "0+050.00" in _texts(document)
+    assert "STA. 0+050.000" in _texts(document)
+    assert "NGL = 100.000" in _texts(document)
     history.undo()
     grade = [(0.0, 99.0), (100.0, 99.0)]
     history.execute(actions.draw_sections(document, tin, axis, (400.0, 0.0), 50.0, 15.0,
@@ -112,7 +113,9 @@ def test_sections_are_drawn_one_per_station_with_the_design_when_given():
     designs = [e for e in document.doc.modelspace()
                if e.dxftype() == "LWPOLYLINE" and e.dxf.layer == "TOPO-RASANTE"]
     assert len(designs) == 3
-    assert any(t.startswith("cut 7.00  fill 0.00") for t in _texts(document))
+    texts = _texts(document)
+    assert "Cut 7.000 m²" in texts and "Fill 0.000 m²" in texts
+    assert "99.000" in texts                                        # edges and axis of the platform
 
 
 # -- tools, headless ---------------------------------------------------------------------------
@@ -164,7 +167,7 @@ def test_the_four_tools_run_end_to_end_headless(tmp_path):
     grade.start()
     grade.on_selection([design])
     assert h.finished and actions.is_grade(design)
-    assert any("slopes -2.00 %" in line for line in h.echoed)
+    assert any("slopes -2.000 %" in line for line in h.echoed)
 
     h.finished = False
     sections = SectionsTool(h.ctx)
@@ -175,6 +178,8 @@ def test_the_four_tools_run_end_to_end_headless(tmp_path):
     sections.on_enter()                                              # platform 6
     sections.on_enter()                                              # cut 1:1
     assert sections.on_option("1")                                   # fill 1:1
+    sections.on_enter()                                              # no crown
+    sections.on_enter()                                              # no shoulder
     sections.on_point((400.0, 0.0))
     assert h.finished and any("3 sections drawn" in line for line in h.echoed)
 
@@ -187,6 +192,8 @@ def test_the_four_tools_run_end_to_end_headless(tmp_path):
     volumes.on_enter()                                               # platform 6
     volumes.on_enter()                                               # cut 1:1
     assert volumes.on_option("1")                                    # fill 1:1
+    volumes.on_enter()                                               # no crown
+    volumes.on_enter()                                               # no shoulder
     assert volumes.on_option("P")                                    # prismoidal
     assert any("over 11 stations" in line for line in h.echoed)
     volumes.on_point((300.0, -200.0))

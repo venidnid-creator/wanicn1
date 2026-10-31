@@ -15,6 +15,7 @@ from core.i18n import tr
 from tools.base import Tool
 
 from . import actions, geometry
+from . import alignment as alignment_mod
 from . import grading as grading_mod
 from . import memoria as memoria_mod
 from . import profile as profile_mod
@@ -1145,7 +1146,8 @@ class SlopeZonesTool(Tool):
 def _axis_in(entities):
     for entity in entities:
         if entity.dxftype() in ("LINE", "LWPOLYLINE", "POLYLINE") and not actions.is_grade(entity) \
-                and not actions.is_profile(entity) and not actions.is_contour(entity):
+                and not actions.is_profile(entity) and not actions.is_contour(entity) \
+                and not actions.is_vertical_curve(entity) and not actions.is_station_mark(entity):
             return entity
     return None
 
@@ -1255,12 +1257,15 @@ class ProfileTool(Tool):
 
 class GradeLineTool(Tool):
     """GRADELINE: a polyline drawn over a profile becomes its design line,
-    with the slope of each segment and the elevation at each vertex."""
+    with the grade of each segment and the elevation at each vertex; a
+    vertical-curve length (one for every PVI, or a list ``80,100``) puts a
+    parabola at the PVIs, labelled PVI STA / ELEV / VC / MO."""
 
     wants_selection = True
 
     def start(self) -> None:
         self.name = "GRADELINE"
+        self._found = None
 
     def selection_prompt(self) -> str:
         return tr("Select the polyline drawn on the profile:")
@@ -1268,21 +1273,62 @@ class GradeLineTool(Tool):
     def on_selection(self, entities: list) -> None:
         document = _document(self.ctx)
         for entity in entities:
-            if entity.dxftype() not in ("LINE", "LWPOLYLINE", "POLYLINE") or actions.is_profile(entity):
+            if entity.dxftype() not in ("LINE", "LWPOLYLINE", "POLYLINE") or actions.is_profile(entity) \
+                    or actions.is_vertical_curve(entity):
                 continue
             found = actions.frame_of(document, entity)
             if found is None:
                 continue
-            anchor, frame = found
-            self.ctx.execute(actions.register_grade(document, entity, anchor, frame))
-            grade = actions.grade_of(entity, frame)
-            slopes = profile_mod.grade_slopes(grade)
-            self.ctx.echo(tr("Grade line of {name}: {n} vertices, slopes {slopes}",
-                             name=frame.name, n=len(grade),
-                             slopes=", ".join(f"{v:+.2f} %" for v in slopes)))
-            self.ctx.finish()
+            self._found = (entity,) + tuple(found)
+            if len(actions.grade_pvis(entity, found[1])) < 3:
+                self._run(0.0)
+                return
+            self.prompt("Vertical curve length at the PVIs (one, or one per PVI: 80,100) <0>:")
             return
         self.ctx.echo(tr("The selection has no polyline drawn on a profile."))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if self._found is None:
+            return False
+        try:
+            values = [_number(v) for v in text.replace(";", " ").replace(",", " ").split()]
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if not values or any(v < 0 for v in values):
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        # one per interior PVI: the ends never carry a curve
+        lengths = values[0] if len(values) == 1 else [0.0] + values
+        self._run(lengths)
+        return True
+
+    def on_enter(self) -> None:
+        if self._found is None:
+            self.ctx.finish()
+            return
+        self._run(0.0)
+
+    def _run(self, lengths) -> None:
+        entity, anchor, frame = self._found
+        document = _document(self.ctx)
+        try:
+            command = actions.register_grade(document, entity, anchor, frame, curve_lengths=lengths)
+        except Exception as exc:                        # noqa: BLE001 -- say it, never crash the window
+            self.ctx.echo(tr("Cannot register the grade line: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        pvis = actions.grade_pvis(entity, frame)
+        slopes = profile_mod.grade_slopes(pvis)
+        self.ctx.echo(tr("Grade line of {name}: {n} vertices, slopes {slopes}",
+                         name=frame.name, n=len(pvis),
+                         slopes=", ".join(f"{v:+.3f} %" for v in slopes)))
+        for curve in profile_mod.vertical_curves(pvis, actions.grade_curve_lengths(entity)):
+            self.ctx.echo(tr("PVI {s}: VC {l:.3f} m, MO {m:+.3f} m",
+                             s=alignment_mod.format_station(curve.s, 3), l=curve.length,
+                             m=curve.middle_ordinate))
         self.ctx.finish()
 
 
@@ -1344,10 +1390,24 @@ class SectionsTool(Tool):
             self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
         elif self._stage == "fill":
             self._template.fill_hv = max(value, 0.01)
+            self._ask_crown()
+        elif self._stage == "crown":
+            self._template.crown = value
+            self._ask_shoulder()
+        elif self._stage == "shoulder":
+            self._template.shoulder = max(value, 0.0)
             self._ask_point()
         else:
             return False
         return True
+
+    def _ask_crown(self) -> None:
+        self._stage = "crown"
+        self.prompt("Crown cross slope % <{v:g}>:", v=self._template.crown)
+
+    def _ask_shoulder(self) -> None:
+        self._stage = "shoulder"
+        self.prompt("Shoulder width each side <{v:g}>:", v=self._template.shoulder)
 
     def _ask_width(self) -> None:
         self._stage = "width"
@@ -1376,6 +1436,10 @@ class SectionsTool(Tool):
             self._stage = "fill"
             self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
         elif self._stage == "fill":
+            self._ask_crown()
+        elif self._stage == "crown":
+            self._ask_shoulder()
+        elif self._stage == "shoulder":
             self._ask_point()
         else:
             self.ctx.finish()
@@ -1383,9 +1447,14 @@ class SectionsTool(Tool):
     def on_point(self, point) -> None:
         if self._stage != "point":
             return
-        command = actions.draw_sections(_document(self.ctx), self._tin, self._axis, point,
-                                        self._step, self._half, grade=self._grade,
-                                        template=self._template if self._grade else None)
+        try:
+            command = actions.draw_sections(_document(self.ctx), self._tin, self._axis, point,
+                                            self._step, self._half, grade=self._grade,
+                                            template=self._template if self._grade else None)
+        except Exception as exc:                        # noqa: BLE001 -- say it, never crash the window
+            self.ctx.echo(tr("Cannot draw the sections: {error}", error=exc))
+            self.ctx.finish()
+            return
         self.ctx.execute(command)
         n = sum(1 for c in command.commands if c.name == "TOPO-SECTION" and c.layer == actions.LAYERS["sections"][0])
         self.ctx.echo(tr("{n} sections drawn every {s:g} m", n=n, s=self._step))
@@ -1457,10 +1526,24 @@ class VolumesTool(Tool):
             self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
         elif self._stage == "fill":
             self._template.fill_hv = max(value, 0.01)
+            self._ask_crown()
+        elif self._stage == "crown":
+            self._template.crown = value
+            self._ask_shoulder()
+        elif self._stage == "shoulder":
+            self._template.shoulder = max(value, 0.0)
             self._ask_method()
         else:
             return False
         return True
+
+    def _ask_crown(self) -> None:
+        self._stage = "crown"
+        self.prompt("Crown cross slope % <{v:g}>:", v=self._template.crown)
+
+    def _ask_shoulder(self) -> None:
+        self._stage = "shoulder"
+        self.prompt("Shoulder width each side <{v:g}>:", v=self._template.shoulder)
 
     def _ask_method(self) -> None:
         self._stage = "method"
@@ -1474,6 +1557,10 @@ class VolumesTool(Tool):
             self._stage = "fill"
             self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
         elif self._stage == "fill":
+            self._ask_crown()
+        elif self._stage == "crown":
+            self._ask_shoulder()
+        elif self._stage == "shoulder":
             self._ask_method()
         elif self._stage == "method":
             self._compute()
@@ -1483,8 +1570,13 @@ class VolumesTool(Tool):
             self.ctx.finish()
 
     def _compute(self) -> None:
-        self._rows = actions.earthworks_rows(self._tin, self._axis, self._grade, self._frame.step,
-                                             self._template, method=self._method)
+        try:
+            self._rows = actions.earthworks_rows(self._tin, self._axis, self._grade, self._frame.step,
+                                                 self._template, method=self._method)
+        except Exception as exc:                        # noqa: BLE001 -- say it, never crash the window
+            self.ctx.echo(tr("Cannot compute the earthworks: {error}", error=exc))
+            self.ctx.finish()
+            return
         last = self._rows[-1] if self._rows else None
         if last is not None:
             self.ctx.echo(tr("Cut {c:.1f} m³, fill {f:.1f} m³, mass {m:+.1f} m³ over {n} stations",
@@ -1898,7 +1990,88 @@ class AreaReportTool(Tool):
         self.ctx.finish()
 
 
+class StationsTool(Tool):
+    """STATIONS: the axis on the plan marked like a road plan: a section
+    line across it every step with its station (0+025) at the end, and the
+    start, the end and every PI labelled with their station."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "STATIONS"
+        self._axis = None
+        self._step = 25.0
+        self._half = 15.0
+        self._height = 1.0
+        self._stage = "step"
+
+    def selection_prompt(self) -> str:
+        return tr("Select the axis:")
+
+    def on_selection(self, entities: list) -> None:
+        self._axis = _axis_in(entities)
+        if self._axis is None:
+            self.ctx.echo(tr("The selection has no axis polyline."))
+            self.ctx.finish()
+            return
+        self._stage = "step"
+        self.prompt("Station step <{s:g}>:", s=self._step)
+
+    def on_option(self, text: str) -> bool:
+        try:
+            value = _number(text)
+            if value <= 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "step":
+            self._step = value
+            self._ask_width()
+        elif self._stage == "width":
+            self._half = value
+            self._ask_height()
+        elif self._stage == "height":
+            self._height = value
+            self._run()
+        else:
+            return False
+        return True
+
+    def _ask_width(self) -> None:
+        self._stage = "width"
+        self.prompt("Width to each side <{w:g}>:", w=self._half)
+
+    def _ask_height(self) -> None:
+        self._stage = "height"
+        self.prompt("Text height <{h:g}>:", h=self._height)
+
+    def on_enter(self) -> None:
+        if self._stage == "step":
+            self._ask_width()
+        elif self._stage == "width":
+            self._ask_height()
+        elif self._stage == "height":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        try:
+            command = actions.station_marks(_document(self.ctx), self._axis, self._step, self._half,
+                                            self._height)
+        except Exception as exc:                        # noqa: BLE001 -- say it, never crash the window
+            self.ctx.echo(tr("Cannot mark the stations: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        length = alignment_mod.polyline_length(actions.axis_points(self._axis))
+        self.ctx.echo(tr("Stations every {s:g} m along {l:.3f} m of axis", s=self._step, l=length))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "STATIONS": StationsTool,
     "MEMORIA": MemoriaTool,
     "AREAREPORT": AreaReportTool,
     "PLATFORM": PlatformTool,

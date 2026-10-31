@@ -24,10 +24,10 @@ from .tools import TOOL_CLASSES
 PLUGIN = PluginSpec(
     id="topografia",
     name="Topography",
-    version="0.5.0",
+    version="0.6.0",
     description="Survey points, contours, profiles and volumes for the civil engineer.",
     tools=dict(TOOL_CLASSES),
-    aliases={"PIM": "PIMPORT", "PEX": "PEXPORT", "PRN": "PRENUM", "PFI": "PFIND"},
+    aliases={"PIM": "PIMPORT", "PEX": "PEXPORT", "PRN": "PRENUM", "PFI": "PFIND", "STA": "STATIONS"},
     menu=(
         Submenu("Points", (
             MenuItem("Import points (CSV)...", "PIMPORT"),
@@ -61,6 +61,7 @@ PLUGIN = PluginSpec(
             MenuItem("Volume between surfaces...", "VOLTIN"),
         )),
         Submenu("Profiles", (
+            MenuItem("Stations on the axis...", "STATIONS"),
             MenuItem("Longitudinal profile...", "PROFILE"),
             MenuItem("Grade line", "GRADELINE"),
             MenuItem("Cross sections...", "SECTIONS"),

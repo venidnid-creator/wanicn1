@@ -36,6 +36,8 @@ class Station:
 
 def format_station(s: float, decimals: int = 2) -> str:
     km, m = divmod(round(s, decimals), 1000.0)
+    if decimals <= 0:
+        return f"{int(km)}+{int(round(m)):03d}"
     return f"{int(km)}+{m:0{4 + decimals}.{decimals}f}"
 
 

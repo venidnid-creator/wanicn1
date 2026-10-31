@@ -250,5 +250,20 @@
   "LOT": "LOT",
   "AREA (m²)": "SURFACE (m²)",
   "PERIMETER (m)": "PÉRIMÈTRE (m)",
-  "TECHNICAL DATA (coordinate system {crs})": "DONNÉES TECHNIQUES (système de coordonnées {crs})"
+  "TECHNICAL DATA (coordinate system {crs})": "DONNÉES TECHNIQUES (système de coordonnées {crs})",
+  "Stations on the axis...": "Stations sur l'axe...",
+  "Select the axis:": "Sélectionnez l'axe :",
+  "Cannot mark the stations: {error}": "Impossible de marquer les stations : {error}",
+  "Stations every {s:g} m along {l:.3f} m of axis": "Stations tous les {s:g} m sur {l:.3f} m d'axe",
+  "BEGIN": "DÉBUT",
+  "END": "FIN",
+  "Vertical curve length at the PVIs (one, or one per PVI: 80,100) <0>:": "Longueur du raccordement vertical aux sommets (une, ou une par sommet : 80,100) <0> :",
+  "Cannot register the grade line: {error}": "Impossible d'enregistrer la ligne rouge : {error}",
+  "PVI {s}: VC {l:.3f} m, MO {m:+.3f} m": "Sommet {s} : raccordement {l:.3f} m, flèche {m:+.3f} m",
+  "Crown cross slope % <{v:g}>:": "Dévers en toit % <{v:g}> :",
+  "Shoulder width each side <{v:g}>:": "Largeur d'accotement de chaque côté <{v:g}> :",
+  "Cannot draw the sections: {error}": "Impossible de dessiner les profils en travers : {error}",
+  "Cannot compute the earthworks: {error}": "Impossible de calculer les terrassements : {error}",
+  "Cut {c:.3f} m²": "Déblai {c:.3f} m²",
+  "Fill {f:.3f} m²": "Remblai {f:.3f} m²"
 }

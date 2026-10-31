@@ -250,5 +250,20 @@
   "LOT": "แปลง",
   "AREA (m²)": "พื้นที่ (ตร.ม.)",
   "PERIMETER (m)": "เส้นรอบรูป (ม.)",
-  "TECHNICAL DATA (coordinate system {crs})": "ข้อมูลทางเทคนิค (ระบบพิกัด {crs})"
+  "TECHNICAL DATA (coordinate system {crs})": "ข้อมูลทางเทคนิค (ระบบพิกัด {crs})",
+  "Stations on the axis...": "สถานี (กม.) และเส้นรูปตัดบนแนวทาง...",
+  "Select the axis:": "เลือกแนวศูนย์กลางทาง:",
+  "Cannot mark the stations: {error}": "เขียนสถานีไม่ได้: {error}",
+  "Stations every {s:g} m along {l:.3f} m of axis": "เขียนสถานีทุก {s:g} ม. ตลอดแนวทางยาว {l:.3f} ม.",
+  "BEGIN": "จุดเริ่มต้น",
+  "END": "จุดสิ้นสุด",
+  "Vertical curve length at the PVIs (one, or one per PVI: 80,100) <0>:": "ความยาวโค้งดิ่งที่จุด PVI (ค่าเดียวทุกจุด หรือแยกทีละจุด เช่น 80,100) <0>:",
+  "Cannot register the grade line: {error}": "ตั้งเส้นระดับออกแบบไม่ได้: {error}",
+  "PVI {s}: VC {l:.3f} m, MO {m:+.3f} m": "PVI {s}: โค้งดิ่งยาว {l:.3f} ม., MO {m:+.3f} ม.",
+  "Crown cross slope % <{v:g}>:": "ความลาดขวางผิวทาง (หลังเต่า) % <{v:g}>:",
+  "Shoulder width each side <{v:g}>:": "ความกว้างไหล่ทางแต่ละข้าง <{v:g}>:",
+  "Cannot draw the sections: {error}": "วาดรูปตัดขวางไม่ได้: {error}",
+  "Cannot compute the earthworks: {error}": "คำนวณงานดินไม่ได้: {error}",
+  "Cut {c:.3f} m²": "ดินตัด {c:.3f} ม²",
+  "Fill {f:.3f} m²": "ดินถม {f:.3f} ม²"
 }

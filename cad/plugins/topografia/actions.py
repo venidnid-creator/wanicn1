@@ -48,6 +48,8 @@ LAYERS = {
     "daylight": ("TOPO-LINEA-CERO", 6),
     "hachures": ("TOPO-TALUDES", 8),
     "design_tin": ("TOPO-TIN-DISENO", 4),
+    "stations": ("TOPO-ESTACIONES", 1),
+    "stations_text": ("TOPO-ESTACIONES-TEXTO", 7),
 }
 ALL_LABELS = ("number", "elevation", "description")
 
@@ -1020,6 +1022,8 @@ from . import profile as _profile
 PROFILE_TAG = "TOPO-PROFILE"
 GRADE_TAG = "TOPO-GRADE"
 SECTION_TAG = "TOPO-SECTION"
+VCURVE_TAG = "TOPO-VCURVE"
+STATION_TAG = "TOPO-STATION"
 
 
 def axis_points(entity) -> list:
@@ -1110,7 +1114,9 @@ def draw_profile(document, tin: _tin.Tin, axis_entity, insert, step: float = 20.
     datum = _math.floor(min(zs) / interval) * interval - interval
     top = _math.ceil(max(zs) / interval) * interval + interval
     bands = 2 + (1 if grade else 0)
-    band_h = 3.5 * h
+    # tall enough for "0+000.00" standing on end: at 3.5 h the station ran
+    # into the ground elevation above it
+    band_h = 9.0 * h
     frame = ProfileFrame(name, insert[0] + 8.0 * h, insert[1] + bands * band_h, hscale, vscale,
                          datum, bands * band_h, axis_entity.dxf.handle, step)
     grid, text = LAYERS["profile_grid"][0], LAYERS["profile_text"][0]
@@ -1125,11 +1131,19 @@ def draw_profile(document, tin: _tin.Tin, axis_entity, insert, step: float = 20.
         commands.append(_line_cmd((frame.x0, y), (x_end, y), grid))
         commands.append(_text_cmd(f"{level:.2f}", (frame.x0 - 0.8 * h, y), h, text,
                                   align="MIDDLE_RIGHT"))
+        commands.append(_text_cmd(f"{level:.3f}", (x_end + 0.8 * h, y), 0.8 * h, text,
+                                  align="MIDDLE_LEFT"))
         level += interval
     bottom = insert[1]
+    last_x = None
     for pt in points:
         x = frame.to_drawing(pt.s, datum)[0]
         commands.append(_line_cmd((x, bottom), (x, y_top), grid))
+        # a vertex a metre off a regular station keeps its grid line, not
+        # a second column of numbers printed over the first
+        if last_x is not None and x - last_x < 1.6 * h and pt.vertex and pt is not points[-1]:
+            continue
+        last_x = x
         commands.append(_text_cmd(_alignment.format_station(pt.s), (x, bottom + 0.5 * band_h),
                                   h, text, rotation=90.0))
         if pt.z is not None:
@@ -1237,10 +1251,27 @@ def is_grade(entity) -> bool:
     return bool(data) and data[0] == GRADE_TAG
 
 
-def grade_of(entity, frame: ProfileFrame) -> list:
-    """The design line as (s, z), in chainage order."""
+def grade_pvis(entity, frame: ProfileFrame) -> list:
+    """The vertices of the design line (the PVIs) as (s, z), in chainage
+    order."""
     pts = [frame.to_chainage(x, y) for x, y in axis_points(entity)]
     return sorted(pts, key=lambda p: p[0])
+
+
+def grade_curve_lengths(entity) -> list:
+    """The vertical-curve length stored at each PVI (0 where none)."""
+    data = _xdata(entity) or []
+    return [float(v) for v in data[2:]] if len(data) > 2 else []
+
+
+def grade_of(entity, frame: ProfileFrame) -> list:
+    """The design line as (s, z), in chainage order, with its vertical
+    curves sampled every metre when it has any."""
+    pvis = grade_pvis(entity, frame)
+    lengths = grade_curve_lengths(entity)
+    if any(v > 0 for v in lengths):
+        return _profile.grade_with_curves(pvis, lengths)
+    return pvis
 
 
 def grade_profile_anchor(document, entity):
@@ -1253,26 +1284,118 @@ def grade_profile_anchor(document, entity):
 
 
 def register_grade(document, entity, anchor, frame: ProfileFrame,
-                   text_height: float = 1.0) -> CompositeCommand:
+                   text_height: float = 1.0, curve_lengths=None) -> CompositeCommand:
     """Adopt a polyline drawn on the profile as its design line: layer,
-    tag, a slope label on each segment and the elevation at each vertex."""
-    grade = grade_of(entity, frame)
+    tag, ``G = ±x.xxx %`` on each segment and the station and elevation
+    at each PVI. ``curve_lengths`` (one number for every PVI, or a list,
+    one per vertex) adds a symmetric vertical curve at the PVIs, drawn
+    over the tangents and labelled PVI STA / ELEV / VC / MO as on a road
+    profile; the curves ride in the line's XDATA so the sections and the
+    earthworks follow them."""
+    pvis = grade_pvis(entity, frame)
+    curves = _profile.vertical_curves(pvis, curve_lengths or 0.0)
+    by_s = {round(c.s, 9): c for c in curves}
+    stored = [by_s[round(s_, 9)].length if round(s_, 9) in by_s else 0.0 for s_, _z in pvis]
+    xdata = [(1000, GRADE_TAG), (1005, anchor.dxf.handle)]
+    if curves:
+        xdata += [(1040, float(v)) for v in stored]
     commands = layer_commands(document, ("grade", "profile_text"))
-    commands.append(TagEntityCommand(entity, LAYERS["grade"][0],
-                                     [(1000, GRADE_TAG), (1005, anchor.dxf.handle)]))
+    commands.append(TagEntityCommand(entity, LAYERS["grade"][0], xdata))
     h = text_height
     text = LAYERS["profile_text"][0]
-    for (s0, z0), (s1, z1), slope in zip(grade, grade[1:], _profile.grade_slopes(grade)):
+    for (s0, z0), (s1, z1), slope in zip(pvis, pvis[1:], _profile.grade_slopes(pvis)):
         a, b = frame.to_drawing(s0, z0), frame.to_drawing(s1, z1)
         mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0 + 1.2 * h)
         angle = _math.degrees(_math.atan2(b[1] - a[1], b[0] - a[0]))
-        commands.append(_text_cmd(f"{slope:+.2f} %", mid, h, text, readable_rotation(angle),
+        commands.append(_text_cmd(f"G = {slope:+.3f} %", mid, h, text, readable_rotation(angle),
                                   tag=GRADE_TAG))
-    for s_, z_ in grade:
+    for s_, z_ in pvis:
         x, y = frame.to_drawing(s_, z_)
-        commands.append(_text_cmd(f"{_alignment.format_station(s_)}  {z_:.2f}",
-                                  (x, y - 1.6 * h), 0.8 * h, text, tag=GRADE_TAG))
+        curve = by_s.get(round(s_, 9))
+        if curve is None:
+            commands.append(_text_cmd(f"{_alignment.format_station(s_)}  {z_:.2f}",
+                                      (x, y - 1.6 * h), 0.8 * h, text, tag=GRADE_TAG))
+            continue
+        # the PVI's leader, up from the curve, and its four lines of data
+        y_curve = frame.to_drawing(s_, curve.z_at(s_))[1]
+        top = max(y, y_curve) + 12.0 * h
+        commands.append(_line_cmd((x, min(y, y_curve)), (x, top), text, GRADE_TAG))
+        lines = [f"PVI STA. {_alignment.format_station(s_, 3)}",
+                 f"ELEV. = {z_:.3f}",
+                 f"VC. = {curve.length:.3f}",
+                 f"MO. = {curve.middle_ordinate:+.3f}"]
+        for k, line in enumerate(lines):
+            commands.append(_text_cmd(line, (x + 0.6 * h, top - (k + 0.5) * 1.4 * 0.8 * h), 0.8 * h,
+                                      text, align="MIDDLE_LEFT", tag=GRADE_TAG))
+        for s_end, label in ((curve.bvc, "PVC"), (curve.evc, "PVT")):
+            ex, ey = frame.to_drawing(s_end, curve.z_at(s_end))
+            commands.append(_line_cmd((ex, ey - 1.0 * h), (ex, ey + 1.0 * h), text, GRADE_TAG))
+            commands.append(_text_cmd(
+                f"{label} STA. {_alignment.format_station(s_end, 3)}  ELEV. = {curve.z_at(s_end):.3f}",
+                (ex, ey - 1.6 * h), 0.6 * h, text, rotation=90.0, align="MIDDLE_RIGHT",
+                tag=GRADE_TAG))
+    if curves:
+        line = [frame.to_drawing(s_, z_) for s_, z_ in _profile.grade_with_curves(pvis, stored)]
+
+        def make_curve(msp, pts=line):
+            ensure_appid(msp.doc)
+            entity = msp.add_lwpolyline(pts)
+            entity.set_xdata(APPID, [(1000, VCURVE_TAG), (1005, anchor.dxf.handle)])
+            return entity
+        commands.append(AddEntityCommand("TOPO-PROFILE", make_curve, layer=LAYERS["grade"][0]))
     return CompositeCommand("grade line", commands)
+
+
+def is_vertical_curve(entity) -> bool:
+    data = _xdata(entity)
+    return bool(data) and data[0] == VCURVE_TAG
+
+
+def is_station_mark(entity) -> bool:
+    data = _xdata(entity)
+    return bool(data) and data[0] == STATION_TAG
+
+
+# -- the axis on the plan: stations and section lines ------------------------------------------
+
+def station_marks(document, axis_entity, step: float = 25.0, half_width: float = 15.0,
+                  text_height: float = 1.0, decimals: int = 0) -> CompositeCommand:
+    """The axis on the plan marked the way a road plan is: a section line
+    across it every ``step`` metres (``half_width`` each side) with its
+    station written at the left end, ``0+025``; the start, the end and
+    every PI labelled ``… STA. 0+000.000`` along the axis."""
+    axis = axis_points(axis_entity)
+    h = text_height
+    line_layer, text = LAYERS["stations"][0], LAYERS["stations_text"][0]
+    commands = layer_commands(document, ("stations", "stations_text"))
+    marks = _alignment.stations(axis, step)
+    total = _alignment.polyline_length(axis)
+    for st in marks:
+        regular = abs(st.s / step - round(st.s / step)) < 1e-6
+        if regular:
+            a, b = st.offset_point(-half_width), st.offset_point(half_width)
+            commands.append(_line_cmd(a, b, line_layer, STATION_TAG))
+            label = _alignment.format_station(st.s, decimals)
+            across = readable_rotation(st.angle + 90.0)
+            # at the left end of the section line, reading along it
+            reach = half_width + 1.0 * h + 0.45 * h * len(label)
+            pos = st.offset_point(-reach)
+            commands.append(_text_cmd(label, pos, h, text, across, tag=STATION_TAG))
+        kind = None
+        if st.s <= 1e-6:
+            kind = _tr("BEGIN")
+        elif abs(st.s - total) <= 1e-6:
+            kind = _tr("END")
+        elif st.vertex:
+            kind = "PI"
+        if kind is not None:
+            label = f"{kind} STA. {_alignment.format_station(st.s, 3)}"
+            along = readable_rotation(st.angle)
+            nx, ny = st.normal
+            pos = (st.x + nx * 1.2 * h, st.y + ny * 1.2 * h)
+            align = "MIDDLE_LEFT" if st.s <= 1e-6 else ("MIDDLE_RIGHT" if kind != "PI" else "MIDDLE_CENTER")
+            commands.append(_text_cmd(label, pos, 0.8 * h, text, along, align=align, tag=STATION_TAG))
+    return CompositeCommand("stations", commands)
 
 
 # -- cross sections -----------------------------------------------------------------------
@@ -1283,13 +1406,16 @@ def draw_sections(document, tin: _tin.Tin, axis_entity, insert, step: float = 20
                   grade: list | None = None, template: _profile.Template | None = None,
                   name: str = "EJE") -> CompositeCommand:
     """Every station's ground across the axis, one little plot each in a
-    grid of ``columns``; with a grade and a template the design section is
-    drawn over it and the cut and fill areas written."""
+    grid of ``columns``, laid out the way a road's sections are read: an
+    elevation scale on the left, the axis line, ``STA. 0+000.000`` and
+    ``NGL = …`` (the ground on the axis) under it; with a grade and a
+    template the design over the ground, its elevations at the edges and
+    on the axis, and the cut and fill areas in m² beside it."""
     axis = axis_points(axis_entity)
     h = text_height
     grid, text = LAYERS["sections_grid"][0], LAYERS["profile_text"][0]
-    commands = layer_commands(document, ("sections", "sections_grid", "profile_text"))
-    cell_w = (2 * half_width) * hscale + 6.0 * h
+    commands = layer_commands(document, ("sections", "sections_grid", "profile_text", "grade"))
+    cell_w = (2 * half_width) * hscale + 26.0 * h
     cell_h = 0.0
     plots = []
     for st in _alignment.stations(axis, step):
@@ -1303,32 +1429,57 @@ def draw_sections(document, tin: _tin.Tin, axis_entity, insert, step: float = 20
         zs = [z for _o, z in ground] + ([z for _o, z in design] if design else [])
         datum = _math.floor(min(zs)) - 1.0
         height = (_math.ceil(max(zs)) + 1.0 - datum) * vscale
-        cell_h = max(cell_h, height + 6.0 * h)
+        cell_h = max(cell_h, height + 10.0 * h)
         plots.append((st, ground, design, datum, height, zd))
     for k, (st, ground, design, datum, height, zd) in enumerate(plots):
         col, row = k % columns, k // columns
-        ox = insert[0] + col * cell_w + 3.0 * h + half_width * hscale        # the axis
+        ox = insert[0] + col * cell_w + 6.0 * h + half_width * hscale        # the axis
         oy = insert[1] - row * cell_h - height - 4.0 * h
 
         def to_xy(o, z, ox=ox, oy=oy, datum=datum):
             return (ox + o * hscale, oy + (z - datum) * vscale)
+        top = datum + height / vscale
         commands.append(_line_cmd(to_xy(-half_width, datum), to_xy(half_width, datum), grid, SECTION_TAG))
-        commands.append(_line_cmd(to_xy(0.0, datum), to_xy(0.0, datum + height / vscale), grid, SECTION_TAG))
-        commands.append(_text_cmd(_alignment.format_station(st.s), to_xy(0.0, datum + height / vscale + 1.5 * h / vscale),
-                                  h, text, tag=SECTION_TAG))
-        commands.append(_text_cmd(f"{datum:.2f}", to_xy(-half_width - 0.8 * h / hscale, datum), 0.8 * h, text,
-                                  align="MIDDLE_RIGHT", tag=SECTION_TAG))
+        # the elevation scale: a tick and a whole metre every metre
+        level = datum
+        while level <= top + 1e-9:
+            x, y = to_xy(-half_width, level)
+            commands.append(_line_cmd((x - 0.8 * h, y), (x, y), grid, SECTION_TAG))
+            commands.append(_text_cmd(f"{level:.0f}", (x - 1.2 * h, y), 0.8 * h, text,
+                                      align="MIDDLE_RIGHT", tag=SECTION_TAG))
+            level += 1.0
+        commands.append(_line_cmd(to_xy(-half_width, datum), to_xy(-half_width, top), grid, SECTION_TAG))
+        # the axis, through the whole plot
+        commands.append(_line_cmd(to_xy(0.0, datum), to_xy(0.0, top), LAYERS["grade"][0], SECTION_TAG))
+        commands.append(_text_cmd(f"STA. {_alignment.format_station(st.s, 3)}",
+                                  (ox, oy - 2.0 * h), h, text, tag=SECTION_TAG))
+        z_axis = _profile._z_on(ground, 0.0)
+        if z_axis is not None:
+            commands.append(_text_cmd(f"NGL = {z_axis:.3f}", (ox, oy - 3.6 * h), 0.8 * h, text,
+                                      tag=SECTION_TAG))
         pts = [to_xy(o, z) for o, z in ground]
         commands.append(AddEntityCommand("TOPO-SECTION", lambda msp, pts=pts, s_=st.s: _section_polyline(
             msp, pts, s_, name), layer=LAYERS["sections"][0]))
         if design:
             dpts = [to_xy(o, z) for o, z in design]
-            commands.extend(layer_commands(document, ("grade",)))
             commands.append(AddEntityCommand("TOPO-SECTION", lambda msp, pts=dpts, s_=st.s: _section_polyline(
                 msp, pts, s_, name), layer=LAYERS["grade"][0]))
+            # the finished surface's elevations: each platform edge and the axis
+            half = template.width / 2.0
+            for o in (-half, 0.0, half):
+                z = _profile._z_on(design, o)
+                if z is None:
+                    continue
+                x, y = to_xy(o, z)
+                commands.append(_text_cmd(f"{z:.3f}", (x, y + 1.6 * h), 0.8 * h, text,
+                                          tag=SECTION_TAG))
             cut, fill = _profile.areas(ground, design)
-            commands.append(_text_cmd(_tr("cut {c:.2f}  fill {f:.2f}", c=cut, f=fill),
-                                      to_xy(0.0, datum - 1.5 * h / vscale), 0.8 * h, text, tag=SECTION_TAG))
+            x_right = to_xy(half_width, datum)[0] + 2.0 * h
+            y_mid = oy + height / 2.0
+            commands.append(_text_cmd(_tr("Cut {c:.3f} m²", c=cut), (x_right, y_mid + 0.8 * h),
+                                      0.8 * h, text, align="MIDDLE_LEFT", tag=SECTION_TAG))
+            commands.append(_text_cmd(_tr("Fill {f:.3f} m²", f=fill), (x_right, y_mid - 0.8 * h),
+                                      0.8 * h, text, align="MIDDLE_LEFT", tag=SECTION_TAG))
     return CompositeCommand("sections", commands)
 
 

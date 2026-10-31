@@ -250,5 +250,20 @@
   "LOT": "LOTE",
   "AREA (m²)": "ÁREA (m²)",
   "PERIMETER (m)": "PERÍMETRO (m)",
-  "TECHNICAL DATA (coordinate system {crs})": "DATOS TÉCNICOS (sistema de coordenadas {crs})"
+  "TECHNICAL DATA (coordinate system {crs})": "DATOS TÉCNICOS (sistema de coordenadas {crs})",
+  "Stations on the axis...": "Estaciones sobre el eje...",
+  "Select the axis:": "Seleccione el eje:",
+  "Cannot mark the stations: {error}": "No se pueden marcar las estaciones: {error}",
+  "Stations every {s:g} m along {l:.3f} m of axis": "Estaciones cada {s:g} m a lo largo de {l:.3f} m de eje",
+  "BEGIN": "INICIO",
+  "END": "FIN",
+  "Vertical curve length at the PVIs (one, or one per PVI: 80,100) <0>:": "Longitud de curva vertical en los PIV (una, o una por PIV: 80,100) <0>:",
+  "Cannot register the grade line: {error}": "No se puede registrar la rasante: {error}",
+  "PVI {s}: VC {l:.3f} m, MO {m:+.3f} m": "PIV {s}: CV {l:.3f} m, OM {m:+.3f} m",
+  "Crown cross slope % <{v:g}>:": "Bombeo % <{v:g}>:",
+  "Shoulder width each side <{v:g}>:": "Ancho de berma a cada lado <{v:g}>:",
+  "Cannot draw the sections: {error}": "No se pueden dibujar las secciones: {error}",
+  "Cannot compute the earthworks: {error}": "No se puede calcular el movimiento de tierras: {error}",
+  "Cut {c:.3f} m²": "Corte {c:.3f} m²",
+  "Fill {f:.3f} m²": "Relleno {f:.3f} m²"
 }
