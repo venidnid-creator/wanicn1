@@ -1386,16 +1386,58 @@ def station_marks(document, axis_entity, step: float = 25.0, half_width: float =
             kind = _tr("BEGIN")
         elif abs(st.s - total) <= 1e-6:
             kind = _tr("END")
-        elif st.vertex:
-            kind = "PI"
         if kind is not None:
             label = f"{kind} STA. {_alignment.format_station(st.s, 3)}"
             along = readable_rotation(st.angle)
             nx, ny = st.normal
             pos = (st.x + nx * 1.2 * h, st.y + ny * 1.2 * h)
-            align = "MIDDLE_LEFT" if st.s <= 1e-6 else ("MIDDLE_RIGHT" if kind != "PI" else "MIDDLE_CENTER")
+            align = "MIDDLE_LEFT" if st.s <= 1e-6 else "MIDDLE_RIGHT"
             commands.append(_text_cmd(label, pos, 0.8 * h, text, along, align=align, tag=STATION_TAG))
+    # the curves: the tangents to their PI, PC and PT marked, the curve data
+    # beside the PI (a survey's every centre shot is a vertex, not a PI)
+    for curve in _alignment.horizontal_curves(axis):
+        commands.extend(_curve_commands(curve, h, line_layer, text))
     return CompositeCommand("stations", commands)
+
+
+def curve_lines(curve) -> list[str]:
+    """The data block of a horizontal curve, as a road plan writes it."""
+    fs = _alignment.format_station
+    head = f"PI-{curve.number}  STA. {fs(curve.s_pi, 3)}"
+    if curve.radius <= 0:
+        return [head, f"Δ = {_alignment.format_dms(curve.delta)} {curve.side}", "(ANGLE POINT)"]
+    return [head,
+            f"Δ = {_alignment.format_dms(curve.delta)} {curve.side}",
+            f"R = {curve.radius:.3f} m.",
+            f"T = {curve.tangent:.3f} m.",
+            f"L = {curve.length:.3f} m.",
+            f"E = {curve.external:.3f} m.",
+            f"M = {curve.middle_ordinate:.3f} m.",
+            f"PC STA. {fs(curve.s_pc, 3)}",
+            f"PT STA. {fs(curve.s_pt, 3)}"]
+
+
+def _curve_commands(curve, h, line_layer, text) -> list:
+    out = []
+    if curve.radius > 0:
+        out.append(_line_cmd(curve.pc, curve.pi, line_layer, STATION_TAG))
+        out.append(_line_cmd(curve.pi, curve.pt, line_layer, STATION_TAG))
+        for point, name, s_ in ((curve.pc, "PC", curve.s_pc), (curve.pt, "PT", curve.s_pt)):
+            out.append(_text_cmd(f"{name} {_alignment.format_station(s_, 3)}",
+                                 (point[0], point[1] - 1.2 * h), 0.7 * h, text, tag=STATION_TAG))
+    # the PI: a small cross, the block outside the bend
+    for dx, dy in ((1, 1), (1, -1)):
+        out.append(_line_cmd((curve.pi[0] - dx * 0.6 * h, curve.pi[1] - dy * 0.6 * h),
+                             (curve.pi[0] + dx * 0.6 * h, curve.pi[1] + dy * 0.6 * h),
+                             line_layer, STATION_TAG))
+    mid = ((curve.pc[0] + curve.pt[0]) / 2.0, (curve.pc[1] + curve.pt[1]) / 2.0)
+    ux, uy = curve.pi[0] - mid[0], curve.pi[1] - mid[1]
+    n = _math.hypot(ux, uy) or 1.0
+    x0, y0 = curve.pi[0] + ux / n * 2.0 * h, curve.pi[1] + uy / n * 2.0 * h
+    for k, line in enumerate(curve_lines(curve)):
+        out.append(_text_cmd(line, (x0, y0 - k * 1.4 * 0.8 * h), 0.8 * h, text,
+                             align="MIDDLE_LEFT", tag=STATION_TAG))
+    return out
 
 
 # -- cross sections -----------------------------------------------------------------------
@@ -1466,13 +1508,16 @@ def draw_sections(document, tin: _tin.Tin, axis_entity, insert, step: float = 20
                 msp, pts, s_, name), layer=LAYERS["grade"][0]))
             # the finished surface's elevations: each platform edge and the axis
             half = template.width / 2.0
-            for o in (-half, 0.0, half):
+            # left edge ends at its point, right edge starts at its, the axis
+            # above both: three numbers a few metres apart never run together
+            for o, dx, dy, align in ((-half, -0.3, 1.2, "MIDDLE_RIGHT"), (0.0, 0.0, 2.6, "MIDDLE_CENTER"),
+                                     (half, 0.3, 1.2, "MIDDLE_LEFT")):
                 z = _profile._z_on(design, o)
                 if z is None:
                     continue
                 x, y = to_xy(o, z)
-                commands.append(_text_cmd(f"{z:.3f}", (x, y + 1.6 * h), 0.8 * h, text,
-                                          tag=SECTION_TAG))
+                commands.append(_text_cmd(f"{z:.3f}", (x + dx * h, y + dy * h), 0.7 * h, text,
+                                          align=align, tag=SECTION_TAG))
             cut, fill = _profile.areas(ground, design)
             x_right = to_xy(half_width, datum)[0] + 2.0 * h
             y_mid = oy + height / 2.0

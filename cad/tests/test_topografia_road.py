@@ -123,11 +123,13 @@ def test_stations_and_section_lines_on_the_plan():
     msp = document.doc.modelspace()
     axis = msp.add_lwpolyline([(0.0, 0.0), (60.0, 0.0), (60.0, 40.0)])
     history.execute(actions.station_marks(document, axis, 25.0, 10.0))
-    lines = [e for e in msp if e.dxftype() == "LINE" and actions.is_station_mark(e)]
+    lines = [e for e in msp if e.dxftype() == "LINE" and actions.is_station_mark(e)
+             and abs((e.dxf.end - e.dxf.start).magnitude - 20.0) < 1e-6]   # not the PI's cross
     assert len(lines) == 5                                           # 0, 25, 50, 75, 100
     texts = [e.dxf.text for e in msp if e.dxftype() == "TEXT"]
     assert {"0+000", "0+025", "0+050", "0+075", "0+100"} <= set(texts)
-    assert "BEGIN STA. 0+000.000" in texts and "PI STA. 0+060.000" in texts
+    assert "BEGIN STA. 0+000.000" in texts and "PI-1  STA. 0+060.000" in texts
+    assert "Δ = 90°00'00\" LT" in texts and "(ANGLE POINT)" in texts
     assert "END STA. 0+100.000" in texts
     # the section line at 0+025 crosses the axis square, 10 m each side
     line = next(e for e in lines if abs(e.dxf.start.x - 25.0) < 1e-6)
@@ -135,6 +137,30 @@ def test_stations_and_section_lines_on_the_plan():
     assert alignment.format_station(2175.0, 0) == "2+175"
     history.undo()
     assert not [e for e in msp if e.dxftype() in ("LINE", "TEXT")]
+
+
+def test_a_curve_surveyed_on_its_centre_line_gives_its_pi_pc_pt():
+    """Tangent 150 m, a right curve R = 200 m of 1 rad, tangent 150 m,
+    shots every 25 m on the centre line (one at PC and PT)."""
+    def at(s):
+        if s <= 150.0:
+            return (s, 0.0)
+        if s <= 350.0:
+            a = (s - 150.0) / 200.0
+            return (150.0 + 200.0 * math.sin(a), -200.0 * (1.0 - math.cos(a)))
+        e, n = at(350.0)
+        return (e + (s - 350.0) * math.cos(-1.0), n + (s - 350.0) * math.sin(-1.0))
+    shots = [at(25.0 * k) for k in range(21)]
+    (curve,) = alignment.horizontal_curves(shots)
+    assert curve.side == "RT" and curve.delta == pytest.approx(math.degrees(1.0), abs=1e-6)
+    assert curve.radius == pytest.approx(200.0, rel=1e-6)
+    assert curve.tangent == pytest.approx(200.0 * math.tan(0.5))
+    assert curve.length == pytest.approx(200.0)
+    assert curve.external == pytest.approx(200.0 * (1 / math.cos(0.5) - 1))
+    assert curve.middle_ordinate == pytest.approx(200.0 * (1 - math.cos(0.5)))
+    assert curve.s_pc == pytest.approx(150.0) and curve.pi == pytest.approx((150.0 + curve.tangent, 0.0))
+    assert alignment.format_dms(curve.delta) == "57°17'45\""
+    assert alignment.horizontal_curves([(0, 0), (50, 0), (100, 0.1)]) == []
 
 
 def test_the_road_tools_run_headless():
@@ -191,3 +217,29 @@ def test_breaklines_along_the_road_are_forced_in_quickly():
             i, j = where[(round(a[0], 6), round(a[1], 6))], where[(round(b[0], 6), round(b[1], 6))]
             assert (min(i, j), max(i, j)) in edges
     assert tin.stats()["bad_edges"] == 0
+
+
+def test_thai_text_in_a_latin_style_is_drawn_in_a_thai_font():
+    """ดินตัด in an Arial style came out as boxes: ezdxf never falls back
+    to another font for a missing glyph."""
+    from ezdxf.addons.drawing.unified_text_renderer import UnifiedTextRenderer
+    from ezdxf.fonts import fonts
+
+    from core import ezdxf_patches
+
+    ezdxf_patches.apply()
+    face = None
+    for name in ezdxf_patches.THAI_FONTS:
+        if fonts.font_manager.has_font(name):
+            face = name
+            break
+    if face is None:
+        pytest.skip("no Thai font installed on this machine")
+    renderer = UnifiedTextRenderer()
+    arial = fonts.get_font_face("arial.ttf")
+    thai = fonts.get_font_face(face)
+    assert renderer.get_text_line_width("ดินตัด", arial) == pytest.approx(
+        renderer.get_text_line_width("ดินตัด", thai))
+    # Latin text keeps its own font
+    assert renderer.get_text_line_width("STA. 0+100", arial) != pytest.approx(
+        renderer.get_text_line_width("STA. 0+100", thai))

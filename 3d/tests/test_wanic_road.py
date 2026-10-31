@@ -74,6 +74,40 @@ def test_points_axis_and_analysis():
     assert any(t.startswith("ดินถม") for t in texts) and "0+025" in texts
 
 
+def test_pavement_curves_and_the_500_m_sample():
+    sample = Path(__file__).resolve().parents[2] / "samples" / "ทดสอบถนน-500ม.csv"
+    if not sample.exists():
+        pytest.skip("the sample survey is not beside this checkout")
+    shots = R.parse_points(sample.read_text(encoding="utf-8-sig"))
+    cl = R.centerline_from_codes(shots)
+    pvis = [(0, 92.6, 0), (200, 94.6, 120), (400, 91.8, 100), (499.869, 93.0, 0)]
+    plain = R.analyse(shots, cl, pvis, R.Settings(layers=[]))
+    concrete = R.analyse(shots, cl, pvis, R.Settings(pavement="drr-rc"))
+    asphalt = R.analyse(shots, cl, pvis, R.Settings(pavement="doh-ac"))
+    # the curve the file was made with: R = 200 m, 1 rad to the right
+    (c,) = concrete.hcurves
+    assert c.side == "RT" and c.radius == pytest.approx(200.0, abs=0.05)
+    assert c.length == pytest.approx(200.0, abs=0.05) and c.s_pc == pytest.approx(150.0, abs=0.01)
+    # 0.55 m of concrete pavement under an 8 m finished width: less fill, more cut
+    assert concrete.settings.structure == pytest.approx(0.55)
+    assert concrete.fill_total < plain.fill_total and concrete.cut_total > plain.cut_total
+    assert asphalt.settings.structure == pytest.approx(0.80)
+    sec = concrete.sections[8]
+    assert R.P._z_on(sec.formation, 0.0) == pytest.approx(R.P._z_on(sec.design, 0.0) - 0.55)
+    q = concrete.layer_quantities()
+    assert q[0][0].startswith("ผิวทางคอนกรีต") and q[0][3] == pytest.approx(0.20 * 8.0 * concrete.length, rel=1e-6)
+    polys = R.layer_polygons(sec.design, concrete.settings.template(), concrete.settings.pavement_layers())
+    assert len(polys) == 3
+    doc = R.dxf_document(concrete)
+    texts = [e.dxf.text for e in doc.modelspace() if e.dxftype() == "TEXT"]
+    assert "PI-1  STA. 0+259.259" in texts or any(t.startswith("PI-1  STA.") for t in texts)
+    assert any(t.startswith("R = 200.0") for t in texts) and any(t.startswith("PC STA. 0+149.99") or
+                                                                t.startswith("PC STA. 0+150.00") for t in texts)
+    assert all(e.dxf.style == "WANIC-TH" for e in doc.modelspace() if e.dxftype() == "TEXT")
+    assert "tahoma" in doc.styles.get("WANIC-TH").dxf.font.lower()
+    assert any(l.dxf.name.startswith("WANIC-ชั้นทาง-") for l in doc.layers)
+
+
 def test_without_a_grade_the_ground_is_still_shown():
     text, _axis = _survey_text(200)
     shots = R.parse_points(text)
@@ -121,6 +155,13 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     panel.results.profile.grab()                                   # paints without error
     panel.results.sections.grab()
     assert panel.results.table.rowCount() == len(an.rows)
+    for tab in range(panel.results.tabs.count()):                  # every tab paints
+        panel.results.tabs.setCurrentIndex(tab)
+        panel.results.grab()
+    assert panel.results.curves.rowCount() == len(an.hcurves)
+    assert panel.results.pavement.rowCount() == len(an.settings.pavement_layers())
+    panel.pavement.setCurrentIndex(panel.pavement.findData("drr-rc"))
+    assert panel.layer_rows()[0][0].startswith("ผิวทางคอนกรีต")
     groups = len(scene.groups)
     panel.build_model()
     assert len(scene.groups) == groups + 2
@@ -133,6 +174,7 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     # the document keeps the job: a fresh panel reads it back
     again = RoadPanel(app)
     again.load()
+    assert again.pavement.currentData() == "drr-rc" and len(again.layer_rows()) == 3
     assert len(again.shots) == len(panel.shots) and [c for p in again.pvis() for c in p] == pytest.approx(
         [c for p in panel.pvis() for c in p])
 

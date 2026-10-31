@@ -191,6 +191,18 @@ class ProfileView(QWidget):
                 for s_end in (c.bvc, c.evc):
                     b = xy(s_end, c.z_at(s_end))
                     p.drawLine(QPointF(b.x(), b.y() - 6), QPointF(b.x(), b.y() + 6))
+        # the horizontal curves: PC to PT bracketed over the grid
+        p.setPen(QPen(CYAN, 1.2))
+        for c in an.hcurves:
+            if c.radius <= 0:
+                continue
+            a, b = xy(c.s_pc, top), xy(c.s_pt, top)
+            yb = up + 4
+            p.drawLine(QPointF(a.x(), yb), QPointF(b.x(), yb))
+            p.drawLine(QPointF(a.x(), yb - 4), QPointF(a.x(), yb + 4))
+            p.drawLine(QPointF(b.x(), yb - 4), QPointF(b.x(), yb + 4))
+            p.drawText(QRectF(a.x(), yb + 2, max(b.x() - a.x(), 160), 14), Qt.AlignLeft,
+                       f" PI-{c.number}  R = {c.radius:.3f}  Δ = {A.format_dms(c.delta)} {c.side}")
         p.setPen(CYAN)
         font.setPointSizeF(9.5)
         p.setFont(font)
@@ -274,6 +286,23 @@ class SectionsView(QWidget):
         p.setPen(QPen(GROUND, 1.5))
         p.drawPath(path)
         if sec.design:
+            layers = an.settings.pavement_layers()
+            if layers and sec.formation:
+                for _name, outline, colour in R.layer_polygons(sec.design, an.settings.template(),
+                                                               layers):
+                    poly = QPainterPath(xy(*outline[0]))
+                    for o, z in outline[1:]:
+                        poly.lineTo(xy(o, z))
+                    poly.closeSubpath()
+                    p.setPen(QPen(QColor(200, 200, 200), 0.6))
+                    p.setBrush(QColor.fromRgbF(*colour))
+                    p.drawPath(poly)
+                p.setBrush(Qt.NoBrush)
+                path = QPainterPath(xy(*sec.formation[0]))
+                for o, z in sec.formation[1:]:
+                    path.lineTo(xy(o, z))
+                p.setPen(QPen(QColor("#d946ef"), 1.2))
+                p.drawPath(path)
             path = QPainterPath(xy(*sec.design[0]))
             for o, z in sec.design[1:]:
                 path.lineTo(xy(o, z))
@@ -331,6 +360,19 @@ class ResultsDialog(QDialog):
         self.tabs.addTab(self.profile, "รูปตัดตามยาว")
         self.tabs.addTab(scroll, "รูปตัดขวาง")
         self.tabs.addTab(self.table, "ปริมาณดิน")
+        self.curves = QTableWidget(0, 14)
+        self.curves.setHorizontalHeaderLabels(
+            ["PI", "สถานี PI", "E (PI)", "N (PI)", "Δ", "ทิศ", "R (ม.)", "T (ม.)", "L (ม.)",
+             "E ระยะภายนอก (ม.)", "M ระยะกลางโค้ง (ม.)", "LC คอร์ด (ม.)", "สถานี PC", "สถานี PT"])
+        self.curves.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.curves.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.tabs.addTab(self.curves, "โค้งราบ (PI PC PT)")
+        self.pavement = QTableWidget(0, 5)
+        self.pavement.setHorizontalHeaderLabels(
+            ["ชั้นทาง", "หนา (ม.)", "กว้าง (ม.)", "ปริมาตร (ม³)", "พื้นที่ (ม²)"])
+        self.pavement.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.pavement.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.tabs.addTab(self.pavement, "ชั้นทาง")
         lay.addWidget(self.tabs, 1)
         row = QHBoxLayout()
         for text, fn in (("🏔 สร้างโมเดล 3 มิติ", panel.build_model),
@@ -358,8 +400,35 @@ class ResultsDialog(QDialog):
                 if c:
                     it.setTextAlignment(right)
                 self.table.setItem(r, c, it)
+        self.curves.setRowCount(len(an.hcurves))
+        fs = A.format_station
+        for r, c in enumerate(an.hcurves):
+            vals = [f"PI-{c.number}", fs(c.s_pi, 3), f"{c.pi[0]:,.3f}", f"{c.pi[1]:,.3f}",
+                    A.format_dms(c.delta), c.side]
+            if c.radius > 0:
+                vals += [f"{c.radius:.3f}", f"{c.tangent:.3f}", f"{c.length:.3f}", f"{c.external:.3f}",
+                         f"{c.middle_ordinate:.3f}", f"{c.chord:.3f}", fs(c.s_pc, 3), fs(c.s_pt, 3)]
+            else:
+                vals += ["จุดหักมุม", "", "", "", "", "", "", ""]
+            for k, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if k > 1:
+                    it.setTextAlignment(right)
+                self.curves.setItem(r, k, it)
+        quantities = an.layer_quantities()
+        self.pavement.setRowCount(len(quantities))
+        for r, (name, th, w, vol, area) in enumerate(quantities):
+            for k, v in enumerate((name, f"{th:.3f}", f"{w:.3f}", f"{vol:,.3f}",
+                                   f"{area:,.3f}" if r == 0 else "")):
+                it = QTableWidgetItem(v)
+                if k:
+                    it.setTextAlignment(right)
+                self.pavement.setItem(r, k, it)
         text = (f"แนวทางยาว {an.length:,.3f} ม. · รูปตัดขวาง {len(an.sections)} รูป ทุก "
                 f"{an.settings.step:g} ม. · พื้นผิว {len(an.tin.triangles):,} สามเหลี่ยม")
+        text += (f" · โค้งราบ {sum(1 for c in an.hcurves if c.radius > 0)} โค้ง"
+                 f"<br>{R.PAVEMENTS.get(an.settings.pavement, ('กำหนดเอง',))[0]} · ชั้นทางหนารวม "
+                 f"{an.settings.structure:.3f} ม. (ดินตัด-ถมวัดถึงใต้ชั้นทาง)")
         if an.rows:
             text += (f"<br><b>ดินตัด {an.cut_total:,.3f} ม³ · ดินถม {an.fill_total:,.3f} ม³ · "
                      f"สุทธิ {an.cut_total - an.fill_total:+,.3f} ม³</b>")
@@ -441,7 +510,33 @@ class RoadPanel(QWidget):
         form.addRow("วิธีคำนวณปริมาตร", self.method)
         lay.addWidget(box)
 
-        box = QGroupBox("3. เส้นระดับออกแบบ (PVI)")
+        box = QGroupBox("3. โครงสร้างชั้นทาง (ถนนคอนกรีต / ลาดยาง)")
+        v = QVBoxLayout(box)
+        self.pavement = QComboBox()
+        for key, (title, kind, _layers) in R.PAVEMENTS.items():
+            self.pavement.addItem(title, key)
+        self.pavement.currentIndexChanged.connect(lambda _i: _safe(self, self._pavement_changed))
+        v.addWidget(self.pavement)
+        self.layers = QTableWidget(0, 2)
+        self.layers.setHorizontalHeaderLabels(["ชั้นทาง (บนลงล่าง)", "หนา (ม.)"])
+        self.layers.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.layers.setMinimumHeight(130)
+        v.addWidget(self.layers)
+        row = QHBoxLayout()
+        for text, fn in (("➕ เพิ่มชั้น", self.add_layer), ("➖ ลบชั้น", self.remove_layer)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, fn=fn: _safe(self, fn))
+            row.addWidget(b)
+        v.addLayout(row)
+        note = QLabel("<span style='color:#6b7280;font-size:11px'>ความหนาเป็นค่าเริ่มต้นตามแบบทั่วไปของ "
+                      "ทช./ทล. — ตรวจกับแบบมาตรฐานที่เลือกตามปริมาณจราจรและ CBR ของโครงการ "
+                      "แล้วแก้ในตารางได้ · ดินตัด-ถมคิดถึงใต้ชั้นทาง</span>")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        lay.addWidget(box)
+        self._pavement_changed()
+
+        box = QGroupBox("4. เส้นระดับออกแบบ (PVI)")
         v = QVBoxLayout(box)
         self.pvi = QTableWidget(0, 3)
         self.pvi.setHorizontalHeaderLabels(["สถานี (ม.)", "ระดับ (ม.)", "โค้งดิ่ง VC (ม.)"])
@@ -488,7 +583,54 @@ class RoadPanel(QWidget):
     def settings(self) -> R.Settings:
         s = R.Settings(**{k: float(w.value()) for k, w in self.spins.items()})
         s.method = self.method.currentData()
+        s.pavement = self.pavement.currentData()
+        s.layers = self.layer_rows()
         return s
+
+    # ---- pavement layers -----------------------------------------------------------------
+    def _colour_of(self, name: str, index: int):
+        for _title, _kind, layers in R.PAVEMENTS.values():
+            for n, _t, c in layers:
+                if n == name:
+                    return c
+        palette = [(0.15, 0.15, 0.17), (0.62, 0.60, 0.56), (0.80, 0.66, 0.42), (0.70, 0.56, 0.36),
+                   (0.78, 0.45, 0.30)]
+        return palette[index % len(palette)]
+
+    def layer_rows(self) -> list:
+        out = []
+        for r in range(self.layers.rowCount()):
+            name = self.layers.item(r, 0)
+            thick = self.layers.item(r, 1)
+            try:
+                t = float(thick.text().replace(",", ".")) if thick else 0.0
+            except ValueError:
+                t = 0.0
+            label = name.text().strip() if name and name.text().strip() else f"ชั้นที่ {r + 1}"
+            out.append((label, t, self._colour_of(label, r)))
+        return out
+
+    def set_layers(self, layers):
+        self.layers.setRowCount(0)
+        for name, t, *_c in layers:
+            r = self.layers.rowCount()
+            self.layers.insertRow(r)
+            self.layers.setItem(r, 0, QTableWidgetItem(str(name)))
+            self.layers.setItem(r, 1, QTableWidgetItem(f"{float(t):.3f}"))
+
+    def _pavement_changed(self):
+        key = self.pavement.currentData()
+        if key != "custom":
+            self.set_layers(R.pavement_layers(key))
+        self.analysis = None
+
+    def add_layer(self):
+        layers = self.layer_rows()
+        self.set_layers(layers + [(f"ชั้นที่ {len(layers) + 1}", 0.10)])
+
+    def remove_layer(self):
+        r = self.layers.currentRow()
+        self.layers.removeRow(r if r >= 0 else self.layers.rowCount() - 1)
 
     def pvis(self) -> list:
         out = []
@@ -519,7 +661,9 @@ class RoadPanel(QWidget):
                 "axis": [list(p) for p in self.axis], "origin": list(self.origin),
                 "pvis": [list(p) for p in self.pvis()],
                 "settings": {k: float(w.value()) for k, w in self.spins.items()},
-                "method": self.method.currentData(), "cl": self.cl_code.text()}
+                "method": self.method.currentData(), "cl": self.cl_code.text(),
+                "pavement": self.pavement.currentData(),
+                "layers": [[n, t] for n, t, _c in self.layer_rows()]}
         self._last = json.loads(json.dumps(data))
         setter = getattr(self.app, "set_document_data", None)
         if callable(setter):
@@ -545,6 +689,13 @@ class RoadPanel(QWidget):
         if i >= 0:
             self.method.setCurrentIndex(i)
         self.cl_code.setText(data.get("cl", "CL"))
+        i = self.pavement.findData(data.get("pavement", "drr-ac"))
+        if i >= 0:
+            self.pavement.blockSignals(True)
+            self.pavement.setCurrentIndex(i)
+            self.pavement.blockSignals(False)
+        if "layers" in data:
+            self.set_layers(data["layers"])
         self.set_pvis(data.get("pvis", []))
         self._report()
 
@@ -685,7 +836,9 @@ class RoadPanel(QWidget):
         groups = [group(R.terrain_mesh(an), "ภูมิประเทศ (TIN)", (0.55, 0.68, 0.42))]
         road = R.corridor_mesh(an)
         if road:
-            groups.append(group(road, "ถนนออกแบบ", (0.35, 0.35, 0.38)))
+            concrete = R.pavement_kind(an.settings.pavement) == "concrete"
+            groups.append(group(road, "ถนนคอนกรีต" if concrete else "ถนนลาดยาง",
+                                (0.80, 0.80, 0.77) if concrete else (0.20, 0.20, 0.22)))
         self.app.viewport.history.execute(CompoundCommand([InsertGroupCommand(g) for g in groups]))
         n = getattr(self.app.viewport, "notify_scene_changed", None)
         if callable(n):
@@ -723,7 +876,11 @@ class RoadPanel(QWidget):
 
 def setup(app) -> None:
     panel = RoadPanel(app)
-    dock = app.add_panel(TITLE, panel)
+    # the panel is taller than a laptop screen: it scrolls instead of squeezing
+    scroll = QScrollArea()
+    scroll.setWidget(panel)
+    scroll.setWidgetResizable(True)
+    dock = app.add_panel(TITLE, scroll)
     app.window._wanic_road = panel
     app.on_document_changed(lambda: QTimer.singleShot(0, lambda: _safe(panel, panel.load)))
 

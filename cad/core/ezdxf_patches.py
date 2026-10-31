@@ -45,6 +45,7 @@ def apply() -> None:
     _patch_arc_length_symbol_text()
     _patch_dms_angular_text()
     _patch_linetype_dots()
+    _patch_thai_font_fallback()
 
 
 def dms_text(degrees: float, dimadec: int, dimdsep: str = ".",
@@ -1341,3 +1342,69 @@ def _patch_linetype_dots() -> None:
     draw_line._ingecad_patch = True
     LinetypeStage2d.draw_line = draw_line
     LinetypeStage2d.draw_path = draw_path
+
+
+#: Fonts with Thai glyphs, tried in order: Windows ships Tahoma and
+#: Leelawadee, Thai government drawings use TH Sarabun, Linux has the
+#: TLWG and Noto families.
+THAI_FONTS = ("tahoma.ttf", "leelawui.ttf", "leelawad.ttf", "thsarabunnew.ttf",
+              "sarabun-regular.ttf", "notosansthai-regular.ttf", "garuda.ttf",
+              "loma.otf", "loma.ttf", "waree.ttf", "norasi.ttf", "kinnari.ttf")
+
+
+def has_thai(text: str) -> bool:
+    return any("\u0e00" <= c <= "\u0e7f" for c in text)
+
+
+def _patch_thai_font_fallback() -> None:
+    """Thai text drawn as a row of boxes.
+
+    A drawing's text styles name Arial, txt.shx or another Latin font; none
+    has Thai glyphs, and ezdxf, unlike Windows, never falls back to another
+    font for a missing glyph -- so ดินตัด / ดินถม / ม² came out as empty
+    squares (WANICNSURVEY, 2026-10-31). A text run that holds Thai and whose
+    font has no Thai is drawn, measured and placed in the first Thai font
+    found on the machine instead; Latin-only text keeps its own font.
+    """
+    from ezdxf.addons.drawing.unified_text_renderer import UnifiedTextRenderer
+    from ezdxf.fonts import fonts as _fonts
+
+    if getattr(UnifiedTextRenderer.get_text_path, "_wanic_thai", False):
+        return
+    state: dict = {}
+
+    def thai_face():
+        if "face" not in state:
+            state["face"] = None
+            for name in THAI_FONTS:
+                try:
+                    if _fonts.font_manager.has_font(name):
+                        state["face"] = _fonts.get_font_face(name)
+                        break
+                except Exception:
+                    continue
+        return state["face"]
+
+    def lacks_thai(renderer, face) -> bool:
+        key = (face.filename or face.family or "").lower()
+        cached = state.setdefault("lacks", {})
+        if key not in cached:
+            try:
+                cmap = getattr(renderer.get_font(face).glyph_cache, "cmap", None)
+                cached[key] = cmap is None or ord("\u0e01") not in cmap
+            except Exception:
+                cached[key] = True
+        return cached[key]
+
+    def wrap(method):
+        def patched(self, text, font_face, cap_height=1.0):
+            if text and has_thai(text) and lacks_thai(self, font_face):
+                face = thai_face()
+                if face is not None:
+                    font_face = face
+            return method(self, text, font_face, cap_height)
+        patched._wanic_thai = True
+        return patched
+
+    for name in ("get_text_path", "get_text_glyph_paths", "get_text_line_width"):
+        setattr(UnifiedTextRenderer, name, wrap(getattr(UnifiedTextRenderer, name)))
