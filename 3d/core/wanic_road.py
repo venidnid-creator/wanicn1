@@ -120,8 +120,16 @@ def parse_points(text: str, order: str = "auto") -> list[Shot]:
 # -- 2. the axis -----------------------------------------------------------------------------
 
 def is_cl(code: str, codes=CL_CODES) -> bool:
+    """A centreline shot: the description is a CL code (``CL``, ``CL12``,
+    ``CL-3``) or **starts** with one followed by more words — field books
+    write ``CL STA 0+020`` or ``CL PC STA 0+220``."""
     c = code.strip().upper()
-    return any(c == k.upper() or re.match(rf"^{re.escape(k.upper())}[\s\-_]*\d*$", c) for k in codes)
+    first = c.split()[0] if c.split() else ""
+
+    def hit(t):
+        return any(t == k.upper() or re.match(rf"^{re.escape(k.upper())}[\s\-_]*\d*$", t)
+                   for k in codes)
+    return hit(c) or hit(first)
 
 
 def _name_key(name: str):

@@ -262,3 +262,23 @@ def test_a_chain_of_edges_drawn_in_the_model_is_the_axis(monkeypatch):
     panel.axis_from_selection()
     ends = {tuple(round(c, 6) for c in panel.axis[0]), tuple(round(c, 6) for c in panel.axis[-1])}
     assert ends == {(700000.0, 1600000.0), (700090.0, 1600030.0)} and len(panel.axis) == 3
+
+
+def test_cl_code_may_lead_a_longer_description():
+    """Field books write ``CL STA 0+020`` / ``CL PC STA 0+220``: the first
+    word is the code."""
+    from core import wanic_road as R
+    for d in ("CL", "cl", "CL12", "CL-3", "CL STA 0+020", "CL PC STA 0+220",
+              "ศก STA 0+000", "C/L 5"):
+        assert R.is_cl(d), d
+    for d in ("CLOSE", "EP-L STA 0+000", "TOE-R", "", "STA CL"):
+        assert not R.is_cl(d), d
+    text = ("Point,N,E,Z_MSL,Description\n"
+            "BM-1,873810.247,424867.877,18.050,หมุดหลักฐาน BM-1\n"
+            "1,873805.658,424874.431,17.860,TOE-L STA 0+000\n"
+            "5,873801.643,424880.165,18.400,CL STA 0+000\n"
+            "14,873818.026,424891.637,19.300,CL STA 0+020\n"
+            "23,873834.409,424903.109,20.200,CL STA 0+040\n")
+    shots = R.parse_points(text)
+    axis = R.centerline_from_codes(shots)
+    assert len(axis) == 3
