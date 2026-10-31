@@ -46,6 +46,8 @@ LAYERS = {
     "dim": 3, "text": 7, "door": 4, "window": 4, "fixture": 6, "roof": 5,
     "struct": 2, "rebar": 1, "hidden": 8, "pipe": 4, "elec": 6, "hatch": 8,
     "mech": 5,
+    # the site map (road set): road yellow, PI cyan, start/end red, labels white
+    "sat": 2, "satpi": 4, "satred": 1, "sattext": 7, "satgrid": 8, "halo": 8, "photo": 8,
 }
 
 
@@ -186,14 +188,16 @@ def frame(sh: Sheet, info: dict, total: int, roles=None):
         band(11)
         sh.line((x0 + 22, y), (x0 + 22, y + 11), "title", 0.18)
         sh.text((x0 + 2, y + 7), l1, 2.0, "left", "title")
-        sh.text((x0 + 2, y + 2.8), l2, 2.0, "left", "title")
+        # a long second line (โครงสร้าง/ระบายน้ำ) is set smaller to stay in its cell
+        sh.text((x0 + 2, y + 2.8), l2, 2.0 if len(l2) <= 12 else 1.6, "left", "title")
         sh.text((x1 - 2, y + 1.5), who, 1.8, "right", "title")
         name = (info.get("signers") or {}).get(l1 + l2, "")
         if name:
             sh.text((x0 + 24, y + 5), name, 2.0, "left", "title")
     # The program's signature (every development carries it).
     band(16, 0.35)
-    sh.text((cx, y + 11), "ผู้จัดทำ / รับรองโปรแกรม", 2.0, "center", "title")
+    # room to sign above the name (the label is left out on purpose)
+    sh.line((cx - 20, y + 10), (cx + 20, y + 10), "title", 0.13, True)
     sh.text((cx, y + 6.5), f"({NAME})", 2.4, "center", "title", True)
     sh.text((cx, y + 2.5), ROLE, 2.0, "center", "title")
     band(14)
@@ -1962,6 +1966,10 @@ def _set_scale(sh, sc):
 # DXF (R12 ASCII, Thai text in ANSI_874) — every sheet side by side
 # ---------------------------------------------------------------------------
 
+#: Fill layers that exist for the PDF's photograph only.
+DXF_SKIP_FILLS = {"halo", "photo"}
+
+
 def _dxf_layer(name):
     return name.upper()
 
@@ -2080,6 +2088,12 @@ def dxf_bytes(sheets, gap=30.0) -> bytes:
                 code(0, "SEQEND")
             elif kind == "fill":
                 pts, layer = it[1], it[2]
+                # a CAD has no photograph under the lines: the dark plates
+                # that keep labels readable on it, white fills and the grey
+                # stand-in for the picture would only hide the drawing
+                white = (len(it) > 4 and tuple(it[4]) == (255, 255, 255)) or it[3] >= 0.99
+                if layer in DXF_SKIP_FILLS or white:
+                    continue
                 if len(pts) in (3, 4):
                     q = pts if len(pts) == 4 else pts + [pts[-1]]
                     code(0, "SOLID")

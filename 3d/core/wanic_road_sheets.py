@@ -1149,7 +1149,7 @@ def location_sheet(an, info, site) -> "D.Sheet":
         if site.get("image"):
             sh.image(SITE_BOX, site["image"])
         else:
-            sh.fill([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], "hatch", 0.9,
+            sh.fill([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], "photo", 0.9,
                     (226, 230, 222))
             sh.text(((bx0 + bx1) / 2, (by0 + by1) / 2 + 4), "ยังไม่มีภาพถ่ายดาวเทียม", 3.0,
                     "center", "text", True)

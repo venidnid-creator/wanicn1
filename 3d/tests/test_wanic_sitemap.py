@@ -119,3 +119,21 @@ def test_a_google_earth_picture_and_no_picture():
     t = " ".join(none.texts())
     assert "ยังไม่มีภาพถ่ายดาวเทียม" in t and none.count("image") == 1   # the vicinity only
     assert "PI-1" in t                                    # the road is still drawn
+
+
+def test_the_dxf_has_no_white_blocks_over_the_text():
+    """A CAD shows no photograph: the plates under the labels, the white
+    scale-bar squares and the picture's stand-in are left out of the DXF
+    (they printed as white blocks over the text), the labels stay."""
+    an, shots = _analysis()
+    for mode in ("tiles", "none"):
+        S = RS.build_road_set(an, {"location": "ต.หนองใหญ่ อ.หนองใหญ่ จ.ชลบุรี"}, shots,
+                              ("G", "PP"), _site(an, mode))
+        text = D.dxf_bytes(S).decode("cp874")
+        solids = text.split("\n0\nSOLID\n")[1:]
+        layers = {b.split("\n")[1] for b in solids}
+        assert not layers & {"HALO", "PHOTO"}, layers
+        assert "0+100" in text and "PI-1" in text and "E 7" in text
+    # the title column: no label over the signature, the name under the line
+    t = " ".join(S[0].texts())
+    assert "ผู้จัดทำ" not in t and "(นายเวนิช ธัมมะวงษ์)" in t
