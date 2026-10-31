@@ -605,6 +605,13 @@ class RoadPanel(QWidget):
         b.clicked.connect(lambda: _safe(self, self.export_csv))
         row.addWidget(b)
         lay.addLayout(row)
+        b = QPushButton("📐 แบบงานทาง A3 (แปลน-รูปตัดตามยาว · รูปตัดขวาง · ตาราง) PDF/DXF…")
+        b.setStyleSheet("QPushButton{background:#8A5A00;color:white;font-weight:bold;"
+                        "padding:6px;border-radius:6px}")
+        b.setToolTip("ชุดแบบ G (ผังสังเขป ข้อมูลออกแบบ ตารางโค้ง หมุด), PP (แปลนและรูปตัดตามยาว "
+                     "พร้อมแถบระดับ), ST (รูปตัดขวางทุกสถานี พร้อมพื้นที่/ปริมาตร), VT (ตารางปริมาณดิน)")
+        b.clicked.connect(lambda: _safe(self, self.export_sheets))
+        lay.addWidget(b)
         try:
             from core.wanic_sign import label_html
             sign = QLabel(label_html("ออกแบบถนน"))
@@ -824,6 +831,18 @@ class RoadPanel(QWidget):
         self._report("" if len(self.axis) >= 2 else
                      "ไม่พบจุดรหัส CL — เขียนเส้นแนวทางในโมเดลแล้วกด «ใช้เส้นที่เลือก»")
         self._flash(f"นำเข้าจุดสำรวจ {len(self.shots):,} จุด")
+        notes = []
+        turned = sum(1 for s in self.shots if s.swapped)
+        if turned:
+            notes.append(f"พบ {turned:,} จุดที่บันทึกเป็น N,E สลับกับส่วนอื่นของไฟล์ "
+                         "(ไฟล์ GNSS/RTK ที่รวมหลายงาน) — สลับเป็น E,N ให้แล้ว "
+                         "ตำแหน่งบน Google Earth และพื้นผิวดินจึงถูกต้อง")
+        dup = R.duplicate_names(self.shots)
+        if dup:
+            notes.append(f"เลขจุดซ้ำ {len(dup):,} เลข (เช่น {', '.join(dup[:5])}) — "
+                         "ใช้ได้ตามปกติ แต่ควรตั้งเลขจุดใหม่เพื่ออ้างอิงได้ถูกจุด")
+        if notes:
+            QMessageBox.information(self, TITLE, "\n\n".join(notes))
 
     def axis_from_codes(self):
         axis = R.centerline_from_codes(self.shots, self._codes())
@@ -1045,6 +1064,46 @@ class RoadPanel(QWidget):
         R.dxf_document(an).saveas(path)
         self._flash(f"บันทึก {path} แล้ว")
 
+    def export_sheets(self):
+        """The drawing set of the road (PDF and DXF, A3)."""
+        an = self._ensure()
+        if an is None:
+            return []
+        dlg = RoadSheetsDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return []
+        info = dlg.info()
+        zone, datum = self._zone_datum()
+        info.update(zone=zone, datum=datum,
+                    crs=f"UTM {datum} โซน {zone}N · ระดับ MSL",
+                    location=info.get("location") or self._place)
+        from core import wanic_drawings as D
+        from core import wanic_road_sheets as RS
+        sheets = RS.build_road_set(an, info, self.shots, info["groups"])
+        if not sheets:
+            QMessageBox.information(self, TITLE, "ยังไม่มีแนวทางที่วิเคราะห์แล้ว")
+            return []
+        name = (info.get("project") or "แบบงานทาง").replace(" ", "_")
+        path, _ = QFileDialog.getSaveFileName(self, "บันทึกแบบงานทาง", f"{name}.pdf",
+                                              "PDF (*.pdf);;DXF (*.dxf)")
+        if not path:
+            return []
+        stem = os.path.splitext(path)[0]
+        saved = []
+        if info.get("pdf", True):
+            from plugins.wanic_building import render_pdf
+            render_pdf(sheets, stem + ".pdf")
+            saved.append(stem + ".pdf")
+        if info.get("dxf", True):
+            Path(stem + "_แผ่นแบบ.dxf").write_bytes(D.dxf_bytes(sheets))
+            saved.append(stem + "_แผ่นแบบ.dxf")
+        groups = ", ".join(f"{g} {sum(1 for x in sheets if x.group == g)} แผ่น"
+                           for g in info["groups"] if any(x.group == g for x in sheets))
+        self._flash(f"ส่งออกแบบงานทาง {len(sheets)} แผ่น ({groups})")
+        QMessageBox.information(self, TITLE, f"ส่งออกแบบงานทาง {len(sheets)} แผ่น ({groups})\n"
+                                + "\n".join(saved))
+        return saved
+
     def export_csv(self):
         an = self._ensure()
         if an is None:
@@ -1058,6 +1117,64 @@ class RoadPanel(QWidget):
             return
         Path(path).write_text(R.earthworks_csv(an), encoding="utf-8-sig")
         self._flash(f"บันทึก {path} แล้ว")
+
+
+class RoadSheetsDialog(QDialog):
+    """Project data for the title column and the sheet families."""
+
+    GROUPS = [("G", "G — ผังสังเขป ข้อมูลออกแบบ ตารางโค้งราบ/ดิ่ง หมุดหลักฐาน"),
+              ("PP", "PP — แปลนและรูปตัดตามยาว พร้อมแถบระดับดิน/ออกแบบ/ขุด/ถม"),
+              ("ST", "ST — รูปตัดขวางทุกสถานี พร้อมพื้นที่และปริมาตร"),
+              ("VT", "VT — ตารางปริมาณดินขุด-ถม และปริมาณชั้นทาง")]
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        from PySide6.QtWidgets import QCheckBox
+        self.setWindowTitle("แบบงานทาง A3 — WANIC ออกแบบถนน")
+        f = QFormLayout(self)
+        self.fields = {}
+        for key, th, default in (("project", "ชื่อโครงการ", "งานออกแบบถนน"),
+                                 ("owner", "เจ้าของงาน / หน่วยงาน", ""),
+                                 ("location", "สถานที่", getattr(panel, "_place", "") or ""),
+                                 ("office", "ชื่อสำนักงาน (หัวตาราง)", "WANICNSURVEY"),
+                                 ("drawing_no", "เลขที่แบบ", "")):
+            e = QLineEdit(default)
+            self.fields[key] = e
+            f.addRow(th, e)
+        self.hscale = QComboBox()
+        for v in (500, 1000, 2000):
+            self.hscale.addItem(f"1:{v}", v)
+        self.hscale.setCurrentIndex(1)
+        f.addRow("มาตราส่วนราบ (แปลน/รูปตัดตามยาว)", self.hscale)
+        self.checks = {}
+        for g, th in self.GROUPS:
+            c = QCheckBox(th)
+            c.setChecked(True)
+            self.checks[g] = c
+            f.addRow(c)
+        self.pdf = QCheckBox("PDF (พิมพ์ A3)")
+        self.pdf.setChecked(True)
+        self.dxf = QCheckBox("DXF ชุดแผ่นแบบ (ทุกแผ่นเรียงกัน)")
+        self.dxf.setChecked(True)
+        f.addRow(self.pdf)
+        f.addRow(self.dxf)
+        row = QHBoxLayout()
+        ok = QPushButton("📐 ส่งออก")
+        ok.clicked.connect(self.accept)
+        no = QPushButton("ยกเลิก")
+        no.clicked.connect(self.reject)
+        row.addStretch(1)
+        row.addWidget(ok)
+        row.addWidget(no)
+        f.addRow(row)
+
+    def info(self) -> dict:
+        i = {k: e.text().strip() for k, e in self.fields.items()}
+        i["h_scale"] = self.hscale.currentData()
+        i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
+        i["pdf"] = self.pdf.isChecked()
+        i["dxf"] = self.dxf.isChecked()
+        return i
 
 
 def setup(app) -> None:

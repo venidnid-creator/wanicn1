@@ -44,6 +44,7 @@ class Shot:
     n: float
     z: float
     code: str = ""
+    swapped: bool = False           # read N,E and turned round by the importer
 
 
 # -- 1. the survey file ------------------------------------------------------------------
@@ -114,7 +115,47 @@ def parse_points(text: str, order: str = "auto") -> list[Shot]:
         auto += 1
     if not out:
         raise ValueError("ไม่พบจุดในไฟล์ (ตรวจลำดับคอลัมน์ P,N,E,Z,D)")
-    return out
+    return fix_swapped(out)
+
+
+def fix_swapped(shots: list[Shot], factor: float = 20.0) -> list[Shot]:
+    """Turn round the rows written N,E in a file that is otherwise E,N (or
+    the other way): GNSS/RTK exports often join two jobs with different
+    column orders, and those shots land hundreds of kilometres away — on
+    Google Earth the work then seems to be somewhere else.
+
+    A shot is swapped when (n, e) lies near the bulk of the survey (the
+    median) and (e, n) does not — by ``factor`` times the survey's spread.
+    Flagged with ``Shot.swapped`` so the panel can say how many."""
+    if len(shots) < 3:
+        return shots
+    me = sorted(s.e for s in shots)[len(shots) // 2]
+    mn = sorted(s.n for s in shots)[len(shots) // 2]
+    # A UTM easting is always 100 000–900 000 m (every zone): when the bulk
+    # of the file has its "E" outside that and its "N" inside, the bulk is
+    # the swapped part and the reference turns round.
+    if not 100000 <= me <= 900000 and 100000 <= mn <= 900000:
+        me, mn = mn, me
+
+    def d(e, n):
+        return math.hypot(e - me, n - mn)
+    near = sorted(min(d(s.e, s.n), d(s.n, s.e)) for s in shots)
+    spread = max(near[int(len(near) * 0.5)], 50.0)
+    for s in shots:
+        here, turned = d(s.e, s.n), d(s.n, s.e)
+        if here > spread * factor and turned < spread * 3:
+            s.e, s.n, s.swapped = s.n, s.e, True
+    return shots
+
+
+def duplicate_names(shots: list[Shot]) -> list[str]:
+    """Point names used by more than one shot (two jobs joined)."""
+    seen, dup = set(), []
+    for s in shots:
+        if s.name in seen and s.name not in dup:
+            dup.append(s.name)
+        seen.add(s.name)
+    return dup
 
 
 # -- 2. the axis -----------------------------------------------------------------------------

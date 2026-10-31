@@ -62,6 +62,7 @@ class Sheet:
             group
         self.items: list = []
         self.number = 0
+        self.colors: dict = {}           # layer → (r, g, b) for the PDF pen
 
     # primitives — every one carries its layer and line weight (mm)
     def line(self, a, b, layer="wall", w=0.25, dash=False):
@@ -76,8 +77,10 @@ class Sheet:
         self.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], layer, w, True,
                   dash)
 
-    def fill(self, pts, layer="hatch", gray=0.6):
-        self.items.append(("fill", [tuple(p) for p in pts], layer, gray))
+    def fill(self, pts, layer="hatch", gray=0.6, rgb=None):
+        """A filled polygon: grey level, or ``rgb`` (0–255) in the PDF."""
+        it = ("fill", [tuple(p) for p in pts], layer, gray)
+        self.items.append(it + (tuple(rgb),) if rgb else it)
 
     def circle(self, c, r, layer="grid", w=0.25):
         self.items.append(("circle", (c[0], c[1], r), layer, w))
@@ -141,7 +144,9 @@ SIGN_ROLES = [("สถาปัตยกรรม", "", "สถาปนิก")
               ("วิศวกรรม", "เครื่องกล", "วิศวกร")]
 
 
-def frame(sh: Sheet, info: dict, total: int):
+def frame(sh: Sheet, info: dict, total: int, roles=None):
+    """The title column; ``roles`` replaces the sign-off boxes
+    (``[(line1, line2, title)]``)."""
     W, H = PAPER
     m = MARGIN
     sh.rect(m, m, W - m, H - m, "frame", 0.5)
@@ -171,7 +176,7 @@ def frame(sh: Sheet, info: dict, total: int):
     sh.text((x0 + 2, y + 5.5), "สถานที่", 2.0, "left", "title")
     sh.text((x0 + 14, y + 5.5), (info.get("location") or "")[:30], 2.2,
             "left", "title")
-    for l1, l2, who in SIGN_ROLES:
+    for l1, l2, who in (roles or SIGN_ROLES):
         band(11)
         sh.line((x0 + 22, y), (x0 + 22, y + 11), "title", 0.18)
         sh.text((x0 + 2, y + 7), l1, 2.0, "left", "title")

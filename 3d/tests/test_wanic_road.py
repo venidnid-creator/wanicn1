@@ -211,8 +211,15 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     groups = len(scene.groups)
     panel.build_model()
     assert len(scene.groups) == groups + 2
+    from PySide6.QtWidgets import QDialog
+
+    from plugins.wanic_road import RoadSheetsDialog
+    monkeypatch.setattr(RoadSheetsDialog, "exec", lambda self: QDialog.Accepted)
     done = _click_all(panel, skip=("ใช้เส้นที่เลือก",))
     assert any("วิเคราะห์" in t for t in done)
+    pdf = [p for p in saved if p.endswith(".pdf")]
+    assert pdf and open(pdf[-1], "rb").read(5) == b"%PDF-"          # the A3 sheet set
+    assert os.path.exists(pdf[-1][:-4] + "_แผ่นแบบ.dxf")
     assert any(p.endswith(".dxf") and os.path.exists(p) for p in saved)
     assert any(p.endswith(".csv") and os.path.exists(p) for p in saved)
     _click_all(panel.results)
@@ -282,3 +289,23 @@ def test_cl_code_may_lead_a_longer_description():
     shots = R.parse_points(text)
     axis = R.centerline_from_codes(shots)
     assert len(axis) == 3
+
+
+def test_rows_written_n_e_in_an_e_n_file_are_turned_round():
+    """A GNSS/RTK export joining two jobs: part E,N and part N,E. The N,E
+    rows used to land 700 km away (Google Earth showed the wrong place)."""
+    rows = ["9,745911.488,1454500.84,95.615,N",
+            "15,745895.682,1454520.734,94.873,CL",
+            "18,745884.444,1454543.05,94.085,CL",
+            "21,745873.171,1454565.269,93.445,CL"]
+    rows += [f"{i},{1454498.7468 + 20 * i},{745906.9425 - 9 * i},95.6,N"
+             for i in range(3, 12)]
+    shots = R.parse_points("\n".join(rows))
+    assert sum(s.swapped for s in shots) == 9
+    assert all(744000 < s.e < 747000 and 1454000 < s.n < 1457000
+               for s in shots)
+    # nothing to turn in a clean file
+    clean = R.parse_points("\n".join(rows[:4]))
+    assert not any(s.swapped for s in clean)
+    assert R.duplicate_names(R.parse_points("1,10,10,1,N\n1,12,11,1,N\n"
+                                            "2,14,12,1,N")) == ["1"]

@@ -1553,15 +1553,18 @@ def render_pdf(sheets, path: str) -> int:
                 kind = it[0]
                 if kind == "fill":
                     g = int(255 * it[3])
+                    rgb = it[4] if len(it) > 4 else (g, g, g)
                     painter.setPen(Qt.NoPen)
-                    painter.setBrush(QBrush(QColor(g, g, g)))
+                    painter.setBrush(QBrush(QColor(*rgb)))
                     painter.drawPolygon(QPolygonF([P(*p) for p in it[1]]))
             painter.setBrush(Qt.NoBrush)
             for it in sh.items:
                 kind = it[0]
+                colors = getattr(sh, "colors", None) or {}
                 if kind in ("line", "poly"):
                     dash = it[4] if kind == "line" else it[5]
-                    pen = QPen(QColor(0, 0, 0), max(0.13, it[3]) * k)
+                    pen = QPen(QColor(*colors.get(it[2], (0, 0, 0))),
+                               max(0.13, it[3]) * k)
                     pen.setStyle(Qt.DashLine if dash else Qt.SolidLine)
                     pen.setCapStyle(Qt.FlatCap)
                     painter.setPen(pen)
@@ -1576,7 +1579,8 @@ def render_pdf(sheets, path: str) -> int:
                             painter.drawPolyline(pts)
                 elif kind == "circle":
                     cx, cy, r = it[1]
-                    painter.setPen(QPen(QColor(0, 0, 0), max(0.13, it[3]) * k))
+                    painter.setPen(QPen(QColor(*colors.get(it[2], (0, 0, 0))),
+                                        max(0.13, it[3]) * k))
                     painter.drawEllipse(P(cx, cy), r * k, r * k)
                 elif kind == "arc":
                     cx, cy, r, a0, a1 = it[1]
@@ -1589,7 +1593,7 @@ def render_pdf(sheets, path: str) -> int:
                     (x, y), t, h, al, _layer, bold, ang = it[1:]
                     f = font(h, bold)
                     painter.setFont(f)
-                    painter.setPen(QColor(0, 0, 0))
+                    painter.setPen(QColor(*colors.get(_layer, (0, 0, 0))))
                     w = painter.fontMetrics().horizontalAdvance(t)
                     dx = 0 if al == "left" else -w / 2 if al == "center" else -w
                     p = P(x, y)
