@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
@@ -518,12 +520,16 @@ class RoadPanel(QWidget):
         self.pavement.currentIndexChanged.connect(lambda _i: _safe(self, self._pavement_changed))
         v.addWidget(self.pavement)
         self.layers = QTableWidget(0, 2)
-        self.layers.setHorizontalHeaderLabels(["ชั้นทาง (บนลงล่าง)", "หนา (ม.)"])
+        self.layers.setHorizontalHeaderLabels(["ชั้นทาง (บนลงล่าง) — เลือกหรือพิมพ์ชื่อ", "หนา (ม.)"])
         self.layers.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.layers.setMinimumHeight(130)
+        self.layers.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.layers.setMinimumHeight(170)
         v.addWidget(self.layers)
+        self.structure = QLabel()
+        v.addWidget(self.structure)
         row = QHBoxLayout()
-        for text, fn in (("➕ เพิ่มชั้น", self.add_layer), ("➖ ลบชั้น", self.remove_layer)):
+        for text, fn in (("➕ เพิ่มชั้น", self.add_layer), ("➖ ลบชั้น", self.remove_layer),
+                         ("▲", lambda: self.move_layer(-1)), ("▼", lambda: self.move_layer(1))):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, fn=fn: _safe(self, fn))
             row.addWidget(b)
@@ -551,6 +557,36 @@ class RoadPanel(QWidget):
             row.addWidget(b)
         v.addLayout(row)
         lay.addWidget(box)
+
+        box = QGroupBox("5. ตำแหน่งบนแผนที่ (Google Earth)")
+        v = QVBoxLayout(box)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("ระบบพิกัดที่สำรวจ"))
+        self.grid = QComboBox()
+        for label, zone, datum in R.GRIDS:
+            self.grid.addItem(label, (zone, datum))
+        self.grid.currentIndexChanged.connect(lambda _i: self._grid_changed())
+        row.addWidget(self.grid, 1)
+        v.addLayout(row)
+        row = QHBoxLayout()
+        for text, fn, tip in (
+                ("📍 จังหวัด อำเภอ ตำบล", self.find_place,
+                 "แปลงพิกัด UTM เป็นละติจูด/ลองจิจูด แล้วถาม OpenStreetMap ว่าแนวทางอยู่ตำบล อำเภอ จังหวัดใด"),
+                ("🌏 เปิดใน Google Earth", self.open_google_earth,
+                 "บันทึกแนวทาง ผิวทาง สถานี โค้งราบ และจุดสำรวจเป็นไฟล์ KML แล้วเปิดด้วย Google Earth Pro"),
+                ("🌐 Google Earth บนเว็บ", self.open_earth_web,
+                 "เปิด Google Earth ในเบราว์เซอร์ตรงที่ตั้งงาน (ลากไฟล์ KML ลงไปเพื่อดูแนวทาง)")):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, fn=fn: _safe(self, fn))
+            row.addWidget(b)
+        v.addLayout(row)
+        self.place = QLabel("ตำแหน่ง: — (กด «📍 จังหวัด อำเภอ ตำบล»)")
+        self.place.setWordWrap(True)
+        self.place.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(self.place)
+        lay.addWidget(box)
+        self._place = ""
 
         row = QHBoxLayout()
         b = QPushButton("🔍 วิเคราะห์")
@@ -588,35 +624,52 @@ class RoadPanel(QWidget):
         return s
 
     # ---- pavement layers -----------------------------------------------------------------
-    def _colour_of(self, name: str, index: int):
-        for _title, _kind, layers in R.PAVEMENTS.values():
-            for n, _t, c in layers:
-                if n == name:
-                    return c
-        palette = [(0.15, 0.15, 0.17), (0.62, 0.60, 0.56), (0.80, 0.66, 0.42), (0.70, 0.56, 0.36),
-                   (0.78, 0.45, 0.30)]
-        return palette[index % len(palette)]
-
     def layer_rows(self) -> list:
+        """(name, thickness, colour) of each row, top first: the name from
+        its editable list, the thickness from its spin box (typed or
+        stepped, 0.005 m to 3 m)."""
         out = []
         for r in range(self.layers.rowCount()):
-            name = self.layers.item(r, 0)
-            thick = self.layers.item(r, 1)
-            try:
-                t = float(thick.text().replace(",", ".")) if thick else 0.0
-            except ValueError:
-                t = 0.0
-            label = name.text().strip() if name and name.text().strip() else f"ชั้นที่ {r + 1}"
-            out.append((label, t, self._colour_of(label, r)))
+            name = self.layers.cellWidget(r, 0)
+            thick = self.layers.cellWidget(r, 1)
+            label = name.currentText().strip() if name is not None else ""
+            label = label or f"ชั้นที่ {r + 1}"
+            t = float(thick.value()) if thick is not None else 0.0
+            out.append((label, t, R.layer_colour(label, r)))
         return out
 
     def set_layers(self, layers):
         self.layers.setRowCount(0)
         for name, t, *_c in layers:
-            r = self.layers.rowCount()
-            self.layers.insertRow(r)
-            self.layers.setItem(r, 0, QTableWidgetItem(str(name)))
-            self.layers.setItem(r, 1, QTableWidgetItem(f"{float(t):.3f}"))
+            self._insert_layer(self.layers.rowCount(), str(name), float(t))
+        self._show_structure()
+
+    def _insert_layer(self, r: int, name: str, t: float):
+        self.layers.insertRow(r)
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(list(R.LAYER_NAMES))
+        combo.setCurrentText(name)
+        combo.currentTextChanged.connect(lambda _t: self._layers_edited())
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 3.0)
+        spin.setDecimals(3)
+        spin.setSingleStep(0.01)
+        spin.setSuffix(" ม.")
+        spin.setValue(t)
+        spin.valueChanged.connect(lambda _v: self._layers_edited())
+        self.layers.setCellWidget(r, 0, combo)
+        self.layers.setCellWidget(r, 1, spin)
+        self.layers.setRowHeight(r, 28)
+
+    def _layers_edited(self):
+        self.analysis = None
+        self._show_structure()
+
+    def _show_structure(self):
+        rows = self.layer_rows() if hasattr(self, "structure") else []
+        if hasattr(self, "structure"):
+            self.structure.setText(f"รวม {len(rows)} ชั้น หนา {sum(t for _n, t, _c in rows):.3f} ม.")
 
     def _pavement_changed(self):
         key = self.pavement.currentData()
@@ -624,13 +677,36 @@ class RoadPanel(QWidget):
             self.set_layers(R.pavement_layers(key))
         self.analysis = None
 
+    def _selected_layer(self) -> int:
+        for r in range(self.layers.rowCount()):
+            for c in (0, 1):
+                w = self.layers.cellWidget(r, c)
+                if w is not None and (w.hasFocus() or (w.focusProxy() and w.focusProxy().hasFocus())):
+                    return r
+        return self.layers.currentRow()
+
     def add_layer(self):
-        layers = self.layer_rows()
-        self.set_layers(layers + [(f"ชั้นที่ {len(layers) + 1}", 0.10)])
+        """A new layer under the selected one (at the bottom when none is)."""
+        r = self._selected_layer()
+        r = self.layers.rowCount() if r < 0 else r + 1
+        self._insert_layer(r, "ชั้นทรายรองพื้น", 0.05)
+        self.layers.setCurrentCell(r, 0)
+        self._layers_edited()
 
     def remove_layer(self):
-        r = self.layers.currentRow()
+        r = self._selected_layer()
         self.layers.removeRow(r if r >= 0 else self.layers.rowCount() - 1)
+        self._layers_edited()
+
+    def move_layer(self, step: int):
+        rows = self.layer_rows()
+        r = self._selected_layer()
+        if not (0 <= r < len(rows)) or not (0 <= r + step < len(rows)):
+            return
+        rows[r], rows[r + step] = rows[r + step], rows[r]
+        self.set_layers(rows)
+        self.layers.setCurrentCell(r + step, 0)
+        self._layers_edited()
 
     def pvis(self) -> list:
         out = []
@@ -663,6 +739,7 @@ class RoadPanel(QWidget):
                 "settings": {k: float(w.value()) for k, w in self.spins.items()},
                 "method": self.method.currentData(), "cl": self.cl_code.text(),
                 "pavement": self.pavement.currentData(),
+                "grid": self.grid.currentIndex(), "place": self._place,
                 "layers": [[n, t] for n, t, _c in self.layer_rows()]}
         self._last = json.loads(json.dumps(data))
         setter = getattr(self.app, "set_document_data", None)
@@ -696,6 +773,11 @@ class RoadPanel(QWidget):
             self.pavement.blockSignals(False)
         if "layers" in data:
             self.set_layers(data["layers"])
+        self.grid.blockSignals(True)
+        self.grid.setCurrentIndex(int(data.get("grid", 0)))
+        self.grid.blockSignals(False)
+        self._place = data.get("place", "")
+        self._show_place()
         self.set_pvis(data.get("pvis", []))
         self._report()
 
@@ -705,6 +787,8 @@ class RoadPanel(QWidget):
         if len(self.axis) >= 2:
             text += f" · แนวทางยาว {A.polyline_length(self.axis):,.3f} ม."
         self.info.setText(text + (f"<br>{extra}" if extra else ""))
+        if hasattr(self, "place"):
+            self._show_place()
 
     def _codes(self):
         return tuple(c.strip() for c in self.cl_code.text().split(",") if c.strip()) or R.CL_CODES
@@ -788,6 +872,108 @@ class RoadPanel(QWidget):
         self.set_pvis(R.auto_pvis(tin, self.axis))
         if save:
             self.save()
+
+    # ---- on the globe ---------------------------------------------------------------------
+    def _zone_datum(self):
+        zone, datum = self.grid.currentData()
+        return int(zone), str(datum)
+
+    def _grid_changed(self):
+        self._place = ""
+        self._show_place()
+
+    def _centre(self):
+        if len(self.axis) < 2:
+            QMessageBox.information(self, TITLE, "นำเข้าจุดสำรวจและกำหนดแนวทางก่อน")
+            return None
+        zone, datum = self._zone_datum()
+        lat, lon = R.axis_centre_wgs84(self.axis, zone, datum)
+        if not R.in_thailand(lat, lon):
+            QMessageBox.warning(
+                self, TITLE,
+                f"พิกัดกลางแนวทางแปลงได้ ละติจูด {lat:.6f} ลองจิจูด {lon:.6f} ซึ่งอยู่นอกประเทศไทย\n"
+                "ตรวจระบบพิกัด (โซน 47 หรือ 48, WGS84 หรือ Indian 1975) และลำดับคอลัมน์ N/E ของไฟล์")
+        return lat, lon
+
+    def _show_place(self):
+        text = "ตำแหน่ง: "
+        if len(self.axis) >= 2:
+            zone, datum = self._zone_datum()
+            lat, lon = R.axis_centre_wgs84(self.axis, zone, datum)
+            text += f"กลางแนวทาง ละติจูด {lat:.6f}° ลองจิจูด {lon:.6f}° (WGS84)"
+        else:
+            text += "—"
+        if self._place:
+            text += f"<br><b>{self._place}</b>"
+        self.place.setText(text)
+
+    def find_place(self):
+        got = self._centre()
+        if got is None:
+            return
+        lat, lon = got
+        if os.environ.get("WANIC_OFFLINE"):
+            self._place = ""
+            self._show_place()
+            return
+        self.place.setText(self.place.text() + "<br>กำลังถาม OpenStreetMap…")
+        result: dict = {}
+
+        def work():
+            try:
+                result["place"] = R.reverse_geocode(lat, lon)
+            except Exception as e:                      # shown to the user below
+                result["error"] = e
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+
+        def poll():
+            if thread.is_alive():
+                QTimer.singleShot(200, poll)
+                return
+            if "error" in result:
+                self._show_place()
+                QMessageBox.warning(self, TITLE, "ถามตำแหน่งจาก OpenStreetMap ไม่สำเร็จ "
+                                    f"(ต้องต่ออินเทอร์เน็ต): {result['error']}")
+                return
+            self._place = R.place_text(result["place"])
+            self._show_place()
+            self.save()
+            self._flash(f"แนวทางอยู่ที่ {self._place}")
+        QTimer.singleShot(200, poll)
+
+    def kml_text(self) -> str:
+        zone, datum = self._zone_datum()
+        return R.kml_document(self.axis, self.settings(), zone, datum, self.analysis, self.shots,
+                              self._place)
+
+    def open_google_earth(self):
+        if self._centre() is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "บันทึกไฟล์สำหรับ Google Earth",
+                                              "ถนน-GoogleEarth.kml", "Google Earth (*.kml)")
+        if not path:
+            return
+        Path(path).write_text(self.kml_text(), encoding="utf-8")
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        if os.environ.get("WANIC_OFFLINE") or not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.information(
+                self, TITLE, f"บันทึก {path} แล้ว\nเปิดด้วย Google Earth Pro (ดับเบิลคลิกไฟล์) หรือกด "
+                "«🌐 Google Earth บนเว็บ» แล้วลากไฟล์ลงในหน้าเว็บ")
+        self._flash(f"บันทึก {path} แล้ว — เปิดใน Google Earth")
+
+    def open_earth_web(self):
+        got = self._centre()
+        if got is None:
+            return
+        url = R.earth_web_url(*got, distance=max(800.0, A.polyline_length(self.axis) * 1.6))
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        if not os.environ.get("WANIC_OFFLINE"):
+            QDesktopServices.openUrl(QUrl(url))
+        self._flash("เปิด Google Earth บนเว็บแล้ว — ลากไฟล์ KML ลงในหน้าเว็บเพื่อดูแนวทาง")
+        return url
 
     # ---- analysis and outputs ----------------------------------------------------------
     def analyse(self):

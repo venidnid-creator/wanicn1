@@ -88,16 +88,18 @@ def test_pavement_curves_and_the_500_m_sample():
     (c,) = concrete.hcurves
     assert c.side == "RT" and c.radius == pytest.approx(200.0, abs=0.05)
     assert c.length == pytest.approx(200.0, abs=0.05) and c.s_pc == pytest.approx(150.0, abs=0.01)
-    # 0.55 m of concrete pavement under an 8 m finished width: less fill, more cut
-    assert concrete.settings.structure == pytest.approx(0.55)
+    # 0.60 m of concrete pavement (with its 5 cm of sand) under an 8 m
+    # finished width: less fill, more cut
+    assert concrete.settings.structure == pytest.approx(0.60)
+    assert [n for n, _t, _c in concrete.settings.pavement_layers()][1] == "ชั้นทรายรองพื้น"
     assert concrete.fill_total < plain.fill_total and concrete.cut_total > plain.cut_total
     assert asphalt.settings.structure == pytest.approx(0.80)
     sec = concrete.sections[8]
-    assert R.P._z_on(sec.formation, 0.0) == pytest.approx(R.P._z_on(sec.design, 0.0) - 0.55)
+    assert R.P._z_on(sec.formation, 0.0) == pytest.approx(R.P._z_on(sec.design, 0.0) - 0.60)
     q = concrete.layer_quantities()
     assert q[0][0].startswith("ผิวทางคอนกรีต") and q[0][3] == pytest.approx(0.20 * 8.0 * concrete.length, rel=1e-6)
     polys = R.layer_polygons(sec.design, concrete.settings.template(), concrete.settings.pavement_layers())
-    assert len(polys) == 3
+    assert len(polys) == 4
     doc = R.dxf_document(concrete)
     texts = [e.dxf.text for e in doc.modelspace() if e.dxftype() == "TEXT"]
     assert "PI-1  STA. 0+259.259" in texts or any(t.startswith("PI-1  STA.") for t in texts)
@@ -106,6 +108,42 @@ def test_pavement_curves_and_the_500_m_sample():
     assert all(e.dxf.style == "WANIC-TH" for e in doc.modelspace() if e.dxftype() == "TEXT")
     assert "tahoma" in doc.styles.get("WANIC-TH").dxf.font.lower()
     assert any(l.dxf.name.startswith("WANIC-ชั้นทาง-") for l in doc.layers)
+
+
+def test_utm_to_google_earth_and_the_place_name(monkeypatch):
+    # zone 47 WGS84: the same as the 3D's own georeferencing
+    from georef.datum import utm_forward, utm_inverse
+    lat, lon = R.utm_to_wgs84(701250.0, 1612480.0, 47)
+    assert (lat, lon) == pytest.approx(utm_inverse(701250.0, 1612480.0, 47, True), abs=1e-9)
+    assert R.in_thailand(lat, lon)
+    e, n = utm_forward(13.7563, 100.5018, 47)                       # Bangkok
+    assert R.utm_to_wgs84(e, n, 47) == pytest.approx((13.7563, 100.5018), abs=1e-8)
+    # the same grid numbers on Indian 1975 sit a few hundred metres away
+    lat2, lon2 = R.utm_to_wgs84(e, n, 47, "Indian1975")
+    shift = math.hypot((lat2 - 13.7563) * 110574, (lon2 - 100.5018) * 108100)
+    assert 250 < shift < 600
+    # zone 48 for the east of the country
+    assert 102.0 < R.utm_to_wgs84(300000.0, 1800000.0, 48)[1] < 104.0
+    # the KML: axis, road, stations, curves, points -- in lon,lat order
+    text, _axis = _survey_text(300)
+    shots = R.parse_points(text)
+    cl = R.centerline_from_codes(shots)
+    an = R.analyse(shots, cl, R.auto_pvis(R.build_tin(shots), cl), R.Settings())
+    kml = R.kml_document(cl, an.settings, 47, "WGS84", an, shots, "ต.ทดสอบ อ.ทดสอบ จ.ทดสอบ")
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(kml.encode("utf-8"))
+    ns = {"k": "http://www.opengis.net/kml/2.2"}
+    names = [e.text for e in root.iter("{http://www.opengis.net/kml/2.2}name")]
+    assert "แนวศูนย์กลางทาง" in names and "ผิวทาง" in names and "0+100" in names
+    first = root.find(".//k:LineString/k:coordinates", ns).text.split()[0].split(",")
+    lat0, lon0 = R.utm_to_wgs84(cl[0][0], cl[0][1], 47)
+    assert (float(first[1]), float(first[0])) == pytest.approx((lat0, lon0), abs=1e-7)
+    assert "ต.ทดสอบ" in kml and "ระดับออกแบบ" in kml
+    assert R.earth_web_url(14.5, 100.8).startswith("https://earth.google.com/web/@14.5000000,100.8000000")
+    # จังหวัด อำเภอ ตำบล out of OpenStreetMap's answer
+    place = R.parse_place({"display_name": "x", "address": {
+        "suburb": "ตำบลหน้าพระลาน", "county": "อำเภอเฉลิมพระเกียรติ", "state": "จังหวัดสระบุรี"}})
+    assert R.place_text(place) == "ต.หน้าพระลาน อ.เฉลิมพระเกียรติ จ.สระบุรี"
 
 
 def test_without_a_grade_the_ground_is_still_shown():
@@ -127,6 +165,7 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     from tests.test_wanic_buttons import _App, _click_all
 
     QApplication.instance() or QApplication([])
+    monkeypatch.setenv("WANIC_OFFLINE", "1")           # no browser, no Google Earth, no network
     text, _axis = _survey_text(300)
     pts = tmp_path / "survey.csv"
     pts.write_text(text, encoding="utf-8")
@@ -162,6 +201,13 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     assert panel.results.pavement.rowCount() == len(an.settings.pavement_layers())
     panel.pavement.setCurrentIndex(panel.pavement.findData("drr-rc"))
     assert panel.layer_rows()[0][0].startswith("ผิวทางคอนกรีต")
+    assert panel.layer_rows()[1][0] == "ชั้นทรายรองพื้น"
+    # the thickness is typed in its own box; a layer goes in under the selected one
+    panel.layers.cellWidget(1, 1).setValue(0.07)
+    panel.layers.setCurrentCell(2, 0)
+    panel.add_layer()
+    assert len(panel.layer_rows()) == 5 and panel.layer_rows()[3][0] == "ชั้นทรายรองพื้น"
+    assert "หนา 0.670 ม." in panel.structure.text()
     groups = len(scene.groups)
     panel.build_model()
     assert len(scene.groups) == groups + 2
@@ -171,10 +217,26 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     assert any(p.endswith(".csv") and os.path.exists(p) for p in saved)
     _click_all(panel.results)
     assert not wanic_ui.LAST_ERROR
+    assert any(p.endswith(".kml") and os.path.exists(p) for p in saved)
+    assert "ละติจูด" in panel.place.text()
+    # the place: asked in the background, written in the panel and the document
+    monkeypatch.delenv("WANIC_OFFLINE")
+    monkeypatch.setattr(R, "reverse_geocode", lambda lat, lon: {
+        "province": "สระบุรี", "district": "เฉลิมพระเกียรติ", "subdistrict": "หน้าพระลาน"})
+    panel.find_place()
+    import time
+    for _ in range(50):
+        QApplication.processEvents()
+        if panel._place:
+            break
+        time.sleep(0.05)
+    assert panel._place == "ต.หน้าพระลาน อ.เฉลิมพระเกียรติ จ.สระบุรี" and "จ.สระบุรี" in panel.place.text()
+    assert panel.open_earth_web().startswith("https://earth.google.com/web/@")
     # the document keeps the job: a fresh panel reads it back
     again = RoadPanel(app)
     again.load()
-    assert again.pavement.currentData() == "drr-rc" and len(again.layer_rows()) == 3
+    assert again.pavement.currentData() == "drr-rc" and len(again.layer_rows()) == 5
+    assert again.layer_rows()[1][:2] == ("ชั้นทรายรองพื้น", pytest.approx(0.07))
     assert len(again.shots) == len(panel.shots) and [c for p in again.pvis() for c in p] == pytest.approx(
         [c for p in panel.pvis() for c in p])
 

@@ -184,6 +184,7 @@ PAVEMENTS = {
         ("ชั้นรองพื้นทางลูกรัง", 0.15, (0.78, 0.45, 0.30))]),
     "drr-rc": ("ทช. ถนนคอนกรีตเสริมเหล็ก", "concrete", [
         ("ผิวทางคอนกรีตเสริมเหล็ก", 0.20, (0.80, 0.80, 0.77)),
+        ("ชั้นทรายรองพื้น", 0.05, (0.93, 0.84, 0.55)),
         ("ชั้นพื้นทางหินคลุก", 0.15, (0.62, 0.60, 0.56)),
         ("ชั้นรองพื้นทางวัสดุมวลรวม", 0.20, (0.80, 0.66, 0.42))]),
     "doh-ac": ("ทล. ถนนลาดยาง ผิวแอสฟัลต์คอนกรีต (AC)", "asphalt", [
@@ -194,11 +195,34 @@ PAVEMENTS = {
         ("ชั้นวัสดุคัดเลือก ก", 0.30, (0.70, 0.56, 0.36))]),
     "doh-rc": ("ทล. ถนนคอนกรีต (JRCP)", "concrete", [
         ("ผิวทางคอนกรีตเสริมเหล็ก (JRCP)", 0.25, (0.82, 0.82, 0.79)),
+        ("ชั้นทรายรองพื้น", 0.05, (0.93, 0.84, 0.55)),
         ("ชั้นพื้นทางหินคลุก", 0.15, (0.62, 0.60, 0.56)),
         ("ชั้นรองพื้นทางวัสดุมวลรวม", 0.20, (0.80, 0.66, 0.42)),
         ("ชั้นวัสดุคัดเลือก ก", 0.30, (0.70, 0.56, 0.36))]),
     "custom": ("กำหนดเอง", "asphalt", []),
 }
+
+
+#: Names offered in the layer table (any other may be typed).
+LAYER_NAMES = ("ผิวทางคอนกรีตเสริมเหล็ก", "ผิวทางคอนกรีตไม่เสริมเหล็ก", "ผิวทางแอสฟัลต์คอนกรีต (AC)",
+               "ชั้นรองผิว AC (Binder Course)", "ผิวทางลาดยางเคลือบผิว 2 ชั้น (DBST)",
+               "ผิวทางลาดยางเคลือบผิว 1 ชั้น (SST)", "ชั้นทรายรองพื้น", "ชั้นพื้นทางหินคลุก",
+               "ชั้นพื้นทางดินซีเมนต์", "ชั้นรองพื้นทางวัสดุมวลรวม", "ชั้นรองพื้นทางลูกรัง",
+               "ชั้นวัสดุคัดเลือก ก", "ชั้นวัสดุคัดเลือก ข", "ชั้นทรายถม")
+#: Colours of the usual materials, by a word of the layer's name.
+_COLOURS = (("คอนกรีต", (0.80, 0.80, 0.77)), ("ทราย", (0.93, 0.84, 0.55)),
+            ("Binder", (0.25, 0.25, 0.27)), ("แอสฟัลต์", (0.15, 0.15, 0.17)),
+            ("ลาดยาง", (0.18, 0.18, 0.20)), ("หินคลุก", (0.62, 0.60, 0.56)),
+            ("ซีเมนต์", (0.70, 0.70, 0.66)), ("มวลรวม", (0.80, 0.66, 0.42)),
+            ("ลูกรัง", (0.78, 0.45, 0.30)), ("คัดเลือก", (0.70, 0.56, 0.36)))
+
+
+def layer_colour(name: str, index: int = 0) -> tuple:
+    for word, colour in _COLOURS:
+        if word in name:
+            return colour
+    palette = [(0.55, 0.50, 0.45), (0.65, 0.55, 0.40), (0.50, 0.45, 0.35)]
+    return palette[index % len(palette)]
 
 
 def pavement_layers(key: str) -> list:
@@ -775,3 +799,250 @@ def curve_table_lines(c) -> list:
     return [head, f"Δ = {A.format_dms(c.delta)} {c.side}", f"R = {c.radius:.3f} ม.",
             f"T = {c.tangent:.3f} ม.", f"L = {c.length:.3f} ม.", f"E = {c.external:.3f} ม.",
             f"M = {c.middle_ordinate:.3f} ม.", f"PC STA. {fs(c.s_pc, 3)}", f"PT STA. {fs(c.s_pt, 3)}"]
+
+
+# -- 6. on the globe: UTM to WGS84, Google Earth, the place's name -------------------------
+
+#: Ellipsoids of the grids a Thai survey comes in (a, 1/f).
+ELLIPSOIDS = {"WGS84": (6378137.0, 298.257223563),
+              "Indian1975": (6377276.345, 300.8017)}          # Everest 1830
+#: Indian 1975 to WGS84, the three-parameter shift Thai agencies use (m).
+INDIAN1975_TO_WGS84 = (204.4798, 837.8940, 294.7765)
+#: (label, zone, datum) offered by the panel; a Thai survey is zone 47
+#: west of 102°E (most of the country) and 48 east of it.
+GRIDS = (("UTM WGS84 โซน 47N", 47, "WGS84"), ("UTM WGS84 โซน 48N", 48, "WGS84"),
+         ("UTM Indian 1975 โซน 47N", 47, "Indian1975"), ("UTM Indian 1975 โซน 48N", 48, "Indian1975"))
+THAILAND = (5.5, 20.6, 97.3, 105.7)                            # lat, lat, lon, lon
+
+
+def _tm_inverse(e: float, n: float, zone: int, a: float, inv_f: float) -> tuple:
+    """UTM (northern hemisphere) to (lat, lon) degrees on the ellipsoid
+    (a, 1/f) -- Snyder's Transverse Mercator inverse."""
+    f = 1.0 / inv_f
+    e2 = f * (2 - f)
+    ep2 = e2 / (1 - e2)
+    k0 = 0.9996
+    x = e - 500000.0
+    m = n / k0
+    mu = m / (a * (1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256))
+    e1 = (1 - math.sqrt(1 - e2)) / (1 + math.sqrt(1 - e2))
+    phi1 = (mu + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * math.sin(2 * mu)
+            + (21 * e1 ** 2 / 16 - 55 * e1 ** 4 / 32) * math.sin(4 * mu)
+            + (151 * e1 ** 3 / 96) * math.sin(6 * mu) + (1097 * e1 ** 4 / 512) * math.sin(8 * mu))
+    c1 = ep2 * math.cos(phi1) ** 2
+    t1 = math.tan(phi1) ** 2
+    n1 = a / math.sqrt(1 - e2 * math.sin(phi1) ** 2)
+    r1 = a * (1 - e2) / (1 - e2 * math.sin(phi1) ** 2) ** 1.5
+    d = x / (n1 * k0)
+    lat = phi1 - (n1 * math.tan(phi1) / r1) * (
+        d ** 2 / 2 - (5 + 3 * t1 + 10 * c1 - 4 * c1 ** 2 - 9 * ep2) * d ** 4 / 24
+        + (61 + 90 * t1 + 298 * c1 + 45 * t1 ** 2 - 252 * ep2 - 3 * c1 ** 2) * d ** 6 / 720)
+    lon0 = math.radians((zone - 1) * 6 - 180 + 3)
+    lon = lon0 + (d - (1 + 2 * t1 + c1) * d ** 3 / 6
+                  + (5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * ep2 + 24 * t1 ** 2) * d ** 5 / 120) \
+        / math.cos(phi1)
+    return math.degrees(lat), math.degrees(lon)
+
+
+def _shift(lat: float, lon: float, src, dst, d) -> tuple:
+    """A three-parameter datum shift through geocentric XYZ."""
+    def to_xyz(lat, lon, a, inv_f):
+        f = 1 / inv_f
+        e2 = f * (2 - f)
+        la, lo = math.radians(lat), math.radians(lon)
+        nn = a / math.sqrt(1 - e2 * math.sin(la) ** 2)
+        return (nn * math.cos(la) * math.cos(lo), nn * math.cos(la) * math.sin(lo),
+                nn * (1 - e2) * math.sin(la))
+    x, y, z = to_xyz(lat, lon, *src)
+    x, y, z = x + d[0], y + d[1], z + d[2]
+    a, inv_f = dst
+    f = 1 / inv_f
+    e2 = f * (2 - f)
+    lo = math.atan2(y, x)
+    p = math.hypot(x, y)
+    la = math.atan2(z, p * (1 - e2))
+    for _ in range(6):
+        nn = a / math.sqrt(1 - e2 * math.sin(la) ** 2)
+        la = math.atan2(z + e2 * nn * math.sin(la), p)
+    return math.degrees(la), math.degrees(lo)
+
+
+def utm_to_wgs84(e: float, n: float, zone: int = 47, datum: str = "WGS84") -> tuple:
+    """(lat, lon) WGS84 -- what Google Earth reads -- of a UTM point on
+    the given zone (northern hemisphere) and datum."""
+    lat, lon = _tm_inverse(e, n, zone, *ELLIPSOIDS[datum])
+    if datum == "Indian1975":
+        lat, lon = _shift(lat, lon, ELLIPSOIDS["Indian1975"], ELLIPSOIDS["WGS84"],
+                          INDIAN1975_TO_WGS84)
+    return lat, lon
+
+
+def in_thailand(lat: float, lon: float) -> bool:
+    return THAILAND[0] <= lat <= THAILAND[1] and THAILAND[2] <= lon <= THAILAND[3]
+
+
+def _esc(s) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def kml_document(axis: list, settings: Settings, zone: int = 47, datum: str = "WGS84",
+                 an: Optional[Analysis] = None, shots: Optional[list] = None,
+                 place: str = "", name: str = "ออกแบบถนน WANIC") -> str:
+    """A KML for Google Earth: the axis, the edges and surface of the road,
+    the stations with their section lines (with NGL, design elevation and
+    cut/fill when analysed), the horizontal curves' PI / PC / PT with their
+    data, and the survey points (hidden at first) -- all converted from
+    the survey's UTM grid to WGS84 and clamped to the ground."""
+    def ll(p):
+        lat, lon = utm_to_wgs84(p[0], p[1], zone, datum)
+        return f"{lon:.8f},{lat:.8f},0"
+
+    def line(pts, style, title, visible=1):
+        return (f"<Placemark><name>{_esc(title)}</name><visibility>{visible}</visibility>"
+                f"<styleUrl>#{style}</styleUrl><LineString><tessellate>1</tessellate>"
+                f"<altitudeMode>clampToGround</altitudeMode><coordinates>"
+                + " ".join(ll(p) for p in pts) + "</coordinates></LineString></Placemark>")
+
+    def point(p, title, style, desc="", visible=1):
+        return (f"<Placemark><name>{_esc(title)}</name><visibility>{visible}</visibility>"
+                f"<description>{_esc(desc)}</description><styleUrl>#{style}</styleUrl>"
+                f"<Point><coordinates>{ll(p)}</coordinates></Point></Placemark>")
+
+    length = A.polyline_length(axis)
+    half = settings.width / 2.0
+    edge = half + settings.shoulder
+    dense = []
+    s = 0.0
+    while s < length:
+        dense.append(A.point_at(axis, s))
+        s += 5.0
+    dense.append(A.point_at(axis, length))
+    left = [st.offset_point(-edge) for st in dense]
+    right = [st.offset_point(edge) for st in dense]
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
+           f"<name>{_esc(name)}</name>",
+           f"<description>{_esc(place)}  ระบบพิกัดสำรวจ: UTM {datum} โซน {zone}N · "
+           f"แนวทางยาว {length:,.3f} ม. · {_esc(PAVEMENTS.get(settings.pavement, ('',))[0])}"
+           "</description>",
+           '<Style id="axis"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>',
+           '<Style id="edge"><LineStyle><color>ff00ffff</color><width>2</width></LineStyle></Style>',
+           '<Style id="road"><LineStyle><color>ff00ffff</color><width>1</width></LineStyle>'
+           '<PolyStyle><color>6600a5ff</color></PolyStyle></Style>',
+           '<Style id="section"><LineStyle><color>ffffffff</color><width>1</width></LineStyle></Style>',
+           '<Style id="sta"><IconStyle><scale>0.5</scale><Icon><href>'
+           'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>'
+           '<LabelStyle><scale>0.8</scale></LabelStyle></Style>',
+           '<Style id="pi"><IconStyle><color>ffffff00</color><scale>1.0</scale><Icon><href>'
+           'http://maps.google.com/mapfiles/kml/shapes/triangle.png</href></Icon></IconStyle></Style>',
+           '<Style id="shot"><IconStyle><scale>0.35</scale><Icon><href>'
+           'http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle>'
+           '<LabelStyle><scale>0</scale></LabelStyle></Style>']
+    out.append("<Folder><name>ถนน</name>")
+    out.append(line(axis, "axis", "แนวศูนย์กลางทาง"))
+    out.append(line(left, "edge", "ขอบไหล่ทางซ้าย"))
+    out.append(line(right, "edge", "ขอบไหล่ทางขวา"))
+    ring = left + list(reversed(right)) + [left[0]]
+    out.append('<Placemark><name>ผิวทาง</name><styleUrl>#road</styleUrl><Polygon><tessellate>1</tessellate>'
+               '<altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>'
+               + " ".join(ll(p) for p in ring) + "</coordinates></LinearRing></outerBoundaryIs></Polygon>"
+               "</Placemark>")
+    out.append("</Folder><Folder><name>สถานีและแนวรูปตัด</name>")
+    by_s = {round(sec.s, 3): sec for sec in an.sections} if an else {}
+    for st in A.stations(axis, settings.step):
+        if abs(st.s / settings.step - round(st.s / settings.step)) > 1e-6 and \
+                abs(st.s - length) > 1e-6 and st.s > 1e-6:
+            continue
+        label = A.format_station(st.s, 3)
+        desc = f"สถานี {label}"
+        sec = by_s.get(round(st.s, 3))
+        if sec is not None:
+            if sec.z_ground is not None:
+                desc += f" · ระดับดินเดิม {sec.z_ground:.3f}"
+            if sec.z_design is not None:
+                desc += f" · ระดับออกแบบ {sec.z_design:.3f} · ดินตัด {sec.cut:.3f} ม² · ดินถม {sec.fill:.3f} ม²"
+        out.append(point((st.x, st.y), A.format_station(st.s, 0), "sta", desc))
+        out.append(line([st.offset_point(-settings.half_width), st.offset_point(settings.half_width)],
+                        "section", f"รูปตัด {label}"))
+    out.append("</Folder><Folder><name>โค้งราบ</name>")
+    for c in (an.hcurves if an else A.horizontal_curves(axis)):
+        desc = " · ".join(curve_table_lines(c))
+        out.append(point(c.pi, f"PI-{c.number}", "pi", desc))
+        if c.radius > 0:
+            out.append(point(c.pc, f"PC {A.format_station(c.s_pc, 3)}", "sta", desc))
+            out.append(point(c.pt, f"PT {A.format_station(c.s_pt, 3)}", "sta", desc))
+            out.append(line([c.pc, c.pi, c.pt], "section", f"เส้นสัมผัส PI-{c.number}"))
+    out.append("</Folder>")
+    if shots:
+        out.append("<Folder><name>จุดสำรวจ</name><visibility>0</visibility>")
+        for sh in shots:
+            out.append(point((sh.e, sh.n), sh.name, "shot",
+                             f"{sh.name} E {sh.e:.3f} N {sh.n:.3f} Z {sh.z:.3f} {sh.code}", visible=0))
+        out.append("</Folder>")
+    out.append("</Document></kml>")
+    return "\n".join(out)
+
+
+def axis_centre_wgs84(axis: list, zone: int = 47, datum: str = "WGS84") -> tuple:
+    """(lat, lon) of the middle of the axis."""
+    st = A.point_at(axis, A.polyline_length(axis) / 2.0)
+    return utm_to_wgs84(st.x, st.y, zone, datum)
+
+
+def earth_web_url(lat: float, lon: float, distance: float = 1500.0) -> str:
+    """Google Earth on the web, over the site, tilted so the ground reads."""
+    return f"https://earth.google.com/web/@{lat:.7f},{lon:.7f},100a,{distance:.0f}d,35y,0h,45t,0r"
+
+
+def reverse_geocode_url(lat: float, lon: float) -> str:
+    return ("https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&addressdetails=1"
+            f"&accept-language=th&lat={lat:.7f}&lon={lon:.7f}")
+
+
+def parse_place(data: dict) -> dict:
+    """จังหวัด / อำเภอ / ตำบล from a Nominatim reverse answer (OpenStreetMap's
+    Thai boundaries: province = state, amphoe = county or city district,
+    tambon = suburb, town, village or quarter)."""
+    a = data.get("address") or {}
+
+    def first(*keys):
+        for k in keys:
+            if a.get(k):
+                return str(a[k])
+        return ""
+    province = first("state", "province", "city")
+    district = first("county", "city_district", "district", "municipality")
+    sub = first("suburb", "town", "village", "quarter", "hamlet", "neighbourhood")
+    clean = lambda s, *pre: next((s[len(p):].strip() for p in pre if s.startswith(p)), s)
+    return {"province": clean(province, "จังหวัด", "จ."),
+            "district": clean(district, "อำเภอ", "เขต", "อ."),
+            "subdistrict": clean(sub, "ตำบล", "แขวง", "ต."),
+            "display": str(data.get("display_name", ""))}
+
+
+def place_text(place: dict) -> str:
+    parts = []
+    if place.get("subdistrict"):
+        parts.append(f"ต.{place['subdistrict']}")
+    if place.get("district"):
+        parts.append(f"อ.{place['district']}")
+    if place.get("province"):
+        parts.append(f"จ.{place['province']}")
+    return " ".join(parts) or place.get("display", "")
+
+
+def reverse_geocode(lat: float, lon: float, timeout: float = 15.0) -> dict:
+    """Ask OpenStreetMap's Nominatim which ตำบล / อำเภอ / จังหวัด the point
+    is in (internet needed; their policy: a real User-Agent, a request at
+    a time)."""
+    import json as _json
+    import urllib.request
+
+    from core import branding
+
+    req = urllib.request.Request(reverse_geocode_url(lat, lon), headers={
+        "User-Agent": f"WANICNSURVEY/{getattr(branding, 'PRODUCT', 'WANIC')} road design",
+        "Accept-Language": "th"})
+    with urllib.request.urlopen(req, timeout=timeout) as reply:
+        return parse_place(_json.loads(reply.read().decode("utf-8")))
