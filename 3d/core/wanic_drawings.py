@@ -82,6 +82,12 @@ class Sheet:
         it = ("fill", [tuple(p) for p in pts], layer, gray)
         self.items.append(it + (tuple(rgb),) if rgb else it)
 
+    def image(self, box, data: bytes, layer="image"):
+        """A picture (PNG/JPEG bytes) stretched over ``box`` (x0, y0, x1, y1)
+        -- printed in the PDF under everything else; a DXF keeps only the
+        lines drawn over it."""
+        self.items.append(("image", tuple(box), layer, data))
+
     def circle(self, c, r, layer="grid", w=0.25):
         self.items.append(("circle", (c[0], c[1], r), layer, w))
 

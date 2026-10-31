@@ -21,7 +21,7 @@ import os
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
@@ -1549,6 +1549,12 @@ def render_pdf(sheets, path: str) -> int:
         for i, sh in enumerate(sheets):
             if i:
                 wr.newPage()
+            for it in sh.items:
+                if it[0] == "image":
+                    x0, y0, x1, y1 = it[1]
+                    img = QImage.fromData(it[3])
+                    if not img.isNull():
+                        painter.drawImage(QRectF(P(x0, y1), P(x1, y0)), img)
             for it in sh.items:
                 kind = it[0]
                 if kind == "fill":

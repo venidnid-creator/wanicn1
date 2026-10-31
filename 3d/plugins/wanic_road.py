@@ -26,7 +26,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -1134,7 +1134,8 @@ class RoadPanel(QWidget):
                     location=info.get("location") or self._place)
         from core import wanic_drawings as D
         from core import wanic_road_sheets as RS
-        sheets = RS.build_road_set(an, info, self.shots, info["groups"])
+        site, site_note = self._site_map(an, info)
+        sheets = RS.build_road_set(an, info, self.shots, info["groups"], site)
         if not sheets:
             QMessageBox.information(self, TITLE, "ยังไม่มีแนวทางที่วิเคราะห์แล้ว")
             return []
@@ -1156,8 +1157,80 @@ class RoadPanel(QWidget):
                            for g in info["groups"] if any(x.group == g for x in sheets))
         self._flash(f"ส่งออกแบบงานทาง {len(sheets)} แผ่น ({groups})")
         QMessageBox.information(self, TITLE, f"ส่งออกแบบงานทาง {len(sheets)} แผ่น ({groups})\n"
-                                + "\n".join(saved))
+                                + "\n".join(saved) + (f"\n\n{site_note}" if site_note else ""))
         return saved
+
+    def _site_map(self, an, info):
+        """The location sheet's pictures: satellite tiles (downloaded in the
+        background) or a picture saved from Google Earth Pro; the ตำบล
+        อำเภอ จังหวัด asked from OpenStreetMap when not known yet.
+        Returns (site or None, a note for the user)."""
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+
+        from core import wanic_road_sheets as RS
+        from core import wanic_sitemap as M
+        mode = info.get("site", "tiles")
+        if mode == "none":
+            return None, ""
+        main, vic = RS.site_views(an, info)
+        site = {"mode": mode, "main": main, "vicinity": vic, "credit": M.SOURCES["esri"][2]}
+        note = []
+        if mode == "file":
+            img = QImage(info.get("site_file") or "")
+            if img.isNull():
+                note.append("เปิดภาพจาก Google Earth Pro ไม่ได้ — ใช้ภาพถ่ายดาวเทียมแทน")
+                site["mode"] = mode = "tiles"
+            else:
+                site.update(image=_jpeg(img), size=(img.width(), img.height()), main=None)
+        offline = bool(os.environ.get("WANIC_OFFLINE"))
+        result: dict = {"done": 0, "total": 0}
+
+        def work():
+            try:
+                if not info.get("location") and not offline:
+                    lat, lon = R.axis_centre_wgs84(an.axis, int(info["zone"]), info["datum"])
+                    result["place"] = R.place_text(R.reverse_geocode(lat, lon))
+            except Exception as e:                      # noqa: BLE001 -- told below
+                result["place_error"] = e
+
+            def prog(i, n):
+                result["done"] = i
+            views = ([main] if mode == "tiles" else []) + [vic]
+            result["total"] = sum(len(v.tiles()) for v in views)
+            result["tiles"] = [M.fetch_tiles(v, progress=prog) for v in views]
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        dlg = QProgressDialog("กำลังดาวน์โหลดภาพถ่ายดาวเทียมและหาตำบล อำเภอ จังหวัด…",
+                              "ข้ามแผนที่", 0, 0, self)
+        dlg.setWindowTitle(TITLE)
+        dlg.setMinimumDuration(400)
+        while thread.is_alive():
+            QApplication.processEvents()
+            if result["total"]:
+                dlg.setMaximum(result["total"])
+                dlg.setValue(min(result["done"], result["total"] - 1))
+            if dlg.wasCanceled():
+                note.append("ข้ามการดาวน์โหลดภาพถ่ายดาวเทียม")
+                break
+            thread.join(0.05)
+        dlg.close()
+        tiles = result.get("tiles") or []
+        if mode == "tiles":
+            site["image"] = stitch(main, tiles[0]) if tiles else None
+            vtiles = tiles[1] if len(tiles) > 1 else {}
+            if not site["image"] and not dlg.wasCanceled():
+                note.append("ดาวน์โหลดภาพถ่ายดาวเทียมไม่ได้ (ต้องต่ออินเทอร์เน็ต) — แผนที่ตั้งมีแต่แนวทาง "
+                            "หรือแนบภาพที่บันทึกจาก Google Earth Pro แทน")
+        else:
+            vtiles = tiles[0] if tiles else {}
+        site["vicinity_image"] = stitch(vic, vtiles)
+        if result.get("place"):
+            self._place = info["location"] = result["place"]
+            self._show_place()
+            self.save()
+        elif "place_error" in result:
+            note.append("หาตำบล อำเภอ จังหวัด จาก OpenStreetMap ไม่สำเร็จ — พิมพ์ในช่อง «สถานที่» ได้")
+        return site, "\n".join(note)
 
     def export_csv(self):
         an = self._ensure()
@@ -1194,6 +1267,8 @@ class RoadSheetsDialog(QDialog):
                                  ("office", "ชื่อสำนักงาน (หัวตาราง)", "WANICNSURVEY"),
                                  ("drawing_no", "เลขที่แบบ", "")):
             e = QLineEdit(default)
+            if key == "location":
+                e.setPlaceholderText("ต.… อ.… จ.… (ว่างไว้ = หาจากพิกัดให้เมื่อต่ออินเทอร์เน็ต)")
             self.fields[key] = e
             f.addRow(th, e)
         self.hscale = QComboBox()
@@ -1207,6 +1282,26 @@ class RoadSheetsDialog(QDialog):
             c.setChecked(True)
             self.checks[g] = c
             f.addRow(c)
+        self.site = QComboBox()
+        for key, th in (("tiles", "แผนที่ตั้งโครงการ: ภาพถ่ายดาวเทียมดาวน์โหลดอัตโนมัติ (ต่ออินเทอร์เน็ต)"),
+                        ("file", "แผนที่ตั้งโครงการ: ภาพที่บันทึกจาก Google Earth Pro…"),
+                        ("none", "ไม่ใส่แผนที่ตั้งโครงการ")):
+            self.site.addItem(th, key)
+        self.site.setToolTip("แผ่นแรกของชุดแบบ: ภาพถ่ายดาวเทียม แนวทาง สถานี PI แผนที่บริเวณใกล้เคียง "
+                             "และ ตำบล อำเภอ จังหวัด ที่ตั้งงาน")
+        f.addRow(self.site)
+        row = QHBoxLayout()
+        self.site_file = QLineEdit()
+        self.site_file.setPlaceholderText("ภาพ .jpg/.png — Google Earth Pro: เปิดแนวทางด้วยปุ่ม 🌏 "
+                                          "แล้ว ไฟล์ ▸ บันทึก ▸ บันทึกภาพ…")
+        row.addWidget(self.site_file, 1)
+        b = QPushButton("เลือกภาพ…")
+        b.clicked.connect(self._pick_image)
+        row.addWidget(b)
+        f.addRow(row)
+        self.site_file.setEnabled(False)
+        self.site.currentIndexChanged.connect(
+            lambda _i: self.site_file.setEnabled(self.site.currentData() == "file"))
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
         self.pdf.setChecked(True)
         self.dxf = QCheckBox("DXF ชุดแผ่นแบบ (ทุกแผ่นเรียงกัน)")
@@ -1223,13 +1318,52 @@ class RoadSheetsDialog(QDialog):
         row.addWidget(no)
         f.addRow(row)
 
+    def _pick_image(self):
+        path, _ = QFileDialog.getOpenFileName(self, "ภาพจาก Google Earth Pro", "",
+                                              "ภาพ (*.jpg *.jpeg *.png *.bmp)")
+        if path:
+            self.site_file.setText(path)
+            self.site.setCurrentIndex(self.site.findData("file"))
+
     def info(self) -> dict:
         i = {k: e.text().strip() for k, e in self.fields.items()}
+        i["site"] = self.site.currentData()
+        i["site_file"] = self.site_file.text().strip()
         i["h_scale"] = self.hscale.currentData()
         i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
         i["pdf"] = self.pdf.isChecked()
         i["dxf"] = self.dxf.isChecked()
         return i
+
+
+def _jpeg(img, quality: int = 88) -> bytes:
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    data = QByteArray()
+    buf = QBuffer(data)
+    buf.open(QIODevice.WriteOnly)
+    img.convertToFormat(QImage.Format_RGB32).save(buf, "JPEG", quality)
+    buf.close()
+    return bytes(data)
+
+
+def stitch(view, tiles: dict):
+    """The window of ``view`` (:class:`core.wanic_sitemap.View`) as one
+    JPEG from its tiles; None without a single tile."""
+    if not tiles:
+        return None
+    img = QImage(max(1, round(view.w_px)), max(1, round(view.h_px)), QImage.Format_RGB32)
+    img.fill(QColor(226, 230, 222))
+    p = QPainter(img)
+    try:
+        for (x, y), data in tiles.items():
+            t = QImage.fromData(data)
+            if t.isNull():
+                continue
+            dx, dy = view.tile_offset(x, y)
+            p.drawImage(QPointF(dx, dy), t)
+    finally:
+        p.end()
+    return _jpeg(img)
 
 
 def setup(app) -> None:

@@ -831,18 +831,243 @@ def vt_sheets(an, info):
 # the set
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# แผนที่ตั้งโครงการ — the site on a satellite picture
+# ---------------------------------------------------------------------------
+
+#: The satellite picture and the vicinity map on the location sheet.
+SITE_BOX = (X0, Y0 + 16.0, X1 - 100.0, Y1 - 9.0)
+VICINITY_BOX = (X1 - 95.0, Y1 - 95.0, X1, Y1 - 9.0)
+SAT_COLORS = {"sat": (255, 214, 0), "halo": (20, 20, 20), "sattext": (255, 255, 255),
+              "satpi": (0, 215, 255), "satred": (230, 30, 30)}
+
+
+def axis_lat_lon(an, zone=47, datum="WGS84") -> list:
+    """(station, lat, lon) of every vertex of the axis."""
+    from core import wanic_road as R
+    pts = []
+    run = 0.0
+    for k, p in enumerate(an.axis):
+        if k:
+            run += math.dist(an.axis[k - 1], p)
+        pts.append((run, *R.utm_to_wgs84(p[0], p[1], zone, datum)))
+    return pts
+
+
+def site_views(an, info=None):
+    """The satellite windows (:class:`core.wanic_sitemap.View`) of the
+    location sheet: the site, and the vicinity three zooms further out."""
+    from core import wanic_sitemap as M
+    info = info or {}
+    ll = [(la, lo) for _s, la, lo in axis_lat_lon(an, int(info.get("zone") or 47),
+                                                    info.get("datum") or "WGS84")]
+    bw, bh = SITE_BOX[2] - SITE_BOX[0], SITE_BOX[3] - SITE_BOX[1]
+    vw, vh = VICINITY_BOX[2] - VICINITY_BOX[0], VICINITY_BOX[3] - VICINITY_BOX[1]
+    return (M.fit_view(ll, bw, bh, max_px=2400),
+            M.fit_view(ll, vw, vh, max_px=700, zoom_out=3))
+
+
+def _label(sh, p, text, h=2.0, align="left"):
+    """White text on a dark plate, readable over a photograph."""
+    w = len(text) * h * 0.56 + 1.2
+    x = p[0] - (w / 2 if align == "center" else w - 0.6 if align == "right" else 0.6)
+    sh.fill([(x, p[1] - 0.8), (x + w, p[1] - 0.8), (x + w, p[1] + h + 0.2),
+             (x, p[1] + h + 0.2)], "halo", 0.1, (25, 25, 25))
+    sh.text(p, text, h, align, "sattext", True)
+
+
+def _site_overlay(sh, an, view, box, zone, datum):
+    """The alignment, its stations, PIs, start and end over the picture."""
+    from core import wanic_road as R
+    bx, by = box[0], box[1]
+
+    def v(e, n):
+        la, lo = R.utm_to_wgs84(e, n, zone, datum)
+        x, y = view.to_box(la, lo)
+        return (bx + x, by + y)
+    line = [v(*p) for p in an.axis]
+    sh.poly(line, "halo", 1.5, closed=False)
+    sh.poly(line, "sat", 0.75, closed=False)
+    per_100 = 100.0 / view.ground_per_mm()             # paper mm of 100 m
+    step = 100.0 if per_100 >= 9 else 200.0 if per_100 >= 4.5 else 500.0 \
+        if per_100 >= 1.8 else 1000.0
+    s = 0.0
+    while s <= an.length + 1e-6:
+        st = A.point_at(an.axis, s)
+        a = v(st.x, st.y)
+        b = v(*st.offset_point(10.0))
+        d = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
+        nx, ny = (b[0] - a[0]) / d, (b[1] - a[1]) / d
+        sh.line((a[0] - nx * 1.6, a[1] - ny * 1.6), (a[0] + nx * 1.6, a[1] + ny * 1.6),
+                "sat", 0.35)
+        _label(sh, (a[0] + nx * 3.0, a[1] + ny * 3.0 - 1.0), sta(s, 0), 1.8,
+               "left" if nx >= 0 else "right")
+        s += step
+    for c in an.hcurves:
+        q = v(*c.pi)
+        sh.fill([(q[0], q[1] + 2.4), (q[0] - 2.0, q[1] - 1.2), (q[0] + 2.0, q[1] - 1.2)],
+                "satpi", 0.5, SAT_COLORS["satpi"])
+        sh.poly([(q[0], q[1] + 2.4), (q[0] - 2.0, q[1] - 1.2), (q[0] + 2.0, q[1] - 1.2)],
+                "halo", 0.2)
+        _label(sh, (q[0] - 3.0, q[1] + 0.2), f"PI-{c.number}", 2.0, "right")
+    for s, word in ((0.0, "เริ่มต้น"), (an.length, "สิ้นสุด")):
+        st = A.point_at(an.axis, s)
+        q = v(st.x, st.y)
+        b = v(*st.offset_point(10.0))
+        d = math.hypot(b[0] - q[0], b[1] - q[1]) or 1.0
+        nx, ny = (b[0] - q[0]) / d, (b[1] - q[1]) / d
+        sh.circle(q, 1.4, "satred", 0.6)
+        # the station labels are on the right: these go on the left
+        _label(sh, (q[0] - nx * 4.0, q[1] - ny * 4.0 - 1.1), f"{word} {sta(s)}", 2.3,
+               "right" if nx >= 0 else "left")
+
+
+def location_sheet(an, info, site) -> "D.Sheet":
+    """แผนที่ตั้งโครงการ: the site on a satellite picture (downloaded, or
+    one saved from Google Earth Pro), a vicinity map, and the ตำบล
+    อำเภอ จังหวัด and coordinates of the job.
+
+    ``site``: {"mode": "tiles" | "file" | "none", "main": View,
+    "image": bytes, "size": (w, h) of a file's picture, "vicinity": View,
+    "vicinity_image": bytes, "credit": text}."""
+    from core import wanic_road as R
+    from core import wanic_sitemap as M
+    zone = int(info.get("zone") or 47)
+    datum = info.get("datum") or "WGS84"
+    sh = D.Sheet("G-01", "แผนที่ตั้งโครงการ", "-", "G")
+    sh.text((X0, Y1 - 5), "แผนที่ตั้งโครงการ (ภาพถ่ายดาวเทียม)", 4.0, "left", "text", True)
+    bx0, by0, bx1, by1 = SITE_BOX
+    mode = site.get("mode", "tiles")
+    main = site.get("main")
+    if mode == "file" and site.get("image"):
+        iw, ih = site.get("size") or (4, 3)
+        k = min((bx1 - bx0) / iw, (by1 - by0) / ih)
+        w, h = iw * k, ih * k
+        x0, y0 = bx0 + (bx1 - bx0 - w) / 2, by0 + (by1 - by0 - h) / 2
+        sh.image((x0, y0, x0 + w, y0 + h), site["image"])
+        sh.text((bx0, by0 - 4.5), "ภาพจาก Google Earth Pro (บันทึกภาพโดยผู้ออกแบบ) "
+                "— ลิขสิทธิ์ภาพตามที่ปรากฏบนภาพ", 2.0)
+    else:
+        if site.get("image"):
+            sh.image(SITE_BOX, site["image"])
+        else:
+            sh.fill([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], "hatch", 0.9,
+                    (226, 230, 222))
+            sh.text(((bx0 + bx1) / 2, (by0 + by1) / 2 + 4), "ยังไม่มีภาพถ่ายดาวเทียม", 3.0,
+                    "center", "text", True)
+            sh.text(((bx0 + bx1) / 2, (by0 + by1) / 2 - 2),
+                    "ต่ออินเทอร์เน็ตแล้วส่งออกใหม่ หรือแนบภาพที่บันทึกจาก Google Earth Pro", 2.2,
+                    "center")
+        if main is not None:
+            _site_overlay(sh, an, main, SITE_BOX, zone, datum)
+            # scale bar and north (Web Mercator: north is up)
+            g = main.ground_per_mm()
+            bar = M.nice_bar(g, 50.0)
+            L = bar / g
+            x, y = bx0 + 5, by0 + 5
+            sh.fill([(x - 2, y - 2), (x + L + 14, y - 2), (x + L + 14, y + 6.5),
+                     (x - 2, y + 6.5)], "halo", 0.1, (255, 255, 255))
+            for i in range(4):
+                xa, xb = x + L * i / 4, x + L * (i + 1) / 4
+                sh.fill([(xa, y), (xb, y), (xb, y + 1.4), (xa, y + 1.4)], "text",
+                        0.0 if i % 2 == 0 else 1.0, (0, 0, 0) if i % 2 == 0 else (255, 255, 255))
+            sh.rect(x, y, x + L, y + 1.4, "text", 0.2)
+            sh.text((x, y + 2.4), "0", 1.8, "center")
+            sh.text((x + L, y + 2.4), f"{bar:,.0f} ม.", 1.8, "center")
+            sh.fill([(bx1 - 15, by1 - 17), (bx1 - 2, by1 - 17), (bx1 - 2, by1 - 2),
+                     (bx1 - 15, by1 - 2)], "halo", 0.1, (255, 255, 255))
+            D.north(sh, (bx1 - 8.5, by1 - 11.5), 4)
+        sh.text((bx0, by0 - 4.5), site.get("credit") or M.SOURCES["esri"][2], 2.0)
+    sh.rect(bx0, by0, bx1, by1, "text", 0.35)
+    # vicinity
+    vx0, vy0, vx1, vy1 = VICINITY_BOX
+    sh.text((vx0, vy1 + 2.5), "แผนที่บริเวณใกล้เคียง", 3.0, "left", "text", True)
+    vic = site.get("vicinity")
+    if vic is not None and site.get("vicinity_image"):
+        sh.image(VICINITY_BOX, site["vicinity_image"])
+
+        def vv(e, n):
+            la, lo = R.utm_to_wgs84(e, n, zone, datum)
+            x, y = vic.to_box(la, lo)
+            return (vx0 + x, vy0 + y)
+        sh.poly([vv(*p) for p in an.axis], "satred", 0.9, closed=False)
+        if main is not None:
+            corners = [M.lat_lon(main.x0 + dx, main.y0 + dy, main.z)
+                       for dx, dy in ((0, 0), (main.w_px, 0), (main.w_px, main.h_px),
+                                      (0, main.h_px))]
+            box = []
+            for la, lo in corners:
+                x, y = vic.to_box(la, lo)
+                box.append((min(max(vx0 + x, vx0), vx1), min(max(vy0 + y, vy0), vy1)))
+            sh.poly(box, "sat", 0.5)
+        sh.rect(vx0, vy0, vx1, vy1, "text", 0.35)
+    else:
+        key_plan(sh, an, VICINITY_BOX, None, None, (), labels=False)
+    # the place and the coordinates
+    y = vy0 - 8
+    sh.text((vx0, y), "ที่ตั้งโครงการ", 3.4, "left", "text", True)
+    place = info.get("location") or ""
+    parts = M.place_parts(place)
+    if any(n for _l, n in parts):
+        for label, name in parts:
+            y -= 6.5
+            sh.text((vx0 + 2, y), label, 3.0)
+            sh.text((vx0 + 22, y), name or "-", 3.4, "left", "text", True)
+    else:
+        y -= 6.5
+        sh.text((vx0 + 2, y), place or "ยังไม่ทราบ (กด «📍 จังหวัด อำเภอ ตำบล» ในแผงออกแบบถนน)",
+                2.6 if place else 2.0, "left", "text", bool(place))
+    y -= 9
+    if info.get("project"):
+        sh.text((vx0, y), "โครงการ", 2.4, "left", "text", True)
+        for ln in D._wrap(str(info["project"]), 40)[:2]:
+            y -= 4.5
+            sh.text((vx0 + 2, y), ln, 2.4)
+        y -= 7
+    rows = []
+    for s, word in ((0.0, "เริ่มต้น"), (an.length, "สิ้นสุด")):
+        st = A.point_at(an.axis, s)
+        la, lo = R.utm_to_wgs84(st.x, st.y, zone, datum)
+        rows += [(f"{word} {sta(s)}", f"N {st.y:,.3f}  E {st.x:,.3f}"),
+                 ("", f"{la:.6f}°N  {lo:.6f}°E")]
+    y = D.table(sh, vx0, y, [("ตำแหน่ง", 28, "left"), ("พิกัด", 67, "left")],
+                rows, 2.0, 4.6, 5.0)
+    y -= 6
+    sh.text((vx0, y), f"ความยาวทาง {an.length:,.3f} ม.", 2.4, "left", "text", True)
+    y -= 5
+    sh.text((vx0, y), f"ระบบพิกัด UTM {datum} โซน {zone}N", 2.2)
+    # legend under the picture
+    lx, ly = bx0 + 2, Y0 + 3
+    sh.line((lx, ly + 1), (lx + 12, ly + 1), "halo", 1.4)
+    sh.line((lx, ly + 1), (lx + 12, ly + 1), "sat", 0.7)
+    sh.text((lx + 14, ly), "แนวศูนย์กลางทาง พร้อมสถานี", 2.2)
+    lx += 62
+    sh.fill([(lx + 4, ly + 2.6), (lx + 2.2, ly - 0.4), (lx + 5.8, ly - 0.4)], "satpi", 0.5,
+            SAT_COLORS["satpi"])
+    sh.text((lx + 8, ly), "จุดตัดแนวสัมผัส (PI)", 2.2)
+    lx += 48
+    sh.circle((lx + 4, ly + 1), 1.4, "satred", 0.6)
+    sh.text((lx + 8, ly), "จุดเริ่มต้น / สิ้นสุดโครงการ", 2.2)
+    return sh
+
+
 def build_road_set(an, info=None, shots=None,
-                   groups=("G", "PP", "ST", "VT")) -> list:
+                   groups=("G", "PP", "ST", "VT"), site=None) -> list:
     """Every sheet of the road drawing set, numbered, with its title
-    column.  ``an`` is :func:`core.wanic_road.analyse`'s result."""
+    column.  ``an`` is :func:`core.wanic_road.analyse`'s result; with
+    ``site`` (:func:`location_sheet`) the set opens with the site map."""
     info = dict(info or {})
     if an is None or len(an.axis) < 2:
         return []
     hscale = int(info.get("h_scale") or 1000)
     chunks = chunks_of(an, hscale)
     sheets = []
+    if site is not None:
+        sheets.append(location_sheet(an, info, site))
     if "G" in groups:
         sheets += g_sheets(an, info, chunks, shots)
+    for i, s in enumerate([s for s in sheets if s.group == "G"], 1):
+        s.code = f"G-{i:02d}"
     if "PP" in groups:
         sheets += pp_sheets(an, info, chunks, shots, hscale)
     if "ST" in groups and an.sections:
@@ -854,5 +1079,5 @@ def build_road_set(an, info=None, shots=None,
     info.setdefault("project", "งานออกแบบถนน")
     for s in sheets:
         D.frame(s, info, len(sheets), ROLES)
-        s.colors = dict(COLORS)
+        s.colors = dict(COLORS, **SAT_COLORS)
     return sheets

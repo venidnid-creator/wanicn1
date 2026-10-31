@@ -416,3 +416,60 @@ def test_the_panel_designs_through_the_pi_stakes(tmp_path, monkeypatch):
     assert panel.pis[0].name == "9003" and panel.pi_curves[0].side != an.hcurves[0].side
     panel.axis_from_codes()
     assert not panel.pis
+
+
+def test_the_site_map_in_the_exported_pdf(tmp_path, monkeypatch):
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
+
+    from core import wanic_sitemap as M
+    from core.scene import Scene
+    from plugins import wanic_road as WR
+    from tests.test_wanic_buttons import _App
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
+    # tiles stitched into the window, in their places
+    v = M.fit_view([(13.15, 101.26), (13.16, 101.27)], 100, 100, max_px=600)
+    red = QImage(256, 256, QImage.Format_RGB32)
+    red.fill(QColor(200, 0, 0))
+    jpg = WR._jpeg(red)
+    img = QImage.fromData(WR.stitch(v, {xy: jpg for xy in v.tiles()}))
+    assert (img.width(), img.height()) == (round(v.w_px), round(v.h_px))
+    assert QColor(img.pixel(img.width() // 2, img.height() // 2)).red() > 150
+    assert WR.stitch(v, {}) is None
+    # a picture saved from Google Earth Pro goes on the first sheet
+    pic = tmp_path / "earth.jpg"
+    big = QImage(1266, 882, QImage.Format_RGB32)
+    big.fill(QColor(40, 120, 60))
+    big.save(str(pic))
+    text, _axis = _survey_text(300)
+    pts = tmp_path / "survey.csv"
+    pts.write_text(text, encoding="utf-8")
+    msgs, saved = [], []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(pts), "")))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(
+        lambda *a, **k: (saved.append(str(tmp_path / "set.pdf")) or saved[-1], "")))
+    for name in ("information", "warning"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: msgs.append(a)))
+    built = []
+    from core import wanic_road_sheets as RS
+    real = RS.build_road_set
+    monkeypatch.setattr(RS, "build_road_set", lambda *a, **k: built.append(real(*a, **k)) or built[-1])
+    panel = WR.RoadPanel(_App(Scene(), "wanic_road"))
+    panel.import_points()
+    panel._place = "ต.หน้าพระลาน อ.เฉลิมพระเกียรติ จ.สระบุรี"
+    monkeypatch.setattr(WR.RoadSheetsDialog, "exec", lambda self: QDialog.Accepted)
+    orig = WR.RoadSheetsDialog.info
+
+    def info(self):
+        self.site.setCurrentIndex(self.site.findData("file"))
+        self.site_file.setText(str(pic))
+        return orig(self)
+    monkeypatch.setattr(WR.RoadSheetsDialog, "info", info)
+    out = panel.export_sheets()
+    loc = built[-1][0]
+    assert loc.title == "แผนที่ตั้งโครงการ" and loc.count("image") == 1   # offline: no vicinity tiles
+    assert "สระบุรี" in " ".join(loc.texts()) and "Google Earth Pro" in " ".join(loc.texts())
+    assert out and open(out[0], "rb").read(5) == b"%PDF-"
+    assert os.path.getsize(out[0]) > 20000                                 # the picture is in it
