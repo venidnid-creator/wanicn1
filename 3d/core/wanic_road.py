@@ -215,6 +215,260 @@ def centerline_from_codes(shots: list[Shot], codes=CL_CODES) -> list[Point]:
     return clean
 
 
+# -- 2b. the axis from the PI stakes ------------------------------------------------------
+
+_PI_RE = re.compile(r"^PI[-_.]?(\d*)(?:[-_.]?([ERT])[=:]?(\d+(?:\.\d+)?))?$")
+_END_RE = re.compile(r"^(POT|POB|POE|BOP|EOP|BOC|EOC|SOP)[-_.]?\d*$")
+
+
+def pi_code(code: str):
+    """``("PI", key, value)`` for a PI stake -- ``PI``, ``PI12``,
+    ``PIE=1.09`` (the external distance E staked in the field),
+    ``PIR=500`` (the radius), ``PIT=40`` (the tangent) -- or
+    ``("POT", None, None)`` for a point on tangent that starts or ends
+    the line (``POT``, ``BOP``, ``EOP``); None for any other shot."""
+    c = re.sub(r"\s+", "", code.strip().upper())
+    first = code.strip().upper().split()[0] if code.strip() else ""
+    for t in (c, first):
+        m = _PI_RE.match(t)
+        if m:
+            return ("PI", m.group(2), float(m.group(3)) if m.group(3) else None)
+        if _END_RE.match(t):
+            return ("POT", None, None)
+    return None
+
+
+@dataclass
+class PiStake:
+    name: str
+    e: float
+    n: float
+    kind: str = "PI"                # PI or POT
+    radius: Optional[float] = None  # given in the field (PIR=) or chosen
+    external: Optional[float] = None
+    tangent: Optional[float] = None
+    source: str = ""                # where the radius came from
+
+
+@dataclass
+class PiAlignment:
+    axis: list
+    curves: list                    # A.HorizontalCurve, one per PI
+    stakes: list                    # PiStake, the radii resolved
+    notes: list = field(default_factory=list)
+
+
+def pi_stakes(shots: list[Shot]) -> list[PiStake]:
+    """The PI and POT stakes in the order of their point numbers (the
+    order they were staked along the road), or as surveyed."""
+    out = []
+    for s in shots:
+        k = pi_code(s.code)
+        if not k:
+            continue
+        kind, key, val = k
+        out.append(PiStake(s.name, s.e, s.n, kind,
+                           radius=val if key == "R" else None,
+                           external=val if key == "E" else None,
+                           tangent=val if key == "T" else None))
+    keys = [_name_key(p.name) for p in out]
+    if out and all(k is not None for k in keys):
+        out = [p for _k, p in sorted(zip(keys, out), key=lambda t: t[0])]
+    clean = []
+    for p in out:
+        if not clean or math.hypot(p.e - clean[-1].e, p.n - clean[-1].n) > 0.01:
+            clean.append(p)
+    return clean
+
+
+def _unit(dx, dy):
+    d = math.hypot(dx, dy)
+    return (dx / d, dy / d) if d > 0 else (0.0, 0.0)
+
+
+def _turn(a, b, c) -> float:
+    """The deflection at ``b``, degrees, + to the right."""
+    h0 = math.atan2(b[1] - a[1], b[0] - a[0])
+    h1 = math.atan2(c[1] - b[1], c[0] - b[0])
+    return -math.degrees((h1 - h0 + math.pi) % (2 * math.pi) - math.pi)
+
+
+def _local_offset(q, a, b, c, radius: float) -> float:
+    """Distance of ``q`` from tangent a-b, the curve of ``radius`` at b,
+    tangent b-c."""
+    u0 = _unit(b[0] - a[0], b[1] - a[1])
+    u1 = _unit(c[0] - b[0], c[1] - b[1])
+
+    def to_line(p, u):
+        return abs((q[0] - p[0]) * u[1] - (q[1] - p[1]) * u[0])
+    half = math.radians(abs(_turn(a, b, c))) / 2.0
+    if radius <= 0 or half < 1e-9:
+        # the nearer tangent, on its own side of the bisector
+        before = (q[0] - b[0]) * (u0[0] + u1[0]) + (q[1] - b[1]) * (u0[1] + u1[1]) < 0
+        return to_line(b, u0) if before else to_line(b, u1)
+    t = radius * math.tan(half)
+    pc = (b[0] - u0[0] * t, b[1] - u0[1] * t)
+    pt = (b[0] + u1[0] * t, b[1] + u1[1] * t)
+    if (q[0] - pc[0]) * u0[0] + (q[1] - pc[1]) * u0[1] < 0:
+        return to_line(pc, u0)
+    if (q[0] - pt[0]) * u1[0] + (q[1] - pt[1]) * u1[1] > 0:
+        return to_line(pt, u1)
+    w = _unit(u1[0] - u0[0], u1[1] - u0[1])
+    cen = (b[0] + w[0] * radius / math.cos(half), b[1] + w[1] * radius / math.cos(half))
+    return abs(math.hypot(q[0] - cen[0], q[1] - cen[1]) - radius)
+
+
+def nice_radius(r: float) -> float:
+    """A radius the way a designer writes it: to 1 m under 100, 5 m under
+    1 000, 10 m above."""
+    if r <= 0:
+        return 0.0
+    step = 1.0 if r < 100 else 5.0 if r < 1000 else 10.0
+    return max(step, round(r / step) * step)
+
+
+def fit_radius(a, b, c, cl: list, t_max: float) -> tuple:
+    """The radius at PI ``b`` that the centreline shots ``cl`` follow
+    best (least squares over tangent-curve-tangent), with its RMS; 0 is
+    an angle point. Only shots near this PI (half way to the next PIs)
+    count; fewer than three, and the PI stays an angle point."""
+    reach = min(math.dist(a, b), math.dist(b, c)) * 0.5
+    near = [q for q in cl if math.dist(q, b) <= max(reach, 1.0)
+            and min(_local_offset(q, a, b, c, 0.0), 99.0) < 15.0]
+    if len(near) < 3:
+        return 0.0, None
+    half = math.radians(abs(_turn(a, b, c))) / 2.0
+    cands = [0.0] + [10.0 * 1.04 ** k for k in range(0, 200)]
+    if half > 1e-9:
+        cands = [r for r in cands if r * math.tan(half) <= t_max]
+    best = (math.inf, 0.0)
+    for r in cands:
+        rms = math.sqrt(sum(_local_offset(q, a, b, c, r) ** 2 for q in near) / len(near))
+        if rms < best[0] - 1e-6:
+            best = (rms, r)
+    return nice_radius(best[1]), best[0]
+
+
+def alignment_from_pis(stakes: list[PiStake], cl: Optional[list] = None,
+                       step: float = 5.0) -> PiAlignment:
+    """The designed axis through the field PI stakes: tangents between
+    them and a circular curve at each PI, its radius from the field (R,
+    or the external distance E or tangent T staked at the PI), else the
+    radius the centreline shots follow best, else an angle point. Curves
+    that would overlap on a short tangent are eased to fit. ``axis`` is
+    the polyline (curves as chords of about ``step`` m), ``curves`` the
+    curve table."""
+    if len(stakes) < 2:
+        raise ValueError("ต้องมีหมุด PI/POT อย่างน้อย 2 หมุด")
+    cl = cl or []
+    P = [(s.e, s.n) for s in stakes]
+    notes: list = []
+    out = [PiStake(**s.__dict__) for s in stakes]
+    radii = [0.0] * len(P)
+    for k in range(1, len(P) - 1):
+        s = out[k]
+        half = math.radians(abs(_turn(P[k - 1], P[k], P[k + 1]))) / 2.0
+        if half < 1e-9:
+            s.source = "แนวตรง"
+            continue
+        if s.radius is not None:
+            radii[k] = max(0.0, s.radius)
+            s.source = s.source or ("R จากสนาม" if s.radius > 0 else "จุดหักมุม")
+        elif s.external:
+            radii[k] = s.external / (1.0 / math.cos(half) - 1.0)
+            s.source = f"จาก E = {s.external:g} ม. ที่สนาม"
+        elif s.tangent:
+            radii[k], s.source = s.tangent / math.tan(half), f"จาก T = {s.tangent:g} ม. ที่สนาม"
+        else:
+            t_max = min(math.dist(P[k - 1], P[k]) * (1.0 if k == 1 else 0.5),
+                        math.dist(P[k], P[k + 1]) * (1.0 if k == len(P) - 2 else 0.5))
+            r, rms = fit_radius(P[k - 1], P[k], P[k + 1], cl, t_max)
+            radii[k] = r
+            s.source = (f"ประมาณจากจุด CL (RMS {rms:.3f} ม.)" if r > 0 and rms is not None else
+                        "จุดหักมุม (จุด CL แนวตรง)" if rms is not None else
+                        "จุดหักมุม (ไม่มีจุด CL ใกล้ PI)")
+    tans = [radii[k] * math.tan(math.radians(abs(_turn(P[k - 1], P[k], P[k + 1]))) / 2.0)
+            if 0 < k < len(P) - 1 else 0.0 for k in range(len(P))]
+    for k in range(len(P) - 1):
+        gap = math.dist(P[k], P[k + 1])
+        if tans[k] + tans[k + 1] > gap + 1e-6:
+            f = gap / (tans[k] + tans[k + 1])
+            for j in (k, k + 1):
+                if tans[j] > 0:
+                    radii[j] *= f
+                    tans[j] *= f
+            notes.append(f"โค้งที่ {out[k].name} และ {out[k + 1].name} ซ้อนกันบนแนวตรงสั้น "
+                         f"{gap:.2f} ม. — ลดรัศมีให้ต่อกันพอดี")
+    axis: list = [P[0]]
+    parts = []                       # (k, pc, pt) to find the stations after
+    for k in range(1, len(P) - 1):
+        out[k].radius = radii[k]
+        if radii[k] <= 0:
+            axis.append(P[k])
+            parts.append((k, P[k], P[k]))
+            continue
+        u0 = _unit(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1])
+        u1 = _unit(P[k + 1][0] - P[k][0], P[k + 1][1] - P[k][1])
+        half = math.radians(abs(_turn(P[k - 1], P[k], P[k + 1]))) / 2.0
+        t = tans[k]
+        pc = (P[k][0] - u0[0] * t, P[k][1] - u0[1] * t)
+        pt = (P[k][0] + u1[0] * t, P[k][1] + u1[1] * t)
+        w = _unit(u1[0] - u0[0], u1[1] - u0[1])
+        cen = (P[k][0] + w[0] * radii[k] / math.cos(half), P[k][1] + w[1] * radii[k] / math.cos(half))
+        a0 = math.atan2(pc[1] - cen[1], pc[0] - cen[0])
+        a1 = math.atan2(pt[1] - cen[1], pt[0] - cen[0])
+        sweep = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
+        n = max(2, math.ceil(radii[k] * abs(sweep) / step))
+        if math.dist(axis[-1], pc) > 1e-6:
+            axis.append(pc)
+        for j in range(1, n):
+            a = a0 + sweep * j / n
+            axis.append((cen[0] + radii[k] * math.cos(a), cen[1] + radii[k] * math.sin(a)))
+        axis.append(pt)
+        parts.append((k, pc, pt))
+    if math.dist(axis[-1], P[-1]) > 1e-6:
+        axis.append(P[-1])
+    # stations along the axis as built: every vertex's chainage
+    chain = [0.0]
+    for p, q in zip(axis, axis[1:]):
+        chain.append(chain[-1] + math.dist(p, q))
+    where = {}
+    for i, p in enumerate(axis):
+        where.setdefault((round(p[0], 6), round(p[1], 6)), chain[i])
+    curves = []
+    for k, pc, pt in parts:
+        s_pc = where[(round(pc[0], 6), round(pc[1], 6))]
+        s_pt = where[(round(pt[0], 6), round(pt[1], 6))]
+        curves.append(A.HorizontalCurve(len(curves) + 1, P[k], _turn(P[k - 1], P[k], P[k + 1]),
+                                        radii[k], s_pc, s_pt, pc, pt))
+    off = []
+    total = chain[-1]
+    for q in cl:
+        sq = A.station_of(axis, q)
+        if 0.5 < sq < total - 0.5:
+            p = A.point_at(axis, sq)
+            d = math.hypot(p.x - q[0], p.y - q[1])
+            if d > 1.0:
+                off.append((sq, d))
+    if off:
+        where_ = ", ".join(f"{A.format_station(sq, 0)} ({d:.2f} ม.)" for sq, d in off[:6])
+        notes.append(f"จุด CL {len(off)} จุดห่างจากแนว PI เกิน 1 ม. ที่ {where_}"
+                     f"{' …' if len(off) > 6 else ''} — ทางเดิมไม่ตรงแนวออกแบบ หรือรหัสจุดผิด")
+    return PiAlignment(axis, curves, out, notes)
+
+
+def pi_rows(stakes: list[PiStake]) -> list:
+    """The stakes as saved in the job: [name, e, n, kind, radius]."""
+    return [[s.name, s.e, s.n, s.kind, s.radius or 0.0, s.source] for s in stakes]
+
+
+def stakes_of(rows: list) -> list[PiStake]:
+    return [PiStake(str(r[0]), float(r[1]), float(r[2]), str(r[3]),
+                    radius=float(r[4]) if str(r[3]) == "PI" else None,
+                    source=str(r[5]) if len(r) > 5 else "")
+            for r in rows]
+
+
 # -- 3. the pavement ------------------------------------------------------------------------
 
 #: Pavement structures to start from, top layer first: (name, thickness m,
@@ -488,9 +742,11 @@ def auto_pvis(tin: T.Tin, axis: list, every: float = 100.0, raise_by: float = 0.
 
 
 def analyse(shots: list[Shot], axis: list, pvis: list, settings: Settings,
-            tin: Optional[T.Tin] = None) -> Analysis:
+            tin: Optional[T.Tin] = None, hcurves: Optional[list] = None) -> Analysis:
     """Everything the panel shows, from the shots, the axis, the PVIs
-    ``[(station, elevation, vertical-curve length)]`` and the settings."""
+    ``[(station, elevation, vertical-curve length)]`` and the settings.
+    ``hcurves`` are the horizontal curves of an axis designed through PI
+    stakes (:func:`alignment_from_pis`); otherwise read off the axis."""
     if len(axis) < 2:
         raise ValueError("ยังไม่มีแนวศูนย์กลางทาง (ต้องมีจุดรหัส CL อย่างน้อย 2 จุด "
                          "หรือเลือกเส้นในโมเดล)")
@@ -539,7 +795,7 @@ def analyse(shots: list[Shot], axis: list, pvis: list, settings: Settings,
         cut, fill = P.areas(ground, form) if design else (0.0, 0.0)
         sections.append(Section(st.s, ground, design, P._z_on(ground, 0.0), zd, cut, fill, form))
     rows = _earthworks(tin, axis, grade, settings) if grade else []
-    hcurves = A.horizontal_curves(axis)
+    hcurves = list(hcurves) if hcurves is not None else A.horizontal_curves(axis)
     xs = [p[0] for p in tin.points]
     ys = [p[1] for p in tin.points]
     zs = [p[2] for p in tin.points]

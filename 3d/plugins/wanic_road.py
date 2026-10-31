@@ -447,6 +447,8 @@ class RoadPanel(QWidget):
         self.app = app
         self.shots: list = []
         self.axis: list = []
+        self.pis: list = []            # R.PiStake: the axis designed through the field PIs
+        self.pi_curves: list = []
         self.origin = (0.0, 0.0, 0.0)
         self.analysis = None
         self.results = None
@@ -471,6 +473,12 @@ class RoadPanel(QWidget):
         row.addWidget(self.cl_code)
         b = QPushButton("แนวทางจากจุด CL")
         b.clicked.connect(lambda: _safe(self, self.axis_from_codes))
+        row.addWidget(b)
+        b = QPushButton("📍 แนวทางจากหมุด PI")
+        b.setToolTip("ออกแบบแนวทางผ่านหมุด PI/POT ที่วางในสนาม: แนวตรงระหว่างหมุด และโค้งวงกลม"
+                     "ที่ทุก PI — รัศมีจากรหัส PIR=…, PIE=… (ระยะ E) หรือ PIT=… ในสนาม "
+                     "ถ้าไม่มี ประมาณจากจุด CL ที่สำรวจ")
+        b.clicked.connect(lambda: _safe(self, self.axis_from_pis))
         row.addWidget(b)
         b = QPushButton("ใช้เส้นที่เลือก")
         b.setToolTip("เลือกเส้นที่ต่อกันเป็นสายเดียวในโมเดล แล้วกดเพื่อใช้เป็นแนวศูนย์กลางทาง")
@@ -742,6 +750,7 @@ class RoadPanel(QWidget):
     def save(self):
         data = {"shots": [[s.name, s.e, s.n, s.z, s.code] for s in self.shots],
                 "axis": [list(p) for p in self.axis], "origin": list(self.origin),
+                "pis": R.pi_rows(self.pis),
                 "pvis": [list(p) for p in self.pvis()],
                 "settings": {k: float(w.value()) for k, w in self.spins.items()},
                 "method": self.method.currentData(), "cl": self.cl_code.text(),
@@ -765,6 +774,10 @@ class RoadPanel(QWidget):
         self.shots = [R.Shot(str(n), float(e), float(no), float(z), str(c))
                       for n, e, no, z, c in data.get("shots", [])]
         self.axis = [tuple(p) for p in data.get("axis", [])]
+        self.pis, self.pi_curves = [], []
+        if data.get("pis"):
+            al = R.alignment_from_pis(R.stakes_of(data["pis"]))
+            self.pis, self.pi_curves = al.stakes, al.curves
         self.origin = tuple(data.get("origin", (0.0, 0.0, 0.0)))
         for k, v in (data.get("settings") or {}).items():
             if k in self.spins:
@@ -793,6 +806,8 @@ class RoadPanel(QWidget):
         text = f"จุดสำรวจ {len(self.shots):,} จุด · จุดศูนย์กลางทาง {cl} จุด"
         if len(self.axis) >= 2:
             text += f" · แนวทางยาว {A.polyline_length(self.axis):,.3f} ม."
+            if self.pis:
+                text += f" (ออกแบบผ่านหมุด PI {sum(1 for s in self.pis if s.kind == 'PI')} หมุด)"
         self.info.setText(text + (f"<br>{extra}" if extra else ""))
         if hasattr(self, "place"):
             self._show_place()
@@ -825,6 +840,10 @@ class RoadPanel(QWidget):
             return
         self.analysis = None
         self.axis = R.centerline_from_codes(self.shots, self._codes())
+        self.pis, self.pi_curves = [], []
+        pi_notes = []
+        if len(R.pi_stakes(self.shots)) >= 3:
+            pi_notes = self._design_through_pis()
         if len(self.axis) >= 2 and not self.pvis():
             self.auto_pvi(save=False)
         self.save()
@@ -841,8 +860,38 @@ class RoadPanel(QWidget):
         if dup:
             notes.append(f"เลขจุดซ้ำ {len(dup):,} เลข (เช่น {', '.join(dup[:5])}) — "
                          "ใช้ได้ตามปกติ แต่ควรตั้งเลขจุดใหม่เพื่ออ้างอิงได้ถูกจุด")
+        if self.pis:
+            notes.append(self._pi_summary(pi_notes))
         if notes:
             QMessageBox.information(self, TITLE, "\n\n".join(notes))
+
+    def _design_through_pis(self, stakes=None) -> list:
+        """Set the axis from the PI stakes (from the shots unless given);
+        the notes of the design."""
+        stakes = stakes if stakes is not None else R.pi_stakes(self.shots)
+        cl = R.centerline_from_codes(self.shots, self._codes())
+        al = R.alignment_from_pis(stakes, cl)
+        self.axis, self.pis, self.pi_curves = al.axis, al.stakes, al.curves
+        return al.notes
+
+    def _pi_summary(self, notes) -> str:
+        pis = [s for s in self.pis if s.kind == "PI"]
+        lines = [f"แนวทางออกแบบผ่านหมุด PI {len(pis)} หมุด "
+                 f"(ยาว {A.polyline_length(self.axis):,.3f} ม.) แทนแนวจุด CL:"]
+        for s in pis:
+            r = f"R = {s.radius:,.1f} ม." if s.radius else "จุดหักมุม"
+            lines.append(f"  • {s.name}: {r} — {s.source}")
+        return "\n".join(lines + [f"⚠ {n}" for n in notes])
+
+    def axis_from_pis(self):
+        if len(R.pi_stakes(self.shots)) < 2:
+            QMessageBox.information(self, TITLE, "ไม่พบหมุด PI/POT อย่างน้อย 2 หมุด "
+                                    "(รหัส PI, PIE=…, PIR=…, POT, BOP, EOP)")
+            return
+        notes = self._design_through_pis()
+        self.save()
+        self._report()
+        QMessageBox.information(self, TITLE, self._pi_summary(notes))
 
     def axis_from_codes(self):
         axis = R.centerline_from_codes(self.shots, self._codes())
@@ -850,6 +899,7 @@ class RoadPanel(QWidget):
             QMessageBox.information(self, TITLE, "ไม่พบจุดที่มีรหัสศูนย์กลางทางอย่างน้อย 2 จุด")
             return
         self.axis = axis
+        self.pis, self.pi_curves = [], []
         self.save()
         self._report()
 
@@ -860,6 +910,7 @@ class RoadPanel(QWidget):
             return
         ox, oy, _oz = self.origin
         self.axis = [(x + ox, y + oy) for x, y, _z in pts]
+        self.pis, self.pi_curves = [], []
         self.save()
         self._report()
 
@@ -867,7 +918,10 @@ class RoadPanel(QWidget):
         if len(self.axis) < 2:
             return
         length = A.polyline_length(self.axis)
-        self.axis = list(reversed(self.axis))
+        if self.pis:
+            self._design_through_pis(list(reversed(self.pis)))
+        else:
+            self.axis = list(reversed(self.axis))
         self.set_pvis(sorted((length - s, z, vc) for s, z, vc in self.pvis()))
         self.save()
         self._report()
@@ -1000,7 +1054,8 @@ class RoadPanel(QWidget):
             QMessageBox.information(self, TITLE, "นำเข้าจุดสำรวจก่อน (อย่างน้อย 3 จุด)")
             return None
         try:
-            an = R.analyse(self.shots, self.axis, self.pvis(), self.settings())
+            an = R.analyse(self.shots, self.axis, self.pvis(), self.settings(),
+                           hcurves=self.pi_curves if self.pis else None)
         except ValueError as e:
             QMessageBox.warning(self, TITLE, str(e))
             return None

@@ -309,3 +309,110 @@ def test_rows_written_n_e_in_an_e_n_file_are_turned_round():
     assert not any(s.swapped for s in clean)
     assert R.duplicate_names(R.parse_points("1,10,10,1,N\n1,12,11,1,N\n"
                                             "2,14,12,1,N")) == ["1"]
+
+
+# -- the axis through the field PI stakes ------------------------------------------------
+
+def _true_road(r1=200.0, r2=450.0):
+    """POT (0,0) → PI-1 (400,0) → PI-2 (700,300) → POT (700+…), the
+    centre line every 10 m along the real tangent-curve-tangent."""
+    stakes = [R.PiStake("1", 0.0, 0.0, "POT"), R.PiStake("2", 400.0, 0.0, "PI", radius=r1),
+              R.PiStake("3", 700.0, 300.0, "PI", radius=r2),
+              R.PiStake("4", 700.0, 700.0, "POT")]
+    true = R.alignment_from_pis(stakes, step=1.0)
+    cl = [(p.x, p.y) for p in (A.point_at(true.axis, s)
+                               for s in range(0, int(A.polyline_length(true.axis)), 10))]
+    return true, cl
+
+
+def test_pi_codes_of_the_field_book():
+    assert R.pi_code("PI") == ("PI", None, None)
+    assert R.pi_code("PI12") == ("PI", None, None)
+    assert R.pi_code("PIE=1.09") == ("PI", "E", 1.09)
+    assert R.pi_code("PI R=500") == ("PI", "R", 500.0)
+    assert R.pi_code("PIT=35.5") == ("PI", "T", 35.5)
+    assert R.pi_code("POT")[0] == "POT" and R.pi_code("EOP")[0] == "POT"
+    assert R.pi_code("CL") is None and R.pi_code("PIPE") is None and R.pi_code("N") is None
+
+
+def test_curves_from_the_field_values_and_from_the_centre_line():
+    true, cl = _true_road()
+    c1, c2 = true.curves
+    assert c1.radius == 200.0 and abs(c1.delta + 45.0) < 1e-9 and c1.side == "LT"
+    assert abs(c1.tangent - 200.0 * math.tan(math.radians(22.5))) < 1e-9
+    assert abs(c1.s_pc - (400.0 - c1.tangent)) < 1e-6
+    # E staked at PI-1, nothing at PI-2: R from E, the other fitted to the CL shots
+    rows = "\n".join(f"{k},{x:.3f},{y:.3f},10.0,CL" for k, (x, y) in enumerate(cl, 100))
+    rows += (f"\n1,0,0,10,POT\n2,400,0,10,PIE={c1.external:.4f}"
+             "\n3,700,300,10,PI\n4,700,700,10,POT")
+    shots = R.parse_points(rows, "PENZD")
+    stakes = R.pi_stakes(shots)
+    assert [s.kind for s in stakes] == ["POT", "PI", "PI", "POT"]
+    al = R.alignment_from_pis(stakes, R.centerline_from_codes(shots))
+    assert abs(al.curves[0].radius - 200.0) < 0.01 and "E =" in al.stakes[1].source
+    assert al.curves[1].radius == 450.0 and "CL" in al.stakes[2].source
+    assert not al.notes
+    assert abs(A.polyline_length(al.axis) - A.polyline_length(true.axis)) < 0.5
+
+
+def test_short_tangent_eases_the_curves_and_off_line_cl_is_reported():
+    stakes = [R.PiStake("1", 0, 0, "POT"), R.PiStake("2", 100, 0, "PI", radius=2000.0),
+              R.PiStake("3", 130, 40, "PI", radius=2000.0), R.PiStake("4", 130, 200, "POT")]
+    al = R.alignment_from_pis(stakes, [(50.0, 6.0), (130.0, 150.0)])
+    a, b = al.curves
+    assert a.tangent + b.tangent <= 50.0 + 1e-6 and a.radius < 2000
+    assert any("ซ้อนกัน" in n for n in al.notes) and any("ห่างจากแนว PI" in n for n in al.notes)
+
+
+def test_an_angle_point_and_the_analysis_keeps_the_designed_curves():
+    true, cl = _true_road()
+    stakes = R.stakes_of(R.pi_rows(true.stakes))           # saved in the job and read back
+    again = R.alignment_from_pis(stakes)
+    assert [c.radius for c in again.curves] == [200.0, 450.0]
+    flat = [R.PiStake("1", 0, 0, "POT"), R.PiStake("2", 300, 0, "PI"),
+            R.PiStake("3", 600, 3, "POT")]
+    al = R.alignment_from_pis(flat, [(x, 0.0) for x in range(0, 300, 10)]
+                              + [(300 + x, x * 0.01) for x in range(0, 300, 10)])
+    assert al.curves[0].radius == 0.0 and "หักมุม" in al.stakes[1].source
+    shots = [R.Shot(str(k), x + dx, y + dy, 10.0 + 0.01 * dx)
+             for k, (x, y) in enumerate(cl) for dx, dy in ((0, 0), (15, 15), (-15, -15))]
+    an = R.analyse(shots, true.axis, [], R.Settings(), hcurves=true.curves)
+    assert [round(c.radius) for c in an.hcurves] == [200, 450]
+
+
+def test_the_panel_designs_through_the_pi_stakes(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+    from core.scene import Scene
+    from plugins.wanic_road import RoadPanel
+    from tests.test_wanic_buttons import _App
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
+    text, axis = _survey_text(600)
+    a, b, c = axis[0], axis[6], axis[-1]          # POT, PI (E,N), POT -- written N,E
+    text += (f"\n9001,{a[1]:.3f},{a[0]:.3f},95,POT\n9002,{b[1]:.3f},{b[0]:.3f},95,PI R=800"
+             f"\n9003,{c[1]:.3f},{c[0]:.3f},95,POT")
+    pts = tmp_path / "survey.csv"
+    pts.write_text(text, encoding="utf-8")
+    msgs = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(pts), "")))
+    for name in ("information", "warning"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: msgs.append(a)))
+    app = _App(Scene(), "wanic_road")
+    panel = RoadPanel(app)
+    panel.import_points()
+    assert [s.kind for s in panel.pis] == ["POT", "PI", "POT"] and panel.pis[1].radius == 800
+    assert any("หมุด PI 1 หมุด" in str(m) and "R = 800.0" in str(m) for m in msgs)
+    assert "ออกแบบผ่านหมุด PI" in panel.info.text()
+    an = panel.analyse()
+    assert [c.radius for c in an.hcurves] == [800.0]
+    # saved in the job and read back; reversed keeps the curve
+    other = RoadPanel(app)
+    other._last = None
+    other.load()
+    assert [c.radius for c in other.pi_curves] == [800.0] and len(other.axis) == len(panel.axis)
+    panel.reverse_axis()
+    assert panel.pis[0].name == "9003" and panel.pi_curves[0].side != an.hcurves[0].side
+    panel.axis_from_codes()
+    assert not panel.pis
