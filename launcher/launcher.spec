@@ -10,6 +10,9 @@ datas = [(str(BR / "wanicnsurvey.ico"), "branding")]
 for name in ("wanicnsurvey", "wanicnsurvey-cad", "wanicnsurvey-3d"):
     datas.append((str(BR / "png" / f"{name}-128.png"), "branding"))
 datas.append((str(BR / "png" / "developer.jpg"), "branding"))
+datas.append((str(BR / "png" / "contact-qr.png"), "branding"))
+datas.append((str(BR / "fonts" / "Charm-Bold.ttf"), "branding"))
+datas.append((str(BR / "fonts" / "Charm-OFL.txt"), "branding"))
 
 a = Analysis(
     [str(ROOT / "launcher" / "launcher.py")],

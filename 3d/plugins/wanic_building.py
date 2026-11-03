@@ -2073,6 +2073,11 @@ class BuildingPanel(QWidget):
         self.op_w = _spin(0.3, 6.0, 0.9)
         self.op_h = _spin(0.3, 4.0, 2.0)
         self.op_sill = _spin(0.0, 3.0, 0.9)
+        self.op_sill.setToolTip("หน้าต่าง: หัวบานแนวเดียวกับหัวประตู (ความสูงหัวบาน "
+                                "2.00 ม.) — ขอบล่าง = 2.00 − ความสูงบาน")
+        self.op_h.valueChanged.connect(
+            lambda v: self.tool() == "window" and self.op_sill.setValue(
+                B.window_sill(B.settings_of(self.data()), v)))
         og.addWidget(QLabel("แบบ"), 0, 0)
         og.addWidget(self.op_style, 0, 1, 1, 4)
         pick = QPushButton("🖼 เลือกจากรูป…")
@@ -2233,7 +2238,40 @@ class BuildingPanel(QWidget):
                ("category", "ตามหมวดงาน 15 หมวด (เช่น 04 งานโครงสร้างคอนกรีต)"),
                ("", "ไม่แยกเลเยอร์")])
         num("band", "เสาเอ็น-ทับหลังรอบประตู/หน้าต่าง (0 = ไม่มี)", 0.0, 0.3, 0.01)
+        check("slot_snap", "วางประตู/หน้าต่าง 3 ตำแหน่ง (กลางช่วง · ชิดเสาซ้าย/ขวา 25 ซม.)",
+              "คลิกใกล้ตำแหน่งใด โปรแกรมวางที่ตำแหน่งมาตรฐานที่ใกล้ที่สุด — หัวหน้าต่าง"
+              "แนวเดียวกับหัวประตู")
         lay.addWidget(st)
+        fin = QGroupBox("ฝ้า บัวผนัง และงานระบบ")
+        sf_keep = sf
+        sf = QFormLayout(fin)
+        combo("ceiling_type", "ฝ้าภายใน (ทุกห้อง)",
+              [("cline", "ยิปซัมบอร์ดฉาบเรียบ โครงซีลาย (ว480 2.2.3)"),
+               ("tbar", "ยิปซัมบอร์ด โครง T-bar (ว480 2.2.4)"),
+               ("none", "ไม่มีฝ้า")])
+        trim = QHBoxLayout()
+        self.skirt_btn = QPushButton("🧱 บัวเชิงผนัง")
+        self.skirt_btn.setCheckable(True)
+        self.skirt_btn.setToolTip("ติด/ไม่ติดบัวเชิงผนังทุกห้อง (ห้องที่บุกระเบื้องผนังสูง "
+                                  "≥ 1.20 ม. ไม่ต้องมีบัว) — คิดใน BOQ ตาม ว480 2.4.17")
+        self.skirt_btn.toggled.connect(lambda on: self._toggle_trim("skirting", on))
+        self.cornice_btn = QPushButton("〰 บัวฝ้า")
+        self.cornice_btn.setCheckable(True)
+        self.cornice_btn.setToolTip("ติด/ไม่ติดบัวฝ้า (ไม้มอบฝ้าสำเร็จรูป) รอบห้องที่มีฝ้า "
+                                    "— ว480 2.2.5")
+        self.cornice_btn.toggled.connect(lambda on: self._toggle_trim("cornice", on))
+        trim.addWidget(self.skirt_btn)
+        trim.addWidget(self.cornice_btn)
+        sf.addRow("บัวผนัง", trim)
+        combo("skirting_type", "ชนิดบัวเชิงผนัง",
+              [(k, v[0]) for k, v in B.SKIRTING_TYPES.items()])
+        check("mep", "งานระบบตามห้อง: ไฟฟ้า ปรับอากาศ สุขาภิบาล ภายนอก (หมวด 1, 11–15)",
+              "แอร์ในห้องนอน/ห้องนั่งเล่น (800/900 BTU ต่อ ตร.ม.) ติดใต้ฝ้า 15 ซม. · "
+              "ดวงโคม 1 ชุด/9 ตร.ม. · เต้ารับ สวิตช์ ตู้ไฟ หลักดิน (วสท.) · ท่อประปา "
+              "ท่อน้ำทิ้ง ฟลอร์เดรน ถังบำบัด (มยผ.) · ท่อระบายน้ำรอบอาคาร ทางเท้า")
+        check("head_plate", "เพลทหัวเสา 200×200×9 มม. + J-bolt 4-DB12 ฝัง 60 ซม.")
+        sf = sf_keep
+        lay.addWidget(fin)
         self.library = LibraryBox(self)
         lay.addWidget(self.library)
 
@@ -2576,19 +2614,26 @@ class BuildingPanel(QWidget):
     def place_opening(self, x, y, kind):
         d = self.data()
         f = d["floors"][self.floor]
-        hit = B.snap_to_segment(x, y, B.segments(f.get("rooms") or []))
-        if hit is None:
-            self.status.setText("คลิกให้ใกล้แนวผนัง (ขอบห้อง) เพื่อวางประตู/หน้าต่าง")
-            return None
-        oid = self._item_id(d, "o")
+        s = B.settings_of(d)
         style = self.op_style.currentData() if self.tool() == kind else None
         if style is None or CAT.OPENING_TYPES[style]["kind"] != kind:
             style = CAT.DEFAULT_STYLE[kind]
             spec = CAT.OPENING_TYPES[style]
-            w, h, sill = spec["w"], spec["h"], spec.get("sill", 0.0)
+            w, h = spec["w"], spec["h"]
+            sill = B.window_sill(s, h)
         else:
             w, h, sill = self.op_w.value(), self.op_h.value(), \
                 self.op_sill.value()
+        segs = B.segments(f.get("rooms") or [])
+        if s.get("slot_snap", True):
+            col_b = float(B.library_of(d)["C1"]["b"])
+            hit = B.snap_opening(x, y, w, segs, col_b)
+        else:
+            hit = B.snap_to_segment(x, y, segs)
+        if hit is None:
+            self.status.setText("คลิกให้ใกล้แนวผนัง (ขอบห้อง) เพื่อวางประตู/หน้าต่าง")
+            return None
+        oid = self._item_id(d, "o")
         op = {"id": oid, "type": kind, "style": style, "x": hit[0],
               "y": hit[1], "w": w, "h": h}
         if kind == "window":
@@ -2611,6 +2656,16 @@ class BuildingPanel(QWidget):
             self._style_changed()
             self.op_sill.setEnabled(t == "window")
 
+    def _toggle_trim(self, key, on):
+        if self._loading:
+            return
+        d = self.data()
+        d["settings"][key] = bool(on)
+        self._write(d)
+        self.status.setText(("ติด" if on else "เอาออก") +
+                            ("บัวเชิงผนัง" if key == "skirting" else "บัวฝ้า") +
+                            " — กด «สร้าง/อัปเดตโครงสร้าง» เพื่อแสดงใน 3D")
+
     def pick_opening(self):
         kind = self.tool() if self.tool() in ("door", "window") else None
         dlg = OpeningPicker(self, kind, self.op_style.currentData())
@@ -2631,7 +2686,8 @@ class BuildingPanel(QWidget):
         if spec:
             self.op_w.setValue(spec["w"])
             self.op_h.setValue(spec["h"])
-            self.op_sill.setValue(spec.get("sill", 0.0))
+            self.op_sill.setValue(B.window_sill(B.settings_of(self.data()), spec["h"])
+                                  if spec["kind"] == "window" else 0.0)
 
     def place_fixture(self, x, y, kind=None):
         d = self.data()
@@ -2916,6 +2972,8 @@ class BuildingPanel(QWidget):
                 c.setCurrentIndex(max(i, 0))
             for k, c in self.checks.items():
                 c.setChecked(bool(s.get(k, B.DEFAULT_SETTINGS.get(k))))
+            self.skirt_btn.setChecked(bool(s.get("skirting")))
+            self.cornice_btn.setChecked(bool(s.get("cornice")))
             self.skin.setChecked(bool(s["skin"]))
             self.fascia.setChecked(bool(s.get("fascia", True)))
             self.caps.setChecked(bool(s.get("caps", True)))

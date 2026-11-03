@@ -85,16 +85,18 @@ def test_exterior_walls_flush_outside_interior_on_the_line():
         assert math.isclose(thin, 0.07, abs_tol=1e-6)
         mid = (x0 + x1) / 2 if x1 - x0 < y1 - y0 else (y0 + y1) / 2
         if ext:
-            # its outer face is the column's outer face (grid ± b/2)
+            # its outside plaster is flush with the column face (grid ± b/2):
+            # the masonry's outer face sits the plaster's thickness inside
             faces = (x0, x1) if x1 - x0 < y1 - y0 else (y0, y1)
-            assert any(abs(f - round(f / 2.4) * 2.4) > 0.09 and
-                       abs(abs(f - round(f / 2.4) * 2.4) - col / 2) < 1e-6 for f in faces)
+            po = B.wall_spec(B.settings_of(d), True)["po"]
+            assert any(abs(abs(f - round(f / 2.4) * 2.4) - (col / 2 - po)) < 1e-6
+                       for f in faces), (g.name, faces)
         else:
             assert abs(mid - round(mid / 0.1) * 0.1) < 1e-6
-    # the outside plaster wraps the corner column: x = −0.115 at A-1
+    # the outside plaster face is flush with the column and beam faces
     skin = [g for g in groups if _kind(g) == "plaster" and "ภายนอก" in g.name]
-    assert min(_box(g)[0] for g in skin) == -0.115 or \
-        math.isclose(min(_box(g)[0] for g in skin), -0.115, abs_tol=1e-6)
+    assert math.isclose(min(_box(g)[0] for g in skin), -col / 2, abs_tol=1e-6)
+    assert math.isclose(min(_box(g)[1] for g in skin), -col / 2, abs_tol=1e-6)
     # nothing overlaps
     solids = [(g.name, _box(g)) for g in groups
               if _kind(g) in ("column", "beam", "slab", "wall", "plaster")]
@@ -154,13 +156,18 @@ def test_tie_beam_under_every_king_post_and_wall_plates():
     d = _data()
     lines = B.roof_lines(d)
     assert lines["plate_h"] == 0.15 and lines["plate"] and lines["tie"]
-    assert len(lines["tie"]) == len(lines["post"])
-    for (a, _b), (t0, t1) in zip(lines["post"], lines["tie"]):
-        # the post stands on the tie beam's top, the tie runs wall to wall
-        assert abs(a[2] - t0[2]) < 1e-9
-        lo, hi = sorted((t0, t1))
-        assert min(lo[0], hi[0]) - 1e-6 <= a[0] <= max(lo[0], hi[0]) + 1e-6
-        assert min(lo[1], hi[1]) - 1e-6 <= a[1] <= max(lo[1], hi[1]) + 1e-6
+    assert len(lines["tie"]) > len(lines["post"])
+
+    def under(a, t, axis):
+        t0, t1 = t
+        if abs(t0[2] - a[2]) > 1e-9 or abs(t0[1 - axis] - t1[1 - axis]) > 1e-9:
+            return False
+        lo, hi = sorted((t0[axis], t1[axis]))
+        return abs(t0[1 - axis] - a[1 - axis]) < 1e-6 and lo - 1e-6 <= a[axis] <= hi + 1e-6
+    for a, _b in lines["post"]:
+        # every post stands on a tie each way (x and y), wall to wall
+        assert any(under(a, t, 0) for t in lines["tie"]), a
+        assert any(under(a, t, 1) for t in lines["tie"]), a
     z0 = lines["z0"]
     assert all(abs(p[2] - (z0 + 0.15)) < 1e-9 for seg in lines["plate"] for p in seg)
     groups, count = B.roof_members(d)
@@ -217,14 +224,17 @@ def test_part_prices_layers_and_categories():
     assert CG.NAME[1] == "งานเตรียมพื้นที่" and CG.NAME[15] == "งานอื่นๆ"
     r = Q.compute(d)
     titles = [th for _k, th, _rows in r["groups"]]
-    assert titles[0].startswith("2. งานดิน") or titles[0].startswith("3. ")
+    assert titles[0] == "1. งานเตรียมพื้นที่"
+    for t in ("11. งานสุขาภิบาล", "12. งานไฟฟ้า", "13. งานปรับอากาศ",
+              "14. งานภายนอก", "15. งานอื่นๆ", "10. งานพื้น/ฝ้า"):
+        assert t in titles, t
     assert "5. งานโครงสร้างเหล็ก" in titles and "6. งานผนัง/ฉาบ" in titles
     assert "7. งานหลังคา" in titles and "4. งานโครงสร้างคอนกรีต" in titles
     assert all(ln["cat"] in CG.NAME for ln in r["lines"])
     paint = [ln for ln in r["lines"] if ln["desc"].startswith("ทาสี") and "กันสนิม" not in ln["desc"]]
     assert all(ln["cat"] == 9 for ln in paint)
     d["boq_options"] = {"boq_by": "rule"}
-    assert Q.compute(d)["groups"][0][1] == Q.GROUP_TH["earth"]
+    assert Q.compute(d)["groups"][0][1] == Q.GROUP_TH["prep"]
 
 
 def test_more_door_and_window_styles():
@@ -295,9 +305,83 @@ def test_panel_layers_picker_walls_and_the_boq_sidebar(monkeypatch):
     assert shown == ["4. งานโครงสร้างคอนกรีต"]
     boq.boq_by.setCurrentIndex(boq.boq_by.findData("rule"))
     assert panel.data()["boq_options"]["boq_by"] == "rule"
-    assert boq.tree.topLevelItem(0).text(1) == Q.GROUP_TH["earth"]
+    assert boq.tree.topLevelItem(0).text(1) == Q.GROUP_TH["prep"]
     # the whole ว480 list, searchable
     assert boq.w480.rowCount() == len(W.ROWS)
     boq.w480_q.setText("ฉาบปูนผนัง ภายนอก")
     assert 0 < boq.w480.rowCount() < 20
     assert any(boq.w480.item(r, 4).text() == "109.00" for r in range(boq.w480.rowCount()))
+    # the skirting / cornice buttons and the services switch
+    panel.skirt_btn.setChecked(True)
+    panel.cornice_btn.setChecked(True)
+    s = panel.data()["settings"]
+    assert s["skirting"] and s["cornice"]
+    panel.build(("structure", "roof"))
+    kinds = {_kind(g) for g in B.generated(scene)}
+    assert {"skirting", "cornice", "ceiling", "ac", "light", "headplate"} <= kinds
+    # a window clicked near a column lands 25 cm off it, head level with the doors
+    panel.set_tool("window")
+    panel.op_style.setCurrentIndex(panel.op_style.findData("W3"))
+    room = panel.rooms()[0]
+    oid = panel.place_opening(float(room["x"]) + 0.3, float(room["y"]) + 0.02, "window")
+    op = next(o for o in panel.items("openings") if o["id"] == oid)
+    col = float(B.library_of(panel.data())["C1"]["b"])
+    assert math.isclose(op["x"] - float(room["x"]), col / 2 + 0.25 + op["w"] / 2,
+                        abs_tol=1e-6), (op, room)
+    assert math.isclose(op["sill"] + op["h"], 2.0, abs_tol=1e-6)
+
+
+def test_openings_snap_to_three_places_and_heads_line_up():
+    p0, p1 = (0.0, 0.0), (4.8, 0.0)
+    slots = B.opening_slots(p0, p1, 1.2, 0.2)
+    assert [round(v, 3) for v in slots] == [0.95, 2.4, 3.85]   # 0.10 + 0.25 + 0.60
+    segs = [(p0, p1)]
+    assert B.snap_opening(0.3, 0.05, 1.2, segs, 0.2)[:2] == (0.95, 0.0)
+    assert B.snap_opening(2.0, 0.05, 1.2, segs, 0.2)[:2] == (2.4, 0.0)
+    assert B.snap_opening(4.7, -0.1, 1.2, segs, 0.2)[:2] == (3.85, 0.0)
+    assert B.opening_slots((0, 0), (1.6, 0), 0.9, 0.2) == [0.8]  # short span: middle
+    s = B.settings_of(_data())
+    assert B.window_sill(s, 1.10) == 0.9 and B.window_sill(s, 1.50) == 0.5
+    op = {"type": "window", "style": "W9"}
+    w, h, sill = B.opening_size(op, s)
+    assert math.isclose(sill + h, 2.0)
+
+
+def test_column_heads_ceilings_trims_and_services():
+    d = _data()
+    d["settings"].update(skirting=True, cornice=True)
+    groups, count = B.build(d)
+    # a plate with four J-bolts on every top column, in the bill
+    assert count["headplate"] == len(B.nodes(d["floors"][0]["rooms"]))
+    hp = next(g for g in groups if _kind(g) == "headplate")
+    z = [v.position.z() for v in hp.mesh.vertices]
+    assert math.isclose(min(z), 3.0 - 0.60, abs_tol=1e-6) and max(z) > 3.0
+    r = Q.compute(d)
+    assert any(ln["desc"].startswith("เพลทหัวเสา") for ln in r["lines"])
+    assert any(ln["desc"].startswith("J-bolt 4-DB12") for ln in r["lines"])
+    # a ceiling in every room, under the beams, with its frame
+    n_rooms = len(d["floors"][0]["rooms"])
+    assert count["ceiling"] == n_rooms and count["ceiling_frame"] == n_rooms
+    ceil = next(g for g in groups if _kind(g) == "ceiling" and "ห้องนอน" in g.name)
+    assert math.isclose(_box(ceil)[5], 3.0 - 0.4, abs_tol=1e-6)
+    wet = next(g for g in groups if _kind(g) == "ceiling" and "ห้องน้ำ" in g.name)
+    assert "ไฟเบอร์ซีเมนต์" in dict(wet.ext[B.EXT_KEY]["info"])["ชนิด"]
+    descs = " | ".join(ln["desc"] for ln in r["lines"])
+    assert "ฝ้ายิปซัมบอร์ด 9 มม. ฉาบรอยต่อเรียบ" in descs and "ฝ้าไฟเบอร์ซีเมนต์" in descs
+    # skirting where the walls are not tiled high, cornice under every ceiling
+    assert count["skirting"] == n_rooms - 2 and count["cornice"] == n_rooms
+    sk = next(ln for ln in r["lines"] if ln["desc"].startswith("บัวเชิงผนังกระเบื้องเซรามิค"))
+    assert sk["lab"] == 51 and sk["cat"] == 10
+    # services: AC in the bedrooms only, lights everywhere
+    assert count["ac"] == 2 and count["ac_out"] == 2 and count["light"] == n_rooms
+    ac = next(ln for ln in r["lines"] if ln["desc"].startswith("เครื่องปรับอากาศแยกส่วน"))
+    assert "24,000" in ac["desc"] and ac["qty"] == 2 and ac["lab"] == 1538 and ac["cat"] == 13
+    cats = {ln["cat"] for ln in r["lines"]}
+    assert {1, 11, 12, 13, 14, 15} <= cats
+    fd = next(ln for ln in r["lines"] if "ฟลอร์เดรน" in ln["desc"])
+    assert fd["qty"] == 2 and fd["cat"] == 11
+    unit = next(g for g in groups if _kind(g) == "ac")
+    top = _box(unit)[5]
+    assert math.isclose(top, 3.0 - 0.4 - 0.009 - 0.15, abs_tol=1e-6)
+    d["settings"]["mep"] = False
+    assert not any(ln["cat"] in (12, 13) for ln in Q.compute(d)["lines"])

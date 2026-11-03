@@ -75,6 +75,12 @@ def line_category(group: str, desc: str) -> int:
                                 "ตะเฆ่", "ขื่อ")) and "กระเบื้อง" not in d:
             return 5
         return 7
+    if group == "prep":
+        return 1
+    if group == "plumbing":
+        return 11
+    if group == "misc":
+        return 15
     if group in ("electric",):
         return 12
     if group in ("hvac",):
@@ -89,11 +95,13 @@ KIND_CATEGORY = {
     "footing": 3, "pile": 3, "stump": 3,
     "column": 4, "beam": 4, "slab": 4, "stair": 4, "band": 6,
     "ridge": 5, "hip": 5, "rafter": 5, "purlin": 5, "post": 5, "valley": 5,
-    "wallplate": 5, "tiebeam": 5, "brace": 5,
+    "wallplate": 5, "tiebeam": 5, "brace": 5, "headplate": 5,
     "wall": 6, "plaster": 6,
     "skin": 7, "tiles": 7, "cap": 7, "fascia": 7, "barge": 7, "gutter": 7,
     "door": 8, "window": 8,
-    "soffit": 10, "soffit_frame": 10,
+    "soffit": 10, "soffit_frame": 10, "ceiling": 10, "ceiling_frame": 10,
+    "skirting": 10, "cornice": 10, "light": 12, "outlet": 12, "ac": 13,
+    "ac_out": 13,
     "fixture": 11,
 }
 

@@ -33,9 +33,11 @@ from core import wanic_catalog as CAT
 from core import wanic_profiles as P
 from core import wanic_recipes2569 as RC
 from core import wanic_std2569 as S
+from core import wanic_w480 as W480
 from core.wanic_sign import footer
 
 GROUPS = [
+    ("prep", "หมวดงานเตรียมพื้นที่"),
     ("earth", "หมวดงานดินและฐานราก"),
     ("column", "หมวดงานเสาตอม่อและเสา"),
     ("beam", "หมวดงานคาน"),
@@ -47,6 +49,11 @@ GROUPS = [
     ("sanitary", "หมวดงานสุขภัณฑ์และอุปกรณ์"),
     ("finish", "หมวดงานพื้นผิวและฝ้าเพดาน"),
     ("roof", "หมวดงานหลังคา"),
+    ("plumbing", "หมวดงานระบบประปาและสุขาภิบาล"),
+    ("electric", "หมวดงานระบบไฟฟ้า"),
+    ("hvac", "หมวดงานระบบปรับอากาศและระบายอากาศ"),
+    ("external", "หมวดงานภายนอกอาคาร"),
+    ("misc", "หมวดงานอื่นๆ"),
 ]
 GROUP_TH = dict(GROUPS)
 
@@ -654,10 +661,46 @@ def compute(data) -> dict:
                      basis="พื้นที่ริมผนังถึงริมผนัง",
                      ref=f"หลักเกณฑ์ 4.2 ข้อ 4.2 · สูตรวัสดุ {code} · "
                          f"ว480 {lc[:5]}", note=fnote)
-        bill.add(g, "ฝ้าเพดานยิปซัมบอร์ด 9 มม. โครงคร่าว T-bar", ceiling,
-                 "ตร.ม.", mat_key="ฝ้ายิปซัม 9 มม. โครง T-bar (วัสดุ)",
-                 lab_code="2.2.2", basis="พื้นที่ห้องที่มีฝ้า (ผนังถึงผนัง)",
-                 ref="หลักเกณฑ์ 4.2 ข้อ 2.1 · สูตรวัสดุ 5.42 · ว480 2.2.2")
+        # interior ceilings by type (dry rooms / wet rooms), with the
+        # frame, wall angle and hangers (ครบชุด) in the material price
+        ceil: dict = {}
+        cper: dict = {}
+        for e in E["slabs"]:
+            rm, k = e["room"], e["floor"]
+            ct = B.ceiling_type(s, rm)
+            if ct == "none" or not CAT.finish_of(rm, o["floor_recipe"])["ceiling"]:
+                continue
+            x0, y0, x1, y1 = B.room_inner(E, rm, k)
+            ceil[ct] = ceil.get(ct, 0.0) + (x1 - x0) * (y1 - y0)
+            cper[ct] = cper.get(ct, 0.0) + 2 * ((x1 - x0) + (y1 - y0))
+        for ct, area in ceil.items():
+            name, lab, frame, sub, main = B.CEILING_TYPES[ct]
+            bill.add(g, name, area, "ตร.ม.",
+                     mat_key=f"{name} (วัสดุครบชุด)",
+                     lab=float(W480.rate(lab)) if lab != "2.2.2" else None,
+                     lab_code=lab,
+                     basis=f"พื้นที่ห้องระหว่างผิวผนัง · โครงซอย @{sub:.2f} ม. "
+                           f"โครงหลัก/ลวดแขวน @{main:.2f} ม. ฉากริมผนัง {cper[ct]:.1f} ม.",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 2.1 · สูตรวัสดุ 5.42 · ว480 {lab}")
+        # skirting / cornice (ปุ่มบัวผนัง)
+        if s.get("skirting"):
+            name, lab, _h, _t, rate = B.SKIRTING_TYPES.get(
+                s.get("skirting_type", "ceramic"), B.SKIRTING_TYPES["ceramic"])
+            L = sum(B.trim_length(E, e["room"], e["floor"]) for e in E["slabs"]
+                    if B._has_trim(E, e["room"], "skirting"))
+            bill.add(g, name, L, "ม.", mat_key=f"{name} (วัสดุ)", lab=float(rate),
+                     lab_code=lab, basis="รอบห้องตามผิวผนัง หักช่องประตู "
+                                         "(ห้องที่บุกระเบื้องผนังสูง ≥ 1.20 ม. ไม่มีบัว)",
+                     ref=f"ว480 {lab}")
+        if s.get("cornice"):
+            name, lab, _h, _t = B.CORNICE
+            L = 0.0
+            for e in E["slabs"]:
+                if B._has_trim(E, e["room"], "cornice"):
+                    x0, y0, x1, y1 = B.room_inner(E, e["room"], e["floor"])
+                    L += 2 * ((x1 - x0) + (y1 - y0))
+            bill.add(g, name, L, "ม.", mat_key=f"{name} (วัสดุ)", lab_code=lab,
+                     basis="รอบห้องที่มีฝ้า", ref="ว480 2.2.5")
 
     # --- 11. Roof --------------------------------------------------------
     g = "roof"
@@ -690,6 +733,23 @@ def compute(data) -> dict:
                            f"{kgm:.2f} กก./ม.",
                      ref="หลักเกณฑ์ 4.1 ข้อ 6.3 · ว480 1.11.1")
             paint_a += pieces * S.STEEL_BAR_LENGTH * _perimeter(fam, params)
+        heads = len(lines.get("heads") or []) if s.get("head_plate", True) and \
+            (lines.get("plate") or lines.get("tie")) else 0
+        if heads:
+            pk, bk = B.head_plate_kg()
+            hp = B.HEAD_PLATE
+            bill.add(g, f"เพลทหัวเสา PL {hp['b'] * 1000:.0f}×{hp['b'] * 1000:.0f}×"
+                        f"{hp['t'] * 1000:.0f} มม.", heads * pk, "กก.",
+                     mat_key="เหล็กรูปพรรณ (ทั่วไป)", lab_code="1.11.3",
+                     basis=f"{heads} หัวเสา × {pk:.2f} กก.",
+                     ref="ว480 1.11.3 (ตัดประกอบ/เชื่อม)")
+            bill.add(g, f"J-bolt {hp['n']}-{hp['bolt']} ฝังหัวเสา {hp['embed']:.2f} ม.",
+                     heads * bk, "กก.", mat_key=hp["bolt"],
+                     lab=labour.get("1.10.2", 0.0) / 1000.0, lab_code="1.10.2",
+                     basis=f"{heads} หัวเสา × {hp['n']} เส้น × "
+                           f"{hp['embed'] + hp['hook'] + hp['stick']:.2f} ม. × 0.888 กก./ม.",
+                     ref="ว480 1.10.2 (บาท/ตัน ÷ 1,000)")
+            paint_a += heads * 2 * hp["b"] * hp["b"]
         bill.add(g, "ทาสีกันสนิมโครงหลังคาเหล็ก", paint_a, "ตร.ม.",
                  mat_key="สีกันสนิม", lab_code="2.8.3",
                  basis="เส้นรอบรูปหน้าตัด × ความยาวทุกท่อน",
@@ -824,6 +884,11 @@ def compute(data) -> dict:
                      "(หรือกด «ราคาตัวอย่าง» เพื่อทดลอง)")
     notes.append("ขนาดชิ้นส่วนและเหล็กเสริมเป็นค่าเริ่มต้น — "
                  "วิศวกรผู้ออกแบบต้องกำหนดตามแบบจริง")
+    from core import wanic_mep as MEP
+
+    def _mep_add(group, desc, qty, unit, **kw):
+        return bill.add(group, desc, qty, unit, **kw)
+    MEP.bill(data, E, _mep_add, labour)
     from core import wanic_categories as CG
     for ln in bill.lines:
         ln["cat"] = CG.line_category(ln["group"], ln["desc"])

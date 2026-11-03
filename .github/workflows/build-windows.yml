@@ -140,6 +140,8 @@ jobs:
         run: |
           test -f dist/launcher/wanicnsurvey.exe
           find dist/launcher -name developer.jpg | grep -q .
+          find dist/launcher -name contact-qr.png | grep -q .
+          find dist/launcher -name Charm-Bold.ttf | grep -q .
           test -f dist/ingecad/ingecad.exe
           test -f dist/ingetrazo/ingetrazo.exe
           test -f dist/ingecad/_internal/i18n/th/ui.json

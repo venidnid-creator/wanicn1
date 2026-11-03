@@ -56,10 +56,29 @@ def suite_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+CONTACT_TEXT = "ติดต่อผู้พัฒนาระบบ"
+CONTACT_PHONE = "093-5838348"
+CONTACT_QR = "contact-qr.png"          # tel:0935838348 (tools/qr.py)
+SCRIPT_FONT = "Charm-Bold.ttf"         # ลายมือไทย Charm (SIL Open Font License)
+
+
+def thai_script_font(px: int) -> QFont:
+    """The bundled Thai calligraphic face at ``px`` pixels; the system Thai
+    face when it cannot be loaded."""
+    from PySide6.QtGui import QFontDatabase
+    fid = QFontDatabase.addApplicationFont(str(asset(SCRIPT_FONT)))
+    fams = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+    f = QFont(fams[0]) if fams else QFont("Leelawadee UI")
+    f.setPixelSize(px)
+    f.setBold(True)
+    return f
+
+
 def asset(name: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent / "branding"))
     for p in (base / name, base / "branding" / name, base / "png" / name,
-              base / "branding" / "png" / name):
+              base / "branding" / "png" / name, base / "fonts" / name,
+              base / "branding" / "fonts" / name):
         if p.exists():
             return p
     return base / name
@@ -286,6 +305,21 @@ class StartWindow(QWidget):
         photo.setAlignment(Qt.AlignCenter)
         photo.setStyleSheet("border-radius: 10px;")
         col.addWidget(photo)
+        # contact: a QR code that dials the developer, and the number in a
+        # Thai calligraphic face (Charm, SIL OFL)
+        qr = QLabel()
+        qpix = QPixmap(str(asset(CONTACT_QR)))
+        if not qpix.isNull():
+            qr.setPixmap(qpix.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        qr.setAlignment(Qt.AlignCenter)
+        qr.setToolTip(f"สแกนเพื่อโทร {CONTACT_PHONE}")
+        col.addWidget(qr)
+        contact = QLabel(f"{CONTACT_TEXT}<br><span style='font-size:22px'>{CONTACT_PHONE}</span>")
+        contact.setAlignment(Qt.AlignCenter)
+        contact.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        contact.setFont(thai_script_font(17))
+        contact.setStyleSheet(f"color: {NAVY};")
+        col.addWidget(contact)
         free = QLabel(FREE_USE)
         free.setAlignment(Qt.AlignCenter)
         free.setWordWrap(True)

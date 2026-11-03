@@ -61,6 +61,13 @@ def unit_rates(data) -> dict:
     fk = "เชิงชายไม้สำเร็จรูป 1\"×8\" + ทับเชิงชาย 1\"×6\""
     r["board"] = (prices.get(fk, 0.0), labour.get("2.1.10a", 0.0), "ม.",
                   "2.1.10a", "เชิงชาย/ปั้นลม + ทับ ไม้สำเร็จรูป")
+    for ct, (cname, clab, *_r) in B.CEILING_TYPES.items():
+        from core import wanic_w480 as W
+        r[f"ceiling:{cname}"] = (prices.get(f"{cname} (วัสดุครบชุด)", 0.0),
+                                 float(W.rate(clab)), "ตร.ม.", clab, cname)
+    sname, slab, _h, _t, srate = B.SKIRTING_TYPES.get(
+        s.get("skirting_type", "ceramic"), B.SKIRTING_TYPES["ceramic"])
+    r["skirting"] = (prices.get(f"{sname} (วัสดุ)", 0.0), float(srate), "ม.", slab, sname)
     smat, _n = Q.recipe_price("5.41", prices)
     r["soffit"] = (smat, labour.get("2.2.1c", 0.0), "ตร.ม.", "2.2.1c",
                    "ฝ้าชายคาระแนงไม้เทียม")
@@ -90,6 +97,16 @@ def _qty(g, kind, info) -> tuple:
             t = 0.015
         ext = "ภายนอก" in rows.get("ชนิด", "")
         return ("plaster:ext" if ext else "plaster:int"), (v / t if t else 0.0)
+    if kind == "ceiling":
+        try:
+            return f"ceiling:{rows.get('ชนิด', '')}", float(rows.get("พื้นที่", "").split()[0])
+        except (ValueError, IndexError):
+            return "", 0.0
+    if kind == "skirting":
+        try:
+            return "skirting", float(rows.get("ความยาว", "").split()[0])
+        except (ValueError, IndexError):
+            return "", 0.0
     if kind in ("fascia", "barge"):
         try:
             return "board", float(rows.get("ความยาว", "").split()[0])

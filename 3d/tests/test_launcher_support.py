@@ -32,6 +32,14 @@ def test_start_screen_support_panel(monkeypatch):
              if w.pixmap() is not None and not w.pixmap().isNull()
              and w.pixmap().width() == 260]
     assert photo, "the developer's photo is on the start screen"
+    # the contact QR (it dials the developer) and the number in Thai script
+    assert "ติดต่อผู้พัฒนาระบบ" in texts and "093-5838348" in texts
+    qr = [w for w in win.findChildren(QLabel)
+          if w.pixmap() is not None and not w.pixmap().isNull()
+          and w.pixmap().width() == 120]
+    assert qr, "the contact QR code is under the photo"
+    contact = [w for w in win.findChildren(QLabel) if "093-5838348" in w.text()][0]
+    assert contact.font().family() == "Charm"
     copy = [b for b in win.findChildren(QPushButton) if "คัดลอก" in b.text()][0]
     copy.click()
     assert app.clipboard().text() in ("666132472", "6661324721")

@@ -75,6 +75,16 @@ DEFAULT_SETTINGS = {
     # one per type and size ("type"), per type and floor ("floor") or per
     # work category ("category"); "" leaves them on the default layer
     "layer_mode": "name",
+    # doors and windows: three places per span (middle, 25 cm off either
+    # column), window heads level with the door heads
+    "head_h": 2.0, "slot_snap": True,
+    # interior ceilings (ฝ้าภายใน): "cline" ยิปซัมฉาบเรียบ โครงซีลาย, "tbar",
+    # "none"; wet rooms take fibre-cement on T-bar. Skirting / cornice on
+    # request (ปุ่มบัวผนัง)
+    "ceiling_type": "cline", "skirting": False, "skirting_type": "ceramic",
+    "cornice": False,
+    # services by the rooms (ไฟฟ้า ปรับอากาศ สุขาภิบาล ภายนอก)
+    "mep": True,
     # roof frame by the tile maker and the usual steel-roof practice:
     # purlins at the tile's batten gauge (ระยะแป = ระยะซ้อนทับที่ผู้ผลิตกำหนด,
     # CPAC 32 ซม.), rafters at most the spacing the tile weight allows, a
@@ -83,7 +93,54 @@ DEFAULT_SETTINGS = {
     "purlin_auto": True, "rafter_auto": True,
     "wall_plate": True, "wallplate": "C 150×65×20×3.2",
     "tie_beams": True, "tiebeam": "C 150×65×20×3.2",
+    # column-head plate (เพลทหัวเสา) for the wall plate / tie beams:
+    # PL 200×200×9 มม. on 4 J-bolts DB12 cast 0.60 ม. into the column
+    "head_plate": True,
 }
+
+#: เพลทหัวเสา: กว้าง ยาว หนา (ม.), เหล็ก J-bolt (ขนาด, จำนวน, ฝังลึก ม., ขอ ม., โผล่ ม.)
+HEAD_PLATE = {"b": 0.20, "t": 0.009, "bolt": "DB12", "n": 4, "embed": 0.60,
+              "hook": 0.08, "stick": 0.05, "edge": 0.05}
+
+
+def head_plate_kg() -> tuple:
+    """(plate kg, J-bolt kg) of one column head."""
+    hp = HEAD_PLATE
+    plate = hp["b"] * hp["b"] * hp["t"] * 7850.0
+    bolt = hp["n"] * (hp["embed"] + hp["hook"] + hp["stick"]) * 0.888
+    return plate, bolt
+
+
+def head_plate(x, y, z):
+    """A column-head plate and its four J-bolts at the column (x, y), the
+    plate's top at ``z`` (the top of the ring beam)."""
+    hp = HEAD_PLATE
+    bx = _Boxes((x, y), (1.0, 0.0), z)
+    b, t, r = hp["b"] / 2, hp["t"], 0.006
+    steel = _paint("metal")
+    bx.box(-b, b, -b, b, -t, 0.0, steel)
+    e = b - hp["edge"]
+    for sx in (-e, e):
+        for sy in (-e, e):
+            bx.box(sx - r, sx + r, sy - r, sy + r, -hp["embed"], hp["stick"], steel)
+            # the J: a hook turned in towards the column centre
+            hx = -hp["hook"] if sx > 0 else hp["hook"]
+            lo, hi = sorted((sx, sx + hx))
+            bx.box(lo, hi, sy - r, sy + r, -hp["embed"], -hp["embed"] + 2 * r, steel)
+    pk, bk = head_plate_kg()
+    g = bx.group(f"เพลทหัวเสา PL {hp['b'] * 1000:.0f}×{hp['b'] * 1000:.0f}×"
+                 f"{t * 1000:.0f} มม. + J-bolt {hp['n']}-{hp['bolt']}",
+                 "roof", "headplate", "เพลทหัวเสา", "IfcPlate")
+    if g is not None:
+        rec = g.ext[EXT_KEY]
+        rec["info"] = [["ชนิด", "เพลทหัวเสา ยึดอะเส/ขื่อกับเสา ค.ส.ล."],
+                       ["แผ่นเหล็ก", f"{hp['b'] * 1000:.0f}×{hp['b'] * 1000:.0f}×"
+                                    f"{t * 1000:.0f} มม. ({pk:.2f} กก.)"],
+                       ["J-bolt", f"{hp['n']}-{hp['bolt']} ฝังในเสา {hp['embed']:.2f} ม. "
+                                  f"งอขอ {hp['hook'] * 100:.0f} ซม. ({bk:.2f} กก.)"],
+                       ["ตำแหน่ง", f"x {x:.2f} y {y:.2f} ระดับ {z:.2f} ม."],
+                       ["รายการ BOQ", "หมวด 5 งานโครงสร้างเหล็ก"]]
+    return g
 
 #: ระยะจันทันสูงสุด (ม.) ตามน้ำหนักวัสดุมุง: กระเบื้องคอนกรีต/ดินเผา 1.00,
 #: ไฟเบอร์ซีเมนต์ 1.20, เหล็กรีดลอน 1.50 — ใช้กับแป C 75×45×15×2.3
@@ -565,6 +622,48 @@ def snap_to_segment(x, y, segs, reach=0.4):
     return None if best is None else best[1]
 
 
+#: ระยะจากผิวเสาถึงขอบวงกบ เมื่อวางประตู/หน้าต่างชิดเสา (ม.)
+SLOT_GAP = 0.25
+
+
+def opening_slots(p0, p1, w, col_b, gap=SLOT_GAP) -> list:
+    """The three places a door or window may stand on a span (distance of
+    its centre from p0): the middle, and next to either column with
+    ``gap`` between the column face and the frame — the tidy elevation
+    every opening of the plan shares. A span too short for a side slot
+    has the middle only."""
+    L = math.dist(p0, p1)
+    mid = L / 2
+    left = col_b / 2 + gap + w / 2
+    right = L - col_b / 2 - gap - w / 2
+    out = [mid]
+    if right - left > w + 0.10 and left < mid - 0.05:
+        out = [left, mid, right]
+    return out
+
+
+def snap_opening(x, y, w, segs, col_b, gap=SLOT_GAP, reach=0.4):
+    """``(px, py, (p0, p1))``: the slot of :func:`opening_slots` nearest
+    the click on the nearest span, or ``None``."""
+    hit = snap_to_segment(x, y, segs, reach)
+    if hit is None:
+        return None
+    px, py, (p0, p1) = hit
+    L = math.dist(p0, p1)
+    if L < 1e-9:
+        return None
+    s_ = math.dist(p0, (px, py))
+    best = min(opening_slots(p0, p1, w, col_b, gap), key=lambda c: abs(c - s_))
+    ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+    return (_r(p0[0] + ux * best), _r(p0[1] + uy * best), (p0, p1))
+
+
+def window_sill(s, h) -> float:
+    """A window's sill so its head lines up with the door heads
+    (``head_h``, 2.00 ม.) — the usual rule of the standard drawings."""
+    return round(max(float(s.get("head_h", 2.0)) - float(h), 0.30), 3)
+
+
 def _openings_on(p0, p1, openings, tol=0.06):
     """Openings standing on span p0→p1: [(s, opening)] with ``s`` the
     distance of its centre from p0."""
@@ -591,7 +690,7 @@ def opening_size(op, s):
     styled = bool(op.get("style"))
     if op.get("type") == "window":
         dw, dh = (spec["w"], spec["h"]) if styled else (s["win_w"], s["win_h"])
-        dsill = spec.get("sill", s["win_sill"]) if styled else s["win_sill"]
+        dsill = window_sill(s, float(op.get("h") or dh)) if styled else s["win_sill"]
         return (float(op.get("w") or dw), float(op.get("h") or dh),
                 float(op.get("sill") if op.get("sill") is not None
                       else dsill))
@@ -886,7 +985,209 @@ def structure_members(data) -> tuple[list, dict]:
         rm = room_at(rooms_of[e["floor"]], float(fx["x"]), float(fx["y"]))
         z = e["floor"] * E["H"] - (drop if is_wet(rm) else 0.0)
         add(fixture_member(fx, z), "fixture")
+    if s.get("ceiling_type", "cline") != "none":
+        for g, kind in ceiling_members(E):
+            add(g, kind)
+    if s.get("skirting") or s.get("cornice"):
+        for g, kind in trim_members(E):
+            add(g, kind)
+    try:
+        from core import wanic_mep
+        for g, kind in wanic_mep.members(data, E):
+            add(g, kind)
+    except ImportError:                                 # pragma: no cover
+        pass
     return out, count
+
+
+# ---------------------------------------------------------------------------
+# Ceilings (ฝ้าเพดาน), skirting (บัวเชิงผนัง) and cornice (บัวฝ้า)
+# ---------------------------------------------------------------------------
+
+#: ชนิดฝ้าภายใน: (ชื่อ, ว480, โครง, ระยะโครงซอย, ระยะโครงหลัก/ลวดแขวน)
+CEILING_TYPES = {
+    "cline": ("ฝ้ายิปซัมบอร์ด 9 มม. ฉาบรอยต่อเรียบ โครงคร่าวเหล็กชุบสังกะสี (ซีลาย)",
+              "2.2.3", "C-line", 0.40, 1.20),
+    "tbar": ("ฝ้ายิปซัมบอร์ด 9 มม. โครงคร่าว T-bar 0.60×1.20 ม.", "2.2.4", "T-bar",
+             0.60, 1.20),
+    "fc": ("ฝ้าไฟเบอร์ซีเมนต์ 6 มม. โครงคร่าว T-bar (ห้องเปียก)", "2.2.4", "T-bar",
+           0.60, 1.20),
+}
+SKIRTING_TYPES = {
+    "ceramic": ("บัวเชิงผนังกระเบื้องเซรามิค สูง 4\"", "2.4.17", 0.10, 0.012, 51),
+    "pvc": ("บัวเชิงผนังสำเร็จรูป (พี วี ซี.) สูง 4\"", "2.4.17", 0.10, 0.010, 41),
+    "wood": ("บัวเชิงผนังไม้สำเร็จรูป (ไม้เทียม) สูง 4\"", "2.4.17", 0.10, 0.015, 46),
+    "granite": ("บัวเชิงผนังหินแกรนิต สูง 4\" (ลบมุม 45°)", "2.4.17", 0.10, 0.015, 179),
+    "cement": ("บัวเชิงผนังผิวซีเมนต์ขัดมันเรียบ สูง 4\"", "2.4.17", 0.10, 0.010, 41),
+}
+CORNICE = ("บัวฝ้า/ไม้มอบฝ้า สำเร็จรูป (ไม้เทียม) 2\"", "2.2.5b", 0.05, 0.02)
+
+
+def ceiling_type(s, room) -> str:
+    t = s.get("ceiling_type", "cline")
+    if t == "none":
+        return "none"
+    return "fc" if is_wet(room) else t
+
+
+def ceiling_z(E, k) -> float:
+    """Top of a floor's ceiling board: the underside of the beams above."""
+    lib, H, n = E["lib"], E["H"], E["n"]
+    key = "RB1" if k == n - 1 else "B1"
+    return (k + 1) * H - float(lib[key]["h"])
+
+
+def room_inner(E, rm, k):
+    """The room's clear rectangle between the plastered wall faces."""
+    s, lib = E["settings"], E["lib"]
+    rooms = E["floors"][k]["rooms"]
+    x0, y0 = float(rm["x"]), float(rm["y"])
+    x1, y1 = x0 + float(rm["w"]), y0 + float(rm["d"])
+    half = float(lib["C1"]["b"]) / 2
+    se, si = wall_spec(s, True), wall_spec(s, False)
+    off = max(half - se["po"] - se["t"] / 2, 0.0) if s.get("wall_flush", True) else 0.0
+    ext_in = max(se["t"] / 2 + se["pi"] - off, 0.0)
+    int_in = si["t"] / 2 + si["pi"]
+    if not s.get("walls", True):
+        ext_in = int_in = 0.0
+
+    def inset(mx, my):
+        n_ = sum(1 for r in rooms if _on_edge(r, mx, my))
+        return ext_in if n_ <= 1 else int_in
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    return (x0 + inset(x0, cy), y0 + inset(cx, y0),
+            x1 - inset(x1, cy), y1 - inset(cx, y1))
+
+
+def ceiling_members(E):
+    """Every room's ceiling: the board under the beams and its frame — the
+    furring channels (โครงซอย), main runners (โครงหลัก), the wall angle
+    (ฉากริมผนัง) and the hangers (ลวดแขวน/สตัด) up to the structure."""
+    s, H = E["settings"], E["H"]
+    G = Grid(E)
+    out = []
+    for e in E["slabs"]:
+        rm, k = e["room"], e["floor"]
+        ct = ceiling_type(s, rm)
+        if ct == "none" or not (rm.get("finish") or {}).get("ceiling", True):
+            continue
+        name, lab, frame, sub, main = CEILING_TYPES[ct]
+        x0, y0, x1, y1 = room_inner(E, rm, k)
+        if x1 - x0 < 0.3 or y1 - y0 < 0.3:
+            continue
+        zc = ceiling_z(E, k)
+        area = (x1 - x0) * (y1 - y0)
+        rname = rm.get("name") or "ห้อง"
+        where = f"{rname} · {_floor_name(k)} · {G.area(rm)}"
+        bx = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
+        board = {"color": (0.96, 0.96, 0.94)} if ct != "fc" else {"color": (0.88, 0.88, 0.86)}
+        bx.box(x0, x1, y0, y1, zc - 0.009, zc, board)
+        g = bx.group(f"ฝ้าเพดาน · {where}", "structure", "ceiling", "ฝ้าเพดาน",
+                     "IfcCovering")
+        if g is not None:
+            g.ext[EXT_KEY]["key"] = name
+            g.ext[EXT_KEY]["info"] = [["ชนิด", name], ["ห้อง", rname],
+                                      ["ชั้น", _floor_name(k)],
+                                      ["ระดับฝ้า", f"+{zc - k * H:.2f} ม. จากพื้น"],
+                                      ["พื้นที่", f"{area:.2f} ตร.ม."],
+                                      ["ค่าแรง", f"ว480 {lab}"],
+                                      ["รายการ BOQ", "หมวด 10 งานพื้น/ฝ้า"]]
+            out.append((g, "ceiling"))
+        # the frame above the board
+        fb = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
+        steel = {"color": (0.78, 0.80, 0.82)}
+        z1 = zc
+        top = (k + 1) * H - (0.0 if k == E["n"] - 1 else float(E["lib"]["S2"]["t"])
+                             if "S2" in E["lib"] else 0.10)
+        xs_n = max(int(math.ceil((x1 - x0) / sub - 1e-9)), 1)
+        for i in range(xs_n + 1):                    # furring channels along y
+            x = min(x0 + i * sub, x1 - 0.019)
+            x = max(x, x0 + 0.019)
+            fb.box(x - 0.019, x + 0.019, y0 + 0.02, y1 - 0.02, z1, z1 + 0.012, steel)
+        ys_n = max(int(math.ceil((y1 - y0) / main - 1e-9)), 1)
+        mains = [y0 + (y1 - y0) * (j + 0.5) / ys_n for j in range(ys_n)]
+        for y in mains:                              # main runners along x
+            fb.box(x0 + 0.02, x1 - 0.02, y - 0.019, y + 0.019, z1 + 0.012,
+                   z1 + 0.012 + 0.025, steel)
+            nh = max(int(math.ceil((x1 - x0) / main - 1e-9)), 1)
+            for i in range(nh):                      # hangers
+                x = x0 + (x1 - x0) * (i + 0.5) / nh
+                if top - (z1 + 0.037) > 0.02:
+                    fb.box(x - 0.003, x + 0.003, y - 0.003, y + 0.003,
+                           z1 + 0.037, top, steel)
+        for (a0, b0, a1, b1) in ((x0, y0, x1, y0 + 0.025), (x0, y1 - 0.025, x1, y1),
+                                 (x0, y0 + 0.025, x0 + 0.025, y1 - 0.025),
+                                 (x1 - 0.025, y0 + 0.025, x1, y1 - 0.025)):
+            fb.box(a0, a1, b0, b1, z1, z1 + 0.025, steel)   # wall angle
+        g = fb.group(f"โครงคร่าวฝ้า {frame} · {where}", "structure", "ceiling_frame",
+                     "โครงคร่าวฝ้า", "IfcMember")
+        if g is not None:
+            g.ext[EXT_KEY]["info"] = [["ชนิด", f"โครงคร่าวฝ้า {frame} พร้อมฉากริมผนัง "
+                                               "และลวด/สตัดแขวน"],
+                                      ["โครงซอย", f"@{sub:.2f} ม."],
+                                      ["โครงหลัก/ตัวแขวน", f"@{main:.2f} ม."],
+                                      ["ห้อง", rname], ["รายการ BOQ", "หมวด 10 งานพื้น/ฝ้า"]]
+            out.append((g, "ceiling_frame"))
+    return out
+
+
+def trim_length(E, rm, k) -> float:
+    """Metres of skirting round a room: its inner perimeter less the doors."""
+    x0, y0, x1, y1 = room_inner(E, rm, k)
+    per = 2 * ((x1 - x0) + (y1 - y0))
+    for op in E["openings"]:
+        if op["floor"] == k and op["type"] != "window" and \
+                _on_edge(rm, float(op["op"]["x"]), float(op["op"]["y"]), tol=0.06):
+            per -= op["w"]
+    return max(per, 0.0)
+
+
+def _has_trim(E, rm, what):
+    from core.wanic_catalog import finish_of
+    if what == "skirting":
+        fin = finish_of(rm)
+        return not (fin["wall_tile"] and fin["tile_h"] >= 1.2)
+    return (rm.get("finish") or {}).get("ceiling", True) and \
+        ceiling_type(E["settings"], rm) != "none"
+
+
+def trim_members(E):
+    """Skirting at the floor and cornice at the ceiling of every room the
+    user turned them on for (rooms tiled to 1.20 ม. or more have none)."""
+    s, H = E["settings"], E["H"]
+    out = []
+    drop = max(float(s.get("wet_drop") or 0.0), 0.0)
+    for e in E["slabs"]:
+        rm, k = e["room"], e["floor"]
+        x0, y0, x1, y1 = room_inner(E, rm, k)
+        rname = rm.get("name") or "ห้อง"
+        for what in ("skirting", "cornice"):
+            if not s.get(what) or not _has_trim(E, rm, what):
+                continue
+            if what == "skirting":
+                name, _lab, h, t, _r = SKIRTING_TYPES.get(s.get("skirting_type", "ceramic"),
+                                                          SKIRTING_TYPES["ceramic"])
+                z0 = k * H - (drop if is_wet(rm) else 0.0)
+                color = {"color": (0.82, 0.80, 0.76)}
+            else:
+                name, _lab, h, t = CORNICE
+                z0 = ceiling_z(E, k) - 0.009 - h
+                color = {"color": (0.98, 0.98, 0.97)}
+            bx = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
+            bx.box(x0, x1, y0, y0 + t, z0, z0 + h, color)
+            bx.box(x0, x1, y1 - t, y1, z0, z0 + h, color)
+            bx.box(x0, x0 + t, y0 + t, y1 - t, z0, z0 + h, color)
+            bx.box(x1 - t, x1, y0 + t, y1 - t, z0, z0 + h, color)
+            L = trim_length(E, rm, k) if what == "skirting" else \
+                2 * ((x1 - x0) + (y1 - y0))
+            g = bx.group(f"{name} · {rname} · {_floor_name(k)}", "structure", what,
+                         name, "IfcCovering")
+            if g is not None:
+                g.ext[EXT_KEY]["info"] = [["ชนิด", name], ["ห้อง", rname],
+                                          ["ความยาว", f"{L:.2f} ม."],
+                                          ["รายการ BOQ", "หมวด 10 งานพื้น/ฝ้า"]]
+                out.append((g, what))
+    return out
 
 
 def fixture_member(fx, z):
@@ -907,55 +1208,16 @@ def fixture_member(fx, z):
 
 def wall_offset(E, wl) -> float:
     """How far the wall's centre sits off its grid line, towards the
-    outside: an exterior wall's masonry lies flush with the outer face of
-    the columns (so the plaster runs on past the column without a step,
-    as มยผ. แบบมาตรฐาน draws it); an interior wall stays on the line."""
+    outside: an exterior wall stands so that its outside plaster is flush
+    with the outer faces of the columns and the beam above (one plumb,
+    even face from the ground beam to the ring beam); an interior wall
+    stays on the grid line."""
     s, lib = E["settings"], E["lib"]
     if not wl.get("exterior") or not s.get("wall_flush", True):
         return 0.0
     sp = wall_spec(s, True)
     half = float(lib["C1"]["b"]) / 2
-    return max(half - sp["t"] / 2, 0.0)
-
-
-def _outer_ends(E, wl, half, po):
-    """Where the outside plaster of an exterior wall starts and ends
-    (distances along the wall): on to the column centre where the wall
-    runs straight on, round the column's outer corner at a convex corner
-    (the wall along x carries the plaster's own thickness, so the two
-    skins meet without a gap or an overlap), and short of the other skin
-    at a concave corner."""
-    p0, p1, L = wl["p0"], wl["p1"], wl["L"]
-    ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
-    ox, oy = wl["out"]
-    along_x = abs(uy) < 1e-9
-    ends = []
-    for node, d in ((p0, (ux, uy)), (p1, (-ux, -uy))):
-        kind = None
-        for o in E["walls"]:
-            if o is wl or not o.get("exterior") or o["floor"] != wl["floor"]:
-                continue
-            if node == o["p0"]:
-                od = ((o["p1"][0] - node[0]) / o["L"], (o["p1"][1] - node[1]) / o["L"])
-            elif node == o["p1"]:
-                od = ((o["p0"][0] - node[0]) / o["L"], (o["p0"][1] - node[1]) / o["L"])
-            else:
-                continue
-            dot = od[0] * d[0] + od[1] * d[1]
-            if dot < -0.99:
-                kind = "straight"
-            elif abs(dot) < 1e-6 and kind != "straight":
-                kind = "convex" if od[0] * ox + od[1] * oy < 0 else "concave"
-        if kind == "straight":
-            e = 0.0
-        elif kind == "convex":
-            e = -half - (po if along_x else 0.0)
-        elif kind == "concave":
-            e = half + (po if along_x else 0.0)
-        else:
-            e = half
-        ends.append(e)
-    return ends[0], L - ends[1]
+    return max(half - sp["po"] - sp["t"] / 2, 0.0)
 
 
 def _walls(E, add):
@@ -985,13 +1247,13 @@ def _walls(E, add):
             return (c0[0] + ux * dist - uy * d, c0[1] + uy * dist + ux * d, z)
 
         where = G.span(p0, p1)
+        floor_ = _floor_name(wl["floor"])
         side = "ผนังภายนอก" if ext else "ผนังภายใน"
         kind_name = f"{side} {sp['name']}"
         layers = [("ฉาบปูนผนังภายนอก" if ext else "ฉาบปูนผนังภายใน",
-                   sgn * (t / 2 + sp["po"] / 2), sp["po"], ext),
-                  ("ฉาบปูนผนังภายใน", -sgn * (t / 2 + sp["pi"] / 2), sp["pi"], False)]
-        oa, ob = _outer_ends(E, wl, half, sp["po"]) if ext and off > 1e-6 \
-            else (half, L - half)
+                   sgn * (t / 2 + sp["po"] / 2), sp["po"]),
+                  ("ฉาบปูนผนังภายใน", -sgn * (t / 2 + sp["pi"] / 2), sp["pi"])]
+        aac = sp["recipe"] in ("6.10", "6.11", "6.12", "6.13", "6.14")
 
         def piece(a, b, z, height):
             if b - a <= 0.02 or height <= 0.02:
@@ -1000,7 +1262,7 @@ def _walls(E, add):
             add(_member("structure", "wall", kind_name, "rect",
                         dict(b=_mm(t), h=_mm(height)),
                         [at(a, z), at(b, z)], anchor="bc", ifc="IfcWall",
-                        name=f"{kind_name} · {_floor_name(wl['floor'])} · {where}",
+                        name=f"{kind_name} · {floor_} · {where}",
                         key=kind_name,
                         info=[("ชนิด", kind_name),
                               ("สูตรวัสดุ", f"หลักเกณฑ์ 2569 หมวด 6 ข้อ {sp['recipe']}"),
@@ -1008,43 +1270,42 @@ def _walls(E, add):
                               ("ความหนาฉาบ", f"ใน {sp['pi'] * 100:g} ซม. · "
                                              f"นอก {sp['po'] * 100:g} ซม."),
                               ("ความหนารวม", f"{T * 100:g} ซม."),
-                              ("แนวผนัง", "ชิดผิวนอกเสา" if off > 1e-6 else
-                               "กึ่งกลางเสา"),
-                              ("ชั้น", _floor_name(wl["floor"])),
-                              ("ตำแหน่ง", where),
+                              ("แนวผนัง", "ผิวฉาบนอกเสมอผิวเสาและคาน" if off > 1e-6
+                               else "กึ่งกลางเสา"),
+                              ("ชั้น", floor_), ("ตำแหน่ง", where),
                               ("ชิ้นนี้", f"ยาว {b - a:.2f} ม. สูง {height:.2f} ม."),
                               ("พื้นที่", f"{area:.2f} ตร.ม."),
                               ("รายการ BOQ", "หมวด 6 งานผนัง/ฉาบ")]),
                 "wall")
-            if not s.get("plaster_3d", True):
+
+        def skin(a, b, z, height):
+            """Plaster on both faces of a stretch of wall (masonry and the
+            concrete bands alike)."""
+            if not s.get("plaster_3d", True) or b - a <= 0.02 or height <= 0.02:
                 return
-            for lname, d, pt, outer in layers:
+            area = (b - a) * height
+            for lname, d, pt in layers:
                 if pt <= 1e-4:
                     continue
-                pa = oa if outer and abs(a - half) < 1e-6 else a
-                pb = ob if outer and abs(b - (L - half)) < 1e-6 else b
                 add(_member("structure", "plaster", lname, "rect",
                             dict(b=_mm(pt), h=_mm(height)),
-                            [at(pa, z, d), at(pb, z, d)], anchor="bc",
+                            [at(a, z, d), at(b, z, d)], anchor="bc",
                             ifc="IfcCovering",
-                            name=f"{lname} หนา {pt * 100:g} ซม. · "
-                                 f"{_floor_name(wl['floor'])} · {where}",
+                            name=f"{lname} หนา {pt * 100:g} ซม. · {floor_} · {where}",
                             key=lname,
                             info=[("ชนิด", lname),
-                                  ("สูตรวัสดุ", "หลักเกณฑ์ 2569 หมวด 7 ข้อ 7.2"
-                                   if sp["recipe"] not in ("6.10", "6.11", "6.12",
-                                                           "6.13", "6.14")
-                                   else "หลักเกณฑ์ 2569 หมวด 7 ข้อ 7.3"),
+                                  ("สูตรวัสดุ", "หลักเกณฑ์ 2569 หมวด 7 ข้อ "
+                                   + ("7.3" if aac else "7.2")),
                                   ("ความหนา", f"{pt * 100:g} ซม."),
                                   ("บนผนัง", kind_name),
-                                  ("ชั้น", _floor_name(wl["floor"])),
-                                  ("ตำแหน่ง", where),
+                                  ("ชั้น", floor_), ("ตำแหน่ง", where),
                                   ("พื้นที่", f"{area:.2f} ตร.ม."),
                                   ("ค่าแรง", "ว480 2.3.1.2 "
                                    + ("ภายนอก" if "ภายนอก" in lname else "ภายใน"))]),
                     "plaster")
         band = float(s.get("band", 0.10))
         cur = half
+        scur = half
         for sdist, op in _openings_on(p0, p1, wl["openings"]):
             ow, oh, sill = opening_size(op, s)
             door = op.get("type") != "window"
@@ -1058,6 +1319,12 @@ def _walls(E, add):
             piece(a - band, b + band, z0, lo)           # under a window
             hi = min(top + band, wh)
             piece(a - band, b + band, z0 + hi, wh - hi)  # over the opening
+            # plaster: the wall less the opening itself (it covers the bands)
+            bottom = 0.0 if door else sill
+            skin(scur, a, z0, wh)
+            skin(a, b, z0, bottom)
+            skin(a, b, z0 + top, wh - top)
+            scur = b
             if band > 0:
                 add(opening_band(c0, (ux, uy), z0, a, b, sill if not door
                                  else 0.0, top, t, band, wh, door), "band")
@@ -1066,6 +1333,7 @@ def _walls(E, add):
                 kind)
             cur = max(cur, b + band)
         piece(cur, L - half, z0, wh)
+        skin(scur, L - half, z0, wh)
 
 
 # ---------------------------------------------------------------------------
@@ -1355,7 +1623,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
                    o[1] - 1e-6 <= py <= o[3] + 1e-6 for o in others)
 
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "eave": [], "barge": [], "tie": []}
+           "skin": [], "eave": [], "barge": [], "tie": [], "tie2": []}
     zr = h(half)
     yc = y0 + half
     if s["roof"] == "hip":
@@ -1411,7 +1679,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
     d = 0.05
 
     def purlin(p, q):
-        if math.dist(p, q) > 0.40:            # no stubs at a hip's tip
+        if math.dist(p, q) > 0.05:
             out["purlin"].append({"closed": False, "path": [p, q]})
     ds = []
     while d < half - 0.05:
@@ -1442,6 +1710,10 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
         for xx in sorted(px):
             out["post"].append([P3(xx, yc, z0), P3(xx, yc, zr)])
             out["tie"].append([P3(xx, y0 + ov, z0), P3(xx, y1 - ov, z0)])
+        # and the other way: one tie along the ridge line from end wall to
+        # end wall under every post, so the posts are held both ways and
+        # the ceiling hangers have a line to hang from
+        out["tie2"].append([P3(x0 + ov, yc, z0), P3(x1 - ov, yc, z0)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
     # Eave lines (เชิงชาย) and, on a gable end, the rakes (ปั้นลม).
@@ -1498,6 +1770,7 @@ def roof_lines(data):
             _f, prm_ = steel_lookup(s[key])
             ph = max(ph, float(prm_.get("H", prm_.get("D", prm_.get("A", 0.0)))) / 1000.0)
     out["plate_h"] = ph
+    out["heads"] = nodes(top)
     if s.get("wall_plate"):
         segs = [[(a[0], a[1], z0 + ph), (b[0], b[1], z0 + ph)]
                 for a, b in outline_segments(top)]
@@ -1520,6 +1793,7 @@ def roof_lines(data):
         if not many:
             for k in ("ridge", "hip", "rafter", "purlin", "post", "skin", "tie"):
                 out[k] += part[k]
+            out["tie"] += part["tie2"]
         else:
             # Trim what lies under a neighbouring roof (L / T plans); a
             # ridge or hip is kept only where it is still a crease of the
@@ -1538,6 +1812,7 @@ def roof_lines(data):
                 if not RC.hidden(b, i, roofs):
                     out["post"].append([a, b])
                     out["tie"].append(tie)
+            out["tie"] += part["tie2"]
             kept[i] = []
             for poly in part["skin"]:
                 kept[i] += RC.clip_facet(poly, i, roofs)
@@ -1547,8 +1822,12 @@ def roof_lines(data):
                 out[k] += RC.clip_segment(a, b, i, roofs) if many \
                     else [[a, b]]
     out["eave"] = _merge_collinear(out["eave"])
+    # one member from end to end: pieces of one line (a hip end and the
+    # wing whose slope it shares, or bits a clip left) become one
     out["purlin"] = [{"closed": False, "path": seg} for seg in
                      merge_segments([pl["path"] for pl in out["purlin"]])]
+    out["rafter"] = merge_segments(out["rafter"])
+    out["ridge"] = merge_segments(out["ridge"])
     if not s.get("tie_beams"):
         out["tie"] = []
     if many:
@@ -1849,6 +2128,9 @@ def roof_members(data) -> tuple[list, dict]:
                               ("ความยาว", f"{L:.2f} ม."),
                               ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
                               ("รายการ BOQ", "หมวด 5 งานโครงสร้างเหล็ก")]), kind)
+    if s.get("head_plate", True) and (lines.get("plate") or lines.get("tie")):
+        for (x, y) in lines.get("heads") or []:
+            add(head_plate(x, y, lines["z0"]), "headplate")
     fam, params = steel_lookup(s["purlin"])
     kgm = P.weight_per_m(fam, params)
     for pl in lines["purlin"]:
@@ -2506,10 +2788,13 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("wallplate", "อะเส"),
-           ("tiebeam", "ขื่อรับดั้ง"), ("fascia", "เชิงชาย"),
+           ("tiebeam", "ขื่อรับดั้ง"), ("headplate", "เพลทหัวเสา"),
+           ("fascia", "เชิงชาย"),
            ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
            ("band", "เสาเอ็น-ทับหลัง"), ("plaster", "ผิวฉาบปูน"),
-           ("fixture", "สุขภัณฑ์"),
+           ("fixture", "สุขภัณฑ์"), ("ceiling", "ฝ้าเพดาน"),
+           ("ceiling_frame", "โครงคร่าวฝ้า"), ("skirting", "บัวเชิงผนัง"),
+           ("cornice", "บัวฝ้า"), ("ac", "เครื่องปรับอากาศ"), ("light", "ดวงโคม"),
            ("tiles", "กระเบื้อง"),
            ("skin", "แผ่นหลังคา")]
 
