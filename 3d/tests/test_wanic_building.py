@@ -451,7 +451,7 @@ def test_choosing_a_province_fills_the_bill_at_once(monkeypatch, tmp_path):
     for i in range(dlg.tree.topLevelItemCount()):
         top = dlg.tree.topLevelItem(i)
         for j in range(top.childCount()):
-            if "DB12" in top.child(j).text(1):
+            if top.child(j).text(1).startswith("เหล็กเสริม DB12"):
                 found.append(top.child(j).text(6))
     assert found == ["24.40"]
     # Saved for next time: choosing it again does not fetch again.
