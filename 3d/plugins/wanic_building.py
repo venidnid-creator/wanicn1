@@ -578,7 +578,7 @@ class ItemDialog(QDialog):
             code, _spec = CAT.opening_type(item)
             self.choice = ("style", QComboBox())
             for c, spec in CAT.types_of("window" if win else "door"):
-                self.choice[1].addItem(f"{c} — {spec['name']}", c)
+                self.choice[1].addItem(opening_icon(spec, 40), f"{c} — {spec['name']}", c)
             self.choice[1].setCurrentIndex(max(self.choice[1].findData(code),
                                                0))
             f.addRow("แบบ", self.choice[1])
@@ -595,6 +595,95 @@ class ItemDialog(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         f.addRow(bb)
+
+
+def opening_icon(spec, size=96):
+    """A small elevation of a door / window type (frame, leaves, fixed
+    glass, slide arrows, swing marks) as an icon."""
+    from PySide6.QtGui import QIcon, QPixmap
+    pm = QPixmap(size, size)
+    pm.fill(QColor(255, 255, 255, 0))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    w, h = float(spec.get("w", 1)), float(spec.get("h", 2))
+    k = (size - 10) / max(w, h)
+    bw, bh = w * k, h * k
+    ox, oy = (size - bw) / 2, (size - bh) / 2
+
+    def R(x0, y0, x1, y1):
+        return QRectF(ox + x0 * bw, oy + (1 - y1) * bh, (x1 - x0) * bw, (y1 - y0) * bh)
+    alu = spec.get("frame") == "alu"
+    frame = QColor("#9AA4AE") if alu else QColor("#7A4E2D")
+    for x0, y0, x1, y1, what in CAT.opening_sketch(spec):
+        r = R(x0, y0, x1, y1)
+        if what == "frame":
+            p.fillRect(r, frame)
+        elif what in ("glass", "fixed"):
+            p.fillRect(r, QColor("#BFE3F2") if what == "glass" else QColor("#D8EEF6"))
+            p.setPen(QPen(QColor("#5B6B78"), 1))
+            p.drawRect(r)
+        elif what == "leaf":
+            p.fillRect(r, QColor("#C08A5A"))
+            p.setPen(QPen(QColor("#5B3A1E"), 1))
+            p.drawRect(r)
+        elif what == "arrow":
+            p.setPen(QPen(QColor("#1F4E79"), 1.6))
+            cy = r.center().y()
+            p.drawLine(QPointF(r.left() + 4, cy), QPointF(r.right() - 4, cy))
+            p.drawLine(QPointF(r.right() - 4, cy), QPointF(r.right() - 9, cy - 4))
+            p.drawLine(QPointF(r.right() - 4, cy), QPointF(r.right() - 9, cy + 4))
+        elif what in ("swing_r", "swing_l"):
+            p.setPen(QPen(QColor("#1F4E79"), 1, Qt.DashLine))
+            hx = r.right() if what == "swing_r" else r.left()
+            fx = r.left() if what == "swing_r" else r.right()
+            p.drawLine(QPointF(fx, r.top()), QPointF(hx, r.center().y()))
+            p.drawLine(QPointF(fx, r.bottom()), QPointF(hx, r.center().y()))
+    p.end()
+    return QIcon(pm)
+
+
+class OpeningPicker(QDialog):
+    """Pick a door or window type from thumbnails — the catalog's
+    elevation of each set with its standard size."""
+
+    def __init__(self, parent, kind, current=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QScrollArea, QToolButton
+        self.setWindowTitle({"window": "เลือกแบบหน้าต่าง", "door": "เลือกแบบประตู"}
+                            .get(kind, "เลือกแบบประตู-หน้าต่าง"))
+        self.resize(760, 560)
+        self.code = current
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("<b>คลิกเลือกแบบ</b> — ขนาดมาตรฐานตามแคตตาล็อก "
+                             "(แก้ขนาดได้ภายหลัง) · ลูกศร = บานเลื่อน · เส้นประ = "
+                             "บานเปิด (ด้านบานพับ)"))
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        inner = QWidget()
+        g = QGridLayout(inner)
+        types = CAT.types_of(kind) if kind else \
+            CAT.types_of("door") + CAT.types_of("window")
+        for i, (code, spec) in enumerate(types):
+            b = QToolButton()
+            b.setIcon(opening_icon(spec, 110))
+            b.setIconSize(QSize(110, 110))
+            b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            b.setText(f"{code} {spec['name']}\n{spec['w']:.2f}×{spec['h']:.2f} ม.")
+            b.setMinimumSize(170, 170)
+            b.setCheckable(True)
+            b.setChecked(code == current)
+            b.clicked.connect(lambda _=False, c=code: self._pick(c))
+            g.addWidget(b, i // 4, i % 4)
+        area.setWidget(inner)
+        lay.addWidget(area, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Cancel)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _pick(self, code):
+        self.code = code
+        self.accept()
 
 
 class RoomDialog(QDialog):
@@ -804,6 +893,45 @@ class LibraryBox(QGroupBox):
         self.mark.setCurrentIndex(max(self.mark.findData(new), 0))
 
 
+from core.history import Command as _Command  # noqa: E402
+
+
+class _LayersCommand(_Command):
+    """Create the layers a build's parts carry (named after the parts) and
+    drop the ones an earlier build made that nothing carries any more —
+    one undoable step with the build."""
+
+    def __init__(self, names, stale):
+        self.names = list(names)
+        self.stale = set(stale)
+        self.added, self.removed = [], []
+
+    def do(self, scene):
+        from core.layers import Layer, layer_of
+        from core.purge import iter_groups
+        self.added, self.removed = [], []
+        for n in self.names:
+            if scene.layer(n) is None:
+                ly = Layer(n)
+                scene.layers.append(ly)
+                self.added.append(ly)
+        if self.stale:
+            used = {layer_of(g) for g in iter_groups(scene.groups)}
+            for ly in list(scene.layers):
+                if ly.name in self.stale and ly.name not in used:
+                    self.removed.append((scene.layers.index(ly), ly))
+                    scene.layers.remove(ly)
+        scene.version += 1
+
+    def undo(self, scene):
+        for ly in self.added:
+            if ly in scene.layers:
+                scene.layers.remove(ly)
+        for i, ly in sorted(self.removed, key=lambda p: p[0]):
+            scene.layers.insert(min(i, len(scene.layers)), ly)
+        scene.version += 1
+
+
 class BoqDialog(QDialog):
     """BOQ ตามหลักเกณฑ์ 2569: the bill by หมวด, the price list, options."""
 
@@ -825,6 +953,7 @@ class BoqDialog(QDialog):
         lay.addWidget(self.tabs, 1)
         self._bill_tab()
         self._price_tab()
+        self._w480_tab()
         self._option_tab()
         row = QHBoxLayout()
         for text, color, fn in (
@@ -1123,9 +1252,34 @@ class BoqDialog(QDialog):
 
     # ---- tabs ---------------------------------------------------------------
     def _bill_tab(self):
-        from PySide6.QtWidgets import QTreeWidget
+        from PySide6.QtWidgets import QListWidget, QSplitter, QTreeWidget
         w = QWidget()
-        v = QVBoxLayout(w)
+        outer = QVBoxLayout(w)
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("<b>จัดหมวดใบ BOQ</b>"))
+        self.boq_by = QComboBox()
+        self.boq_by.addItem("15 หมวดงาน (เตรียมพื้นที่ … งานอื่นๆ)", "cat15")
+        self.boq_by.addItem("หมวดตามหลักเกณฑ์การถอดแบบ 2569", "rule")
+        cur = (self.panel.data().get("boq_options") or {}).get("boq_by", "cat15")
+        self.boq_by.setCurrentIndex(max(self.boq_by.findData(cur), 0))
+        self.boq_by.currentIndexChanged.connect(
+            lambda _i: _safe(self, self._set_boq_by))
+        bar.addWidget(self.boq_by)
+        bar.addStretch(1)
+        outer.addLayout(bar)
+        split = QSplitter(Qt.Horizontal)
+        self.cats = QListWidget()
+        self.cats.setMinimumWidth(230)
+        self.cats.setMaximumWidth(300)
+        self.cats.setToolTip("เลือกหมวดงานเพื่อดูเฉพาะหมวดนั้น — «ทั้งหมด» แสดงทุกหมวด")
+        self.cats.currentRowChanged.connect(lambda _r: self._filter_cat())
+        split.addWidget(self.cats)
+        right = QWidget()
+        v = QVBoxLayout(right)
+        v.setContentsMargins(0, 0, 0, 0)
+        split.addWidget(right)
+        split.setStretchFactor(1, 1)
+        outer.addWidget(split, 1)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(self.COLS))
         self.tree.setHeaderLabels(self.COLS)
@@ -1179,6 +1333,49 @@ class BoqDialog(QDialog):
         self._QTI = QTableWidgetItem
         self._S = S
         self._fill_prices()
+
+    def _w480_tab(self):
+        """The whole ว480 list (1,465 rows), searchable — to look a labour
+        rate up for an item the bill does not make by itself."""
+        from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+        from core import wanic_w480 as W
+        w = QWidget()
+        v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("<b>บัญชีค่าแรงงาน ว480 (26 มิ.ย. 2569) ครบทั้งบัญชี</b> — ค้นหา:"))
+        self.w480_q = QLineEdit()
+        self.w480_q.setPlaceholderText("เช่น ฉาบปูน ภายนอก · มวลเบา 0.10 · 2.4.6 · PVC")
+        self.w480_q.textChanged.connect(lambda _t: self._fill_w480())
+        top.addWidget(self.w480_q, 1)
+        v.addLayout(top)
+        self.w480 = QTableWidget(0, 6)
+        self.w480.setHorizontalHeaderLabels(["ลำดับที่", "รายการ", "ขนาด/ชนิด", "หน่วย",
+                                             "ค่าแรง/หน่วย (บาท)", "หมายเหตุ/เงื่อนไข"])
+        for i, px in enumerate((70, 300, 280, 60, 110, 330)):
+            self.w480.setColumnWidth(i, px)
+        self.w480.setEditTriggers(QTableWidget.NoEditTriggers)
+        v.addWidget(self.w480, 1)
+        foot = QLabel(f"{W.SOURCE} · ค่าแรงที่ไม่มีในบัญชีคิดร้อยละ "
+                      f"{W.UNLISTED[0] * 100:.0f}–{W.UNLISTED[1] * 100:.0f} ของค่าวัสดุ")
+        foot.setWordWrap(True)
+        v.addWidget(foot)
+        self._W, self._QTI_ = W, QTableWidgetItem
+        self.tabs.addTab(w, "ค่าแรง ว480 (ทั้งบัญชี)")
+        self._fill_w480()
+
+    def _fill_w480(self):
+        W, QTI = self._W, self._QTI_
+        q = self.w480_q.text().strip()
+        rows = W.search(q, limit=2000) if q else list(W.ROWS)
+        self.w480.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            code, item, spec, unit, rate, note, page = row
+            for c, text in enumerate((code, item, spec, unit, f"{rate:,.2f}", note)):
+                it = QTI(text)
+                if c == 4:
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                it.setToolTip(f"{W.label(row)}\nหน้า {page}")
+                self.w480.setItem(r, c, it)
 
     def _fill_prices(self):
         from core import wanic_quantities as Q
@@ -1247,8 +1444,7 @@ class BoqDialog(QDialog):
         roof_note.setStyleSheet("color: palette(mid);")
         f.addRow(roof_note)
         self.recipe = {}
-        for key, prefix, th in (("wall_recipe", "6.", "ผนัง (สูตรวัสดุ)"),
-                                ("plaster_recipe", "7.", "ฉาบปูน (สูตรวัสดุ)"),
+        for key, prefix, th in (("plaster_recipe", "7.", "ฉาบปูน (สูตรวัสดุ)"),
                                 ("floor_recipe", "9.", "พื้นผิว (สูตรวัสดุ)")):
             c = QComboBox()
             for rc in RC.RECIPES:
@@ -1275,6 +1471,53 @@ class BoqDialog(QDialog):
         self.tabs.addTab(w, "ตัวเลือก")
 
     # ---- data ---------------------------------------------------------------
+    def _set_boq_by(self):
+        d = self.panel.data()
+        o = dict(d.get("boq_options") or {})
+        o["boq_by"] = self.boq_by.currentData()
+        d["boq_options"] = o
+        self.panel._write(d)
+        self.recompute()
+
+    def _fill_cats(self):
+        from PySide6.QtWidgets import QListWidgetItem
+        from core import wanic_categories as CG
+        row = max(self.cats.currentRow(), 0)
+        self.cats.blockSignals(True)
+        self.cats.clear()
+        lines = self.result.get("lines") or []
+        tot = sum(ln["total"] for ln in lines)
+        it = QListWidgetItem(f"📋 ทั้งหมด  ·  {tot:,.0f} บาท")
+        it.setData(Qt.UserRole, None)
+        self.cats.addItem(it)
+        if self.boq_by.currentData() == "cat15":
+            for no, name, icon, ex in CG.CATEGORIES:
+                rows = [ln for ln in lines if ln.get("cat") == no]
+                t = sum(ln["total"] for ln in rows)
+                it = QListWidgetItem(f"{icon} {no}. {name}" +
+                                     (f"  ·  {t:,.0f}" if rows else "  ·  —"))
+                it.setData(Qt.UserRole, CG.title(no))
+                it.setToolTip(f"{name}: {ex}\n{len(rows)} รายการ · {t:,.2f} บาท")
+                if not rows:
+                    it.setForeground(QColor("#99A"))
+                self.cats.addItem(it)
+        else:
+            for _k, th, rows in self.result["groups"]:
+                t = sum(ln["total"] for ln in rows)
+                it = QListWidgetItem(f"{th}  ·  {t:,.0f}")
+                it.setData(Qt.UserRole, th)
+                self.cats.addItem(it)
+        self.cats.setCurrentRow(min(row, self.cats.count() - 1))
+        self.cats.blockSignals(False)
+        self._filter_cat()
+
+    def _filter_cat(self):
+        it = self.cats.currentItem()
+        want = it.data(Qt.UserRole) if it is not None else None
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            top.setHidden(bool(want) and top.text(1) != want)
+
     def recompute(self):
         from PySide6.QtWidgets import QTreeWidgetItem
         from core import wanic_quantities as Q
@@ -1326,6 +1569,8 @@ class BoqDialog(QDialog):
             f"ค่าแรง {t['lab']:,.2f}) — ยังไม่คูณ Factor F · ส่งเข้า «ถอดปริมาณ» "
             f"เพื่อคิด Factor F และพิมพ์แบบ ปร.<br><span style='color:#B26A00'>{notes}"
             "</span>")
+        if hasattr(self, "cats"):
+            self._fill_cats()
 
     def _write(self, key, value):
         d = self.panel.data()
@@ -1829,7 +2074,12 @@ class BuildingPanel(QWidget):
         self.op_h = _spin(0.3, 4.0, 2.0)
         self.op_sill = _spin(0.0, 3.0, 0.9)
         og.addWidget(QLabel("แบบ"), 0, 0)
-        og.addWidget(self.op_style, 0, 1, 1, 5)
+        og.addWidget(self.op_style, 0, 1, 1, 4)
+        pick = QPushButton("🖼 เลือกจากรูป…")
+        pick.setToolTip("เลือกแบบประตู/หน้าต่างจากรูปตัวอย่าง (บานเปิด เปิดคู่ "
+                        "บานเลื่อน 2/4 บาน เลื่อน+ติดตาย ช่องแสงบน ติดตายข้าง …)")
+        pick.clicked.connect(lambda _=False: _safe(self, self.pick_opening))
+        og.addWidget(pick, 0, 5)
         for c, (lab, sp) in enumerate((("กว้าง", self.op_w), ("สูง", self.op_h),
                                        ("ขอบล่าง", self.op_sill))):
             og.addWidget(QLabel(lab), 1, c * 2)
@@ -1949,7 +2199,39 @@ class BuildingPanel(QWidget):
         self.walls = QCheckBox("สร้างผนังก่ออิฐรอบห้อง")
         self.walls.toggled.connect(lambda _v: self._save_settings())
         sf.addRow(self.walls)
-        num("wall_t", "ผนังหนา", 0.05, 0.5, 0.01)
+        self.combos, self.checks = {}, {}
+
+        def combo(key, label, items):
+            c = QComboBox()
+            for data_, text in items:
+                c.addItem(text, data_)
+            c.currentIndexChanged.connect(lambda _i: self._save_settings())
+            self.combos[key] = c
+            sf.addRow(label, c)
+
+        def check(key, text, tip=""):
+            c = QCheckBox(text)
+            c.setToolTip(tip)
+            c.toggled.connect(lambda _v: self._save_settings())
+            self.checks[key] = c
+            sf.addRow(c)
+        walls_items = [(k, f"{k} {v[0]} (เนื้อผนัง {v[1] * 100:g} ซม.)")
+                       for k, v in B.WALL_TYPES.items()]
+        combo("ext_wall", "ผนังภายนอก", walls_items)
+        combo("int_wall", "ผนังภายใน", walls_items)
+        pl = [(v, f"{v * 100:g} ซม.") for v in B.PLASTER_T]
+        combo("ext_plaster_t", "ฉาบปูนผนังภายนอก หนา", pl)
+        combo("plaster_t", "ฉาบปูนผนังภายใน หนา", pl)
+        check("wall_flush", "ผนังภายนอกชิดผิวนอกเสา (ผนังภายในอยู่กึ่งกลางเสา)",
+              "ตามแบบมาตรฐาน มยผ./วสท.: ผิวนอกผนังก่อเสมอผิวนอกเสาและคาน "
+              "เพื่อให้ฉาบปูนต่อเนื่องไม่มีบ่า")
+        check("plaster_3d", "สร้างผิวฉาบปูนเป็นชิ้นแยก (เลเยอร์ฉาบภายใน/ภายนอก)")
+        combo("layer_mode", "เลเยอร์อัตโนมัติ",
+              [("name", "ตามชื่อชิ้นส่วน (เช่น เสา C1 20×20 ซม. · ชั้น 1 · D-3)"),
+               ("type", "ตามชนิดและขนาด (เช่น เสา C1 20×20 ซม.)"),
+               ("floor", "ตามชนิดและชั้น (เช่น เสา C1 20×20 ซม. · ชั้น 1)"),
+               ("category", "ตามหมวดงาน 15 หมวด (เช่น 04 งานโครงสร้างคอนกรีต)"),
+               ("", "ไม่แยกเลเยอร์")])
         num("band", "เสาเอ็น-ทับหลังรอบประตู/หน้าต่าง (0 = ไม่มี)", 0.0, 0.3, 0.01)
         lay.addWidget(st)
         self.library = LibraryBox(self)
@@ -2323,10 +2605,26 @@ class BuildingPanel(QWidget):
             self.op_style.blockSignals(True)
             self.op_style.clear()
             for code, spec in CAT.types_of(t):
-                self.op_style.addItem(f"{code} — {spec['name']}", code)
+                self.op_style.addItem(opening_icon(spec, 40),
+                                      f"{code} — {spec['name']}", code)
             self.op_style.blockSignals(False)
             self._style_changed()
             self.op_sill.setEnabled(t == "window")
+
+    def pick_opening(self):
+        kind = self.tool() if self.tool() in ("door", "window") else None
+        dlg = OpeningPicker(self, kind, self.op_style.currentData())
+        if dlg.exec() and dlg.code:
+            want = CAT.OPENING_TYPES[dlg.code]["kind"]
+            if self.tool() != want:
+                j = self.tool_box.findData(want)
+                if j >= 0:
+                    self.tool_box.setCurrentIndex(j)
+            i = self.op_style.findData(dlg.code)
+            if i >= 0:
+                self.op_style.setCurrentIndex(i)
+            self.status.setText(f"แบบ {dlg.code} {CAT.OPENING_TYPES[dlg.code]['name']}"
+                                " — คลิกบนผนังในผังเพื่อวาง")
 
     def _style_changed(self):
         spec = CAT.OPENING_TYPES.get(self.op_style.currentData())
@@ -2585,6 +2883,12 @@ class BuildingPanel(QWidget):
         s["roof_mode"] = self.roof_mode.currentData()
         for k, c in self.steel.items():
             s[k] = c.currentText()
+        for k, c in self.combos.items():
+            if c.currentData() is not None:
+                s[k] = c.currentData()
+        for k, c in self.checks.items():
+            s[k] = c.isChecked()
+        s["wall_t"] = round(B.wall_spec(s, True)["T"], 4)
         if s != self.data()["settings"]:
             self._write(d)
 
@@ -2602,6 +2906,16 @@ class BuildingPanel(QWidget):
             for k, sp in self.fields.items():
                 sp.setValue(float(s[k]))
             self.walls.setChecked(bool(s["walls"]))
+            for k, c in self.combos.items():
+                v = s.get(k, B.DEFAULT_SETTINGS.get(k))
+                i = c.findData(v)
+                if i < 0 and isinstance(v, float):
+                    i = next((j for j in range(c.count())
+                              if isinstance(c.itemData(j), float)
+                              and abs(c.itemData(j) - v) < 1e-6), -1)
+                c.setCurrentIndex(max(i, 0))
+            for k, c in self.checks.items():
+                c.setChecked(bool(s.get(k, B.DEFAULT_SETTINGS.get(k))))
             self.skin.setChecked(bool(s["skin"]))
             self.fascia.setChecked(bool(s.get("fascia", True)))
             self.caps.setChecked(bool(s.get("caps", True)))
@@ -2639,8 +2953,12 @@ class BuildingPanel(QWidget):
         if not groups and not old:
             self.status.setText("ไม่มีอะไรให้สร้าง")
             return
+        mode = B.settings_of(d).get("layer_mode", "name")
+        by_layer = B.assign_layers(groups, mode)
+        stale = {g.layer for g in old if getattr(g, "layer", None)}
         cmds = [DeleteGroupCommand(g) for g in old]
         cmds += [InsertGroupCommand(g) for g in groups]
+        cmds.append(_LayersCommand(list(by_layer), stale - set(by_layer)))
         self.app.viewport.history.execute(CompoundCommand(cmds))
         self.app.scene.selection.clear()
         vp = self.app.viewport

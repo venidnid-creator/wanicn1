@@ -166,13 +166,13 @@ def test_the_book_ends_with_por4():
                                      range(1, len(boq) + 1)]
     first = " ".join(boq[0].texts())
     for t in ("แบบ ปร.1", "ค่างานต้นทุน", "สรุปงาน",
-              "หมวดงานดินและฐานราก", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ",
+              "2. งานดิน", "3. งานฐานราก", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ",
               "สถานที่ก่อสร้าง  จังหวัดลพบุรี", "แบบเลขที่  WN-001",
               "สำนักงานพาณิชย์จังหวัดลพบุรี", "หน่วย : บาท", "ราคาหน่วยละ",
               "จำนวนเงิน", "ค่าแรงงาน", f"แผ่นที่ 1 / {len(boq)}"):
         assert t in first, t
     allt = " ".join(t for s in boq for t in s.texts())
-    assert "รวมข้อ 1 หมวดงานดินและฐานราก" in allt
+    assert "รวมข้อ 1 2. งานดิน" in allt or "รวมข้อ 1 งานดิน" in allt, allt[:400]
     assert "ผู้ประมาณราคา" in " ".join(boq[-1].texts())
     # The summary total is the BOQ's total.
     from core import wanic_quantities as Q

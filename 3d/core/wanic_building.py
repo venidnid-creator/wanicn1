@@ -66,7 +66,90 @@ DEFAULT_SETTINGS = {
     "wet_drop": 0.05,
     # eave soffit (ฝ้าชายคา): planks on a galvanised steel frame
     "soffit": True, "soffit_sp": 0.60,
+    # walls (มยผ. 1301/1302, วสท.): masonry by สูตรวัสดุ หมวด 6, plaster
+    # 1.5 ซม. each side (สูตร 7.2), exterior walls flush with the outer face
+    # of the columns, interior walls on the grid line
+    "ext_wall": "6.1", "int_wall": "6.1", "plaster_t": 0.015,
+    "ext_plaster_t": 0.015, "plaster_3d": True, "wall_flush": True,
+    # layers: every generated part on a layer of its own name ("name"),
+    # one per type and size ("type"), per type and floor ("floor") or per
+    # work category ("category"); "" leaves them on the default layer
+    "layer_mode": "name",
+    # roof frame by the tile maker and the usual steel-roof practice:
+    # purlins at the tile's batten gauge (ระยะแป = ระยะซ้อนทับที่ผู้ผลิตกำหนด,
+    # CPAC 32 ซม.), rafters at most the spacing the tile weight allows, a
+    # steel wall plate (อะเส) on the ring beams and a tie beam (ขื่อ/คานรับดั้ง)
+    # under every king post (ดั้ง)
+    "purlin_auto": True, "rafter_auto": True,
+    "wall_plate": True, "wallplate": "C 150×65×20×3.2",
+    "tie_beams": True, "tiebeam": "C 150×65×20×3.2",
 }
+
+#: ระยะจันทันสูงสุด (ม.) ตามน้ำหนักวัสดุมุง: กระเบื้องคอนกรีต/ดินเผา 1.00,
+#: ไฟเบอร์ซีเมนต์ 1.20, เหล็กรีดลอน 1.50 — ใช้กับแป C 75×45×15×2.3
+RAFTER_MAX = {"concrete": 1.00, "ceramic": 1.00, "fibre": 1.20, "metal": 1.50}
+
+
+def tile_family(code: str) -> str:
+    from core.wanic_catalog import ROOF_TILES
+    name = (ROOF_TILES.get(code) or {}).get("name", "")
+    if "เหล็ก" in name or "Metal" in name:
+        return "metal"
+    if "ไฟเบอร์" in name or "ลอน" in name and "คอนกรีต" not in name:
+        return "fibre"
+    if "ดินเผา" in name or "เซรามิค" in name:
+        return "ceramic"
+    return "concrete"
+
+
+def roof_spacing(s) -> tuple:
+    """(rafter spacing, purlin spacing along the slope) in metres: the
+    set values, or — with ``rafter_auto`` / ``purlin_auto`` — the tile's
+    batten gauge (its effective length, ``eff`` of the catalog) and the
+    largest rafter spacing its weight allows (:data:`RAFTER_MAX`)."""
+    from core.wanic_catalog import ROOF_TILES
+    tile = ROOF_TILES.get(s.get("tile")) or {}
+    rsp = max(float(s["rafter_sp"]), 0.2)
+    psp = max(float(s["purlin_sp"]), 0.1)
+    if s.get("purlin_auto") and tile.get("eff"):
+        psp = float(tile["eff"][1])
+    if s.get("rafter_auto"):
+        rsp = RAFTER_MAX[tile_family(s.get("tile"))]
+    return rsp, psp
+
+#: สูตรวัสดุงานก่อผนัง (หลักเกณฑ์ 2569 หมวด 6) → (ชื่อ, ความหนาเนื้อผนัง ม.)
+WALL_TYPES = {
+    "6.1": ("ผนังก่ออิฐมอญครึ่งแผ่น", 0.07),
+    "6.2": ("ผนังก่ออิฐมอญเต็มแผ่น", 0.16),
+    "6.3": ("ผนังก่ออิฐกลวงครึ่งแผ่น", 0.11),
+    "6.4": ("ผนังก่ออิฐกลวงเต็มแผ่น", 0.25),
+    "6.5": ("ผนังก่ออิฐทนไฟครึ่งแผ่น", 0.11),
+    "6.6": ("ผนังก่อคอนกรีตบล็อก 7 ซม.", 0.07),
+    "6.7": ("ผนังก่อคอนกรีตบล็อก 9 ซม.", 0.09),
+    "6.8": ("ผนังก่อคอนกรีตบล็อกช่องลม 9 ซม.", 0.09),
+    "6.10": ("ผนังก่ออิฐมวลเบา 7.5 ซม.", 0.075),
+    "6.11": ("ผนังก่ออิฐมวลเบา 10 ซม.", 0.10),
+    "6.12": ("ผนังก่ออิฐมวลเบา 12.5 ซม.", 0.125),
+    "6.13": ("ผนังก่ออิฐมวลเบา 15 ซม.", 0.15),
+    "6.14": ("ผนังก่ออิฐมวลเบา 20 ซม.", 0.20),
+    "6.15": ("ผนังก่อบล็อกแก้ว 8 ซม.", 0.08),
+}
+#: ความหนาปูนฉาบที่เลือกได้ (ม.)
+PLASTER_T = (0.010, 0.0125, 0.015, 0.020, 0.025)
+
+
+def wall_spec(s, exterior: bool) -> dict:
+    """Masonry recipe, name, masonry thickness ``t``, plaster thickness
+    inside ``pi`` and outside ``po`` and the finished thickness ``T`` of an
+    exterior or interior wall."""
+    code = str(s.get("ext_wall" if exterior else "int_wall") or "6.1")
+    if code not in WALL_TYPES:
+        code = "6.1"
+    name, t = WALL_TYPES[code]
+    pi = max(float(s.get("plaster_t") or 0.0), 0.0)
+    po = max(float(s.get("ext_plaster_t") or pi), 0.0) if exterior else pi
+    return {"recipe": code, "name": name, "t": t, "pi": pi, "po": po,
+            "T": t + pi + po, "exterior": exterior}
 
 #: Rooms whose floor is set down ``wet_drop`` (ห้องน้ำ ห้องส้วม ห้องอาบน้ำ…).
 WET_WORDS = ("ห้องน้ำ", "ห้องส้วม", "ส้วม", "สุขา", "ห้องอาบน้ำ", "อาบน้ำ",
@@ -314,9 +397,15 @@ def elements(data) -> dict:
             sides = sum(1 for rm in f["rooms"] if _on_edge(rm, mx, my))
             above = beam_at.get((k + 1, p0, p1)) or ROLE_DEFAULT[
                 "RB" if k == n - 1 else "B"]
+            L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            out = (0.0, 0.0)
+            if sides <= 1 and L > 1e-9:
+                nx, ny = -(p1[1] - p0[1]) / L, (p1[0] - p0[0]) / L
+                eps = 0.05
+                inside = room_at(f["rooms"], mx + nx * eps, my + ny * eps)
+                out = (-nx, -ny) if inside is not None else (nx, ny)
             E["walls"].append({
-                "floor": k, "p0": p0, "p1": p1,
-                "L": math.hypot(p1[0] - p0[0], p1[1] - p0[1]),
+                "floor": k, "p0": p0, "p1": p1, "L": L, "out": out,
                 "exterior": sides <= 1, "beam": above,
                 "openings": [op for _s, op in
                              _openings_on(p0, p1, f["openings"])]})
@@ -413,6 +502,17 @@ def segments(rooms, extra_nodes=()) -> list[tuple[tuple, tuple]]:
                 if p0 != p1:
                     out.add(tuple(sorted((p0, p1))))
     return sorted(out)
+
+
+def outline_segments(rooms) -> list:
+    """The plan's outer edges (the exterior walls / ring beams): segments
+    on the edge of only one room."""
+    out = []
+    for p0, p1 in segments(rooms):
+        mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+        if sum(1 for rm in rooms if _on_edge(rm, mx, my)) <= 1:
+            out.append((p0, p1))
+    return out
 
 
 def footprint(rooms):
@@ -805,10 +905,62 @@ def fixture_member(fx, z):
                    ifc="IfcSanitaryTerminal", name=name)
 
 
+def wall_offset(E, wl) -> float:
+    """How far the wall's centre sits off its grid line, towards the
+    outside: an exterior wall's masonry lies flush with the outer face of
+    the columns (so the plaster runs on past the column without a step,
+    as มยผ. แบบมาตรฐาน draws it); an interior wall stays on the line."""
+    s, lib = E["settings"], E["lib"]
+    if not wl.get("exterior") or not s.get("wall_flush", True):
+        return 0.0
+    sp = wall_spec(s, True)
+    half = float(lib["C1"]["b"]) / 2
+    return max(half - sp["t"] / 2, 0.0)
+
+
+def _outer_ends(E, wl, half, po):
+    """Where the outside plaster of an exterior wall starts and ends
+    (distances along the wall): on to the column centre where the wall
+    runs straight on, round the column's outer corner at a convex corner
+    (the wall along x carries the plaster's own thickness, so the two
+    skins meet without a gap or an overlap), and short of the other skin
+    at a concave corner."""
+    p0, p1, L = wl["p0"], wl["p1"], wl["L"]
+    ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+    ox, oy = wl["out"]
+    along_x = abs(uy) < 1e-9
+    ends = []
+    for node, d in ((p0, (ux, uy)), (p1, (-ux, -uy))):
+        kind = None
+        for o in E["walls"]:
+            if o is wl or not o.get("exterior") or o["floor"] != wl["floor"]:
+                continue
+            if node == o["p0"]:
+                od = ((o["p1"][0] - node[0]) / o["L"], (o["p1"][1] - node[1]) / o["L"])
+            elif node == o["p1"]:
+                od = ((o["p0"][0] - node[0]) / o["L"], (o["p0"][1] - node[1]) / o["L"])
+            else:
+                continue
+            dot = od[0] * d[0] + od[1] * d[1]
+            if dot < -0.99:
+                kind = "straight"
+            elif abs(dot) < 1e-6 and kind != "straight":
+                kind = "convex" if od[0] * ox + od[1] * oy < 0 else "concave"
+        if kind == "straight":
+            e = 0.0
+        elif kind == "convex":
+            e = -half - (po if along_x else 0.0)
+        elif kind == "concave":
+            e = half + (po if along_x else 0.0)
+        else:
+            e = half
+        ends.append(e)
+    return ends[0], L - ends[1]
+
+
 def _walls(E, add):
     s, lib, H = E["settings"], E["lib"], E["H"]
     G = Grid(E)
-    wt = _mm(s["wall_t"])
     half = float(lib["C1"]["b"]) / 2
     for wl in E["walls"]:
         z0 = wl["floor"] * H
@@ -818,32 +970,80 @@ def _walls(E, add):
         p0, p1, L = wl["p0"], wl["p1"], wl["L"]
         if L <= 2 * half + 0.05:
             continue
+        ext = bool(wl.get("exterior"))
+        sp = wall_spec(s, ext)
+        t, T = sp["t"], sp["T"]
         ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+        off = wall_offset(E, wl)
+        ox, oy = wl.get("out") or (0.0, 0.0)
+        # wall-local across axis: +d = left of p0→p1; the outside side
+        out_left = (-uy * ox + ux * oy) > 0 if ext else True
+        sgn = 1.0 if out_left else -1.0
+        c0 = (p0[0] + ox * off, p0[1] + oy * off)     # wall centre line
 
-        def at(dist, z):
-            return (p0[0] + ux * dist, p0[1] + uy * dist, z)
+        def at(dist, z, d=0.0):
+            return (c0[0] + ux * dist - uy * d, c0[1] + uy * dist + ux * d, z)
 
         where = G.span(p0, p1)
-        side = "ผนังภายนอก" if wl.get("exterior") else "ผนังภายใน"
+        side = "ผนังภายนอก" if ext else "ผนังภายใน"
+        kind_name = f"{side} {sp['name']}"
+        layers = [("ฉาบปูนผนังภายนอก" if ext else "ฉาบปูนผนังภายใน",
+                   sgn * (t / 2 + sp["po"] / 2), sp["po"], ext),
+                  ("ฉาบปูนผนังภายใน", -sgn * (t / 2 + sp["pi"] / 2), sp["pi"], False)]
+        oa, ob = _outer_ends(E, wl, half, sp["po"]) if ext and off > 1e-6 \
+            else (half, L - half)
 
         def piece(a, b, z, height):
-            if b - a > 0.02 and height > 0.02:
-                add(_member("structure", "wall", "ผนังก่ออิฐ", "rect",
-                            dict(b=wt, h=_mm(height)),
-                            [at(a, z), at(b, z)], anchor="bc",
-                            ifc="IfcWall",
-                            name=f"ผนังก่ออิฐ หนา {wt / 10:g} ซม. · "
+            if b - a <= 0.02 or height <= 0.02:
+                return
+            area = (b - a) * height
+            add(_member("structure", "wall", kind_name, "rect",
+                        dict(b=_mm(t), h=_mm(height)),
+                        [at(a, z), at(b, z)], anchor="bc", ifc="IfcWall",
+                        name=f"{kind_name} · {_floor_name(wl['floor'])} · {where}",
+                        key=kind_name,
+                        info=[("ชนิด", kind_name),
+                              ("สูตรวัสดุ", f"หลักเกณฑ์ 2569 หมวด 6 ข้อ {sp['recipe']}"),
+                              ("ความหนาเนื้อผนัง", f"{t * 100:g} ซม."),
+                              ("ความหนาฉาบ", f"ใน {sp['pi'] * 100:g} ซม. · "
+                                             f"นอก {sp['po'] * 100:g} ซม."),
+                              ("ความหนารวม", f"{T * 100:g} ซม."),
+                              ("แนวผนัง", "ชิดผิวนอกเสา" if off > 1e-6 else
+                               "กึ่งกลางเสา"),
+                              ("ชั้น", _floor_name(wl["floor"])),
+                              ("ตำแหน่ง", where),
+                              ("ชิ้นนี้", f"ยาว {b - a:.2f} ม. สูง {height:.2f} ม."),
+                              ("พื้นที่", f"{area:.2f} ตร.ม."),
+                              ("รายการ BOQ", "หมวด 6 งานผนัง/ฉาบ")]),
+                "wall")
+            if not s.get("plaster_3d", True):
+                return
+            for lname, d, pt, outer in layers:
+                if pt <= 1e-4:
+                    continue
+                pa = oa if outer and abs(a - half) < 1e-6 else a
+                pb = ob if outer and abs(b - (L - half)) < 1e-6 else b
+                add(_member("structure", "plaster", lname, "rect",
+                            dict(b=_mm(pt), h=_mm(height)),
+                            [at(pa, z, d), at(pb, z, d)], anchor="bc",
+                            ifc="IfcCovering",
+                            name=f"{lname} หนา {pt * 100:g} ซม. · "
                                  f"{_floor_name(wl['floor'])} · {where}",
-                            info=[("ชนิด", f"ผนังก่ออิฐ ({side})"),
-                                  ("ความหนา", f"{wt / 1000:.2f} ม."),
+                            key=lname,
+                            info=[("ชนิด", lname),
+                                  ("สูตรวัสดุ", "หลักเกณฑ์ 2569 หมวด 7 ข้อ 7.2"
+                                   if sp["recipe"] not in ("6.10", "6.11", "6.12",
+                                                           "6.13", "6.14")
+                                   else "หลักเกณฑ์ 2569 หมวด 7 ข้อ 7.3"),
+                                  ("ความหนา", f"{pt * 100:g} ซม."),
+                                  ("บนผนัง", kind_name),
                                   ("ชั้น", _floor_name(wl["floor"])),
                                   ("ตำแหน่ง", where),
-                                  ("ชิ้นนี้", f"ยาว {b - a:.2f} ม. สูง {height:.2f} ม."),
-                                  ("พื้นที่", f"{(b - a) * height:.2f} ตร.ม."),
-                                  ("รายการ BOQ", "งานก่ออิฐ ฉาบปูน ทาสี")]),
-                    "wall")
+                                  ("พื้นที่", f"{area:.2f} ตร.ม."),
+                                  ("ค่าแรง", "ว480 2.3.1.2 "
+                                   + ("ภายนอก" if "ภายนอก" in lname else "ภายใน"))]),
+                    "plaster")
         band = float(s.get("band", 0.10))
-        wtm = float(s["wall_t"])
         cur = half
         for sdist, op in _openings_on(p0, p1, wl["openings"]):
             ow, oh, sill = opening_size(op, s)
@@ -859,10 +1059,10 @@ def _walls(E, add):
             hi = min(top + band, wh)
             piece(a - band, b + band, z0 + hi, wh - hi)  # over the opening
             if band > 0:
-                add(opening_band(p0, (ux, uy), z0, a, b, sill if not door
-                                 else 0.0, top, wtm, band, wh, door), "band")
+                add(opening_band(c0, (ux, uy), z0, a, b, sill if not door
+                                 else 0.0, top, t, band, wh, door), "band")
             kind = "door" if door else "window"
-            add(opening_set(op, s, p0, (ux, uy), z0, a, b, sill, top, wtm),
+            add(opening_set(op, s, c0, (ux, uy), z0, a, b, sill, top, T),
                 kind)
             cur = max(cur, b + band)
         piece(cur, L - half, z0, wh)
@@ -951,6 +1151,20 @@ def opening_set(op, s, p0, u, z, a, b, sill, top, wt):
     j0, j1 = (bottom + 0.01 if door else sill + fw + gap), top - fw - gap
     n = max(int(spec["leaves"]), 0)
     glass = _paint("glass", 0.35)
+    # A fixed glass transom over the leaves and / or a side light, behind
+    # a mullion of the frame section.
+    tr = float(spec.get("transom") or 0.0)
+    if tr > 0 and j1 - j0 > tr + 0.3:
+        mz = j1 - tr
+        bx.box(i0, i1, -fd, fd, mz, mz + fw, frame)
+        bx.box(i0, i1, -0.003, 0.003, mz + fw + gap, j1, glass)
+        j1 = mz - gap
+    sd = float(spec.get("side") or 0.0)
+    if sd > 0 and i1 - i0 > sd + 0.3:
+        mx = i1 - sd
+        bx.box(mx, mx + fw, -fd, fd, j0, j1, frame)
+        bx.box(mx + fw + gap, i1, -0.003, 0.003, j0, j1, glass)
+        i1 = mx - gap
     if n == 0:                                   # fixed glass
         bx.box(i0, i1, -0.003, 0.003, j0, j1, glass)
     else:
@@ -1141,7 +1355,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
                    o[1] - 1e-6 <= py <= o[3] + 1e-6 for o in others)
 
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "eave": [], "barge": []}
+           "skin": [], "eave": [], "barge": [], "tie": []}
     zr = h(half)
     yc = y0 + half
     if s["roof"] == "hip":
@@ -1158,7 +1372,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
         if hipped:
             for cy in (y0, y1):
                 out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
-    sp = max(float(s["rafter_sp"]), 0.2)
+    sp, psp_slope = roof_spacing(s)
     big = 1e9
     # Rafters (จันทัน) on every column line (จันทันเอก on the column heads),
     # and between them at no more than the set spacing (จันทันพราง).
@@ -1190,17 +1404,25 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
                 continue
             out["rafter"].append([P3(ex, y, h(0)),
                                   P3(ex + sgn * reach, y, h(reach))])
-    psp = max(float(s["purlin_sp"]), 0.1) * math.cos(math.radians(
-        float(s["pitch"])))
+    psp = psp_slope * math.cos(math.radians(float(s["pitch"])))
     # Purlins (แป) as straight pieces, one per slope: on a hipped end they
     # stop on the hip line, where the member is cut along the hip (see
     # :func:`roof_members`) — not swept round the corner as one ring.
     d = 0.05
 
     def purlin(p, q):
-        if math.dist(p, q) > 1e-6:
+        if math.dist(p, q) > 0.40:            # no stubs at a hip's tip
             out["purlin"].append({"closed": False, "path": [p, q]})
+    ds = []
     while d < half - 0.05:
+        ds.append(d)
+        d += psp
+    # the top purlin close under the ridge (CPAC: แปตัวบนห่างสันไม่เกิน 4 ซม.
+    # ตามแนวราบ เพื่อรับครอบสัน)
+    top = half - 0.04
+    if ds and top - ds[-1] > 0.10:
+        ds.append(top)
+    for d in ds:
         a0 = x0 + d if h0 else x0
         a1 = x1 - d if h1 else x1
         if a1 - a0 > 1e-6:
@@ -1210,10 +1432,16 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
                 purlin(P3(a0, y0 + d, h(d)), P3(a0, y1 - d, h(d)))
             if h1:
                 purlin(P3(a1, y0 + d, h(d)), P3(a1, y1 - d, h(d)))
-        d += psp
     if zr - z0 > 0.1:
-        for xx in ((rx0, rx1) if rx1 - rx0 > 1e-6 else (rx0,)):
+        # King posts (ดั้ง) at the ridge ends and on every column line under
+        # the ridge, each on a tie beam (ขื่อ) from wall to wall.
+        px = {round(rx0, 4), round(rx1, 4)}
+        for st in stations:
+            if rx0 + 0.3 < st < rx1 - 0.3:
+                px.add(st)
+        for xx in sorted(px):
             out["post"].append([P3(xx, yc, z0), P3(xx, yc, zr)])
+            out["tie"].append([P3(xx, y0 + ov, z0), P3(xx, y1 - ov, z0)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
     # Eave lines (เชิงชาย) and, on a gable end, the rakes (ปั้นลม).
@@ -1260,7 +1488,21 @@ def roof_lines(data):
         rects = plan_rectangles(top)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
            "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0,
-           "valley": 0.0, "valleys": []}
+           "valley": 0.0, "valleys": [], "tie": [], "plate": []}
+    # The steel wall plate (อะเส) on the ring beams lifts the frame by its
+    # depth: rafters bear on it, the tie beams sit level with it.
+    ph = 0.0
+    if s.get("wall_plate") or s.get("tie_beams"):
+        for key in (("wallplate",) if s.get("wall_plate") else ()) + \
+                (("tiebeam",) if s.get("tie_beams") else ()):
+            _f, prm_ = steel_lookup(s[key])
+            ph = max(ph, float(prm_.get("H", prm_.get("D", prm_.get("A", 0.0)))) / 1000.0)
+    out["plate_h"] = ph
+    if s.get("wall_plate"):
+        segs = [[(a[0], a[1], z0 + ph), (b[0], b[1], z0 + ph)]
+                for a, b in outline_segments(top)]
+        out["plate"] = _merge_collinear(segs)
+    z0 = z0 + ph
     ov = float(s["overhang"])
     from core import wanic_roofclip as RC
     boxes = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov) for r in rects]
@@ -1276,7 +1518,7 @@ def roof_lines(data):
     kept = {}
     for i, (rect, part) in enumerate(zip(rects, parts)):
         if not many:
-            for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
+            for k in ("ridge", "hip", "rafter", "purlin", "post", "skin", "tie"):
                 out[k] += part[k]
         else:
             # Trim what lies under a neighbouring roof (L / T plans); a
@@ -1292,9 +1534,10 @@ def roof_lines(data):
             for pl in part["purlin"]:
                 for seg in RC.clip_path(pl["path"], i, roofs, pl["closed"]):
                     out["purlin"].append({"closed": False, "path": seg})
-            for a, b in part["post"]:
+            for (a, b), tie in zip(part["post"], part["tie"]):
                 if not RC.hidden(b, i, roofs):
                     out["post"].append([a, b])
+                    out["tie"].append(tie)
             kept[i] = []
             for poly in part["skin"]:
                 kept[i] += RC.clip_facet(poly, i, roofs)
@@ -1304,6 +1547,10 @@ def roof_lines(data):
                 out[k] += RC.clip_segment(a, b, i, roofs) if many \
                     else [[a, b]]
     out["eave"] = _merge_collinear(out["eave"])
+    out["purlin"] = [{"closed": False, "path": seg} for seg in
+                     merge_segments([pl["path"] for pl in out["purlin"]])]
+    if not s.get("tie_beams"):
+        out["tie"] = []
     if many:
         out["valleys"] = RC.valley_lines(roofs)
         # a valley ends on the ridge / hip junction or the eave corner:
@@ -1316,6 +1563,52 @@ def roof_lines(data):
                     seg[i_] = tuple(near)
         out["valley"] = sum(math.dist(a, b) for a, b in out["valleys"]) or \
             RC.valley_length(kept, roofs)
+    return out
+
+
+def merge_segments(segs, tol=1e-4):
+    """Straight 3D segments that lie on one line and touch or overlap
+    become one piece — a purlin runs as one member from end to end, not
+    as the bits each roof part or clip left."""
+    def unit(a, b):
+        L = math.dist(a, b)
+        return tuple((b[i] - a[i]) / L for i in range(3)), L
+    items = []
+    for a, b in segs:
+        if math.dist(a, b) < 1e-6:
+            continue
+        u, _L = unit(a, b)
+        # a canonical direction
+        if (u[0], u[1], u[2]) < (0, 0, 0):
+            a, b, u = b, a, tuple(-c for c in u)
+        items.append([a, b, u])
+    used = [False] * len(items)
+    out = []
+    for i, (a, b, u) in enumerate(items):
+        if used[i]:
+            continue
+        used[i] = True
+        o = a
+        lo, hi = 0.0, sum((b[k] - a[k]) * u[k] for k in range(3))
+        grow = True
+        while grow:
+            grow = False
+            for j, (c, d_, v) in enumerate(items):
+                if used[j] or abs(sum(u[k] * v[k] for k in range(3))) < 1 - 1e-6:
+                    continue
+                # c on the line through o along u?
+                tc = sum((c[k] - o[k]) * u[k] for k in range(3))
+                off = math.dist(c, tuple(o[k] + u[k] * tc for k in range(3)))
+                if off > tol:
+                    continue
+                td = sum((d_[k] - o[k]) * u[k] for k in range(3))
+                s0, s1 = sorted((tc, td))
+                if s0 <= hi + 1e-3 and s1 >= lo - 1e-3:
+                    lo, hi = min(lo, s0), max(hi, s1)
+                    used[j] = True
+                    grow = True
+        out.append([tuple(o[k] + u[k] * lo for k in range(3)),
+                    tuple(o[k] + u[k] * hi for k in range(3))])
     return out
 
 
@@ -1460,6 +1753,42 @@ def cut_member(g, path, planes):
     return g
 
 
+def mitre_planes(path, others):
+    """The vertical cut planes at the two ends of a fascia / barge board
+    where it meets another board corner to corner: the plane through the
+    corner along the bisector of the two boards (in plan), so the pair
+    closes in a neat mitre instead of crossing over each other."""
+    planes = []
+    a, b = path[0], path[-1]
+    for end, far in ((a, b), (b, a)):
+        t = (far[0] - end[0], far[1] - end[1])
+        tl = math.hypot(*t)
+        best = None
+        if tl > 1e-9:
+            t = (t[0] / tl, t[1] / tl)
+            for o in others:
+                if o is path:
+                    continue
+                for oe, of in ((o[0], o[-1]), (o[-1], o[0])):
+                    if math.hypot(oe[0] - end[0], oe[1] - end[1]) > 1e-3:
+                        continue
+                    u = (of[0] - oe[0], of[1] - oe[1])
+                    ul = math.hypot(*u)
+                    if ul < 1e-9:
+                        continue
+                    u = (u[0] / ul, u[1] / ul)
+                    if abs(t[0] * u[0] + t[1] * u[1]) > 0.98:   # in line
+                        continue
+                    best = u
+        if best is None:
+            planes.append(None)
+            continue
+        bis = (t[0] + best[0], t[1] + best[1])
+        bl = math.hypot(*bis)
+        planes.append(((end[0], end[1]), (-bis[1] / bl, bis[0] / bl)))
+    return planes
+
+
 def roof_members(data) -> tuple[list, dict]:
     s = settings_of(data)
     lines = roof_lines(data)
@@ -1503,6 +1832,23 @@ def roof_members(data) -> tuple[list, dict]:
                 g = cut_member(g, path, _end_planes(
                     path, creases, widths if kind == "rafter" else no_width))
             add(g, kind)
+    for kind, key, label, why in (
+            ("wallplate", "wallplate", "อะเส",
+             "อะเสเหล็กบนคานรัดรอบ รับจันทัน (ยึดเพลทฝังในคาน ค.ส.ล.)"),
+            ("tiebeam", "tiebeam", "ขื่อ (คานรับดั้ง)",
+             "ขื่อเหล็กพาดจากอะเสถึงอะเส รับดั้ง ถ่ายน้ำหนักลงคาน/เสา")):
+        fam, params = steel_lookup(s[key])
+        kgm = P.weight_per_m(fam, params)
+        for path in lines["plate" if kind == "wallplate" else "tie"]:
+            L = math.dist(path[0], path[-1])
+            add(_member("roof", kind, label, fam, params, path, anchor="tc",
+                        ifc="IfcMember", key=f"{label} {s[key]}",
+                        name=f"{label} {s[key]} · ยาว {L:.2f} ม.",
+                        info=[("ชนิด", f"{label} (โครงหลังคาเหล็ก)"),
+                              ("หน้าที่", why), ("หน้าตัด", s[key]),
+                              ("ความยาว", f"{L:.2f} ม."),
+                              ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
+                              ("รายการ BOQ", "หมวด 5 งานโครงสร้างเหล็ก")]), kind)
     fam, params = steel_lookup(s["purlin"])
     kgm = P.weight_per_m(fam, params)
     for pl in lines["purlin"]:
@@ -1520,20 +1866,20 @@ def roof_members(data) -> tuple[list, dict]:
         add(g, "purlin")
     if s.get("fascia", True):
         fp = dict(b=_mm(s.get("fascia_t", 0.025)), h=_mm(s.get("fascia_h", 0.20)))
-        for path in lines["eave"]:
-            add(_member("roof", "fascia", "เชิงชาย", "rect", fp, path,
-                        anchor="tc", ifc="IfcMember",
-                        name=f"เชิงชาย · ยาว {math.dist(path[0], path[-1]):.2f} ม.",
-                        info=[("ชนิด", "เชิงชาย + ทับเชิงชาย ไม้สำเร็จรูป"),
-                              ("ความยาว", f"{math.dist(path[0], path[-1]):.2f} ม.")]),
-                "fascia")
-        for path in lines["barge"]:
-            add(_member("roof", "barge", "ปั้นลม", "rect", fp, path,
-                        anchor="tc", ifc="IfcMember",
-                        name=f"ปั้นลม · ยาว {math.dist(path[0], path[-1]):.2f} ม.",
-                        info=[("ชนิด", "ปั้นลม + ทับปั้นลม ไม้สำเร็จรูป"),
-                              ("ความยาว", f"{math.dist(path[0], path[-1]):.2f} ม.")]),
-                "barge")
+        boards = [("fascia", "เชิงชาย", "เชิงชาย + ทับเชิงชาย ไม้สำเร็จรูป", p_)
+                  for p_ in lines["eave"]] + \
+                 [("barge", "ปั้นลม", "ปั้นลม + ทับปั้นลม ไม้สำเร็จรูป", p_)
+                  for p_ in lines["barge"]]
+        for kind, label, what, path in boards:
+            L = math.dist(path[0], path[-1])
+            g = _member("roof", kind, label, "rect", fp, path,
+                        anchor="tc", ifc="IfcMember", key=label,
+                        name=f"{label} · ยาว {L:.2f} ม.",
+                        info=[("ชนิด", what), ("ความยาว", f"{L:.2f} ม."),
+                              ("มุม", "ตัดเฉียงชนมุม (บากมุม 45°)"),
+                              ("รายการ BOQ", "หมวด 7 งานหลังคา · ว480 2.1.10")])
+            add(cut_member(g, path, mitre_planes(path, [b[3] for b in boards])),
+                kind)
     from core.wanic_catalog import COLORS, roof_tile, tile_color
     _tc, tile = roof_tile(s)
     tcolor = tile_color(s)
@@ -2147,6 +2493,11 @@ def build(data, parts=("structure", "roof")):
         g, c = roof_members(data)
         groups += g
         count.update(c)
+    try:
+        from core import wanic_partprice
+        wanic_partprice.annotate(groups, data)
+    except Exception:                                   # noqa: BLE001 -- prices are extra
+        pass
     return groups, count
 
 
@@ -2154,11 +2505,47 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("beam", "คาน"), ("slab", "พื้น"), ("wall", "ผนัง"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
-           ("purlin", "แป"), ("post", "ดั้ง"), ("fascia", "เชิงชาย"),
+           ("purlin", "แป"), ("post", "ดั้ง"), ("wallplate", "อะเส"),
+           ("tiebeam", "ขื่อรับดั้ง"), ("fascia", "เชิงชาย"),
            ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
-           ("band", "เสาเอ็น-ทับหลัง"), ("fixture", "สุขภัณฑ์"),
+           ("band", "เสาเอ็น-ทับหลัง"), ("plaster", "ผิวฉาบปูน"),
+           ("fixture", "สุขภัณฑ์"),
            ("tiles", "กระเบื้อง"),
            ("skin", "แผ่นหลังคา")]
+
+
+def layer_name(g, mode: str = "name") -> str:
+    """The layer a generated part goes on: its own name («เสา C1 20×20 ซม.
+    · ชั้น 1 · D-3»), its type and size («เสา C1 20×20 ซม.»), type and
+    floor, or its หมวดงาน («04 งานโครงสร้างคอนกรีต»); "" = default layer."""
+    from core import wanic_categories as CG
+    rec = ((getattr(g, "ext", None) or {}).get(EXT_KEY)) or {}
+    name = (getattr(g, "name", "") or rec.get("key") or rec.get("mark") or "").strip()
+    if not mode or not name:
+        return ""
+    parts = [p_.strip() for p_ in name.split(" · ")]
+    if mode == "category":
+        return CG.layer_title(CG.kind_category(rec.get("kind", "")))
+    if mode == "type":
+        head = parts[0]
+        # «แป C 75×45×15×2.3 · ยาว 4.20 ม.» → «แป C 75×45×15×2.3»
+        return head
+    if mode == "floor":
+        fl = next((p_ for p_ in parts[1:] if p_.startswith("ชั้น")), "")
+        return f"{parts[0]} · {fl}" if fl else parts[0]
+    # "name": the part's own full name, less a running length
+    return " · ".join(p_ for p_ in parts if not p_.startswith("ยาว "))
+
+
+def assign_layers(groups, mode: str = "name") -> dict:
+    """Set ``g.layer`` on every group; {layer name: [groups]}."""
+    out: dict = {}
+    for g in groups:
+        ln = layer_name(g, mode)
+        g.layer = ln or None
+        if ln:
+            out.setdefault(ln, []).append(g)
+    return out
 
 
 def summary(count) -> str:
@@ -2196,10 +2583,24 @@ def takeoff_rates(data) -> list[dict]:
     add("งานโครงสร้าง", "2.5", "คอนกรีตพื้นชั้นล่าง S1", "S1", "volume", "ลบ.ม.")
     add("งานโครงสร้าง", "2.6", "คอนกรีตพื้นชั้นบน S2", "S2", "volume", "ลบ.ม.")
     if s.get("walls"):
-        add("งานสถาปัตยกรรม", "3.1", "ผนังก่ออิฐ (พื้นที่ 1 ด้าน)",
-            "ผนังก่ออิฐ", "side_area", "ตร.ม.", 0.5)
-        add("งานสถาปัตยกรรม", "3.2", "ฉาบปูนผนัง (2 ด้าน)", "ผนังก่ออิฐ",
-            "side_area", "ตร.ม.")
+        kinds = []
+        for ext in (True, False):
+            sp = wall_spec(s, ext)
+            k = f"{'ผนังภายนอก' if ext else 'ผนังภายใน'} {sp['name']}"
+            if k not in kinds:
+                kinds.append(k)
+        for i, k in enumerate(kinds):
+            add("งานผนัง/ฉาบ", f"3.{i + 1}", f"{k} (พื้นที่ 1 ด้าน)", k,
+                "side_area", "ตร.ม.", 0.5)
+        if s.get("plaster_3d", True):
+            add("งานผนัง/ฉาบ", "3.3", "ฉาบปูนผนังภายนอก", "ฉาบปูนผนังภายนอก",
+                "side_area", "ตร.ม.", 0.5)
+            add("งานผนัง/ฉาบ", "3.4", "ฉาบปูนผนังภายใน", "ฉาบปูนผนังภายใน",
+                "side_area", "ตร.ม.", 0.5)
+        else:
+            for k in kinds:
+                add("งานผนัง/ฉาบ", "3.3", f"ฉาบปูน {k} (2 ด้าน)", k,
+                    "side_area", "ตร.ม.")
     floors, _sk = stacked(data)
     ops = sorted({(op.get("type", "door"), opening_name(op, s))
                   for f in floors for op in f["openings"]})
@@ -2209,11 +2610,16 @@ def takeoff_rates(data) -> list[dict]:
         add("งานโครงสร้าง", "2.7", "คอนกรีตบันได", "บันได คสล.", "volume",
             "ลบ.ม.")
     names = {"ridge": "อกไก่", "hip": "ตะเฆ่สัน", "rafter": "จันทัน",
-             "purlin": "แป", "post": "ดั้ง", "valley": "ตะเฆ่ราง"}
+             "purlin": "แป", "post": "ดั้ง", "valley": "ตะเฆ่ราง",
+             "wallplate": "อะเส", "tiebeam": "ขื่อ (คานรับดั้ง)"}
     sizes = dict(s, valley=s["hip"])
     seen = set()
-    for i, kind in enumerate(("ridge", "hip", "rafter", "purlin", "post",
-                              "valley")):
+    kinds = ["ridge", "hip", "rafter", "purlin", "post", "valley"]
+    if s.get("wall_plate"):
+        kinds.append("wallplate")
+    if s.get("tie_beams"):
+        kinds.append("tiebeam")
+    for i, kind in enumerate(kinds):
         label = f"{names[kind]} {sizes[kind]}"
         if label in seen:
             continue

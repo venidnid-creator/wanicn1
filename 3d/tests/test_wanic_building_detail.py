@@ -131,9 +131,10 @@ def test_purlins_are_mitred_on_the_hips_and_rafters_stop_at_the_hip():
             for a, b in lines["hip"]:
                 if off_line(end, a, b) < 0.01 and \
                         min(a[0], b[0]) - 0.01 <= end[0] <= max(a[0], b[0]) + 0.01:
+                    reach = min(0.3, 0.45 * math.dist(path[0], path[-1]))
                     near = [v.position for v in g.mesh.vertices
                             if math.dist((v.position.x(), v.position.y(),
-                                          v.position.z()), end) < 0.3]
+                                          v.position.z()), end) < reach]
                     assert max(off_line((p.x(), p.y()), a, b) for p in near) < 1e-4
                     checked += 1
     assert checked > 20

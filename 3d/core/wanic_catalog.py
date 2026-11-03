@@ -53,8 +53,83 @@ OPENING_TYPES = {
     "W5": dict(kind="window", name="หน้าต่างบานเกล็ดกระจก", w=0.60, h=1.10,
                sill=0.90, frame="alu", leaf="alu", leaves=1, glass=0.9,
                slide=False),
+    # -- ประตู-หน้าต่างอลูมิเนียมสำเร็จรูป (ขนาดมาตรฐานตามแคตตาล็อกผู้ผลิต) --
+    # ``transom``: fixed glass over the leaves (m); ``side``: a fixed glass
+    # side light (m); ``fixed``: leaves of a slider that do not move
+    "D6": dict(kind="door", name="ประตูอลูมิเนียมบานเปิดเดี่ยว", w=0.90, h=2.05,
+               frame="alu", leaf="alu", leaves=1, glass=0.8, slide=False),
+    "D7": dict(kind="door", name="ประตูอลูมิเนียมบานเปิดคู่", w=1.60, h=2.05,
+               frame="alu", leaf="alu", leaves=2, glass=0.8, slide=False),
+    "D8": dict(kind="door", name="ประตูอลูมิเนียมบานเลื่อน 2 บาน", w=1.80, h=2.05,
+               frame="alu", leaf="alu", leaves=2, glass=0.85, slide=True),
+    "D9": dict(kind="door", name="ประตูอลูมิเนียมบานเลื่อน 4 บาน", w=2.80, h=2.05,
+               frame="alu", leaf="alu", leaves=4, glass=0.85, slide=True),
+    "D10": dict(kind="door", name="ประตูอลูมิเนียมบานเลื่อน + ติดตาย", w=1.80,
+                h=2.05, frame="alu", leaf="alu", leaves=2, glass=0.85, slide=True,
+                fixed=1),
+    "D11": dict(kind="door", name="ประตูอลูมิเนียมบานเปิด + ช่องแสงบน", w=0.90,
+                h=2.45, frame="alu", leaf="alu", leaves=1, glass=0.85,
+                slide=False, transom=0.40),
+    "D12": dict(kind="door", name="ประตูอลูมิเนียมบานเปิดคู่ + ช่องแสงบน", w=1.60,
+                h=2.45, frame="alu", leaf="alu", leaves=2, glass=0.85,
+                slide=False, transom=0.40),
+    "D13": dict(kind="door", name="ประตูอลูมิเนียมบานเปิด + ติดตายข้าง", w=1.30,
+                h=2.05, frame="alu", leaf="alu", leaves=1, glass=0.85,
+                slide=False, side=0.40),
+    "D14": dict(kind="door", name="ประตูอลูมิเนียมบานเลื่อน 2 บาน + ช่องแสงบน",
+                w=1.80, h=2.45, frame="alu", leaf="alu", leaves=2, glass=0.85,
+                slide=True, transom=0.40),
+    "W6": dict(kind="window", name="หน้าต่างอลูมิเนียมบานเลื่อน 4 บาน", w=2.40,
+               h=1.10, sill=0.90, frame="alu", leaf="alu", leaves=4, glass=0.85,
+               slide=True),
+    "W7": dict(kind="window", name="หน้าต่างอลูมิเนียมบานเลื่อน + ติดตาย", w=1.80,
+               h=1.10, sill=0.90, frame="alu", leaf="alu", leaves=2, glass=0.85,
+               slide=True, fixed=1),
+    "W8": dict(kind="window", name="หน้าต่างอลูมิเนียมบานกระทุ้งคู่", w=1.20,
+               h=1.10, sill=0.90, frame="alu", leaf="alu", leaves=2, glass=0.85,
+               slide=False),
+    "W9": dict(kind="window", name="หน้าต่างอลูมิเนียมบานเปิดคู่ + ช่องแสงบน",
+               w=1.20, h=1.50, sill=0.60, frame="alu", leaf="alu", leaves=2,
+               glass=0.85, slide=False, transom=0.40),
+    "W10": dict(kind="window", name="หน้าต่างอลูมิเนียมบานติดตาย (Fix)", w=1.80,
+                h=1.50, sill=0.60, frame="alu", leaf="none", leaves=0, glass=0.9,
+                slide=False),
+    "W11": dict(kind="window", name="หน้าต่างอลูมิเนียมบานเปิดเดี่ยว", w=0.60,
+                h=1.10, sill=0.90, frame="alu", leaf="alu", leaves=1, glass=0.85,
+                slide=False),
 }
 DEFAULT_STYLE = {"door": "D1", "window": "W1"}
+
+
+def opening_sketch(spec) -> list:
+    """The elevation of a type as boxes in 0..1 (x across, y up) for the
+    picker's thumbnails: [(x0, y0, x1, y1, what)], what = frame | leaf |
+    glass | fixed | arrow (slide) | swing (hinge side)."""
+    out = [(0.0, 0.0, 1.0, 1.0, "frame")]
+    h = float(spec.get("h", 2.0))
+    w = float(spec.get("w", 1.0))
+    top = 1.0 - float(spec.get("transom", 0.0)) / h
+    right = 1.0 - float(spec.get("side", 0.0)) / w
+    if spec.get("transom"):
+        out.append((0.04, top + 0.02, 0.96, 0.96, "fixed"))
+    if spec.get("side"):
+        out.append((right + 0.02, 0.04, 0.96, top - 0.02, "fixed"))
+    n = int(spec.get("leaves", 0))
+    if n == 0:
+        out.append((0.04, 0.04, 0.96, top - 0.02, "fixed"))
+        return out
+    lw = (right - 0.04 - 0.04) / n
+    fixed = int(spec.get("fixed", 0))
+    for k in range(n):
+        x0 = 0.04 + k * lw
+        x1 = x0 + lw - 0.01
+        what = "fixed" if k >= n - fixed else ("glass" if spec.get("glass") else "leaf")
+        out.append((x0, 0.04, x1, top - 0.02, what))
+        if what != "fixed":
+            out.append((x0, 0.04, x1, top - 0.02,
+                        "arrow" if spec.get("slide") else
+                        ("swing_r" if k % 2 == 0 else "swing_l")))
+    return out
 
 
 def opening_type(op) -> tuple[str, dict]:
@@ -175,10 +250,10 @@ def wall_tile_labour_code(name) -> str:
     """ว480 2.3.1.3 row for a wall tile recipe."""
     s = _inches(name)
     if s and s <= 6:
-        return "2.3.3b"
+        return "2.3.1.3b"
     if s >= 18:
-        return "2.3.3c"
-    return "2.3.3a"
+        return "2.3.1.3c"
+    return "2.3.1.3a"
 
 
 # ---------------------------------------------------------------------------

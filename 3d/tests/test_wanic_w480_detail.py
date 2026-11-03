@@ -1,0 +1,303 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
+"""ว480 in full, wall types (exterior flush with the columns, plaster as
+its own skin), the roof frame by the standard (purlins at the tile's
+gauge in one piece, a tie beam under every king post, the wall plate,
+mitred fascia), part prices in the Properties rows, automatic layers and
+the 15 หมวดงาน."""
+from __future__ import annotations
+
+import math
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from core import wanic_building as B
+from core import wanic_catalog as CAT
+from core import wanic_categories as CG
+from core import wanic_quantities as Q
+from core import wanic_std2569 as S
+from core import wanic_w480 as W
+
+
+def _u_plan():
+    return [dict(name="ห้องนอน", x=0, y=0, w=4.8, d=4.8),
+            dict(name="ห้องทำงาน", x=4.8, y=0, w=4.8, d=4.8),
+            dict(name="ห้องน้ำ", x=0, y=4.8, w=2.5, d=2.4),
+            dict(name="ห้องน้ำ", x=0, y=7.2, w=2.5, d=2.4),
+            dict(name="ทางเดิน", x=2.5, y=4.8, w=2.3, d=4.8),
+            dict(name="ห้องนอน", x=0, y=9.6, w=4.8, d=4.8),
+            dict(name="ห้องครัว", x=4.8, y=9.6, w=4.8, d=4.8)]
+
+
+def _data(rooms=None):
+    d = B.default_data()
+    d["floors"][0]["rooms"] = rooms or _u_plan()
+    return d
+
+
+def _box(g):
+    ps = [v.position for v in g.mesh.vertices]
+    return (min(p.x() for p in ps), min(p.y() for p in ps), min(p.z() for p in ps),
+            max(p.x() for p in ps), max(p.y() for p in ps), max(p.z() for p in ps))
+
+
+def _kind(g):
+    return g.ext[B.EXT_KEY]["kind"]
+
+
+def test_the_whole_w480_list():
+    assert len(W.ROWS) > 1400 and len(W.codes()) > 250
+    assert set(W.SECTIONS) == {"1", "2", "3", "4", "5"}
+    # rows as printed in the letter
+    assert W.rate("2.3.1.2", "ฉาบปูนผนัง", "ภายนอก") == 109
+    assert W.rate("2.3.1.2", "ฉาบปูนผนัง", "ภายใน") == 96
+    assert W.rate("2.3.1.2", "ฉาบปูนโครงสร้าง (ภายนอก)") == 132
+    assert W.rate("2.1.10", "รางน้ำตะเข้") == 26
+    assert W.rate("1.11.1") == 12 and W.rate("4.58") == 118
+    assert W.rate("2.2.1", "ฝ้าเพดานตีเว้นร่อง", "ไม้เทียม") == 113
+    assert any("น้ำ" in r[1] for r in W.rows_of("3"))
+    assert W.search("ก่ออิฐมวลเบา 0.10")
+    # the BOQ's own table agrees with the letter, row by row
+    for code, (_d, _u, rate, _c) in S.LABOUR.items():
+        base = S.w480_code(code)
+        if base in W.codes():
+            assert float(rate) in {float(r[4]) for r in W.ROWS if r[0] == base}, code
+    # plaster and wall-tile rows carry their ว480 numbers; old saved
+    # overrides still apply
+    assert S.labour("2.3.1.2b") == 109 and S.labour("2.3.2b") == 109
+    d = _data()
+    d["labour"] = {"2.3.2a": 99}
+    assert Q.labour_of(d)["2.3.1.2a"] == 99
+    assert S.wall_labour_code("6.11") == "2.3.1b10" and S.labour("2.3.1b10") == 76
+
+
+def test_exterior_walls_flush_outside_interior_on_the_line():
+    d = _data()
+    groups, count = B.structure_members(d)
+    assert count["wall"] and count["plaster"] == 2 * count["wall"]
+    walls = [g for g in groups if _kind(g) == "wall"]
+    col = float(B.library_of(d)["C1"]["b"])
+    for g in walls:
+        x0, y0, _z0, x1, y1, _z1 = _box(g)
+        ext = "ภายนอก" in g.name
+        thin = min(x1 - x0, y1 - y0)
+        assert math.isclose(thin, 0.07, abs_tol=1e-6)
+        mid = (x0 + x1) / 2 if x1 - x0 < y1 - y0 else (y0 + y1) / 2
+        if ext:
+            # its outer face is the column's outer face (grid ± b/2)
+            faces = (x0, x1) if x1 - x0 < y1 - y0 else (y0, y1)
+            assert any(abs(f - round(f / 2.4) * 2.4) > 0.09 and
+                       abs(abs(f - round(f / 2.4) * 2.4) - col / 2) < 1e-6 for f in faces)
+        else:
+            assert abs(mid - round(mid / 0.1) * 0.1) < 1e-6
+    # the outside plaster wraps the corner column: x = −0.115 at A-1
+    skin = [g for g in groups if _kind(g) == "plaster" and "ภายนอก" in g.name]
+    assert min(_box(g)[0] for g in skin) == -0.115 or \
+        math.isclose(min(_box(g)[0] for g in skin), -0.115, abs_tol=1e-6)
+    # nothing overlaps
+    solids = [(g.name, _box(g)) for g in groups
+              if _kind(g) in ("column", "beam", "slab", "wall", "plaster")]
+    for i in range(len(solids)):
+        for j in range(i + 1, len(solids)):
+            a, b = solids[i][1], solids[j][1]
+            ov = [min(a[k + 3], b[k + 3]) - max(a[k], b[k]) for k in range(3)]
+            assert not all(o > 1e-4 for o in ov), (solids[i][0], solids[j][0])
+
+
+def test_wall_types_and_plaster_in_the_bill():
+    d = _data()
+    d["settings"].update(ext_wall="6.11", int_wall="6.1", ext_plaster_t=0.02)
+    r = Q.compute(d)
+    outer = [ln for ln in r["lines"] if ln["desc"].startswith("ผนังภายนอก —")]
+    inner = [ln for ln in r["lines"] if ln["desc"].startswith("ผนังภายใน —")]
+    assert outer and inner
+    assert "มวลเบา" in outer[0]["desc"] and outer[0]["lab"] == 76
+    assert "มอญ" in inner[0]["desc"] and inner[0]["lab"] == 104
+    assert any("ฉาบปูนเรียบ ผนังภายนอก (หนา 2 ซม.)" in ln["desc"] for ln in r["lines"])
+    groups, _c = B.structure_members(d)
+    ext = next(g for g in groups if _kind(g) == "wall" and "ภายนอก" in g.name)
+    assert "มวลเบา 10 ซม." in ext.name
+    rates = B.takeoff_rates(d)
+    keys = {rt["value"] for rt in rates}
+    assert {"ฉาบปูนผนังภายนอก", "ฉาบปูนผนังภายใน"} <= keys
+
+
+def test_purlins_at_the_tile_gauge_in_one_piece():
+    d = _data([dict(name="ห้อง", x=0, y=0, w=8, d=6)])
+    rsp, psp = B.roof_spacing(B.settings_of(d))
+    assert psp == CAT.ROOF_TILES["R1"]["eff"][1] == 0.32 and rsp == 1.0
+    lines = B.roof_lines(d)
+    segs = [pl["path"] for pl in lines["purlin"]]
+    assert B.merge_segments(segs) and len(B.merge_segments(segs)) == len(segs)
+    # one straight piece per course and slope: two pieces never share a line
+    for i, (a, b) in enumerate(segs):
+        for c, e in segs[i + 1:]:
+            same = abs(a[2] - c[2]) < 1e-6 and (
+                (abs(a[1] - b[1]) < 1e-6 and abs(c[1] - e[1]) < 1e-6 and abs(a[1] - c[1]) < 1e-6)
+                or (abs(a[0] - b[0]) < 1e-6 and abs(c[0] - e[0]) < 1e-6 and abs(a[0] - c[0]) < 1e-6))
+            assert not same
+    # collinear bits merge into one
+    m = B.merge_segments([[(0, 0, 0), (1, 0, 0)], [(1, 0, 0), (2.5, 0, 0)],
+                          [(3, 1, 0), (4, 1, 0)]])
+    assert sorted(round(math.dist(a, b), 3) for a, b in m) == [1.0, 2.5]
+    # the top course sits close under the ridge
+    ov = B.settings_of(d)["overhang"]
+    half = (6 + 2 * ov) / 2
+    tan = math.tan(math.radians(B.settings_of(d)["pitch"]))
+    ridge_z = lines["ridge"][0][0][2]
+    top = max(p[2] for s_ in segs for p in s_)
+    assert ridge_z - top < 0.04 * tan + 1e-6 and half > 0
+
+
+def test_tie_beam_under_every_king_post_and_wall_plates():
+    d = _data()
+    lines = B.roof_lines(d)
+    assert lines["plate_h"] == 0.15 and lines["plate"] and lines["tie"]
+    assert len(lines["tie"]) == len(lines["post"])
+    for (a, _b), (t0, t1) in zip(lines["post"], lines["tie"]):
+        # the post stands on the tie beam's top, the tie runs wall to wall
+        assert abs(a[2] - t0[2]) < 1e-9
+        lo, hi = sorted((t0, t1))
+        assert min(lo[0], hi[0]) - 1e-6 <= a[0] <= max(lo[0], hi[0]) + 1e-6
+        assert min(lo[1], hi[1]) - 1e-6 <= a[1] <= max(lo[1], hi[1]) + 1e-6
+    z0 = lines["z0"]
+    assert all(abs(p[2] - (z0 + 0.15)) < 1e-9 for seg in lines["plate"] for p in seg)
+    groups, count = B.roof_members(d)
+    assert count["wallplate"] == len(lines["plate"]) and count["tiebeam"] == len(lines["tie"])
+    plate = next(g for g in groups if _kind(g) == "wallplate")
+    assert plate.name.startswith("อะเส C 150") and abs(_box(plate)[2] - z0) < 1e-6
+    r = Q.compute(d)
+    steel = " ".join(ln["basis"] for ln in r["lines"] if ln["desc"].startswith("โครงหลังคาเหล็ก"))
+    assert steel
+
+
+def test_fascia_corners_are_mitred():
+    d = _data([dict(name="ห้อง", x=0, y=0, w=8, d=6)])
+    groups, _c = B.roof_members(d)
+    boards = [g for g in groups if _kind(g) == "fascia"]
+    assert len(boards) == 4
+    ov = B.settings_of(d)["overhang"]
+    t = B.settings_of(d)["fascia_t"]
+    for g in boards:
+        x0, y0, _z0, x1, y1, _z1 = _box(g)
+        # each board reaches the outer corner and stops there: no crossing
+        assert math.isclose(min(x0, y0), -ov - t / 2, abs_tol=1e-6)
+    for i in range(4):
+        for j in range(i + 1, 4):
+            a, b = _box(boards[i]), _box(boards[j])
+            ov_ = [min(a[k + 3], b[k + 3]) - max(a[k], b[k]) for k in range(2)]
+            # boxes only share the mitre's corner square
+            assert min(ov_) <= t + 1e-6
+
+
+def test_part_prices_layers_and_categories():
+    d = _data()
+    d["prices"] = dict(S.SAMPLE_PRICES)
+    groups, _c = B.build(d)
+    col = next(g for g in groups if _kind(g) == "column")
+    info = dict(col.ext[B.EXT_KEY]["info"])
+    assert "ราคาวัสดุ/หน่วย" in info and "ค่าแรง/หน่วย" in info and "รวม" in info
+    assert info["ปริมาณ"].endswith("ลบ.ม.") and "ว480" in info["ค่าแรง/หน่วย"]
+    wall = next(g for g in groups if _kind(g) == "wall")
+    assert dict(wall.ext[B.EXT_KEY]["info"])["ปริมาณ"].endswith("ตร.ม.")
+    raf = next(g for g in groups if _kind(g) == "rafter")
+    assert dict(raf.ext[B.EXT_KEY]["info"])["ปริมาณ"].endswith("กก.")
+    # layers named after the part
+    assert B.layer_name(col, "name") == col.name
+    assert B.layer_name(col, "type") == "เสา C1 20×20 ซม."
+    assert B.layer_name(col, "floor") == "เสา C1 20×20 ซม. · ชั้น 1"
+    assert B.layer_name(col, "category") == "04 งานโครงสร้างคอนกรีต"
+    assert B.layer_name(raf, "name").startswith("จันทัน C") and "ยาว" not in B.layer_name(raf)
+    by = B.assign_layers(groups, "name")
+    assert col.layer == col.name and col in by[col.name]
+    assert B.assign_layers(groups, "") == {} and col.layer is None
+    # the 15 หมวดงาน
+    assert [c[0] for c in CG.CATEGORIES] == list(range(1, 16))
+    assert CG.NAME[1] == "งานเตรียมพื้นที่" and CG.NAME[15] == "งานอื่นๆ"
+    r = Q.compute(d)
+    titles = [th for _k, th, _rows in r["groups"]]
+    assert titles[0].startswith("2. งานดิน") or titles[0].startswith("3. ")
+    assert "5. งานโครงสร้างเหล็ก" in titles and "6. งานผนัง/ฉาบ" in titles
+    assert "7. งานหลังคา" in titles and "4. งานโครงสร้างคอนกรีต" in titles
+    assert all(ln["cat"] in CG.NAME for ln in r["lines"])
+    paint = [ln for ln in r["lines"] if ln["desc"].startswith("ทาสี") and "กันสนิม" not in ln["desc"]]
+    assert all(ln["cat"] == 9 for ln in paint)
+    d["boq_options"] = {"boq_by": "rule"}
+    assert Q.compute(d)["groups"][0][1] == Q.GROUP_TH["earth"]
+
+
+def test_more_door_and_window_styles():
+    doors = dict(CAT.types_of("door"))
+    wins = dict(CAT.types_of("window"))
+    assert {"D8", "D9", "D10", "D11", "D13"} <= set(doors)
+    assert doors["D9"]["leaves"] == 4 and doors["D9"]["w"] == 2.80
+    assert doors["D11"]["transom"] == 0.40 and doors["D11"]["h"] == 2.45
+    assert {"W6", "W7", "W9", "W10"} <= set(wins)
+    sk = CAT.opening_sketch(doors["D10"])
+    assert any(w == "fixed" for *_r, w in sk) and any(w == "arrow" for *_r, w in sk)
+    d = _data([dict(name="ห้อง", x=0, y=0, w=4, d=4)])
+    d["floors"][0]["openings"] = [{"id": "o1", "type": "door", "style": "D11",
+                                   "x": 2.0, "y": 0.0}]
+    groups, count = B.structure_members(d)
+    door = next(g for g in groups if _kind(g) == "door")
+    assert "D11" in door.name and count["door"] == 1
+    assert math.isclose(_box(door)[5] - _box(door)[2], 2.45, abs_tol=1e-6)
+
+
+def test_panel_layers_picker_walls_and_the_boq_sidebar(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    QApplication.instance() or QApplication([])
+    from core.scene import Scene
+    from plugins import wanic_building as WB
+    from tests.test_wanic_building import _App
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    scene = Scene()
+    panel = WB.BuildingPanel(_App(scene))
+    panel.resize(500, 900)
+    panel.room_name.setCurrentText("ห้องนอน")
+    panel.place_room(1.5, 1.5)
+    # wall settings on the panel
+    panel.combos["ext_wall"].setCurrentIndex(panel.combos["ext_wall"].findData("6.11"))
+    panel.combos["ext_plaster_t"].setCurrentIndex(
+        panel.combos["ext_plaster_t"].findData(0.02))
+    s = panel.data()["settings"]
+    assert s["ext_wall"] == "6.11" and s["ext_plaster_t"] == 0.02
+    assert math.isclose(s["wall_t"], 0.10 + 0.015 + 0.02)
+    # a door picked from the thumbnails
+    panel.set_tool("door")
+    dlg = WB.OpeningPicker(panel, "door", "D1")
+    dlg._pick("D9")
+    assert dlg.code == "D9"
+    i = panel.op_style.findData("D9")
+    assert i >= 0 and not panel.op_style.itemIcon(i).isNull()
+    # build: every part on a layer named after it
+    panel.build(("structure", "roof"))
+    built = B.generated(scene)
+    names = {ly.name for ly in scene.layers}
+    col = next(g for g in built if _kind(g) == "column")
+    assert col.layer == col.name and col.name in names
+    assert any(n.startswith("ฉาบปูนผนังภายนอก") for n in names)
+    # by type: fewer layers, the old ones dropped
+    panel.combos["layer_mode"].setCurrentIndex(panel.combos["layer_mode"].findData("type"))
+    panel.build(("structure", "roof"))
+    names2 = {ly.name for ly in scene.layers}
+    assert "เสา C1 20×20 ซม." in names2 and col.name not in names2
+    # the BOQ: 15 หมวดงาน in the sidebar, picking one shows only it
+    boq = WB.BoqDialog(panel)
+    assert boq.cats.count() == 16
+    row = next(r for r in range(boq.cats.count())
+               if "4. งานโครงสร้างคอนกรีต" in boq.cats.item(r).text())
+    boq.cats.setCurrentRow(row)
+    shown = [boq.tree.topLevelItem(i).text(1) for i in range(boq.tree.topLevelItemCount())
+             if not boq.tree.topLevelItem(i).isHidden()]
+    assert shown == ["4. งานโครงสร้างคอนกรีต"]
+    boq.boq_by.setCurrentIndex(boq.boq_by.findData("rule"))
+    assert panel.data()["boq_options"]["boq_by"] == "rule"
+    assert boq.tree.topLevelItem(0).text(1) == Q.GROUP_TH["earth"]
+    # the whole ว480 list, searchable
+    assert boq.w480.rowCount() == len(W.ROWS)
+    boq.w480_q.setText("ฉาบปูนผนัง ภายนอก")
+    assert 0 < boq.w480.rowCount() < 20
+    assert any(boq.w480.item(r, 4).text() == "109.00" for r in range(boq.w480.rowCount()))

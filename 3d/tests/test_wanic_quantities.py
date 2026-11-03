@@ -92,8 +92,9 @@ def test_one_room_house_quantities():
     s1 = _by(r, "คอนกรีตโครงสร้าง ผสมเสร็จ 240 กก./ตร.ซม. — พื้นวางบนดิน")[0]
     assert close(s1["net"], 2.8 * 2.8 * 0.10)
     # Walls: (c-c − column) × (floor to floor − roof beam), no openings.
-    wall = _by(r, "ผนังก่ออิฐมอญ")[0]
-    assert close(wall["net"], 4 * 2.8 * 2.6)
+    wall = _by(r, "ผนังภายนอก — ผนังก่ออิฐมอญ")[0]
+    assert close(wall["net"], 4 * 2.8 * 2.6) and wall["lab"] == 104
+    assert not _by(r, "ผนังภายใน —")
     ext = _by(r, "ฉาบปูนเรียบ ผนังภายนอก")[0]
     inn = _by(r, "ฉาบปูนเรียบ ผนังภายใน")[0]
     assert close(ext["net"], wall["net"]) and close(inn["net"], wall["net"])
@@ -124,9 +125,12 @@ def test_openings_and_interior_walls():
     d["floors"][0]["openings"] = [{"id": "o1", "type": "door", "x": 1.5,
                                    "y": 0.0}]
     r = Q.compute(d)
-    wall = _by(r, "ผนังก่ออิฐมอญ")[0]
+    outer = _by(r, "ผนังภายนอก — ผนังก่ออิฐมอญ")[0]
+    inner = _by(r, "ผนังภายใน — ผนังก่ออิฐมอญ")[0]
     # Less the door and its concrete band (2 posts × 2.10 + lintel 0.90).
-    assert close(wall["net"], 7 * 2.8 * 2.6 - 0.9 * 2.0 - 5.1 * 0.10)
+    assert close(outer["net"] + inner["net"],
+                 7 * 2.8 * 2.6 - 0.9 * 2.0 - 5.1 * 0.10)
+    assert close(inner["net"], 2.8 * 2.6)
     band = _by(r, "เสาเอ็นและคานทับหลัง")[0]
     assert close(band["net"], 5.1) and band["lab"] == 51
     inn = _by(r, "ฉาบปูนเรียบ ผนังภายใน")[0]
@@ -171,7 +175,7 @@ def test_hand_off_to_pr_forms_keeps_the_totals_and_signature():
     td["rates"] = Q.to_rates(r)
     res = T.compute([], td)
     assert close(res["subtotal"], r["totals"]["total"], 1e-6)
-    assert {ln["category"] for ln in res["lines"]} <= set(Q.GROUP_TH.values())
+    assert {ln["category"] for ln in res["lines"]} <= {th for _k, th, _r in r["groups"]}
     data = T.boq_xlsx_bytes(res, T.settings_of(td))
     z = zipfile.ZipFile(io.BytesIO(data))
     text = "".join(z.read(n).decode("utf-8") for n in z.namelist()

@@ -55,7 +55,7 @@ CONCRETE = "คอนกรีตผสมเสร็จ 240 กก./ตร.ซ
 DEFAULT_OPTIONS = {"finishes": True, "paint": True, "roofing": "tile",
                    "ready_mix": True, "wall_recipe": "6.1",
                    "plaster_recipe": "7.2", "floor_recipe": "9.30",
-                   "slab_sand": 0.05, "gb_sand": 0.05}
+                   "slab_sand": 0.05, "gb_sand": 0.05, "boq_by": "cat15"}
 
 
 def options_of(data) -> dict:
@@ -76,7 +76,7 @@ def labour_of(data) -> dict:
     out = {k: float(v[2]) for k, v in S.LABOUR.items()}
     for k, v in ((data or {}).get("labour") or {}).items():
         if _isnum(v):
-            out[k] = float(v)
+            out[S.ALIASES.get(k, k)] = float(v)
     return out
 
 
@@ -460,12 +460,25 @@ def compute(data) -> dict:
     tiles: dict[str, float] = {}
     if s.get("walls"):
         wall_a = ext_face = int_face = 0.0
+        by_type: dict = {}
+        band_w = float(s.get("band", 0.10))
         for wl in E["walls"]:
             ops = sum(op_w * op_h for op_w, op_h, _sl in
                       (B.opening_size(op, s) for op in wl["openings"]))
-            a = S.wall_area(wl["L"], col_b, H, float(lib[wl["beam"]]["h"]),
-                            ops)
+            bh = float(lib[wl["beam"]]["h"])
+            a = S.wall_area(wl["L"], col_b, H, bh, ops)
+            net = a
+            if band_w > 0:
+                for op in wl["openings"]:
+                    ow, oh, sill = B.opening_size(op, s)
+                    net -= band_w * B.band_length(
+                        ow, oh, sill, op.get("type", "door") != "window",
+                        band_w, H - bh)
+                net = max(net, 0.0)
             wall_a += a
+            sp = B.wall_spec(s, bool(wl["exterior"]))
+            key = (bool(wl["exterior"]), sp["recipe"])
+            by_type[key] = by_type.get(key, 0.0) + net
             if wl["exterior"]:
                 ext_face += a
                 int_face += a
@@ -501,16 +514,18 @@ def compute(data) -> dict:
                 band_m += B.band_length(op["w"], op["h"], op["sill"],
                                         op["type"] != "window", band, wh)
         wall_a -= band_m * band
-        wp, wnote = rprice(o["wall_recipe"], prices)
-        rc = RC.find(o["wall_recipe"])
-        bill.add(g, rc["name"] if rc else "ผนังก่ออิฐ", wall_a, "ตร.ม.",
-                 mat=wp, lab_code="2.3.1a",
-                 basis="(ยาวศูนย์–ศูนย์เสา − กว้างเสา)×(สูงพื้นถึงพื้น − "
-                       "ลึกคาน) − ช่องเปิด",
-                 ref=f"หลักเกณฑ์ 4.2 ข้อ 3.1 · สูตรวัสดุ {o['wall_recipe']}"
-                     " · ว480 2.3.1", note=wnote)
+        for (ext, code), area in sorted(by_type.items(), key=lambda kv: not kv[0][0]):
+            wp, wnote = rprice(code, prices)
+            rc = RC.find(code)
+            side = "ผนังภายนอก" if ext else "ผนังภายใน"
+            bill.add(g, f"{side} — " + (rc["name"] if rc else B.WALL_TYPES[code][0]),
+                     area, "ตร.ม.", mat=wp, lab_code=S.wall_labour_code(code),
+                     basis="(ยาวศูนย์–ศูนย์เสา − กว้างเสา)×(สูงพื้นถึงพื้น − "
+                           "ลึกคาน) − ช่องเปิด − เสาเอ็น/ทับหลัง",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 3.1 · สูตรวัสดุ {code}"
+                         " · ว480 2.3.1", note=wnote)
         if band_m:
-            full = float(s["wall_t"]) >= 0.15
+            full = max(B.wall_spec(s, True)["t"], B.wall_spec(s, False)["t"]) >= 0.15
             code = "4.2" if full else "4.1"
             bp_, bn_ = rprice(code, prices)
             bill.add(g, f"เสาเอ็นและคานทับหลัง ค.ส.ล. รอบประตู-หน้าต่าง "
@@ -520,18 +535,20 @@ def compute(data) -> dict:
                      ref=f"สูตรวัสดุ {code} · ว480 2.3.1", note=bn_)
         pp, pnote = rprice(o["plaster_recipe"], prices)
         bill.add(g, "ฉาบปูนเรียบ ผนังภายใน", int_face - tile_a, "ตร.ม.",
-                 mat=pp, lab_code="2.3.2a",
+                 mat=pp, lab_code="2.3.1.2a",
                  basis="พื้นที่ผนังด้านภายในทุกด้าน − ส่วนที่บุกระเบื้อง",
                  ref=f"หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ "
                      f"{o['plaster_recipe']} · ว480 2.3.1.2", note=pnote)
-        bill.add(g, "ฉาบปูนเรียบ ผนังภายนอก", ext_face, "ตร.ม.", mat=pp,
-                 lab_code="2.3.2b", basis="พื้นที่ผนังด้านนอกอาคาร",
+        po = B.wall_spec(s, True)["po"]
+        bill.add(g, f"ฉาบปูนเรียบ ผนังภายนอก (หนา {po * 100:g} ซม.)", ext_face,
+                 "ตร.ม.", mat=pp * (po / 0.015 if po > 0 else 1.0),
+                 lab_code="2.3.1.2b", basis="พื้นที่ผนังด้านนอกอาคาร",
                  ref=f"หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ "
                      f"{o['plaster_recipe']} · ว480 2.3.1.2", note=pnote)
         if tile_a:
             bp, bnote = rprice("7.1", prices)
             bill.add(g, "ฉาบปูนทรายรองพื้น (สำหรับบุกระเบื้องผนัง)", tile_a,
-                     "ตร.ม.", mat=bp, lab_code="2.3.2d",
+                     "ตร.ม.", mat=bp, lab_code="2.3.1.2d",
                      basis="เท่าพื้นที่บุกระเบื้อง",
                      ref="หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ 7.1 · ว480 2.3.1.2",
                      note=bnote)
@@ -657,6 +674,9 @@ def compute(data) -> dict:
         for pl in lines["purlin"]:
             per[s["purlin"]] = per.get(s["purlin"], 0.0) + \
                 P.path_length(pl["path"], pl["closed"])
+        for key, kind in (("wallplate", "plate"), ("tiebeam", "tie")):   # อะเส ขื่อ
+            for path in lines.get(kind) or []:
+                per[s[key]] = per.get(s[key], 0.0) + P.path_length(path)
         paint_a = 0.0
         for label, length in per.items():
             fam, params = B.steel_lookup(label)
@@ -738,10 +758,10 @@ def compute(data) -> dict:
                 sp_, snote = rprice("5.41", prices)
                 bill.add(g, "ฝ้าชายคาระแนงไม้เทียม โครงคร่าวเหล็กชุบสังกะสี "
                             "พร้อมมุ้งกันแมลง", soffit, "ตร.ม.", mat=sp_,
-                         lab_code="2.2.2",
+                         lab_code="2.2.1c",
                          basis="พื้นที่ใต้ชายคา จากหน้าคานถึงเชิงชาย",
                          ref="หลักเกณฑ์ 4.2 ข้อ 2.1 · สูตรวัสดุ 5.41 · "
-                             "ค่าแรงเทียบ ว480 2.2.2", note=snote)
+                             "ว480 2.2.1 (ฝ้าตีเว้นร่อง ไม้เทียม)", note=snote)
         if s.get("caps", True):
             ridge = sum(P.path_length(p) for p in lines["ridge"])
             hips = sum(P.path_length(p) for p in lines["hip"])
@@ -804,11 +824,21 @@ def compute(data) -> dict:
                      "(หรือกด «ราคาตัวอย่าง» เพื่อทดลอง)")
     notes.append("ขนาดชิ้นส่วนและเหล็กเสริมเป็นค่าเริ่มต้น — "
                  "วิศวกรผู้ออกแบบต้องกำหนดตามแบบจริง")
+    from core import wanic_categories as CG
+    for ln in bill.lines:
+        ln["cat"] = CG.line_category(ln["group"], ln["desc"])
     groups = []
-    for key, th in GROUPS:
-        rows = [ln for ln in bill.lines if ln["group"] == key]
-        if rows:
-            groups.append((key, th, rows))
+    if o.get("boq_by", "cat15") == "cat15":
+        # the 15 หมวดงาน (งานเตรียมพื้นที่ … งานอื่นๆ)
+        for no, _name, _icon, _ex in CG.CATEGORIES:
+            rows = [ln for ln in bill.lines if ln["cat"] == no]
+            if rows:
+                groups.append((f"c{no}", CG.title(no), rows))
+    else:
+        for key, th in GROUPS:
+            rows = [ln for ln in bill.lines if ln["group"] == key]
+            if rows:
+                groups.append((key, th, rows))
     for ln in bill.lines:
         if ln["mat_key"]:
             need.setdefault(ln["mat_key"], S.price_unit(ln["mat_key"]) or
