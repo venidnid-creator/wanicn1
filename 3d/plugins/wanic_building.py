@@ -1862,7 +1862,7 @@ def render_pdf(sheets, path: str) -> int:
 class DrawingDialog(QDialog):
     """Project data for the title block, the sheet families, PDF / DXF."""
 
-    GROUPS = [("A", "แบบสถาปัตยกรรม (A)"), ("S", "แบบวิศวกรรมโครงสร้าง (S)"),
+    GROUPS = [("G", "ปกแบบ และหน้าสารบัญ"), ("A", "แบบสถาปัตยกรรม (A)"), ("S", "แบบวิศวกรรมโครงสร้าง (S)"),
               ("SN", "แบบวิศวกรรมสุขาภิบาล (SN)"), ("EE", "แบบวิศวกรรมไฟฟ้า (EE)"),
               ("M", "แบบวิศวกรรมเครื่องกล (M)"),
               ("BOQ", "ต่อท้ายเล่มด้วยแบบ ปร.1 (แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน)")]
@@ -1891,8 +1891,8 @@ class DrawingDialog(QDialog):
         self.checks = {}
         for g, th in self.GROUPS:
             c = QCheckBox(th)
-            c.setChecked(g in (info.get("groups") or [x for x, _t in
-                                                       self.GROUPS]))
+            saved = info.get("groups") or [x for x, _t in self.GROUPS]
+            c.setChecked(g in saved or (g == "G" and "G" not in saved))
             self.checks[g] = c
             f.addRow(c)
         self.prices = QCheckBox("แสดงราคาใน ปร.1 (ไม่ติ๊ก = เว้นช่องราคาว่างแบบเล่มกรมโยธาฯ)")
@@ -2144,6 +2144,10 @@ class BuildingPanel(QWidget):
             "แบบก่อสร้างครบชุดจากโมเดล: แปลน รูปด้าน รูปตัด ตาราง โครงสร้าง "
             "สุขาภิบาล ไฟฟ้า เครื่องกล — กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)",
             self.open_drawings, 2, 0, "#8A5A00")
+        btn("✂ รูปตัดอาคาร (แนว X / แนว Y)…",
+            "รูปตัดอาคารชั้นละ 1 ชุด (2 รูป แนว X และแนว Y — รูปแรกตัดผ่านห้องน้ำ) "
+            "แสดงฐานราก คาน พื้น ผนังตัด ฝ้า โครงหลังคา ระดับ และเส้นบอกระยะ — PDF / DXF",
+            self.export_sections, 3, 0, "#5B6B78")
         btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
             "(วัดจากโมเดล 3D)", self.send_rates, 2, 1, "#3B6FB6")
@@ -2301,8 +2305,18 @@ class BuildingPanel(QWidget):
         sf = rff
         num("pitch", "ความชัน", 5.0, 60.0, 1.0, 1, "°")
         num("overhang", "ชายคายื่น", 0.0, 3.0, 0.1)
-        num("rafter_sp", "ระยะจันทัน", 0.3, 3.0, 0.1)
-        num("purlin_sp", "ระยะแป (ตามแนวลาด)", 0.2, 2.0, 0.05)
+        num("rafter_sp", "ระยะจันทัน (ไม่เกิน)", 0.3, 3.0, 0.01)
+        self.fields["rafter_sp"].setToolTip("ระยะที่กำหนดเป็นระยะสูงสุด — ช่วงที่หารไม่ลงตัว "
+                                            "โปรแกรมแบ่งเท่ากันให้ชิดขึ้นเล็กน้อย เช่น 0.98 0.97 ม.")
+        num("purlin_sp", "ระยะแป ตามแนวลาด (ไม่เกิน)", 0.2, 2.0, 0.01)
+        self.fields["purlin_sp"].setToolTip("ระยะสูงสุดตามระยะซ้อนทับของกระเบื้อง (ซีแพคโมเนีย "
+                                            "0.32 ม.) — แบ่งเท่ากันจากแปตัวล่างถึงแปตัวบนชิดสัน")
+        pf = QComboBox()
+        pf.addItem("หันปากแปขึ้นทางอกไก่ (มาตรฐาน)", "ridge")
+        pf.addItem("หันปากแปลงทางชายคา", "eave")
+        pf.currentIndexChanged.connect(lambda _i: self._save_settings())
+        self.combos["purlin_face"] = pf
+        rff.addRow("การวางแป", pf)
         sf = sf_backup
         labels = [lab for lab, _f, _p in B.steel_presets()]
         self.steel = {}
@@ -2835,6 +2849,32 @@ class BuildingPanel(QWidget):
         self.status.setText(f"บันทึกเบอร์ {mark} แล้ว — กด «สร้าง/อัปเดต» เพื่อปรับโมเดล")
 
     # ---- 2D drawing set -----------------------------------------------------------
+    def export_sections(self):
+        """The building sections alone (รูปตัดอาคาร), floor by floor."""
+        import os
+        from PySide6.QtWidgets import QFileDialog
+        from core import wanic_drawings as D
+        d = self.data()
+        if not any(f.get("rooms") for f in d["floors"]):
+            QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง — วางห้องก่อน")
+            return []
+        info = dict(d.get("drawing_info") or {})
+        info.setdefault("project", "บ้านพักอาศัย")
+        sheets = D.build_sections(d, info)
+        if not sheets:
+            return []
+        path, _f = QFileDialog.getSaveFileName(
+            self, "บันทึกรูปตัดอาคาร", "รูปตัดอาคาร.pdf", "PDF (*.pdf);;DXF (*.dxf)")
+        if not path:
+            return []
+        stem = os.path.splitext(path)[0]
+        render_pdf(sheets, stem + ".pdf")
+        with open(stem + ".dxf", "wb") as fh:
+            fh.write(D.dxf_bytes(sheets))
+        cuts = ", ".join(t for s in sheets for t in [s.title])
+        self.status.setText(f"รูปตัดอาคาร {len(sheets)} แผ่น: {cuts} → {stem}.pdf / .dxf")
+        return [stem + ".pdf", stem + ".dxf"]
+
     def open_drawings(self):
         d = self.data()
         if not any(f.get("rooms") for f in d["floors"]):

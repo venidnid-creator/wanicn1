@@ -42,10 +42,11 @@ INFO = {"project": "บ้านพักอาศัย 2 ชั้น", "owner
 def test_the_whole_set_numbered_like_the_standard_drawings():
     S = D.build_set(house(), INFO)
     codes = [s.code for s in S]
-    assert codes[:4] == ["A-01", "A-02", "A-03", "A-04"]
+    assert codes[:2] == ["ปก", "สารบัญ"]                 # cover and contents first
+    assert codes[2:6] == ["A-01", "A-02", "A-03", "A-04"]
     for g in ("A-", "S-", "SN-", "EE-", "M-"):
         assert any(c.startswith(g) for c in codes), g
-    dw = [s for s in S if s.group != "BOQ"]
+    dw = [s for s in S if s.group not in ("BOQ", "G")]
     assert [s.number for s in dw] == list(range(1, len(dw) + 1))
     titles = [s.title for s in S]
     for t in ("ผังบริเวณ", "แปลนพื้นชั้น 1", "แปลนพื้นชั้น 2", "แปลนหลังคา",
@@ -61,9 +62,9 @@ def test_the_whole_set_numbered_like_the_standard_drawings():
 
 def test_every_sheet_has_the_title_block_and_signature():
     S = D.build_set(house(), INFO)
-    drawings = [s for s in S if s.group != "BOQ"]
+    drawings = [s for s in S if s.group not in ("BOQ", "G")]
     for s in S:
-        if s.group == "BOQ":
+        if s.group in ("BOQ", "G"):
             _in_bounds(s)
             continue
         t = s.texts()

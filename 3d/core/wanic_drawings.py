@@ -777,6 +777,7 @@ def a_floor(sh, E, k, codes, fcodes):
     draw_rooms(sh, v, E, k, fcodes)
     draw_stairs(sh, v, E, k)
     draw_fixtures(sh, v, E, k)
+    section_marks(sh, v, E, k)
     x0, y0, x1, y1 = drawing_area()
     north(sh, (x1 - 10, y1 - 12))
     name = "แปลนพื้นชั้น 1" if k == 0 else f"แปลนพื้นชั้น {k + 1}"
@@ -844,12 +845,12 @@ def elevation(sh, E, L, side, box):
     umin, umax = min(us) - ov - 0.5, max(us) + ov + 0.5
     ztop = n * H + 3.0
     zmin = -0.6
-    bw, bh = box[2] - box[0] - 22, box[3] - box[1] - 12
+    bw, bh = box[2] - box[0] - 40, box[3] - box[1] - 40
     sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), PLAN_SCALES)
     sh.scale = f"1:{sc}"
     k = 1000.0 / sc
-    ox = box[0] + (bw - (umax - umin) * k) / 2
-    oy = box[1] + 12
+    ox = box[0] + 4 + (bw - (umax - umin) * k) / 2
+    oy = box[1] + 28 + max(0.0, (bh - (ztop - zmin) * k) / 2)
 
     def P(u, z):
         return (ox + (u - umin) * k, oy + (z - zmin) * k)
@@ -878,13 +879,47 @@ def elevation(sh, E, L, side, box):
     if L:
         for poly in L["skin"]:
             sh.poly([P(u_of(p[0], p[1]), p[2]) for p in poly], "roof", 0.25)
-    # levels
-    for f in range(n + 1):
-        z = f * H
-        p = P(umax, z)
-        sh.line(p, (p[0] + 8, p[1]), "dim", 0.13)
-        sh.text((p[0] + 9, p[1] - 1), f"{'±' if z == 0 else '+'}{z:.2f}", 2.2,
-                "left", "dim")
+    # ground, columns at the corners of the faces, glazing bars
+    for i in range(int((umax - umin) / 0.6)):
+        uu = umin + 0.3 + i * 0.6
+        sh.line(P(uu, 0), P(uu - 0.25, -0.25), "hatch", 0.13)
+    for el in E["openings"]:
+        if el["type"] != "window":
+            continue
+        ox_, oy_ = float(el["op"]["x"]), float(el["op"]["y"])
+        rooms = E["floors"][el["floor"]]["rooms"]
+        if not any(abs(outward(w, rooms)[0] - nx) < 1e-6 and abs(outward(w, rooms)[1] - ny) < 1e-6
+                   and w["floor"] == el["floor"] and any(o is el["op"] for o in w["openings"])
+                   for w in E["walls"] if w["exterior"]):
+            continue
+        uc = u_of(ox_, oy_)
+        lo = el["floor"] * H + el["sill"]
+        sh.line(P(uc - el["w"] / 2, lo + el["h"] * 0.5), P(uc + el["w"] / 2, lo + el["h"] * 0.5),
+                "window", 0.1)
+    # levels: floors, ceilings, the ring beam and the ridge
+    marks = [(0.0, "ระดับพื้นชั้น 1")]
+    for f in range(n):
+        if f:
+            marks.append((f * H, f"ระดับพื้นชั้น {f + 1}"))
+    marks.append((n * H, "ระดับหลังคาน"))
+    if L and L.get("skin"):
+        marks.append((max(p[2] for poly in L["skin"] for p in poly), "ระดับสันหลังคา"))
+    _levels(sh, P, umax - 0.2, marks)
+    # notes
+    if L:
+        tile = CAT.roof_tile(E["settings"])[1]["name"]
+        top = max(p[2] for poly in L["skin"] for p in poly) if L.get("skin") else n * H
+        sh.text(P((umin + umax) / 2, top + 0.45), f"หลังคา{tile[:38]}", 2.0, "center", "text")
+    sh.text(P(umin + 0.9, H * 0.5), "ผนังก่ออิฐฉาบปูนเรียบ ทาสี", 1.9, "left", "text")
+    # grid bubbles under the face
+    xs_, ys_ = grids(E)
+    names = [(x, str(i + 1)) for i, x in enumerate(xs_)] if ax[1] == 0 else \
+        [(y, axis_name(i)) for i, y in enumerate(ys_)]
+    for g, nm in names:
+        q = P(g * (ax[0] or ax[1]), 0)
+        sh.line((q[0], q[1] - 1), (q[0], q[1] - 5), "grid", 0.13, True)
+        sh.circle((q[0], q[1] - 8), 3.0, "grid", 0.25)
+        sh.text((q[0], q[1] - 9.2), nm, 2.6, "center", "grid")
     return sc
 
 
@@ -1014,6 +1049,362 @@ def a_sections(sh, E, L):
         box = (x0, y0, mid - 5, y1) if i == 0 else (mid + 5, y0, x1, y1)
         sc = section(sh, E, L, axis, box)
         caption(sh, ((box[0] + box[2]) / 2, y0 + 6), name, f"1:{sc}")
+
+
+# ---------------------------------------------------------------------------
+# Building sections in detail (รูปตัดอาคาร) — X and Y, one through a bathroom
+# ---------------------------------------------------------------------------
+
+THAI_CUTS = ["ก", "ข", "ค", "ง", "จ", "ฉ", "ช", "ซ", "ฌ", "ญ"]
+
+
+def section_cuts(E, k):
+    """The two cuts for floor ``k``: ``[(axis, at, name, through)]`` — one
+    across the building through a bathroom (or the largest room when there
+    is none), the other the other way through the middle of the plan.
+    ``axis`` "x": the plane x = at (seen along +x); "y": y = at."""
+    rooms = E["floors"][k]["rooms"]
+    if not rooms:
+        return []
+    wet = [r for r in rooms if B.is_wet(r)]
+    first = (wet or sorted(rooms, key=lambda r: -float(r["w"]) * float(r["d"])))[0]
+    xs = [float(r["x"]) for r in rooms] + [float(r["x"]) + float(r["w"]) for r in rooms]
+    ys = [float(r["y"]) for r in rooms] + [float(r["y"]) + float(r["d"]) for r in rooms]
+    w, d = max(xs) - min(xs), max(ys) - min(ys)
+    # the long section runs along the long side: cut across it
+    ax1 = "x" if w >= d else "y"
+    at1 = float(first["x"]) + float(first["w"]) / 2 if ax1 == "x" else \
+        float(first["y"]) + float(first["d"]) / 2
+    ax2 = "y" if ax1 == "x" else "x"
+    mid = (min(ys) + max(ys)) / 2 if ax2 == "y" else (min(xs) + max(xs)) / 2
+    # through a room, not along a wall line
+    cand = []
+    for r in rooms:
+        lo, hi = (float(r["y"]), float(r["y"]) + float(r["d"])) if ax2 == "y" else \
+            (float(r["x"]), float(r["x"]) + float(r["w"]))
+        cand.append(((lo + hi) / 2, r))
+    at2, r2 = min(cand, key=lambda c: abs(c[0] - mid))
+    a, b = THAI_CUTS[(2 * k) % 10], THAI_CUTS[(2 * k + 1) % 10]
+    return [(ax1, at1, f"{a}-{a}", first.get("name") or "ห้อง"),
+            (ax2, at2, f"{b}-{b}", r2.get("name") or "ห้อง")]
+
+
+def _level(sh, p, z, label, left=True, ty=None):
+    """A level mark ▽ +0.00 ระดับ… (``ty``: the text's own height when
+    marks close together are stacked apart)."""
+    x, y = p
+    sh.poly([(x, y), (x - 1.6, y + 2.4), (x + 1.6, y + 2.4)], "dim", 0.18)
+    sh.line((x - 12 if left else x - 3, y), (x + 3 if left else x + 12, y), "dim", 0.13)
+    t = f"{'±' if abs(z) < 1e-6 else ('+' if z > 0 else '')}{z:.2f}"
+    yt = y + 0.8 if ty is None else ty
+    if left:
+        # the words to the left of the mark, clear of the building
+        if ty is not None and abs(ty - (y + 0.8)) > 0.3:
+            sh.line((x - 12, y), (x - 13.5, yt - 0.6), "dim", 0.1)
+        sh.text((x - 14 if ty is not None and abs(ty - (y + 0.8)) > 0.3 else x - 12.5, yt),
+                f"{t} {label}", 2.0, "right", "dim")
+        return
+    if ty is not None and abs(ty - (y + 0.8)) > 0.3:
+        sh.line((x + 1.6, y + 2.4), (x + 2.4, yt), "dim", 0.1)
+    sh.text((x + 2.5, yt), f"{t} {label}", 2.0, "left", "dim")
+
+
+def _levels(sh, P, u, marks, left=False):
+    """Level marks at ``u``, their labels kept 3.4 mm apart."""
+    last = None
+    for z, label in sorted(set(marks)):
+        p = P(u, z)
+        ty = p[1] + 0.8
+        if last is not None and ty < last + 3.4:
+            ty = last + 3.4
+        _level(sh, p, z, label, left=left, ty=ty)
+        last = ty
+
+
+def section_detail(sh, E, L, cut, box):
+    """One building section drawn in detail: footings, ground beams,
+    slabs, cut walls (masonry hatched, plaster), cut beams, the doors and
+    windows and columns beyond, ceilings, the roof frame (ties, posts,
+    rafters, purlins cut), the skin, fascia, level marks, dimension
+    strings and grid bubbles, room names."""
+    axis, at, name, _through = cut
+    H, n, lib, s = E["H"], E["n"], E["lib"], E["settings"]
+    xs, ys = grids(E)
+    if not xs:
+        return 100
+
+    def U(x, y):                         # plan → section abscissa
+        return y if axis == "x" else x
+
+    def C(x, y):                         # plan → distance across the plane
+        return x if axis == "x" else y
+    grid_u = ys if axis == "x" else xs
+    ov = float(s.get("overhang") or 0)
+    umin, umax = grid_u[0] - ov - 1.2, grid_u[-1] + ov + 1.2
+    lab_mm = 42.0                        # room for the level words on the left
+    ridge = max((p[2] for poly in (L or {}).get("skin", []) for p in poly), default=n * H + 1)
+    zmin, ztop = -1.8, ridge + 0.8
+    bw, bh = box[2] - box[0] - 40 - lab_mm, box[3] - box[1] - 26
+    sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), (50, 75, 100, 125, 150, 200))
+    k = 1000.0 / sc
+    ox = box[0] + 28 + lab_mm + (bw - (umax - umin) * k) / 2
+    oy = box[1] + 22
+
+    def P(u, z):
+        return (ox + (u - umin) * k, oy + (z - zmin) * k)
+
+    def rect(u0, z0, u1, z1, layer="cut", w=0.35, fill=None):
+        pts = [P(u0, z0), P(u1, z0), P(u1, z1), P(u0, z1)]
+        if fill is not None:
+            sh.fill(pts, "hatch", fill)
+        sh.poly(pts, layer, w)
+    # ground and earth hatch
+    gl = -0.30
+    sh.line(P(umin, gl), P(umax, gl), "cut", 0.5)
+    for i in range(int((umax - umin) / 0.6)):
+        u = umin + 0.3 + i * 0.6
+        sh.line(P(u, gl), P(u - 0.25, gl - 0.25), "hatch", 0.13)
+    # footings, stumps on the cut line (within half a footing)
+    for ft in E["footings"]:
+        spec = lib.get(ft["mark"], {})
+        w_ = float(spec.get("w", 1.0))
+        if abs(C(ft["x"], ft["y"]) - at) > w_ / 2 + 1e-6:
+            continue
+        u = U(ft["x"], ft["y"])
+        rect(u - w_ / 2, ft["z0"], u + w_ / 2, ft["z1"], fill=0.75)
+        rect(u - w_ / 2 - 0.05, ft["z0"] - 0.10, u + w_ / 2 + 0.05, ft["z0"], "hatch", 0.13)
+    for st in E["stumps"]:
+        if abs(C(st["x"], st["y"]) - at) > 0.6:
+            continue
+        b_ = float(lib.get(st["mark"], {}).get("b", 0.2))
+        u = U(st["x"], st["y"])
+        rect(u - b_ / 2, st["z0"], u + b_ / 2, st["z1"] - 0.4, "cut", 0.3)
+    # slabs crossed by the plane
+    for sl in E["slabs"]:
+        rm = sl["room"]
+        lo, hi = (rm["x"], rm["x"] + rm["w"]) if axis == "x" else (rm["y"], rm["y"] + rm["d"])
+        if not (lo - 1e-6 <= at <= hi + 1e-6):
+            continue
+        a, b = (rm["y"], rm["y"] + rm["d"]) if axis == "x" else (rm["x"], rm["x"] + rm["w"])
+        t = float(lib.get(sl["mark"], {}).get("t", 0.1))
+        top = sl["z"] - sl.get("drop", 0.0)
+        rect(float(a), top - t, float(b), top, fill=0.70)
+    # beams cut (running across the plane) and beams beyond (along it)
+    for bm in E["beams"]:
+        (x0_, y0_), (x1_, y1_) = bm["p0"], bm["p1"]
+        spec = lib.get(bm["mark"], {})
+        b_, h_ = float(spec.get("b", 0.2)), float(spec.get("h", 0.4))
+        if axis == "x":
+            cross = abs(y0_ - y1_) < 1e-6 and min(x0_, x1_) - 1e-6 <= at <= max(x0_, x1_) + 1e-6
+        else:
+            cross = abs(x0_ - x1_) < 1e-6 and min(y0_, y1_) - 1e-6 <= at <= max(y0_, y1_) + 1e-6
+        if cross:
+            u = U(x0_, y0_)
+            rect(u - b_ / 2, bm["z"] - h_, u + b_ / 2, bm["z"], fill=0.70)
+    # columns beyond: the grid line just past the cut
+    beyond = [g for g in (xs if axis == "x" else ys) if g > at + 1e-6]
+    nxt = beyond[0] if beyond else None
+    if nxt is not None:
+        for c in E["columns"]:
+            if abs(C(c["x"], c["y"]) - nxt) > 1e-6:
+                continue
+            b_ = float(lib.get(c["mark"], {}).get("b", 0.2))
+            u = U(c["x"], c["y"])
+            rect(u - b_ / 2, c["z0"], u + b_ / 2, c["z1"] - 0.4, "hidden", 0.18)
+        for ft in E["footings"]:                 # footings beyond, dashed
+            if abs(C(ft["x"], ft["y"]) - nxt) > 1e-6:
+                continue
+            spec = lib.get(ft["mark"], {})
+            w_ = float(spec.get("w", 1.0))
+            u = U(ft["x"], ft["y"])
+            pts = [P(u - w_ / 2, ft["z0"]), P(u + w_ / 2, ft["z0"]),
+                   P(u + w_ / 2, ft["z1"]), P(u - w_ / 2, ft["z1"])]
+            sh.poly(pts, "hidden", 0.18, True, True)
+            sh.poly([P(u - 0.1, ft["z1"]), P(u + 0.1, ft["z1"]), P(u + 0.1, 0.0),
+                     P(u - 0.1, 0.0)], "hidden", 0.18, True, True)
+    # walls cut: masonry hatched between the plaster faces; an opening on
+    # the plane leaves the wall below the sill and above the head
+    for wl in E["walls"]:
+        (x0_, y0_), (x1_, y1_) = wl["p0"], wl["p1"]
+        if axis == "x":
+            cross = abs(y0_ - y1_) < 1e-6 and min(x0_, x1_) < at < max(x0_, x1_)
+        else:
+            cross = abs(x0_ - x1_) < 1e-6 and min(y0_, y1_) < at < max(y0_, y1_)
+        if not cross:
+            continue
+        sp = B.wall_spec(s, bool(wl["exterior"]))
+        off = B.wall_offset(E, wl)
+        ox_, oy_ = wl.get("out") or (0.0, 0.0)
+        u = U(x0_ + ox_ * off, y0_ + oy_ * off)
+        z0 = wl["floor"] * H
+        wh = H - float(lib[wl["beam"]]["h"])
+        segs = [(z0, z0 + wh)]
+        for op in wl["openings"]:
+            ow, oh, sill = B.opening_size(op, s)
+            oc = C(float(op["x"]), float(op["y"]))
+            if abs(oc - at) <= ow / 2:
+                lo_ = z0 + (0.0 if op.get("type") != "window" else sill)
+                segs = [(z0, lo_), (lo_ + oh, z0 + wh)]
+                # the frame in section
+                rect(u - 0.05, lo_, u + 0.05, lo_ + oh, "window", 0.25)
+                if op.get("type") == "window":
+                    sh.line(P(u, lo_), P(u, lo_ + oh), "window", 0.18)
+        T = sp["t"] / 2
+        for a_, b_ in segs:
+            if b_ - a_ < 0.01:
+                continue
+            rect(u - T, a_, u + T, b_, "cut", 0.5, 0.88)
+            for d_ in (-T - sp["pi"], T + sp["po"]):
+                sh.line(P(u + d_, a_), P(u + d_, b_), "cut", 0.18)
+    # rooms crossed: name, the doors / windows on the far wall, the ceiling
+    for sl in E["slabs"]:
+        rm, kf = sl["room"], sl["floor"]
+        lo, hi = (rm["x"], rm["x"] + rm["w"]) if axis == "x" else (rm["y"], rm["y"] + rm["d"])
+        if not (lo < at < hi):
+            continue
+        a, b = (float(rm["y"]), float(rm["y"]) + float(rm["d"])) if axis == "x" else \
+            (float(rm["x"]), float(rm["x"]) + float(rm["w"]))
+        z = kf * H
+        far = float(hi)
+        for el in E["openings"]:
+            if el["floor"] != kf:
+                continue
+            ox_, oy_ = float(el["op"]["x"]), float(el["op"]["y"])
+            if abs(C(ox_, oy_) - far) > 0.06 or not (a < U(ox_, oy_) < b):
+                continue
+            uc = U(ox_, oy_)
+            lo_ = z + (el["sill"] if el["type"] == "window" else 0.0)
+            rect(uc - el["w"] / 2, lo_, uc + el["w"] / 2, lo_ + el["h"],
+                 "window" if el["type"] == "window" else "door", 0.18)
+            if el["type"] == "window":
+                sh.line(P(uc, lo_), P(uc, lo_ + el["h"]), "window", 0.13)
+        zc = B.ceiling_z(E, kf)
+        if B.ceiling_type(s, rm) != "none":
+            x0r, y0r, x1r, y1r = B.room_inner(E, rm, kf)
+            ua, ub = (y0r, y1r) if axis == "x" else (x0r, x1r)
+            rect(ua, zc - 0.009, ub, zc, "cut", 0.25)
+            sh.text(P((ua + ub) / 2, zc - 0.25), f"ฝ้า +{zc - z:.2f}", 1.9, "center", "dim")
+        sh.text(P((a + b) / 2, z + 1.25), rm.get("name") or "ห้อง", 2.6, "center", "text", True)
+        if B.is_wet(rm):
+            sh.text(P((a + b) / 2, z + 0.95), f"พื้นต่ำ {float(s.get('wet_drop') or 0) * 100:.0f} ซม.",
+                    1.8, "center", "dim")
+    # roof: the skin cut, the frame beyond (rafters, ties, posts), the
+    # purlins and the wall plates cut
+    if L:
+        for poly in L["skin"]:
+            seg = _cut_poly(poly, axis, at)
+            if seg:
+                (ua, za), (ub, zb) = seg
+                sh.line(P(ua, za + 0.10), P(ub, zb + 0.10), "roof", 0.7)
+                sh.line(P(ua, za), P(ub, zb), "roof", 0.25)
+        depth = 1.25
+        for key, lay, w_ in (("rafter", "roof", 0.18), ("tie", "struct", 0.25),
+                             ("rbeam", "struct", 0.25), ("post", "struct", 0.25),
+                             ("ridge", "struct", 0.25), ("hip", "roof", 0.18)):
+            for a_, b_ in L.get(key) or []:
+                ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
+                if not (at - 1e-6 <= min(ca, cb) and max(ca, cb) <= at + depth):
+                    continue
+                if abs(ca - cb) > 1e-6 and key in ("rafter", "tie", "rbeam", "ridge"):
+                    continue                         # runs across: cut, below
+                sh.line(P(U(a_[0], a_[1]), a_[2]), P(U(b_[0], b_[1]), b_[2]), lay, w_)
+        for key in ("tie", "rbeam", "ridge", "plate"):
+            for a_, b_ in L.get(key) or []:
+                ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
+                if min(ca, cb) - 1e-6 <= at <= max(ca, cb) + 1e-6 and abs(ca - cb) > 1e-6:
+                    u = U(a_[0], a_[1])
+                    rect(u - 0.03, a_[2] - 0.15, u + 0.03, a_[2], "struct", 0.25, 0.5)
+        for pl in L.get("purlin") or []:
+            a_, b_ = pl["path"][0], pl["path"][-1]
+            ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
+            if min(ca, cb) - 1e-6 <= at <= max(ca, cb) + 1e-6 and abs(ca - cb) > 1e-6:
+                u = U(a_[0], a_[1])
+                rect(u - 0.022, a_[2], u + 0.022, a_[2] + 0.075, "struct", 0.13)
+        for e_ in L.get("eave") or []:
+            a_, b_ = e_
+            ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
+            if min(ca, cb) - 1e-6 <= at <= max(ca, cb) + 1e-6:
+                u = U(a_[0], a_[1])
+                rect(u - 0.0125, a_[2] - 0.20, u + 0.0125, a_[2], "cut", 0.35, 0.6)
+    # levels on the left
+    xl = umin + 0.2
+    marks = [(gl, "ระดับดินเดิม"), (0.0, "ระดับพื้นชั้น 1")]
+    for f in range(n):
+        marks.append((B.ceiling_z(E, f), f"ระดับฝ้าชั้น {f + 1}"))
+        if f > 0:
+            marks.append((f * H, f"ระดับพื้นชั้น {f + 1}"))
+    marks.append((n * H, "ระดับหลังคาน"))
+    if L:
+        marks.append((ridge, "ระดับสันหลังคา"))
+    _levels(sh, P, xl, marks, left=True)
+    # vertical dimensions on the right
+    xr = P(umax - 0.3, 0)[0]
+    zs = sorted({0.0} | {B.ceiling_z(E, f) for f in range(n)} | {f * H for f in range(n + 1)}
+                | ({ridge} if L else set()))
+    for za, zb in zip(zs, zs[1:]):
+        pa, pb = (xr, P(0, za)[1]), (xr, P(0, zb)[1])
+        sh.line(pa, pb, "dim", 0.13)
+        for q in (pa, pb):
+            sh.line((q[0] - 1, q[1] - 1), (q[0] + 1, q[1] + 1), "dim", 0.18)
+        sh.text((xr + 1.5, (pa[1] + pb[1]) / 2 - 1), f"{zb - za:.2f}", 2.0, "left", "dim")
+    # grid: dimension chain and bubbles below
+    yb = P(0, zmin + 0.35)[1]
+    for g0, g1 in zip(grid_u, grid_u[1:]):
+        a_, b_ = P(g0, 0)[0], P(g1, 0)[0]
+        sh.line((a_, yb + 6), (b_, yb + 6), "dim", 0.13)
+        for q in (a_, b_):
+            sh.line((q - 1, yb + 5), (q + 1, yb + 7), "dim", 0.18)
+        sh.text(((a_ + b_) / 2, yb + 7), f"{g1 - g0:.2f}", 2.0, "center", "dim")
+    names = [str(i + 1) for i in range(len(xs))] if axis == "y" else \
+        [axis_name(i) for i in range(len(ys))]
+    for g, nm in zip(grid_u, names):
+        q = P(g, 0)[0]
+        sh.line((q, yb + 3.5), (q, P(0, gl)[1]), "grid", 0.13, True)
+        sh.circle((q, yb), 3.0, "grid", 0.25)
+        sh.text((q, yb - 1.2), nm, 2.6, "center", "grid")
+    return sc
+
+
+def a_section_sheet(sh, E, L, k):
+    """Floor ``k``'s pair of sections, stacked as in the standard sets."""
+    x0, y0, x1, y1 = drawing_area()
+    cuts = section_cuts(E, k)
+    midy = (y0 + y1) / 2
+    scales = []
+    for i, cut in enumerate(cuts):
+        box = (x0, midy + 2, x1, y1) if i == 0 else (x0, y0, x1, midy - 2)
+        sc = section_detail(sh, E, L, cut, box)
+        scales.append(sc)
+        note = f" (ตัดผ่าน{cut[3]})" if i == 0 else ""
+        caption(sh, (x0 + 60, box[1] + 8), f"รูปตัด {cut[2]}{note}", f"1:{sc}")
+    if len(cuts) == 2:
+        sh.line((x0, midy), (x1, midy), "frame", 0.25)
+    sh.scale = f"1:{max(scales)}" if scales else "-"
+    return max(scales) if scales else 100
+
+
+def section_marks(sh, v, E, k):
+    """The cut lines of floor ``k``'s sections on its plan, with arrows."""
+    xs, ys = grids(E)
+    if not xs:
+        return
+    for axis, at, name, _t in section_cuts(E, k):
+        tag = name.split("-")[0]
+        if axis == "x":
+            a, b = v(at, ys[0] - 2.2), v(at, ys[-1] + 2.2)
+            arrow = (1.0, 0.0)
+        else:
+            a, b = v(xs[0] - 2.2, at), v(xs[-1] + 2.2, at)
+            arrow = (0.0, 1.0)
+        sh.line(a, b, "grid", 0.35, True)
+        for q in (a, b):
+            sh.line(q, (q[0] + arrow[0] * 6, q[1] + arrow[1] * 6), "text", 0.5)
+            sh.poly([(q[0] + arrow[0] * 6, q[1] + arrow[1] * 6),
+                     (q[0] + arrow[0] * 3.5 + arrow[1] * 1.5, q[1] + arrow[1] * 3.5 + arrow[0] * 1.5),
+                     (q[0] + arrow[0] * 3.5 - arrow[1] * 1.5, q[1] + arrow[1] * 3.5 - arrow[0] * 1.5)],
+                    "text", 0.35)
+            sh.circle(q, 3.2, "text", 0.35)
+            sh.text((q[0], q[1] - 1.2), tag, 2.8, "center", "text", True)
 
 
 def a_schedules(sh, E, codes, fcodes):
@@ -1656,13 +2047,13 @@ def m_plan(sh, E, k, sheets):
 # The set
 # ---------------------------------------------------------------------------
 
-GROUP_TH = {"A": "แบบสถาปัตยกรรม", "S": "แบบวิศวกรรมโครงสร้าง",
+GROUP_TH = {"G": "ปกและสารบัญ", "A": "แบบสถาปัตยกรรม", "S": "แบบวิศวกรรมโครงสร้าง",
             "SN": "แบบวิศวกรรมสุขาภิบาล", "EE": "แบบวิศวกรรมไฟฟ้า",
             "M": "แบบวิศวกรรมเครื่องกล", "BOQ": "บัญชีปริมาณงาน (ปร.1)"}
 
 
 def build_set(data, info=None,
-              groups=("A", "S", "SN", "EE", "M", "BOQ")) -> list:
+              groups=("G", "A", "S", "SN", "EE", "M", "BOQ")) -> list:
     """Every sheet of the drawing set, numbered, with its title block."""
     info = dict(info or {})
     E = B.elements(data)
@@ -1702,7 +2093,10 @@ def build_set(data, info=None,
             lambda sh, _a: a_elevations(sh, E, L, [(0, -1), (1, 0)]))
         add("A", "รูปด้านหลัง รูปด้านซ้าย",
             lambda sh, _a: a_elevations(sh, E, L, [(0, 1), (-1, 0)]))
-        add("A", "รูปตัด ก-ก รูปตัด ข-ข", lambda sh, _a: a_sections(sh, E, L))
+        for k in floors:
+            cuts = section_cuts(E, k)
+            title = " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด"
+            add("A", title, lambda sh, _a, k=k: _set_scale(sh, a_section_sheet(sh, E, L, k)))
         if E["openings"]:
             add("A", "ตารางประตู-หน้าต่าง วัสดุตกแต่ง",
                 lambda sh, _a: a_schedules(sh, E, codes, fcodes), "1:50")
@@ -1745,9 +2139,138 @@ def build_set(data, info=None,
     for s, fn in plan:
         fn(s, sheets)
         frame(s, info, len(sheets))
-    if "BOQ" in groups:
-        sheets += build_boq(data, info)
-    return sheets
+    boq = build_boq(data, info) if "BOQ" in groups else []
+    front = []
+    if "G" in groups and (sheets or boq):
+        cover = Sheet("ปก", "ปกแบบ", "-", "G")
+        cover.number = 0
+        g_cover(cover, E, info, sheets, boq)
+        toc = Sheet("สารบัญ", "สารบัญแบบ", "-", "G")
+        toc.number = 0
+        g_contents(toc, E, info, sheets, boq)
+        front = [cover, toc]
+    return front + sheets + boq
+
+
+def build_sections(data, info=None) -> list:
+    """The building sections alone: one sheet per floor (X and Y, the
+    first through a bathroom), framed and numbered."""
+    info = dict(info or {})
+    E = B.elements(data)
+    if not E["floors"] or not E["footings"]:
+        return []
+    L = B.roof_lines(data)
+    out = []
+    for k in range(E["n"]):
+        cuts = section_cuts(E, k)
+        sh = Sheet(f"A-S{k + 1}", " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด",
+                   "-", "A")
+        out.append(sh)
+    for i, sh in enumerate(out, 1):
+        sh.number = i
+        _set_scale(sh, a_section_sheet(sh, E, L, i - 1))
+        frame(sh, info, len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Front matter: the cover and the contents (สารบัญ), as the standard sets
+# open (แบบบ้านเพื่อประชาชน / บ้านสานฝัน …) — no emblem, the owner's own set
+# ---------------------------------------------------------------------------
+
+def g_cover(sh, E, info, sheets, boq):
+    W, H_ = PAPER
+    m = MARGIN
+    sh.rect(m, m, W - m, H_ - m, "frame", 0.7)
+    sh.rect(m + 3, m + 3, W - m - 3, H_ - m - 3, "frame", 0.25)
+    cx = W / 2
+    sh.text((cx, H_ - 48), "แบบก่อสร้าง", 9.0, "center", "title", True)
+    proj = info.get("project") or "อาคาร"
+    for i, line in enumerate(_wrap(proj, 40)[:2]):
+        sh.text((cx, H_ - 72 - i * 12), line, 10.0, "center", "title", True)
+    y = H_ - 104
+    for line in info.get("summary") or []:
+        sh.text((cx, y), line, 4.0, "center", "text")
+        y -= 7
+    if info.get("location"):
+        sh.text((cx, y - 3), f"สถานที่ก่อสร้าง {info['location']}", 4.2, "center", "text")
+        y -= 10
+    if info.get("owner"):
+        sh.text((cx, y - 3), f"เจ้าของ {info['owner']}", 4.2, "center", "text")
+        y -= 10
+    groups = []
+    for g, th in GROUP_TH.items():
+        n = sum(1 for s in sheets if s.group == g) if g != "BOQ" else len(boq)
+        if n and g != "G":
+            groups.append(f"{th} {n} แผ่น")
+    y -= 6
+    for i, line in enumerate(groups):
+        sh.text((cx, y - i * 6.5), "• " + line, 3.4, "center", "text")
+    yb = m + 42
+    sh.line((cx - 45, yb + 8), (cx + 45, yb + 8), "title", 0.13, True)
+    sh.text((cx, yb + 3), f"({NAME})", 4.2, "center", "title", True)
+    sh.text((cx, yb - 3), ROLE, 3.4, "center", "title")
+    sh.text((cx, m + 18), f"{info.get('office') or 'WANICNSURVEY'} · "
+                          f"{info.get('date') or thai_date()}", 3.0, "center", "title")
+    sh.text((cx, m + 10), f"จัดทำด้วย WANICNSURVEY · {FULL}", 2.2, "center", "title")
+
+
+def g_contents(sh, E, info, sheets, boq):
+    """สารบัญ: every family with its sheet range and first page, the bill
+    of quantities after them — like the contents page of the standard
+    house sets."""
+    W, H_ = PAPER
+    m = MARGIN
+    sh.rect(m, m, W - m, H_ - m, "frame", 0.5)
+    cx = W / 2
+    sh.text((cx, H_ - 30), "สารบัญ", 6.0, "center", "title", True)
+    proj = info.get("project") or "อาคาร"
+    sh.text((cx, H_ - 42), proj, 4.6, "center", "title", True)
+    sub = f"อาคาร {E['n']} ชั้น"
+    sh.fill([(cx - 50, H_ - 57), (cx + 50, H_ - 57), (cx + 50, H_ - 49), (cx - 50, H_ - 49)],
+            "hatch", 0.85)
+    sh.text((cx, H_ - 55), sub, 3.6, "center", "title", True)
+    cols = [(m + 30, m + 175), (cx + 15, W - m - 30)]
+    left = [g for g in ("A", "S", "SN", "EE", "M") if any(s.group == g for s in sheets)]
+    y = H_ - 78
+    x0, x1 = cols[0]
+    sh.text((x1, y + 8), "หน้า", 3.4, "right", "title", True)
+    for g in left:
+        mine = [s for s in sheets if s.group == g]
+        sh.text((x0, y), f"{GROUP_TH[g]}", 4.0, "left", "title", True)
+        y -= 8
+        rng = f"แผ่นที่ {mine[0].code} ถึงแผ่นที่ {mine[-1].code}" if len(mine) > 1 \
+            else f"แผ่นที่ {mine[0].code}"
+        sh.circle((x0 + 6, y + 1), 0.9, "text", 0.9)
+        sh.text((x0 + 10, y), rng, 3.2, "left", "text")
+        sh.line((x0 + 10 + len(rng) * 1.7, y + 0.2), (x1 - 12, y + 0.2), "dim", 0.1, True)
+        sh.text((x1, y), str(mine[0].number), 3.2, "right", "text")
+        y -= 13
+    x0, x1 = cols[1]
+    y = H_ - 78
+    sh.text((x1, y + 8), "หน้า", 3.4, "right", "title", True)
+    if boq:
+        first = len(sheets) + 1
+        sh.text((x0, y), "บัญชีแสดงปริมาณวัสดุและแรงงาน (BOQ)", 4.0, "left", "title", True)
+        y -= 8
+        rng = f"แบบ ปร.1 จำนวน {len(boq)} แผ่น"
+        sh.circle((x0 + 6, y + 1), 0.9, "text", 0.9)
+        sh.text((x0 + 10, y), rng, 3.2, "left", "text")
+        sh.line((x0 + 10 + len(rng) * 1.7, y + 0.2), (x1 - 12, y + 0.2), "dim", 0.1, True)
+        sh.text((x1, y), str(first), 3.2, "right", "text")
+        y -= 13
+    sh.text((x0, y), "รายการประกอบแบบและสัญลักษณ์", 4.0, "left", "title", True)
+    y -= 8
+    for g in left:
+        idx = next((s for s in sheets if s.group == g), None)
+        if idx is None:
+            continue
+        sh.circle((x0 + 6, y + 1), 0.9, "text", 0.9)
+        sh.text((x0 + 10, y), f"{GROUP_TH[g]} — แผ่นที่ {idx.code}", 3.0, "left", "text")
+        sh.text((x1, y), str(idx.number), 3.0, "right", "text")
+        y -= 7
+    sh.text((cx, m + 14), f"({NAME}) {ROLE}", 2.8, "center", "title")
+    sh.text((cx, m + 7), f"จัดทำด้วย WANICNSURVEY · {FULL}", 2.0, "center", "title")
 
 
 # ---------------------------------------------------------------------------

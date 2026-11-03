@@ -156,18 +156,25 @@ def test_tie_beam_under_every_king_post_and_wall_plates():
     d = _data()
     lines = B.roof_lines(d)
     assert lines["plate_h"] == 0.15 and lines["plate"] and lines["tie"]
-    assert len(lines["tie"]) > len(lines["post"])
 
-    def under(a, t, axis):
+    def on(a, t, axis, dz=0.0):
         t0, t1 = t
-        if abs(t0[2] - a[2]) > 1e-9 or abs(t0[1 - axis] - t1[1 - axis]) > 1e-9:
+        if abs(t0[2] + dz - a[2]) > 1e-6 or abs(t0[1 - axis] - t1[1 - axis]) > 1e-9:
             return False
         lo, hi = sorted((t0[axis], t1[axis]))
         return abs(t0[1 - axis] - a[1 - axis]) < 1e-6 and lo - 1e-6 <= a[axis] <= hi + 1e-6
+    assert lines["rbeam"]
+    db = 0.15
     for a, _b in lines["post"]:
-        # every post stands on a tie each way (x and y), wall to wall
-        assert any(under(a, t, 0) for t in lines["tie"]), a
-        assert any(under(a, t, 1) for t in lines["tie"]), a
+        # every post stands on the ridge beam (คานรับดั้ง), which sits on a
+        # tie (ขื่อ) running across under the post: held both ways, and the
+        # tie and the beam never cut through each other
+        beam = [t for t in lines["rbeam"] if on(a, t, 0) or on(a, t, 1)]
+        tie = [t for t in lines["tie"] if on(a, t, 0, db) or on(a, t, 1, db)]
+        assert beam and tie, a
+        bdir = 0 if abs(beam[0][0][1] - beam[0][1][1]) < 1e-9 else 1
+        tdir = 0 if abs(tie[0][0][1] - tie[0][1][1]) < 1e-9 else 1
+        assert bdir != tdir
     z0 = lines["z0"]
     assert all(abs(p[2] - (z0 + 0.15)) < 1e-9 for seg in lines["plate"] for p in seg)
     groups, count = B.roof_members(d)
@@ -385,3 +392,72 @@ def test_column_heads_ceilings_trims_and_services():
     assert math.isclose(top, 3.0 - 0.4 - 0.009 - 0.15, abs_tol=1e-6)
     d["settings"]["mep"] = False
     assert not any(ln["cat"] in (12, 13) for ln in Q.compute(d)["lines"])
+
+
+def test_purlins_even_long_and_facing_the_ridge():
+    d = _data()
+    d["settings"].update(pitch=35, overhang=1.0, purlin_sp=0.32, rafter_sp=1.0)
+    lines = B.roof_lines(d)
+    # every purlin a single straight piece; none share a line with another
+    segs = [pl["path"] for pl in lines["purlin"]]
+    assert len(B.merge_segments(segs)) == len(segs)
+    # evenly spaced, never wider than the set 0.32 m along the slope
+    zs = sorted({round(p[0][2], 4) for p in segs})
+    steps = [b - a for a, b in zip(zs, zs[1:])]
+    sin = math.sin(math.radians(35))
+    assert max(steps) / sin <= 0.32 + 1e-6
+    assert max(steps) - min(steps) < 0.02
+    # rafters evenly spaced within 1.00 m (a span that does not divide
+    # is shared out closer)
+    s = B.settings_of(d)
+    assert B.roof_spacing(s) == (1.0, 0.32)
+    # the C of every purlin opens up the slope, towards the ridge
+    for pl in lines["purlin"]:
+        a, b = B.purlin_facing(pl["path"], lines["skin"])
+        up = B.uphill(tuple((a[i] + b[i]) / 2 for i in range(3)), lines["skin"])
+        assert up is not None
+        assert (-(b[1] - a[1])) * up[0] + (b[0] - a[0]) * up[1] > 0
+    s["purlin_face"] = "eave"
+    a, b = B.purlin_facing(segs[0], lines["skin"], "eave")
+    up = B.uphill(tuple((a[i] + b[i]) / 2 for i in range(3)), lines["skin"])
+    assert (-(b[1] - a[1])) * up[0] + (b[0] - a[0]) * up[1] < 0
+
+
+def test_services_where_they_are_installed():
+    d = _data()
+    d["floors"][0]["openings"] = [{"id": "o1", "type": "door", "style": "D1", "x": 2.4, "y": 0.0}]
+    d["floors"][0]["fixtures"] = [{"id": "f1", "type": "WC1", "x": 1.0, "y": 6.0}]
+    groups, count = B.structure_members(d)
+    for k in ("outlet", "panel", "ground_rod", "fan", "pipe_supply", "pipe_drain",
+              "septic", "grease", "meter", "walkway", "drain_ring", "sign"):
+        assert count.get(k), k
+    panel = next(g for g in groups if _kind(g) == "panel")
+    assert math.isclose(_box(panel)[2], 1.50, abs_tol=1e-6)        # ขอบล่าง 1.50 ม.
+    sw = next(g for g in groups if _kind(g) == "outlet" and "ห้องนอน" in g.name)
+    zs = sorted({round(v.position.z(), 2) for v in sw.mesh.vertices})
+    assert 1.14 in zs or 1.26 in zs                                   # สวิตช์ 1.20 ม.
+    tank = next(g for g in groups if _kind(g) == "septic")
+    assert _box(tank)[2] < -1.0                                       # ฝังใต้ดิน
+    cats = {CG.kind_category(_kind(g)) for g in groups}
+    assert {11, 12, 13, 14, 15} <= cats
+
+
+def test_building_sections_and_the_front_matter():
+    from core import wanic_drawings as D
+    d = _data()
+    E = B.elements(d)
+    cuts = D.section_cuts(E, 0)
+    assert len(cuts) == 2 and {c[0] for c in cuts} == {"x", "y"}
+    assert cuts[0][3] == "ห้องน้ำ" and cuts[0][2] == "ก-ก" and cuts[1][2] == "ข-ข"
+    S = D.build_sections(d, {"project": "บ้านทดสอบ"})
+    assert len(S) == E["n"] and S[0].title == "รูปตัด ก-ก รูปตัด ข-ข"
+    t = " ".join(S[0].texts())
+    for want in ("รูปตัด ก-ก (ตัดผ่านห้องน้ำ)", "รูปตัด ข-ข", "ระดับพื้นชั้น 1",
+                 "ระดับฝ้าชั้น 1", "ระดับสันหลังคา", "ห้องน้ำ", "ฝ้า +2.60", "ระดับดินเดิม"):
+        assert want in t, want
+    full = D.build_set(d, {"project": "บ้านทดสอบ"})
+    assert [s.code for s in full[:2]] == ["ปก", "สารบัญ"]
+    toc = " ".join(full[1].texts())
+    assert "สารบัญ" in toc and "แผ่นที่ A-01 ถึงแผ่นที่" in toc and "บัญชีแสดงปริมาณวัสดุ" in toc
+    plan = next(s for s in full if s.title == "แปลนพื้นชั้น 1")
+    assert "ก" in plan.texts() and "ข" in plan.texts()                # section marks

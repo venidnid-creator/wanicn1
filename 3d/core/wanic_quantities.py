@@ -717,7 +717,8 @@ def compute(data) -> dict:
         for pl in lines["purlin"]:
             per[s["purlin"]] = per.get(s["purlin"], 0.0) + \
                 P.path_length(pl["path"], pl["closed"])
-        for key, kind in (("wallplate", "plate"), ("tiebeam", "tie")):   # อะเส ขื่อ
+        for key, kind in (("wallplate", "plate"), ("tiebeam", "tie"),
+                          ("tiebeam", "rbeam")):          # อะเส ขื่อ คานรับดั้ง
             for path in lines.get(kind) or []:
                 per[s[key]] = per.get(s[key], 0.0) + P.path_length(path)
         paint_a = 0.0

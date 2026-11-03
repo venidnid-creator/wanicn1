@@ -53,7 +53,7 @@ DEFAULT_SETTINGS = {
     "rb_b": 0.2, "rb_h": 0.4, "slab_t": 0.10,
     "walls": True, "wall_t": 0.10,
     "roof": "hip", "pitch": 30.0, "overhang": 0.6,
-    "rafter_sp": 1.0, "purlin_sp": 0.8,
+    "rafter_sp": 1.0, "purlin_sp": 0.32,
     "ridge": "C 150×65×20×3.2", "hip": "C 150×65×20×3.2",
     "rafter": "C 150×65×20×3.2", "purlin": "C 75×45×15×2.3",
     "post": "C 100×50×20×2.3", "skin": True, "roof_mode": "plan",
@@ -90,7 +90,9 @@ DEFAULT_SETTINGS = {
     # CPAC 32 ซม.), rafters at most the spacing the tile weight allows, a
     # steel wall plate (อะเส) on the ring beams and a tie beam (ขื่อ/คานรับดั้ง)
     # under every king post (ดั้ง)
-    "purlin_auto": True, "rafter_auto": True,
+    # the spacings set on the panel are the most allowed: a span that does
+    # not divide is shared out evenly a little closer (1.00 → 0.98 …)
+    "purlin_auto": False, "rafter_auto": False, "purlin_face": "ridge",
     "wall_plate": True, "wallplate": "C 150×65×20×3.2",
     "tie_beams": True, "tiebeam": "C 150×65×20×3.2",
     # column-head plate (เพลทหัวเสา) for the wall plate / tie beams:
@@ -1594,7 +1596,7 @@ def plan_rectangles(rooms):
     return rects
 
 
-def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
+def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0):
     """The frame lines of one rectangular roof (see :func:`roof_lines`).
 
     A gable end that runs into another roof (``others``: their eave boxes)
@@ -1623,7 +1625,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
                    o[1] - 1e-6 <= py <= o[3] + 1e-6 for o in others)
 
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "eave": [], "barge": [], "tie": [], "tie2": []}
+           "skin": [], "eave": [], "barge": [], "tie": [], "rbeam": []}
     zr = h(half)
     yc = y0 + half
     if s["roof"] == "hip":
@@ -1661,7 +1663,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
             continue
         out["rafter"].append([P3(x, y0, h(0)), P3(x, y0 + reach, h(reach))])
         out["rafter"].append([P3(x, y1, h(0)), P3(x, y1 - reach, h(reach))])
-    cnt = max(int(math.floor(W / sp + 1e-9)), 1)
+    cnt = max(int(math.ceil(W / sp - 1e-9)), 1)
     for hipped, ex, sgn in ((h0, x0, 1), (h1, x1, -1)):
         if not hipped:                       # jack rafters on a hipped end
             continue
@@ -1681,14 +1683,21 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
     def purlin(p, q):
         if math.dist(p, q) > 0.05:
             out["purlin"].append({"closed": False, "path": [p, q]})
-    ds = []
-    while d < half - 0.05:
-        ds.append(d)
-        d += psp
-    # the top purlin close under the ridge (CPAC: แปตัวบนห่างสันไม่เกิน 4 ซม.
-    # ตามแนวราบ เพื่อรับครอบสัน)
+    # Purlins evenly spaced from the first (5 cm in from the fascia) to the
+    # top one (4 cm under the ridge — CPAC: แปตัวบนห่างสันไม่เกิน 4 ซม.):
+    # the set spacing is the most allowed, a span that does not divide is
+    # shared out a little closer (0.32 → 0.31 …). ``step`` comes from the
+    # widest roof part so the purlins of slopes that are one plane line up.
     top = half - 0.04
-    if ds and top - ds[-1] > 0.10:
+    step = purlin_step if purlin_step else psp
+    if not purlin_step:
+        n_ = max(int(math.ceil((top - d) / psp - 1e-9)), 1)
+        step = (top - d) / n_
+    ds = []
+    while d < top - 0.02:
+        ds.append(d)
+        d += step
+    if ds and top - ds[-1] > 0.02:
         ds.append(top)
     for d in ds:
         a0 = x0 + d if h0 else x0
@@ -1702,18 +1711,25 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0):
                 purlin(P3(a1, y0 + d, h(d)), P3(a1, y1 - d, h(d)))
     if zr - z0 > 0.1:
         # King posts (ดั้ง) at the ridge ends and on every column line under
-        # the ridge, each on a tie beam (ขื่อ) from wall to wall.
+        # the ridge. Each column line carries a tie (ขื่อ) from wall to wall;
+        # along the ridge a beam (คานรับดั้ง) sits ON the ties from the first
+        # post to the last, and the posts stand on it — tie and beam never
+        # cut through each other, and the posts are held both ways.
+        _f, prm_ = steel_lookup(s.get("tiebeam", s["ridge"]))
+        db = float(prm_.get("H", prm_.get("D", prm_.get("A", 150)))) / 1000.0
+        _f, prm_ = steel_lookup(s["ridge"])
+        dr = float(prm_.get("H", prm_.get("D", prm_.get("A", 150)))) / 1000.0
         px = {round(rx0, 4), round(rx1, 4)}
         for st in stations:
             if rx0 + 0.3 < st < rx1 - 0.3:
                 px.add(st)
+        beam = rx1 - rx0 > 0.3
+        zb = z0 + (db if beam else 0.0)
         for xx in sorted(px):
-            out["post"].append([P3(xx, yc, z0), P3(xx, yc, zr)])
+            out["post"].append([P3(xx, yc, zb), P3(xx, yc, max(zr - dr, zb + 0.1))])
             out["tie"].append([P3(xx, y0 + ov, z0), P3(xx, y1 - ov, z0)])
-        # and the other way: one tie along the ridge line from end wall to
-        # end wall under every post, so the posts are held both ways and
-        # the ceiling hangers have a line to hang from
-        out["tie2"].append([P3(x0 + ov, yc, z0), P3(x1 - ov, yc, z0)])
+        if beam:
+            out["rbeam"].append([P3(rx0, yc, zb), P3(rx1, yc, zb)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
     # Eave lines (เชิงชาย) and, on a gable end, the rakes (ปั้นลม).
@@ -1760,7 +1776,7 @@ def roof_lines(data):
         rects = plan_rectangles(top)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
            "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0,
-           "valley": 0.0, "valleys": [], "tie": [], "plate": []}
+           "valley": 0.0, "valleys": [], "tie": [], "plate": [], "rbeam": []}
     # The steel wall plate (อะเส) on the ring beams lifts the frame by its
     # depth: rafters bear on it, the tie beams sit level with it.
     ph = 0.0
@@ -1783,7 +1799,12 @@ def roof_lines(data):
     fam, prm = steel_lookup(s["rafter"])
     lift = float(prm.get("H", prm.get("D", prm.get("A", 0.0)))) / 1000.0
     cols = nodes(top)
-    parts = [_roof_rect(rect, z0, s, boxes[:i], cols, lift) for i, rect in
+    # one purlin step for the whole roof, from its widest part
+    _rsp, psp_ = roof_spacing(s)
+    psp_h = psp_ * math.cos(math.radians(float(s["pitch"])))
+    wide = max(min(b[2] - b[0], b[3] - b[1]) for b in boxes) / 2 - 0.04 - 0.05
+    pstep = wide / max(int(math.ceil(wide / psp_h - 1e-9)), 1) if wide > 0 else psp_h
+    parts = [_roof_rect(rect, z0, s, boxes[:i], cols, lift, pstep) for i, rect in
              enumerate(rects)]
     roofs = [RC.Roof((r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
                      part["skin"]) for r, part in zip(rects, parts)]
@@ -1793,7 +1814,7 @@ def roof_lines(data):
         if not many:
             for k in ("ridge", "hip", "rafter", "purlin", "post", "skin", "tie"):
                 out[k] += part[k]
-            out["tie"] += part["tie2"]
+            out["rbeam"] += part["rbeam"]
         else:
             # Trim what lies under a neighbouring roof (L / T plans); a
             # ridge or hip is kept only where it is still a crease of the
@@ -1812,7 +1833,7 @@ def roof_lines(data):
                 if not RC.hidden(b, i, roofs):
                     out["post"].append([a, b])
                     out["tie"].append(tie)
-            out["tie"] += part["tie2"]
+            out["rbeam"] += part["rbeam"]
             kept[i] = []
             for poly in part["skin"]:
                 kept[i] += RC.clip_facet(poly, i, roofs)
@@ -1830,6 +1851,7 @@ def roof_lines(data):
     out["ridge"] = merge_segments(out["ridge"])
     if not s.get("tie_beams"):
         out["tie"] = []
+        out["rbeam"] = []
     if many:
         out["valleys"] = RC.valley_lines(roofs)
         # a valley ends on the ridge / hip junction or the eave corner:
@@ -2068,6 +2090,56 @@ def mitre_planes(path, others):
     return planes
 
 
+def uphill(pt, skins, tol=1e-3):
+    """The plan direction up the roof slope at a point of the frame (on
+    the facet of ``skins`` that holds it), or ``None``."""
+    x, y, z = pt
+    for poly in skins:
+        if len(poly) < 3:
+            continue
+        inside = False
+        n = len(poly)
+        for i in range(n):
+            (x1, y1, _), (x2, y2, _) = poly[i][:3], poly[(i + 1) % n][:3]
+            if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+                inside = not inside
+        if not inside:
+            continue
+        a, b, c = poly[0], poly[1], poly[2]
+        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+        if abs(nz) < 1e-9:
+            continue
+        if nz < 0:
+            nx, ny, nz = -nx, -ny, -nz
+        zz = a[2] - (nx * (x - a[0]) + ny * (y - a[1])) / nz
+        if abs(zz - z) > tol + 0.02:
+            continue
+        L = math.hypot(nx, ny)
+        if L < 1e-9:
+            return None
+        return (-nx / L, -ny / L)
+    return None
+
+
+def purlin_facing(path, skins, face="ridge"):
+    """The purlin's path turned so its C opens up the slope, towards the
+    ridge (the usual way: ปากแปหันขึ้นทางอกไก่) — the section opens to the
+    left of the path, so the path runs with the ridge on its left."""
+    a, b = path[0], path[-1]
+    mid = tuple((a[i] + b[i]) / 2 for i in range(3))
+    up = uphill(mid, skins)
+    if up is None:
+        return path
+    if face == "eave":
+        up = (-up[0], -up[1])
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    if -dy * up[0] + dx * up[1] < 0:
+        return [b, a]
+    return path
+
+
 def roof_members(data) -> tuple[list, dict]:
     s = settings_of(data)
     lines = roof_lines(data)
@@ -2114,11 +2186,13 @@ def roof_members(data) -> tuple[list, dict]:
     for kind, key, label, why in (
             ("wallplate", "wallplate", "อะเส",
              "อะเสเหล็กบนคานรัดรอบ รับจันทัน (ยึดเพลทฝังในคาน ค.ส.ล.)"),
-            ("tiebeam", "tiebeam", "ขื่อ (คานรับดั้ง)",
-             "ขื่อเหล็กพาดจากอะเสถึงอะเส รับดั้ง ถ่ายน้ำหนักลงคาน/เสา")):
+            ("tiebeam", "tiebeam", "ขื่อ",
+             "ขื่อเหล็กพาดจากอะเสถึงอะเส ตามแนวเสา รับคานรับดั้ง"),
+            ("rbeam", "tiebeam", "คานรับดั้ง",
+             "คานรับดั้งวางบนขื่อตามแนวอกไก่ ดั้งทุกตัวตั้งบนคานนี้")):
         fam, params = steel_lookup(s[key])
         kgm = P.weight_per_m(fam, params)
-        for path in lines["plate" if kind == "wallplate" else "tie"]:
+        for path in lines.get({"wallplate": "plate", "tiebeam": "tie"}.get(kind, kind)) or []:
             L = math.dist(path[0], path[-1])
             add(_member("roof", kind, label, fam, params, path, anchor="tc",
                         ifc="IfcMember", key=f"{label} {s[key]}",
@@ -2135,6 +2209,9 @@ def roof_members(data) -> tuple[list, dict]:
     kgm = P.weight_per_m(fam, params)
     for pl in lines["purlin"]:
         L = P.path_length(pl["path"], pl["closed"])
+        if not pl["closed"] and len(pl["path"]) == 2:
+            pl = dict(pl, path=purlin_facing(pl["path"], lines["skin"],
+                                             s.get("purlin_face", "ridge")))
         g = _member("roof", "purlin", "แป", fam, params, pl["path"],
                     anchor="bc", ifc="IfcMember", closed=pl["closed"],
                     key=f"แป {s['purlin']}",
@@ -2788,13 +2865,15 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("wallplate", "อะเส"),
-           ("tiebeam", "ขื่อรับดั้ง"), ("headplate", "เพลทหัวเสา"),
+           ("tiebeam", "ขื่อ"), ("rbeam", "คานรับดั้ง"), ("headplate", "เพลทหัวเสา"),
            ("fascia", "เชิงชาย"),
            ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
            ("band", "เสาเอ็น-ทับหลัง"), ("plaster", "ผิวฉาบปูน"),
            ("fixture", "สุขภัณฑ์"), ("ceiling", "ฝ้าเพดาน"),
            ("ceiling_frame", "โครงคร่าวฝ้า"), ("skirting", "บัวเชิงผนัง"),
            ("cornice", "บัวฝ้า"), ("ac", "เครื่องปรับอากาศ"), ("light", "ดวงโคม"),
+           ("outlet", "สวิตช์/เต้ารับ"), ("panel", "ตู้ไฟ"), ("pipe_supply", "ท่อประปา"),
+           ("pipe_drain", "ท่อน้ำทิ้ง"), ("septic", "ถังบำบัด"), ("walkway", "ทางเท้า"),
            ("tiles", "กระเบื้อง"),
            ("skin", "แผ่นหลังคา")]
 
