@@ -112,8 +112,10 @@ def test_open_shell_reports_no_volume():
     data["rates"] = [T.new_rate(by="layer", value="Layer 0", qty="area",
                                 mat=10)]
     r = T.compute(items, data)
-    # Government method: Factor F (1.0 here) already holds VAT.
-    assert math.isclose(r["grand"], 6.0 * 10, rel_tol=1e-6)
+    # Government method: Factor F (from the ว 481 table for this tiny job)
+    # already holds VAT.
+    assert math.isclose(r["grand"], 6.0 * 10 * r["factor_f"], rel_tol=1e-6)
+    assert r["factor_f"] == 1.3073
     data["settings"] = dict(data["settings"], method="private")
     r = T.compute(items, data)
     assert math.isclose(r["grand"], 6.0 * 10 * 1.07, rel_tol=1e-6)

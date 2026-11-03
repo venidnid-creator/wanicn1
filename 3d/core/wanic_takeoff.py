@@ -91,10 +91,44 @@ def default_data() -> dict:
     return {"rates": [], "settings": dict(DEFAULT_SETTINGS)}
 
 
+#: Factor F conditions (ว 481): the table's kind of work, a VAT-exempt
+#: loan's share of the work (%), the rainy zone (road / irrigation).
+FF_DEFAULTS = {"ff_kind": "building", "loan_share": 0.0, "rain": 0}
+
+
 def settings_of(data) -> dict:
+    """The settings with defaults. ``ff_auto`` (Factor F looked up from the
+    ว 481 tables by the project's ค่างานต้นทุน) is on unless the job says
+    otherwise — a job saved before it existed keeps a Factor F typed by
+    hand (any value but the old default 1.0)."""
+    stored = (data or {}).get("settings") or {}
     s = dict(DEFAULT_SETTINGS)
-    s.update((data or {}).get("settings") or {})
+    s.update(FF_DEFAULTS)
+    s.update(stored)
+    if "ff_auto" not in stored:
+        s["ff_auto"] = _num(stored.get("factor_f"), 1.0) in (0.0, 1.0)
     return s
+
+
+def factor_f_of(subtotal: float, settings: dict) -> tuple[float, str]:
+    """(Factor F, how it was found) for the government method: from the
+    ว 481 table when ``ff_auto``, else the value typed in the job."""
+    from core import wanic_factor_f as FF
+    manual = _num(settings.get("factor_f"), 1.0) or 1.0
+    if not settings.get("ff_auto"):
+        return manual, "Factor F กำหนดเอง"
+    kw = dict(kind=settings.get("ff_kind") or "building",
+              advance=_num(settings.get("adv_pay")),
+              retention=_num(settings.get("retention")),
+              rain=int(_num(settings.get("rain"))))
+    try:
+        loan = _num(settings.get("loan_share"))
+        if 0.0 < loan < 100.0:
+            return FF.blended(subtotal, loan, **kw)
+        r = FF.lookup(subtotal, vat=loan < 100.0, **kw)
+        return r.value, r.note()
+    except ValueError as e:
+        return manual, f"ใช้ Factor F ที่กรอกเอง เพราะ{e}"
 
 
 #: Starting lines a user can add and then price (units only — no prices
@@ -231,6 +265,10 @@ def collect_items(scene) -> list[dict]:
     except Exception:                                    # pragma: no cover
         member_record = lambda g: None                  # noqa: E731
     for it in items:
+        g = it["group"]
+        wb = ((getattr(g, "ext", None) or {}).get("wanic_building") or {}) \
+            if g is not None else {}
+        it["mark"] = wb.get("key") or wb.get("mark") or ""
         rec = member_record(it["group"]) if it["group"] is not None else None
         if rec and rec.get("length"):
             it["length"] = float(rec["length"])
@@ -282,7 +320,12 @@ def rate_matches(rate: dict, item: dict) -> bool:
         return False
     have = item.get({"layer": "layer", "material": "material", "ifc": "ifc",
                      "name": "name"}.get(by, by)) or ""
-    return have.strip().casefold() == want.casefold()
+    if have.strip().casefold() == want.casefold():
+        return True
+    # A part made by WANIC ออกแบบอาคาร carries a descriptive name (where it
+    # is, its size) and the short key its price line names (F1, «แป C …»).
+    return by == "name" and (item.get("mark") or "").strip().casefold() == \
+        want.casefold()
 
 
 def item_quantity(item: dict, qty: str):
@@ -368,7 +411,11 @@ def compute(items: list[dict], data: dict) -> dict:
     subtotal = sum(ln["total"] for ln in lines if ln["section"] == "work")
     equip = sum(ln["total"] for ln in lines if ln["section"] == "equip")
     special = sum(ln["total"] for ln in lines if ln["section"] == "special")
-    factor_f = _num(settings.get("factor_f"), 1.0) or 1.0
+    if method == "gov":
+        factor_f, ff_note = factor_f_of(subtotal, settings)
+    else:
+        factor_f = _num(settings.get("factor_f"), 1.0) or 1.0
+        ff_note = ""
     after_f = subtotal * factor_f
     vat_pct = _num(settings.get("vat"), 0.0)
     v = vat_pct / 100.0
@@ -379,7 +426,8 @@ def compute(items: list[dict], data: dict) -> dict:
         vat = (after_f + equip + special) * v
     grand = after_f + equip + special + vat
     return {"lines": lines, "status": status, "subtotal": subtotal,
-            "factor_f": factor_f, "after_f": after_f, "equip": equip,
+            "factor_f": factor_f, "ff_note": ff_note, "after_f": after_f,
+            "equip": equip,
             "equip_vat": equip_vat, "special": special,
             "special_vat": special_vat, "vat_pct": vat_pct, "vat": vat,
             "grand": grand, "method": method}
@@ -873,6 +921,10 @@ def _pr1k(result, st, pr1_rows) -> _Sheet:
                        ("อัตราดอกเบี้ยเงินกู้", "interest"),
                        ("อัตราภาษีมูลค่าเพิ่ม", "vat")):
         r = sh.add(["", f"{label}  {_num(st.get(key)):g} %", "", "", "", ""])
+        sh.merges.append(f"B{r}:F{r}")
+    if result.get("ff_note"):
+        r = sh.add(["", f"ที่มาของ Factor F: {result['ff_note']}", "", "", "",
+                    ""])
         sh.merges.append(f"B{r}:F{r}")
     area = _num(st.get("area_m2"))
     avg = (f"{result['after_f'] / area:,.2f}" if area > 0 else "........")

@@ -794,6 +794,8 @@ def a_roof(sh, E, L):
         for k in ("ridge", "hip"):
             for a, b in L[k]:
                 sh.line(v(a[0], a[1]), v(b[0], b[1]), "roof", 0.5)
+        for a, b in L.get("valleys") or []:           # ตะเข้ราง
+            sh.line(v(a[0], a[1]), v(b[0], b[1]), "roof", 0.5, True)
         for a, b in L.get("eave") or []:
             sh.line(v(a[0], a[1]), v(b[0], b[1]), "roof", 0.5)
         for r in L["rects"]:
@@ -1228,13 +1230,13 @@ def s_roof_frame(sh, E, L):
         for pl in L["purlin"]:
             pts = [v(p[0], p[1]) for p in pl["path"]]
             sh.poly(pts, "struct", 0.13, pl.get("closed", False))
-        for k in ("ridge", "hip"):
-            for a, b in L[k]:
+        for k in ("ridge", "hip", "valleys"):
+            for a, b in L.get(k) or []:
                 sh.line(v(a[0], a[1]), v(b[0], b[1]), "struct", 0.6)
         for a, b in L.get("eave") or []:
             sh.line(v(a[0], a[1]), v(b[0], b[1]), "roof", 0.25)
     x0, y0, x1, y1 = drawing_area()
-    lines = [f"อกไก่ {s['ridge']}", f"ตะเข้สัน {s['hip']}",
+    lines = [f"อกไก่ {s['ridge']}", f"ตะเข้สัน / ตะเข้ราง {s['hip']}",
              f"จันทัน {s['rafter']} @ ไม่เกิน {float(s['rafter_sp']):.2f} ม.",
              f"แป {s['purlin']} @ {float(s['purlin_sp']):.2f} ม.",
              f"ความลาดหลังคา {float(s['pitch']):.0f}°  ชายคา "
@@ -1656,7 +1658,7 @@ def m_plan(sh, E, k, sheets):
 
 GROUP_TH = {"A": "แบบสถาปัตยกรรม", "S": "แบบวิศวกรรมโครงสร้าง",
             "SN": "แบบวิศวกรรมสุขาภิบาล", "EE": "แบบวิศวกรรมไฟฟ้า",
-            "M": "แบบวิศวกรรมเครื่องกล", "BOQ": "บัญชีปริมาณงาน (ปร.4)"}
+            "M": "แบบวิศวกรรมเครื่องกล", "BOQ": "บัญชีปริมาณงาน (ปร.1)"}
 
 
 def build_set(data, info=None,
@@ -1749,7 +1751,7 @@ def build_set(data, info=None,
 
 
 # ---------------------------------------------------------------------------
-# ปร.4 — the bill of quantities at the end of the book
+# ปร.1 — the bill of quantities at the end of the book (2569 form names)
 # ---------------------------------------------------------------------------
 
 #: (header, sub-header, width mm, align)
@@ -1770,7 +1772,7 @@ def _money(v, show=True) -> str:
 
 
 def boq_rows(result, show_prices=True):
-    """The ปร.4 lines: (kind, cells) — kind "group" / "item" / "total";
+    """The ปร.1 lines: (kind, cells) — kind "group" / "item" / "total";
     the summary first, as the department's book does."""
     groups = result.get("groups") or []
     summary = [("head", ["", "สรุปงาน"] + [""] * 8)]
@@ -1815,10 +1817,10 @@ def _boq_page(sh, info, result, page, pages):
     sh.rect(m, m, W - m, H - m, "frame", 0.5)
     x0 = m + 5
     y = H - m - 7
-    sh.text((W - m - 5, y), "แบบ ปร.4", 3.0, "right", "title", True)
+    sh.text((W - m - 5, y), "แบบ ปร.1", 3.0, "right", "title", True)
     proj = info.get("project") or "อาคาร"
-    sh.text((W / 2, y), f"รายการประมาณราคาค่าก่อสร้าง  {proj}", 3.6, "center",
-            "title", True)
+    sh.text((W / 2, y), "แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน  "
+            f"{proj}", 3.6, "center", "title", True)
     y -= 6.5
     sh.text((x0, y), f"สถานที่ก่อสร้าง  {info.get('location') or '-'}", 2.6)
     sh.text((x0 + 150, y), f"แบบเลขที่  {info.get('drawing_no') or '-'}", 2.6)
@@ -1868,7 +1870,7 @@ def _boq_page(sh, info, result, page, pages):
 
 
 def build_boq(data, info=None) -> list:
-    """The ปร.4 pages (A3, same paper as the drawings) from the BOQ of
+    """The ปร.1 pages (A3, same paper as the drawings) from the BOQ of
     :func:`core.wanic_quantities.compute`, summary first."""
     from core import wanic_quantities as Q
     info = dict(info or {})
@@ -1883,7 +1885,7 @@ def build_boq(data, info=None) -> list:
     cur = None
 
     def new_page():
-        sh = Sheet(f"ปร.4-{len(pages) + 1}", "รายการประมาณราคาค่าก่อสร้าง (ปร.4)",
+        sh = Sheet(f"ปร.1-{len(pages) + 1}", "แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน (ปร.1)",
                    "-", "BOQ")
         pages.append(sh)
         return sh
@@ -1943,7 +1945,7 @@ def build_boq(data, info=None) -> list:
                 1.8, "left", "title")
         sh.text((MARGIN + 5, MARGIN + 4), "หมายเหตุ: ปริมาณตามหลักเกณฑ์การคำนวณ"
                 "ราคากลางงานก่อสร้าง พ.ศ. 2569 (เผื่อตามมาตรฐาน) ค่าแรงตามบัญชี ว480 · "
-                "ราคารวมนี้ยังไม่คูณ Factor F (ดูแบบ ปร.5)", 2.0)
+                "ราคารวมนี้คือค่างานต้นทุน ยังไม่คูณ Factor F (ดูแบบ ปร.1 (ก) และ ปร.4)", 2.0)
     return pages
 
 

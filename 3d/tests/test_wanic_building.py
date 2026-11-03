@@ -47,7 +47,11 @@ def test_structure_counts_like_a_one_storey_house():
     assert count["column"] == 9 and count["slab"] == 4
     assert count["beam"] == 24                    # 12 GB + 12 RB
     assert count["wall"] == 12
-    f1 = [g for g in groups if g.name == "F1"][0]
+    f1 = [g for g in groups if g.ext["wanic_building"]["mark"] == "F1"][0]
+    # the name says what and where it is; the takeoff matches the short key
+    assert f1.name.startswith("ฐานราก F1 100×100×30 ซม.") and "A-1" in f1.name
+    assert f1.ext["wanic_building"]["key"] == "F1"
+    assert ["ตำแหน่ง", "A-1"] in f1.ext["wanic_building"]["info"]
     from core.bim import face_set_volume
     assert close(face_set_volume(list(f1.mesh.faces)), 1.0 * 1.0 * 0.3)
 
@@ -90,7 +94,9 @@ def test_takeoff_from_a_build():
     res = T.compute(T.collect_items(scene), data)
     by = {ln["desc"]: ln for ln in res["lines"]}
     assert close(by["คอนกรีตฐานราก F1"]["quantity"], 9 * 0.3)
-    assert close(by["คอนกรีตพื้นชั้นล่าง S1"]["quantity"], 4 * 9 * 0.1)
+    # Measured off the model, a slab is what lies between the beam faces
+    # (no concrete counted twice); the standard BOQ bills the full panel.
+    assert close(by["คอนกรีตพื้นชั้นล่าง S1"]["quantity"], 4 * 2.8 * 2.8 * 0.1)
     assert by["มุงหลังคา (พื้นที่ตามแนวลาด)"]["quantity"] > 36
     assert any(ln["quantity"] > 0 for ln in res["lines"]
                if ln["desc"].startswith("โครงหลังคาเหล็ก จันทัน"))

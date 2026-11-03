@@ -232,6 +232,24 @@ def valley_length(pieces_by_roof, roofs, eps=0.01) -> float:
 # Roof accessories (special cap pieces) from the trimmed lines
 # ---------------------------------------------------------------------------
 
+def junction(r, h, b):
+    """The special cap where ``r`` ridge ends, ``h`` hip tops and ``b``
+    verge tops meet: four lines (a pyramid apex, or two ridges and two
+    hips) take a four-way piece, three a three-way piece (a hip roof's
+    ridge end, or a T where a wing's ridge meets a hip), a gable top the
+    gable-end piece, two ridges in line the two-way piece."""
+    if b >= 1 and r >= 1:
+        return "gable_end"
+    n = r + h
+    if n >= 4:
+        return "four_way"
+    if n == 3:
+        return "three_way"
+    if r >= 2:
+        return "two_way"
+    return None
+
+
 def accessories(lines, tol=0.05) -> dict:
     """Count the special cap pieces a covering needs, from where ridges,
     hips and verges meet:
@@ -263,15 +281,9 @@ def accessories(lines, tol=0.05) -> dict:
     out = {k: 0 for k in ("four_way", "three_way", "gable_end", "two_way",
                           "hip_end", "verge_end")}
     for c in clusters:
-        r, h, b = c.get("r", 0), c.get("h", 0), c.get("b", 0)
-        if h >= 4 and r == 0:
-            out["four_way"] += 1
-        elif h >= 2 and r >= 1:
-            out["three_way"] += 1
-        elif b >= 1:
-            out["gable_end"] += 1
-        elif r >= 2:
-            out["two_way"] += 1
+        kind = junction(c.get("r", 0), c.get("h", 0), c.get("b", 0))
+        if kind:
+            out[kind] += 1
     eave_z = None
     for a, b in lines.get("eave", []):
         eave_z = a[2] if eave_z is None else min(eave_z, a[2])
@@ -280,4 +292,152 @@ def accessories(lines, tol=0.05) -> dict:
             for a, b in lines.get(src, []):
                 if abs(min(a[2], b[2]) - eave_z) < 0.02:
                     out[key] += 1
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Creases of the combined roof: hips and ridges (convex) and valleys (concave)
+# ---------------------------------------------------------------------------
+
+def surface(x, y, roofs):
+    """Height of the roof you see at (x, y): the highest of the roofs over
+    it (None outside every eave box)."""
+    best = None
+    for r in roofs:
+        h = r.height(x, y)
+        if h is not None and (best is None or h > best):
+            best = h
+    return best
+
+
+def crease(pt, along, roofs, eps=0.04, tol=TOL):
+    """What the roof does across the line through ``pt`` running ``along``
+    (a plan direction): "convex" (a hip or ridge: it falls away on both
+    sides), "concave" (a valley), "flat" (no fold — the line lies inside one
+    plane) or "off" (the point is not on the visible surface)."""
+    x, y, z = pt
+    h = surface(x, y, roofs)
+    if h is None or abs(h - z) > tol:
+        return "off"
+    L = math.hypot(along[0], along[1]) or 1.0
+    nx, ny = -along[1] / L, along[0] / L
+    a = surface(x + nx * eps, y + ny * eps, roofs)
+    b = surface(x - nx * eps, y - ny * eps, roofs)
+    if a is None or b is None:
+        # at an eave: only one side has roof — a hip/ridge foot is convex
+        return "convex"
+    bend = (a + b) / 2.0 - h
+    if bend < -1e-4:
+        return "convex"
+    if bend > 1e-4:
+        return "concave"
+    return "flat"
+
+
+def keep_creases(a, b, roofs, want="convex", step=0.05, min_len=0.05):
+    """The parts of the line a→b that are a crease of kind ``want`` of the
+    combined roof (sampled every ``step`` m, ends found by bisection)."""
+    L = math.dist(a, b)
+    if L < 1e-9:
+        return []
+    along = (b[0] - a[0], b[1] - a[1])
+    if math.hypot(*along) < 1e-9:
+        return []
+
+    def ok(t):
+        return crease(_lerp(a, b, t), along, roofs) == want
+    n = max(2, int(math.ceil(L / step)))
+    # sample the inside of each step (a line's ends sit on the eave or on
+    # another crease, where the test is ambiguous)
+    ts = [k / n for k in range(n + 1)]
+    flags = [ok(min(max(t, 0.5 / n), 1 - 0.5 / n)) for t in ts]
+    out, start = [], (0.0 if flags[0] else None)
+    for k in range(1, len(ts)):
+        if flags[k] != flags[k - 1]:
+            lo, hi = ts[k - 1], ts[k]
+            v0 = flags[k - 1]
+            for _ in range(30):
+                m = (lo + hi) / 2
+                if ok(m) == v0:
+                    lo = m
+                else:
+                    hi = m
+            t = (lo + hi) / 2
+            if flags[k]:
+                start = t
+            elif start is not None:
+                out.append((start, t))
+                start = None
+    if start is not None:
+        out.append((start, 1.0))
+    return [[_lerp(a, b, t0), _lerp(a, b, t1)] for t0, t1 in out
+            if (t1 - t0) * L >= min_len]
+
+
+def valley_lines(roofs, step=0.05, min_len=0.10):
+    """The valleys (ตะเข้ราง) where two roofs meet, as 3D segments: on the
+    line where a facet plane of one roof meets one of another, the parts
+    that are on the visible surface and fold inward."""
+    out = []
+    for i in range(len(roofs)):
+        for j in range(i + 1, len(roofs)):
+            ri, rj = roofs[i], roofs[j]
+            x0 = max(ri.box[0], rj.box[0])
+            y0 = max(ri.box[1], rj.box[1])
+            x1 = min(ri.box[2], rj.box[2])
+            y1 = min(ri.box[3], rj.box[3])
+            if x1 - x0 < 1e-6 or y1 - y0 < 1e-6:
+                continue
+            for pa in ri.planes:
+                for pb in rj.planes:
+                    A, B, C = pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]
+                    if abs(A) < 1e-12 and abs(B) < 1e-12:
+                        continue              # parallel planes: no line
+                    seg = _line_in_box(A, B, C, (x0, y0, x1, y1))
+                    if seg is None:
+                        continue
+                    (ax, ay), (bx, by) = seg
+
+                    def P(t):
+                        x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+                        return (x, y, pa[0] * x + pa[1] * y + pa[2])
+                    a3, b3 = P(0.0), P(1.0)
+                    for piece in keep_creases(a3, b3, roofs, "concave", step,
+                                              min_len):
+                        out.append(piece)
+    return _dedupe(out)
+
+
+def _line_in_box(A, B, C, box):
+    """The part of the plan line A x + B y + C = 0 inside the box."""
+    x0, y0, x1, y1 = box
+    pts = []
+    if abs(B) > 1e-12:
+        for x in (x0, x1):
+            y = -(A * x + C) / B
+            if y0 - 1e-9 <= y <= y1 + 1e-9:
+                pts.append((x, y))
+    if abs(A) > 1e-12:
+        for y in (y0, y1):
+            x = -(B * y + C) / A
+            if x0 - 1e-9 <= x <= x1 + 1e-9:
+                pts.append((x, y))
+    uniq = []
+    for p in pts:
+        if all(math.dist(p, q) > 1e-7 for q in uniq):
+            uniq.append(p)
+    if len(uniq) < 2:
+        return None
+    uniq.sort()
+    return uniq[0], uniq[-1]
+
+
+def _dedupe(segs, tol=0.02):
+    out = []
+    for a, b in segs:
+        if any((math.dist(a, c) < tol and math.dist(b, d) < tol) or
+               (math.dist(a, d) < tol and math.dist(b, c) < tol)
+               for c, d in out):
+            continue
+        out.append([a, b])
     return out

@@ -58,7 +58,8 @@ class PrDialog(QDialog):
         ("area_m2", "ขนาดหรือเนื้อที่อาคาร (ตร.ม.)", "num"),
         ("adv_pay", "อัตราเงินค่าจ้างล่วงหน้า (%)", "num"),
         ("retention", "อัตราเงินประกันผลงาน (%)", "num"),
-        ("interest", "อัตราดอกเบี้ยเงินกู้ (%)", "num"),
+        ("interest", "อัตราดอกเบี้ยเงินกู้ (%) — ตาราง ว 481 ใช้ 6%", "num"),
+        ("loan_share", "สัดส่วนเงินกู้ที่ไม่ต้องชำระภาษี (%) — 0 = งบประมาณทั้งหมด", "num"),
         ("chair", "ประธานกรรมการกำหนดราคากลาง", "text"),
         ("member1", "กรรมการกำหนดราคากลาง คนที่ 1", "text"),
         ("member2", "กรรมการกำหนดราคากลาง คนที่ 2", "text"),
@@ -82,6 +83,22 @@ class PrDialog(QDialog):
         self.method.setCurrentIndex(max(self.method.findData(
             settings.get("method", "gov")), 0))
         f.addRow("วิธีคิดราคา", self.method)
+        from core import wanic_factor_f as FF
+        st = T.settings_of({"settings": settings})
+        self.ff_auto = QCheckBox("หา Factor F จากตาราง ว 481 อัตโนมัติ "
+                                 "(เทียบอัตราส่วนตามค่างานต้นทุน)")
+        self.ff_auto.setChecked(bool(st["ff_auto"]))
+        f.addRow(self.ff_auto)
+        self.ff_kind = QComboBox()
+        for k, v in FF.KINDS.items():
+            self.ff_kind.addItem(f"ตาราง Factor F {v}", k)
+        self.ff_kind.setCurrentIndex(max(self.ff_kind.findData(st["ff_kind"]), 0))
+        f.addRow("ชนิดงาน", self.ff_kind)
+        self.rain = QComboBox()
+        for k, v in FF.RAIN.items():
+            self.rain.addItem(v + (" (งานทาง/ชลประทาน)" if k else ""), k)
+        self.rain.setCurrentIndex(max(self.rain.findData(int(T._num(st["rain"]))), 0))
+        f.addRow("พื้นที่ฝนตกชุก", self.rain)
         self.w = {}
         for key, label, kind in self.FIELDS:
             if kind == "num":
@@ -99,7 +116,10 @@ class PrDialog(QDialog):
         f.addRow(bb)
 
     def values(self) -> dict:
-        out = {"method": self.method.currentData()}
+        out = {"method": self.method.currentData(),
+               "ff_auto": self.ff_auto.isChecked(),
+               "ff_kind": self.ff_kind.currentData(),
+               "rain": self.rain.currentData()}
         for key, _label, kind in self.FIELDS:
             w = self.w[key]
             out[key] = w.value() if kind == "num" else w.text().strip()
@@ -149,6 +169,12 @@ class TakeoffPanel(QWidget):
             w.editingFinished.connect(self._save)
         row.addWidget(QLabel("Factor F"))
         row.addWidget(self.factor_f)
+        self.ff_auto = QCheckBox("ตาราง ว481")
+        self.ff_auto.setToolTip("หา Factor F จากตาราง ว 481 (26 มิ.ย. 2569) อัตโนมัติ "
+                                "ตามค่างานต้นทุนทั้งโครงการ — ไม่ติ๊ก = กรอกเอง")
+        self.ff_auto.toggled.connect(lambda on: (self.factor_f.setEnabled(not on),
+                                                 self._save()))
+        row.addWidget(self.ff_auto)
         row.addSpacing(10)
         row.addWidget(QLabel("ภาษีมูลค่าเพิ่ม"))
         row.addWidget(self.vat)
@@ -288,6 +314,7 @@ class TakeoffPanel(QWidget):
                              owner=self.owner.text().strip(),
                              location=self.location.text().strip(),
                              factor_f=self.factor_f.value(),
+                             ff_auto=self.ff_auto.isChecked(),
                              vat=self.vat.value())
         if d != self.data():
             self._write(d)
@@ -545,6 +572,9 @@ class TakeoffPanel(QWidget):
             self.owner.setText(d["settings"].get("owner", ""))
             self.location.setText(d["settings"].get("location", ""))
             self.factor_f.setValue(T._num(d["settings"].get("factor_f"), 1.0) or 1.0)
+            auto = bool(T.settings_of(d)["ff_auto"])
+            self.ff_auto.setChecked(auto)
+            self.factor_f.setEnabled(not auto)
             self.vat.setValue(T._num(d["settings"].get("vat"), 7.0))
             lines = self._result["lines"]
             sel = self.table.currentRow()
@@ -602,6 +632,9 @@ class TakeoffPanel(QWidget):
             if 0 <= sel < len(lines):
                 self.table.setCurrentCell(sel, 0)
             res = self._result
+            if self.ff_auto.isChecked() and res["method"] == "gov":
+                self.factor_f.setValue(res["factor_f"])
+            self.factor_f.setToolTip(res.get("ff_note") or "")
             parts = [f"ค่างานต้นทุน <b>{_money(res['subtotal'])}</b>"]
             if abs(res["factor_f"] - 1.0) > 1e-12:
                 parts.append(f"× Factor F {res['factor_f']:.4f} = "

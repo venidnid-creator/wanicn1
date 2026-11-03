@@ -652,6 +652,8 @@ def compute(data) -> dict:
         for kind in ("ridge", "hip", "rafter", "post"):
             for path in lines[kind]:
                 per[s[kind]] = per.get(s[kind], 0.0) + P.path_length(path)
+        for path in lines.get("valleys") or []:          # ตะเฆ่ราง
+            per[s["hip"]] = per.get(s["hip"], 0.0) + P.path_length(path)
         for pl in lines["purlin"]:
             per[s["purlin"]] = per.get(s["purlin"], 0.0) + \
                 P.path_length(pl["path"], pl["closed"])
@@ -730,6 +732,16 @@ def compute(data) -> dict:
             if cut:
                 bill.add(g, "ตัดกระเบื้องตะเข้ราง", valley, "ม.", lab_code=cut,
                          basis="ความยาวแนวตะเข้ราง", ref=f"ว480 {cut[:5]}")
+        if s.get("soffit", True):
+            soffit = B.soffit_area(data)
+            if soffit > 0.01:
+                sp_, snote = rprice("5.41", prices)
+                bill.add(g, "ฝ้าชายคาระแนงไม้เทียม โครงคร่าวเหล็กชุบสังกะสี "
+                            "พร้อมมุ้งกันแมลง", soffit, "ตร.ม.", mat=sp_,
+                         lab_code="2.2.2",
+                         basis="พื้นที่ใต้ชายคา จากหน้าคานถึงเชิงชาย",
+                         ref="หลักเกณฑ์ 4.2 ข้อ 2.1 · สูตรวัสดุ 5.41 · "
+                             "ค่าแรงเทียบ ว480 2.2.2", note=snote)
         if s.get("caps", True):
             ridge = sum(P.path_length(p) for p in lines["ridge"])
             hips = sum(P.path_length(p) for p in lines["hip"])

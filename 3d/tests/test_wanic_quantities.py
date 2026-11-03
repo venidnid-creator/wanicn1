@@ -288,7 +288,10 @@ def test_l_roofs_are_trimmed_not_overlapping():
     assert acc["gable_end"] == 3 and acc["verge_end"] == 6
     d["settings"]["roof"] = "hip"
     acc = RCL.accessories(B.roof_lines(d))
-    assert acc["three_way"] == 3 and acc["hip_end"] == 6
+    # An L has 5 outside corners (a hip foot each) and 1 inside corner (the
+    # valley): the hip that used to be capped there lay flat in the wing's
+    # slope — a valley drawn on the wrong side.
+    assert acc["three_way"] == 3 and acc["hip_end"] == 5
 
 
 def test_monier_accessories_and_valley_in_boq():
@@ -297,7 +300,7 @@ def test_monier_accessories_and_valley_in_boq():
                                dict(id="b", x=0, y=4, w=3, d=4)]
     r = Q.compute(d)
     assert _by(r, "ครอบโค้งสามทาง")[0]["qty"] == 3
-    assert _by(r, "ครอบโค้งหางมน")[0]["qty"] == 6
+    assert _by(r, "ครอบโค้งหางมน")[0]["qty"] == 5
     valley = _by(r, "รางน้ำตะเข้สำเร็จรูป")[0]
     assert valley["lab"] == 26 and valley["net"] > 1
     ridge = _by(r, "ครอบสัน —")[0]

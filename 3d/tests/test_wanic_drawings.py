@@ -162,10 +162,10 @@ def test_the_book_ends_with_por4():
     S = D.build_set(d, dict(INFO, preparer="นายเวนิช ธัมมะวงษ์"))
     boq = [s for s in S if s.group == "BOQ"]
     assert boq and S[-len(boq):] == boq                   # at the end
-    assert [s.code for s in boq] == [f"ปร.4-{i}" for i in
+    assert [s.code for s in boq] == [f"ปร.1-{i}" for i in
                                      range(1, len(boq) + 1)]
     first = " ".join(boq[0].texts())
-    for t in ("แบบ ปร.4", "รายการประมาณราคาค่าก่อสร้าง", "สรุปงาน",
+    for t in ("แบบ ปร.1", "ค่างานต้นทุน", "สรุปงาน",
               "หมวดงานดินและฐานราก", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ",
               "สถานที่ก่อสร้าง  จังหวัดลพบุรี", "แบบเลขที่  WN-001",
               "สำนักงานพาณิชย์จังหวัดลพบุรี", "หน่วย : บาท", "ราคาหน่วยละ",

@@ -1620,7 +1620,7 @@ class DrawingDialog(QDialog):
     GROUPS = [("A", "แบบสถาปัตยกรรม (A)"), ("S", "แบบวิศวกรรมโครงสร้าง (S)"),
               ("SN", "แบบวิศวกรรมสุขาภิบาล (SN)"), ("EE", "แบบวิศวกรรมไฟฟ้า (EE)"),
               ("M", "แบบวิศวกรรมเครื่องกล (M)"),
-              ("BOQ", "ต่อท้ายเล่มด้วยแบบ ปร.4 (บัญชีปริมาณงานและราคา)")]
+              ("BOQ", "ต่อท้ายเล่มด้วยแบบ ปร.1 (แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน)")]
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -1650,7 +1650,7 @@ class DrawingDialog(QDialog):
                                                        self.GROUPS]))
             self.checks[g] = c
             f.addRow(c)
-        self.prices = QCheckBox("แสดงราคาใน ปร.4 (ไม่ติ๊ก = เว้นช่องราคาว่างแบบเล่มกรมโยธาฯ)")
+        self.prices = QCheckBox("แสดงราคาใน ปร.1 (ไม่ติ๊ก = เว้นช่องราคาว่างแบบเล่มกรมโยธาฯ)")
         self.prices.setChecked(bool(info.get("boq_prices", True)))
         f.addRow(self.prices)
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
@@ -1720,7 +1720,7 @@ class DrawingDialog(QDialog):
                 fh.write(D.dxf_bytes(sheets))
             self.saved.append(stem + ".dxf")
         groups = ", ".join(
-            f"{'ปร.4' if g == 'BOQ' else g} "
+            f"{'ปร.1' if g == 'BOQ' else g} "
             f"{sum(1 for s in sheets if s.group == g)} แผ่น"
             for g in info["groups"])
         self.panel.status.setText(f"ส่งออกแบบ {len(sheets)} แผ่น ({groups})")
@@ -1893,6 +1893,30 @@ class BuildingPanel(QWidget):
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
             "(วัดจากโมเดล 3D)", self.send_rates, 2, 1, "#3B6FB6")
         lay.addLayout(bb)
+        # The structure on its own, coloured by kind (as engineers check a
+        # frame), and the standard looks at it: 3D, plan, four elevations.
+        vb = QGroupBox("มุมมองโครงสร้าง")
+        vl = QGridLayout(vb)
+        vl.setSpacing(3)
+        self.frame_btn = QPushButton("🦴 แสดงเฉพาะโครงสร้าง (สีตามชนิด)")
+        self.frame_btn.setCheckable(True)
+        self.frame_btn.setToolTip(
+            "ซ่อนผนัง ประตู-หน้าต่าง หลังคา แล้วระบายสีโครงสร้าง: ฐานราก/ตอม่อ ม่วง · "
+            "คานคอดิน ส้ม · คานชั้นบน/คานหลังคา น้ำเงิน · เสา เทาเข้ม · พื้น เขียว "
+            "— กดอีกครั้งเพื่อกลับเป็นปกติ")
+        self.frame_btn.toggled.connect(
+            lambda on: _safe(self, lambda: self.frame_view(on)))
+        vl.addWidget(self.frame_btn, 0, 0, 1, 4)
+        for i, (key, text) in enumerate((("iso", "3D"), ("top", "2D (บน)"),
+                                         ("front", "รูปด้านหน้า"),
+                                         ("back", "รูปด้านหลัง"),
+                                         ("left", "รูปด้านซ้าย"),
+                                         ("right", "รูปด้านขวา"))):
+            b = QPushButton(text)
+            b.setToolTip("มุมมองมาตรฐาน — รูปด้านเป็นภาพขนาน (ไม่มีทัศนมิติ)")
+            b.clicked.connect(lambda _=False, k=key: _safe(self, lambda: self.look(k)))
+            vl.addWidget(b, 1 + i // 3, i % 3)
+        lay.addWidget(vb)
         rm = QPushButton("ลบสิ่งที่สร้างโดย ออกแบบอาคาร")
         rm.clicked.connect(lambda _=False: _safe(self, self.remove_built))
         lay.addWidget(rm)
@@ -2634,6 +2658,67 @@ class BuildingPanel(QWidget):
         f = getattr(vp, "flash_status", None)
         if callable(f):
             f(msg)
+
+    #: Colours of the frame view, by kind (and a ground beam its own).
+    FRAME_COLORS = {"footing": (0.70, 0.58, 0.95), "stump": (0.70, 0.58, 0.95),
+                    "pile": (0.55, 0.45, 0.85), "column": (0.33, 0.38, 0.46),
+                    "slab": (0.62, 0.90, 0.72), "stair": (0.62, 0.90, 0.72),
+                    "ground_beam": (0.96, 0.55, 0.18), "beam": (0.24, 0.50, 0.92)}
+    FRAME_KINDS = ("footing", "stump", "pile", "column", "beam", "slab", "stair")
+
+    def frame_view(self, on: bool) -> None:
+        """Show the concrete frame alone, coloured by kind — or the whole
+        building again. Undoable, and a rebuild starts from normal colours."""
+        from core.history import (CompoundCommand, HideCommand,
+                                  SetGroupMaterialCommand)
+        groups = B.generated(self.app.scene)
+        if not groups:
+            self.status.setText("ยังไม่มีชิ้นส่วนที่สร้างไว้ — กด «สร้างทั้งหมด» ก่อน")
+            return
+        frame, rest, cmds = [], [], []
+        for g in groups:
+            wb = (g.ext or {}).get(B.EXT_KEY) or {}
+            (frame if wb.get("part") == "structure" and
+             wb.get("kind") in self.FRAME_KINDS else rest).append(g)
+        if on:
+            for g in frame:
+                wb = g.ext[B.EXT_KEY]
+                key = wb.get("kind")
+                if key == "beam" and str(wb.get("mark", "")).startswith("GB"):
+                    key = "ground_beam"
+                ext = dict(g.ext)
+                ext["wanic_frame_view"] = {"material": getattr(g, "material", None)}
+                g.ext = ext
+                cmds.append(SetGroupMaterialCommand(
+                    g, {"color": self.FRAME_COLORS.get(key, (0.6, 0.6, 0.6))}))
+            cmds.append(HideCommand(rest, True))
+            msg = (f"มุมมองโครงสร้าง: {len(frame)} ชิ้น (ซ่อน {len(rest)} ชิ้น) — "
+                   "ม่วง ฐานราก/ตอม่อ · ส้ม คานคอดิน · น้ำเงิน คาน · เทา เสา · เขียว พื้น")
+        else:
+            for g in frame:
+                old = ((g.ext or {}).get("wanic_frame_view") or {})
+                if old:
+                    cmds.append(SetGroupMaterialCommand(g, old.get("material")))
+            cmds.append(HideCommand(groups, False))
+            msg = "กลับมุมมองปกติ — แสดงทุกชิ้นส่วน"
+        self.app.viewport.history.execute(CompoundCommand(cmds))
+        self.app.viewport.update()
+        self.status.setText(msg)
+
+    def look(self, key: str) -> None:
+        """A standard view of the model; elevations and the plan in
+        parallel projection, like a drawing."""
+        cam = getattr(self.app.viewport, "camera", None)
+        if cam is None:
+            return
+        cam.set_view(key)
+        if hasattr(cam, "set_projection"):
+            cam.set_projection("perspective" if key == "iso" else "parallel")
+        win = getattr(self.app, "window", None)
+        fit = getattr(win, "_on_zoom_extents", None)
+        if callable(fit):
+            fit()
+        self.app.viewport.update()
 
     def remove_built(self):
         from core.history import CompoundCommand, DeleteGroupCommand

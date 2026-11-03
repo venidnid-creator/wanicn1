@@ -3725,7 +3725,8 @@ class EntityInfoPanel(QWidget):
                             f"{tr('In model')}: {kin}{solid}")
                 title = tr("Solid Group") if vol is not None else tr("Group")
                 return (f"<b>{title}</b><br>"
-                        f"{tr('Faces')}: {len(e.mesh.faces)}{solid}")
+                        f"{tr('Faces')}: {len(e.mesh.faces)}{solid}"
+                        f"{self._part_info(e)}")
             return f"<b>{tr('1 entity')}</b>"
         counts = {"faces": 0, "edges": 0, "dimensions": 0, "groups": 0}
         for e in sel:
@@ -3752,6 +3753,22 @@ class EntityInfoPanel(QWidget):
                              if isinstance(e, Edge))
                 text += f"<br>{tr('Length')}: {fmt_len(length)}"
         return text
+
+    @staticmethod
+    def _part_info(group) -> str:
+        """The rows a part made by WANIC ออกแบบอาคาร carries (type, mark,
+        size, floor, grid location, quantity, BOQ item) — what the model
+        browser's name stands for, ready for the takeoff."""
+        import html
+        wb = (getattr(group, "ext", None) or {}).get("wanic_building") or {}
+        rows = wb.get("info") or []
+        if not rows:
+            return ""
+        cells = "".join(
+            f"<tr><td style='color:#667;padding-right:8px'>{html.escape(str(k))}</td>"
+            f"<td>{html.escape(str(v))}</td></tr>" for k, v in rows)
+        return (f"<br><b>ข้อมูลชิ้นส่วน (WANIC ออกแบบอาคาร)</b>"
+                f"<table cellspacing='0' cellpadding='1'>{cells}</table>")
 
     def _solid_volume(self, group):
         """Cached per scene version: the panel refreshes on every change and

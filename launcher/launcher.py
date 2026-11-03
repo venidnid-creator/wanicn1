@@ -33,6 +33,14 @@ CREDIT = ("พัฒนาต่อยอดจากซอฟต์แวร์
 
 NAVY, ORANGE, BRASS, IVORY, MUTED = "#0F2A44", "#C46420", "#C9A14A", "#F6F3EC", "#55657A"
 
+#: The developer and how to support the work (shown beside the programs).
+FREE_USE = "โปรแกรมใช้ได้ฟรี ไม่มีค่าลิขสิทธิ์"
+SUPPORT = "สนใจสนับสนุนผู้พัฒนา สามารถทำได้ที่"
+BANK = "ธนาคารกรุงศรีอยุธยา สาขาโลตัส ถลาง ภูเก็ต"
+ACCOUNT_NAME = "นายเวนิช ธัมมะวงษ์"
+ACCOUNT_NO = "666-1-32472-1"
+ACCOUNT_TYPE = "บัญชีออมทรัพย์"
+
 CAD_EXT = {".dwg", ".dxf"}
 MODEL_EXT = {".igz", ".skp", ".dae", ".obj", ".stl", ".glb", ".gltf"}
 
@@ -176,13 +184,18 @@ class StartWindow(QWidget):
         self.setWindowTitle(PRODUCT)
         self.setWindowIcon(QIcon(str(asset("wanicnsurvey.ico"))))
         self.setAcceptDrops(True)
-        self.resize(940, 680)
+        self.resize(1220, 720)
         self.setObjectName("root")
         self.setStyleSheet(f"QWidget#root {{ background: {IVORY}; }}")
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(44, 32, 44, 18)
+        page = QHBoxLayout(self)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
+        outer = QVBoxLayout()
+        outer.setContentsMargins(44, 32, 32, 18)
         outer.setSpacing(22)
+        page.addLayout(outer, 1)
+        page.addWidget(self._support_panel())
 
         # header
         head = QHBoxLayout()
@@ -255,6 +268,56 @@ class StartWindow(QWidget):
         foot.setWordWrap(True)
         outer.addWidget(foot)
         self.refresh()
+
+    def _support_panel(self) -> QFrame:
+        """The developer's photo, free use, and the account to support him."""
+        box = QFrame()
+        box.setObjectName("support")
+        box.setFixedWidth(300)
+        box.setStyleSheet("QFrame#support { background: white; "
+                          "border-left: 1px solid #D9D4C7; }")
+        col = QVBoxLayout(box)
+        col.setContentsMargins(20, 22, 20, 18)
+        col.setSpacing(8)
+        photo = QLabel()
+        pix = QPixmap(str(asset("developer.jpg")))
+        if not pix.isNull():
+            photo.setPixmap(pix.scaledToWidth(260, Qt.SmoothTransformation))
+        photo.setAlignment(Qt.AlignCenter)
+        photo.setStyleSheet("border-radius: 10px;")
+        col.addWidget(photo)
+        free = QLabel(FREE_USE)
+        free.setAlignment(Qt.AlignCenter)
+        free.setWordWrap(True)
+        free.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {ORANGE};")
+        col.addWidget(free)
+        info = QLabel(
+            f"<div style='color:{NAVY}; font-size:13px; line-height:140%'>"
+            f"{SUPPORT}<br><b>{BANK}</b><br>"
+            f"ชื่อบัญชี <b>{ACCOUNT_NAME}</b><br>"
+            f"เลขที่บัญชี <b style='font-size:16px'>{ACCOUNT_NO}</b><br>"
+            f"{ACCOUNT_TYPE}</div>")
+        info.setAlignment(Qt.AlignCenter)
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        col.addWidget(info)
+        copy = QPushButton("คัดลอกเลขที่บัญชี")
+        copy.setCursor(Qt.PointingHandCursor)
+        copy.setStyleSheet(f"QPushButton {{ background: {BRASS}; color: white; border: none;"
+                           " border-radius: 6px; padding: 6px 12px; font-size: 13px; }"
+                           "QPushButton:hover { background: #B08A36; }")
+
+        def _copy() -> None:
+            QApplication.clipboard().setText(ACCOUNT_NO.replace("-", ""))
+            copy.setText("คัดลอกแล้ว ✓")
+        copy.clicked.connect(_copy)
+        col.addWidget(copy)
+        thanks = QLabel("ขอบคุณที่ใช้งานและสนับสนุนครับ")
+        thanks.setAlignment(Qt.AlignCenter)
+        thanks.setStyleSheet(f"font-size: 12px; color: {MUTED};")
+        col.addWidget(thanks)
+        col.addStretch(1)
+        return box
 
     def refresh(self) -> None:
         self.recent_cad.fill(recent_cad(), "ยังไม่มีแบบ 2 มิติ — กด «เขียนแบบ 2 มิติ» หรือ «เปิดไฟล์…»")
