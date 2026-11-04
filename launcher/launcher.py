@@ -313,6 +313,9 @@ class StartWindow(QWidget):
         fetched in the background; the last answer shows while offline."""
         import threading
         from PySide6.QtCore import QTimer
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
         import stats as ST
         box = QFrame()
         box.setObjectName("stats")
