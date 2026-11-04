@@ -2274,6 +2274,9 @@ class BuildingPanel(QWidget):
               "ดวงโคม 1 ชุด/9 ตร.ม. · เต้ารับ สวิตช์ ตู้ไฟ หลักดิน (วสท.) · ท่อประปา "
               "ท่อน้ำทิ้ง ฟลอร์เดรน ถังบำบัด (มยผ.) · ท่อระบายน้ำรอบอาคาร ทางเท้า")
         check("head_plate", "เพลทหัวเสา 200×200×9 มม. + J-bolt 4-DB12 ฝัง 60 ซม.")
+        check("struts", "ตุ๊กตาและค้ำยันในโครงถัก (ดั้ง-ขื่อ-จันทัน)")
+        num("walk_w", "ทางเท้ารอบอาคาร กว้าง (จากผิวเสา)", 0.0, 3.0, 0.05)
+        num("drain_off", "ท่อระบายน้ำห่างอาคาร (จากผิวเสา)", 0.4, 5.0, 0.1)
         sf = sf_keep
         lay.addWidget(fin)
         self.library = LibraryBox(self)
@@ -2321,7 +2324,9 @@ class BuildingPanel(QWidget):
         labels = [lab for lab, _f, _p in B.steel_presets()]
         self.steel = {}
         for key, th in (("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"),
-                        ("rafter", "จันทัน"), ("purlin", "แป"), ("post", "ดั้ง")):
+                        ("rafter", "จันทัน"), ("purlin", "แป"), ("post", "ดั้ง"),
+                        ("wallplate", "อะเส"), ("tiebeam", "ขื่อ / คานรับดั้ง"),
+                        ("strut", "ตุ๊กตา / ค้ำยัน")):
             c = QComboBox()
             c.addItems(labels)
             for i, (lab, fam, prm) in enumerate(B.steel_presets()):

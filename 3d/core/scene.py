@@ -200,10 +200,26 @@ class Scene:
 
     # ---- Layers --------------------------------------------------------------
     def layer(self, name: str):
-        for ly in self.layers:
-            if ly.name == name:
-                return ly
-        return None
+        """The layer called ``name`` (or None) — by an index, not a walk of
+        the list: every render and pick asks this for every entity, and a
+        building made with a layer per part (WANIC ออกแบบอาคาร) carries
+        hundreds of layers, which turned each selection into seconds.
+        The index is rebuilt when the list is replaced, grows or shrinks,
+        or a layer it found has been renamed."""
+        layers = self.layers
+        sig = (id(layers), len(layers))
+        idx = self.__dict__.get("_layer_index")
+        if idx is None or idx[0] != sig:
+            idx = (sig, {ly.name: ly for ly in reversed(layers)})
+            self.__dict__["_layer_index"] = idx
+        ly = idx[1].get(name)
+        if ly is not None and ly.name == name:
+            return ly
+        # a miss or a stale hit: look again from scratch (renames, swaps)
+        idx = (sig, {ly_.name: ly_ for ly_ in reversed(layers)})
+        self.__dict__["_layer_index"] = idx
+        ly = idx[1].get(name)
+        return ly if ly is not None and ly.name == name else None
 
     def _layer_state(self, entity) -> tuple[bool, bool]:
         """(visible, locked) of the layer ``entity`` carries; unknown layer

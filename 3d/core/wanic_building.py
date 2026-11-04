@@ -98,6 +98,11 @@ DEFAULT_SETTINGS = {
     # column-head plate (เพลทหัวเสา) for the wall plate / tie beams:
     # PL 200×200×9 มม. on 4 J-bolts DB12 cast 0.60 ม. into the column
     "head_plate": True,
+    # struts (ตุ๊กตา) and braces (ค้ำยัน) of the king-post trusses
+    "struts": True, "strut": "C 100×50×20×2.3",
+    # outside: the walkway (ทางเท้า) from the outer face, the drain ring
+    # (ท่อระบายน้ำ) this far out from the building
+    "walk_w": 1.0, "drain_off": 1.5,
 }
 
 #: เพลทหัวเสา: กว้าง ยาว หนา (ม.), เหล็ก J-bolt (ขนาด, จำนวน, ฝังลึก ม., ขอ ม., โผล่ ม.)
@@ -1098,6 +1103,7 @@ def ceiling_members(E):
         # the frame above the board
         fb = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
         steel = {"color": (0.78, 0.80, 0.82)}
+        clip = {"color": (0.55, 0.57, 0.60)}
         z1 = zc
         top = (k + 1) * H - (0.0 if k == E["n"] - 1 else float(E["lib"]["S2"]["t"])
                              if "S2" in E["lib"] else 0.10)
@@ -1117,6 +1123,16 @@ def ceiling_members(E):
                 if top - (z1 + 0.037) > 0.02:
                     fb.box(x - 0.003, x + 0.003, y - 0.003, y + 0.003,
                            z1 + 0.037, top, steel)
+                    # the fixings: hanger clip on the main runner, a spring
+                    # level adjuster (สปริงปรับระดับ), an anchor plate up top
+                    fb.box(x - 0.012, x + 0.012, y - 0.022, y + 0.022,
+                           z1 + 0.037, z1 + 0.052, clip)
+                    za = z1 + 0.15
+                    if top - za > 0.08:
+                        fb.box(x - 0.008, x + 0.008, y - 0.015, y + 0.015,
+                               za, za + 0.05, clip)
+                    fb.box(x - 0.025, x + 0.025, y - 0.025, y + 0.025,
+                           top - 0.006, top, clip)
         for (a0, b0, a1, b1) in ((x0, y0, x1, y0 + 0.025), (x0, y1 - 0.025, x1, y1),
                                  (x0, y0 + 0.025, x0 + 0.025, y1 - 0.025),
                                  (x1 - 0.025, y0 + 0.025, x1, y1 - 0.025)):
@@ -1126,6 +1142,8 @@ def ceiling_members(E):
         if g is not None:
             g.ext[EXT_KEY]["info"] = [["ชนิด", f"โครงคร่าวฝ้า {frame} พร้อมฉากริมผนัง "
                                                "และลวด/สตัดแขวน"],
+                                      ["อุปกรณ์ยึด", "ตัวยึดโครงหลัก สปริงปรับระดับ "
+                                                     "เพลทยึดใต้โครงสร้าง (พุกเหล็ก)"],
                                       ["โครงซอย", f"@{sub:.2f} ม."],
                                       ["โครงหลัก/ตัวแขวน", f"@{main:.2f} ม."],
                                       ["ห้อง", rname], ["รายการ BOQ", "หมวด 10 งานพื้น/ฝ้า"]]
@@ -1625,7 +1643,8 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0):
                    o[1] - 1e-6 <= py <= o[3] + 1e-6 for o in others)
 
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "eave": [], "barge": [], "tie": [], "rbeam": []}
+           "skin": [], "eave": [], "barge": [], "tie": [], "rbeam": [],
+           "strut": [], "brace": []}
     zr = h(half)
     yc = y0 + half
     if s["roof"] == "hip":
@@ -1725,9 +1744,26 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0):
                 px.add(st)
         beam = rx1 - rx0 > 0.3
         zb = z0 + (db if beam else 0.0)
+        # struts (ตุ๊กตา) from the tie up to the rafters at the quarter points
+        # and braces (ค้ำยัน) from the foot of the post to the top of each
+        # strut — the king-post truss of the standard steel roof
+        _f, prm_ = steel_lookup(s["rafter"])
+        dra = float(prm_.get("H", prm_.get("D", prm_.get("A", 150)))) / 1000.0
+        inner = half - ov                       # wall line to the ridge line
         for xx in sorted(px):
             out["post"].append([P3(xx, yc, zb), P3(xx, yc, max(zr - dr, zb + 0.1))])
             out["tie"].append([P3(xx, y0 + ov, z0), P3(xx, y1 - ov, z0)])
+            st, br = [], []
+            if s.get("struts", True) and inner > 1.2:
+                for side in (1, -1):
+                    q = yc - side * inner / 2          # half way wall → ridge
+                    dist = abs(q - (y0 if side == 1 else y1))
+                    zt = h(dist) - dra
+                    if zt - z0 > 0.25:
+                        st.append([P3(xx, q, z0), P3(xx, q, zt)])
+                        br.append([P3(xx, yc, zb + 0.05), P3(xx, q, zt - 0.05)])
+            out["strut"].append(st)
+            out["brace"].append(br)
         if beam:
             out["rbeam"].append([P3(rx0, yc, zb), P3(rx1, yc, zb)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
@@ -1776,7 +1812,8 @@ def roof_lines(data):
         rects = plan_rectangles(top)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
            "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0,
-           "valley": 0.0, "valleys": [], "tie": [], "plate": [], "rbeam": []}
+           "valley": 0.0, "valleys": [], "tie": [], "plate": [], "rbeam": [],
+           "strut": [], "brace": []}
     # The steel wall plate (อะเส) on the ring beams lifts the frame by its
     # depth: rafters bear on it, the tie beams sit level with it.
     ph = 0.0
@@ -1815,6 +1852,8 @@ def roof_lines(data):
             for k in ("ridge", "hip", "rafter", "purlin", "post", "skin", "tie"):
                 out[k] += part[k]
             out["rbeam"] += part["rbeam"]
+            for k in ("strut", "brace"):
+                out[k] += [m for grp in part[k] for m in grp]
         else:
             # Trim what lies under a neighbouring roof (L / T plans); a
             # ridge or hip is kept only where it is still a crease of the
@@ -1829,10 +1868,13 @@ def roof_lines(data):
             for pl in part["purlin"]:
                 for seg in RC.clip_path(pl["path"], i, roofs, pl["closed"]):
                     out["purlin"].append({"closed": False, "path": seg})
-            for (a, b), tie in zip(part["post"], part["tie"]):
+            for (a, b), tie, st, br in zip(part["post"], part["tie"], part["strut"],
+                                           part["brace"]):
                 if not RC.hidden(b, i, roofs):
                     out["post"].append([a, b])
                     out["tie"].append(tie)
+                    out["strut"] += st
+                    out["brace"] += br
             out["rbeam"] += part["rbeam"]
             kept[i] = []
             for poly in part["skin"]:
@@ -1852,6 +1894,8 @@ def roof_lines(data):
     if not s.get("tie_beams"):
         out["tie"] = []
         out["rbeam"] = []
+        out["strut"] = []
+        out["brace"] = []
     if many:
         out["valleys"] = RC.valley_lines(roofs)
         # a valley ends on the ridge / hip junction or the eave corner:
@@ -1988,6 +2032,27 @@ def _end_planes(path, creases, offsets=None):
     planes = []
     for end, sgn in ((a, -1.0), (b, 1.0)):
         best = None
+        # At an apex — where a ridge meets its hips — a member runs up to the
+        # ridge end: a square, plumb cut there (set back half the ridge's
+        # width for one that meets the ridge side on), not a skew cut along
+        # whichever hip happened to be nearest (the wedge-shaped ends).
+        meet = [k for k, (c, d) in enumerate(creases)
+                if min(math.hypot(end[0] - c[0], end[1] - c[1]),
+                       math.hypot(end[0] - d[0], end[1] - d[1])) < 0.05]
+        if len(meet) >= 2 and tl > 1e-6:
+            nx, ny = tx / tl, ty / tl
+            back = 0.0
+            for k in meet:
+                c, d = creases[k]
+                dx, dy = d[0] - c[0], d[1] - c[1]
+                dl = math.hypot(dx, dy)
+                if dl < 1e-6:
+                    continue
+                if abs(nx * dx + ny * dy) / dl < 0.05:      # crosses it square
+                    back = max(back, (offsets[k] if offsets else 0.0) / 2.0)
+            planes.append(((end[0] - sgn * nx * back, end[1] - sgn * ny * back),
+                           (nx, ny)))
+            continue
         if tl > 1e-6:
             for k, (c, d) in enumerate(creases):
                 dx, dy = d[0] - c[0], d[1] - c[1]
@@ -2189,12 +2254,19 @@ def roof_members(data) -> tuple[list, dict]:
             ("tiebeam", "tiebeam", "ขื่อ",
              "ขื่อเหล็กพาดจากอะเสถึงอะเส ตามแนวเสา รับคานรับดั้ง"),
             ("rbeam", "tiebeam", "คานรับดั้ง",
-             "คานรับดั้งวางบนขื่อตามแนวอกไก่ ดั้งทุกตัวตั้งบนคานนี้")):
+             "คานรับดั้งวางบนขื่อตามแนวอกไก่ ดั้งทุกตัวตั้งบนคานนี้"),
+            ("strut", "strut", "ตุ๊กตา",
+             "ตุ๊กตาเหล็กจากขื่อขึ้นรับจันทันกลางช่วง (โครงถักแบบดั้งกลาง)"),
+            ("brace", "strut", "ค้ำยัน",
+             "ค้ำยันจากโคนดั้งไปหัวตุ๊กตา ถ่ายแรงจันทันลงดั้ง")):
         fam, params = steel_lookup(s[key])
         kgm = P.weight_per_m(fam, params)
         for path in lines.get({"wallplate": "plate", "tiebeam": "tie"}.get(kind, kind)) or []:
+            if kind in ("strut", "brace") and not s.get("struts", True):
+                continue
             L = math.dist(path[0], path[-1])
-            add(_member("roof", kind, label, fam, params, path, anchor="tc",
+            add(_member("roof", kind, label, fam, params, path,
+                        anchor="c" if kind in ("strut", "brace") else "tc",
                         ifc="IfcMember", key=f"{label} {s[key]}",
                         name=f"{label} {s[key]} · ยาว {L:.2f} ม.",
                         info=[("ชนิด", f"{label} (โครงหลังคาเหล็ก)"),
@@ -2265,14 +2337,26 @@ def roof_members(data) -> tuple[list, dict]:
         amp = tile["wave"][2]
         up = lift + amp + 0.02
         each = float(tile.get("cap") or 0.33)
+        # The hip caps end on the fascia: their lower end is drawn back
+        # (in plan) by the cap's half width, so the cap and its end piece
+        # (หางมน) sit inside the corner of the fascia boards instead of
+        # running out past them.
+        hips = []
+        for a_, b_ in lines["hip"]:
+            lo, hi = (a_, b_) if a_[2] <= b_[2] else (b_, a_)
+            L2 = math.hypot(hi[0] - lo[0], hi[1] - lo[1])
+            t = min(0.19 / L2, 0.3) if L2 > 1e-6 else 0.0
+            lo2 = tuple(lo[i] + (hi[i] - lo[i]) * t for i in range(3))
+            hips.append([lo2, hi] if a_[2] <= b_[2] else [hi, lo2])
+        cap_lines = dict(lines, hip=hips)
         for kind, paths, name, piece in (
                 ("ridge", lines["ridge"], "ครอบสัน", each),
-                ("hip", lines["hip"], "ครอบตะเข้สัน", each),
+                ("hip", cap_lines["hip"], "ครอบตะเข้สัน", each),
                 ("barge", lines["barge"], "ครอบข้าง",
                  float(tile.get("verge") or each))):
             for path in paths:
                 add(cap_pieces(path, 0.13, tcolor, name, up, piece), "cap")
-        for kind, pt, name in cap_specials(lines):
+        for kind, pt, name in cap_specials(cap_lines):
             add(cap_dome(pt, 0.15 if kind != "hip_end" else 0.13, tcolor,
                          name, up, kind), "cap")
     if s.get("soffit", True):
@@ -2795,7 +2879,45 @@ def soffit_members(data, lines, s):
                 frame.box(x0, x1, y, min(y + fw, y1), bt + fh, bt + 2 * fh,
                           steel_paint)
                 y += sp
+    # the fixings: a hanger (สตัดเกลียว Ø 6 มม.) from every cross runner up
+    # to the rafter above at most 1.20 ม. apart, a clip (ตัวยึด) at the
+    # runner and a plate (เพลทยึด) under the rafter, and the edge angles
+    # (ฉากขอบ) screwed to the wall and behind the fascia
+    fix = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
+    zinc = {"color": (0.55, 0.57, 0.60)}
+    rdepth = lift_of(s)
+    nh = 0
+    for x0, y0, x1, y1 in cells:
+        along_x = (x1 - x0) >= (y1 - y0)
+        runners = []
+        if along_x:
+            x = x0
+            while x < x1 - 1e-6:
+                runners.append([(x + fw / 2, y0 + (y1 - y0) * f) for f in (0.5,)])
+                x += 2 * sp if sp < 0.6 else sp
+        else:
+            y = y0
+            while y < y1 - 1e-6:
+                runners.append([(x0 + (x1 - x0) * f, y + fw / 2) for f in (0.5,)])
+                y += 2 * sp if sp < 0.6 else sp
+        for pts in runners:
+            for (hx, hy) in pts:
+                zr = skin_z(hx, hy, lines.get("skin") or [])
+                zb = z + bt + 2 * fh
+                if zr is None or zr - rdepth - zb < 0.03:
+                    continue
+                top = zr - rdepth
+                fix.box(hx - 0.003, hx + 0.003, hy - 0.003, hy + 0.003, zb, top, zinc)
+                fix.box(hx - 0.02, hx + 0.02, hy - 0.012, hy + 0.012, zb, zb + 0.015, zinc)
+                fix.box(hx - 0.03, hx + 0.03, hy - 0.03, hy + 0.03, top - 0.006, top, zinc)
+                nh += 1
+    g = fix.group(f"อุปกรณ์ยึดฝ้าชายคา (สตัดแขวน {nh} จุด)", "roof", "soffit_fix",
+                  "อุปกรณ์ยึดฝ้าชายคา", "IfcFastener")
     out = []
+    if g is not None:
+        out.append(_tag(g, "roof", "soffit_fix", "อุปกรณ์ยึดฝ้าชายคา",
+                        [("ชนิด", "สตัดเกลียว Ø 6 มม. + ตัวยึดโครงซีลาย + เพลทยึดใต้จันทัน"),
+                         ("จำนวน", f"{nh} จุด"), ("ระยะ", "ไม่เกิน 1.20 ม.")]))
     info = [("ชนิด", "ฝ้าชายคาระแนงไม้เทียม เว้นร่อง 5 มม. + มุ้งกันแมลง"),
             ("พื้นที่", f"{area:.2f} ตร.ม."), ("ระดับ", f"{z:+.2f} ม."),
             ("สูตรวัสดุ", "5.41 ฝ้าระแนงไม้เทียม (หลักเกณฑ์ 2569)"),
@@ -2812,6 +2934,39 @@ def soffit_members(data, lines, s):
                          ("ระยะ", f"@{sp:.2f} ม. ตั้งฉากแนวชายคา + ขอบสองด้าน"),
                          ("พื้นที่ฝ้า", f"{area:.2f} ตร.ม.")]))
     return out
+
+
+def lift_of(s) -> float:
+    """Depth (m) of the rafter section — the frame's underside is this
+    far under the rafter-top lines."""
+    _f, prm = steel_lookup(s["rafter"])
+    return float(prm.get("H", prm.get("D", prm.get("A", 150)))) / 1000.0
+
+
+def skin_z(x, y, skins):
+    """Height of the rafter-top surface at plan point (x, y) (the highest
+    facet over it), or None."""
+    best = None
+    for poly in skins:
+        if len(poly) < 3:
+            continue
+        inside = False
+        n = len(poly)
+        for i in range(n):
+            (x1, y1), (x2, y2) = poly[i][:2], poly[(i + 1) % n][:2]
+            if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+                inside = not inside
+        if not inside:
+            continue
+        a, b, c = poly[0], poly[1], poly[2]
+        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+        if abs(nz) < 1e-9:
+            continue
+        zz = a[2] - (nx * (x - a[0]) + ny * (y - a[1])) / nz
+        best = zz if best is None else max(best, zz)
+    return best
 
 
 def roof_skin(polys, lift=0.0):
@@ -2865,7 +3020,8 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("wallplate", "อะเส"),
-           ("tiebeam", "ขื่อ"), ("rbeam", "คานรับดั้ง"), ("headplate", "เพลทหัวเสา"),
+           ("tiebeam", "ขื่อ"), ("rbeam", "คานรับดั้ง"), ("strut", "ตุ๊กตา"),
+           ("brace", "ค้ำยัน"), ("headplate", "เพลทหัวเสา"),
            ("fascia", "เชิงชาย"),
            ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
            ("band", "เสาเอ็น-ทับหลัง"), ("plaster", "ผิวฉาบปูน"),

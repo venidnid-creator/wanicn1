@@ -74,6 +74,18 @@ def thai_script_font(px: int) -> QFont:
     return f
 
 
+def _version() -> str:
+    """The installed version (the installer writes it beside the program)."""
+    for p in (Path(getattr(sys, "_MEIPASS", "")) / "VERSION",
+              Path(sys.executable).resolve().parent / "VERSION",
+              Path(__file__).resolve().parent / "VERSION"):
+        try:
+            return p.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return "dev"
+
+
 def asset(name: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent / "branding"))
     for p in (base / name, base / "branding" / name, base / "png" / name,
@@ -242,6 +254,7 @@ class StartWindow(QWidget):
         for w in (name, tag, dev):
             words.addWidget(w)
         head.addLayout(words, 1)
+        head.addWidget(self._stats_card(), 0, Qt.AlignTop | Qt.AlignRight)
         outer.addLayout(head)
 
         # the two programs
@@ -294,6 +307,54 @@ class StartWindow(QWidget):
         foot.setWordWrap(True)
         outer.addWidget(foot)
         self.refresh()
+
+    def _stats_card(self) -> QFrame:
+        """Top right: downloads (GitHub) and users (the developer's counter),
+        fetched in the background; the last answer shows while offline."""
+        import threading
+        from PySide6.QtCore import QTimer
+        import stats as ST
+        box = QFrame()
+        box.setObjectName("stats")
+        box.setStyleSheet("QFrame#stats { background: white; border: 1px solid #D9D4C7;"
+                          " border-radius: 8px; }")
+        col = QVBoxLayout(box)
+        col.setContentsMargins(12, 8, 12, 8)
+        title = QLabel(f"<b style='color:{NAVY}'>📊 สถิติผู้ใช้โปรแกรม</b>")
+        col.addWidget(title)
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet(f"font-size: 12px; color: {NAVY};")
+        col.addWidget(self.stats_label)
+        settings = QSettings(PRODUCT, "launcher")
+        cached = {}
+        try:
+            cached = json.loads(settings.value("usage/cache") or "{}")
+        except (TypeError, ValueError):
+            cached = {}
+        self.stats_label.setText(ST.text({}, cached) + "<br><span style='color:#888'>กำลังอัปเดต…</span>")
+        state = {}
+
+        def work():
+            state["info"] = ST.fetch_all(settings_bg, _version())
+        settings_bg = settings
+        threading.Thread(target=work, daemon=True).start()
+        timer = QTimer(box)
+
+        def poll():
+            info = state.get("info")
+            if info is None:
+                return
+            timer.stop()
+            keep = {k: v for k, v in info.items() if k in ("downloads", "usage")}
+            if keep:
+                merged = dict(cached, **keep)
+                settings.setValue("usage/cache", json.dumps(merged))
+            self.stats_label.setText(ST.text(info, cached))
+        timer.timeout.connect(poll)
+        timer.start(300)
+        box.setToolTip("ยอดดาวน์โหลดนับจาก GitHub Releases · ผู้ใช้งานนับจากการเปิดโปรแกรม "
+                       "(ส่งเพียงรหัสสุ่มของเครื่องและรุ่นโปรแกรม ไม่มีข้อมูลส่วนตัว)")
+        return box
 
     def _support_panel(self) -> QFrame:
         """The developer's photo, free use, and the account to support him."""

@@ -37,7 +37,7 @@ def _png(path, alpha=True, w=40, h=120):
 
 def test_the_engineer_by_default_and_none_when_switched_off(settings):
     fig = sf.chosen(settings)
-    assert fig.image.name == "ingeniero.png" and fig.height == pytest.approx(1.70)
+    assert fig.image.name == "wanic.png" and fig.height == pytest.approx(1.70)
     settings.setValue(sf.KEY_ON, "0")
     assert sf.chosen(settings) is None
 
@@ -66,9 +66,9 @@ def test_my_own_picture_is_copied_and_survives_the_original(settings, tmp_path):
 def test_a_lost_picture_falls_back_to_the_engineer_not_to_nothing(settings, tmp_path):
     settings.setValue(sf.KEY_PICK, sf.CUSTOM)
     settings.setValue(sf.KEY_IMAGE, str(tmp_path / "gone.png"))
-    assert sf.chosen(settings).image.name == "ingeniero.png"
+    assert sf.chosen(settings).image.name == "wanic.png"
     settings.setValue(sf.KEY_PICK, "nobody")
-    assert sf.chosen(settings).image.name == "ingeniero.png"
+    assert sf.chosen(settings).image.name == "wanic.png"
 
 
 def test_a_file_that_is_not_a_picture_is_refused(settings, tmp_path):

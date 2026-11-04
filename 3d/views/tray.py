@@ -3651,13 +3651,19 @@ class EntityInfoPanel(QWidget):
         current = {layer_of(e) for e in tagged}
         self._updating = True
         try:
-            self._layer_box.clear()
-            if len(current) > 1:
-                # A mixed selection reads as such; picking a layer moves
-                # everything onto it.
-                self._layer_box.addItem(tr("(several)"), None)
-            for name in names:
-                self._layer_box.addItem(name, name)
+            # Refill the list only when the layers or the mixed state
+            # changed: hundreds of layers (a layer per part) re-added on
+            # every click made selecting slow.
+            key = (tuple(names), len(current) > 1)
+            if getattr(self, "_layer_box_key", None) != key:
+                self._layer_box_key = key
+                self._layer_box.clear()
+                if len(current) > 1:
+                    # A mixed selection reads as such; picking a layer moves
+                    # everything onto it.
+                    self._layer_box.addItem(tr("(several)"), None)
+                for name in names:
+                    self._layer_box.addItem(name, name)
             if len(current) == 1:
                 idx = self._layer_box.findData(next(iter(current)))
                 self._layer_box.setCurrentIndex(max(idx, 0))

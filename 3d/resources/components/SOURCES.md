@@ -30,3 +30,7 @@ No `.glb` component ships any more: the Sketchfab CC-BY starter set was
 retired when the offline `.igz` set replaced it, and the bed went with it at
 the author's request. `formats/glb.py` still imports the format — it is what
 a user's own download arrives as.
+
+`wanic.png` — the default scale figure of WANICNSURVEY: the engineer figure
+with the face of the developer (นายเวนิช ธัมมะวงษ์, his own picture, used at
+his request) and the WANICNSURVEY compass logo on the hard hat and the vest.

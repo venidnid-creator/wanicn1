@@ -429,7 +429,7 @@ def test_services_where_they_are_installed():
     d["floors"][0]["fixtures"] = [{"id": "f1", "type": "WC1", "x": 1.0, "y": 6.0}]
     groups, count = B.structure_members(d)
     for k in ("outlet", "panel", "ground_rod", "fan", "pipe_supply", "pipe_drain",
-              "septic", "grease", "meter", "walkway", "drain_ring", "sign"):
+              "septic", "grease", "meter", "walkway", "drain_pipe", "manhole", "sign"):
         assert count.get(k), k
     panel = next(g for g in groups if _kind(g) == "panel")
     assert math.isclose(_box(panel)[2], 1.50, abs_tol=1e-6)        # ขอบล่าง 1.50 ม.
@@ -461,3 +461,69 @@ def test_building_sections_and_the_front_matter():
     assert "สารบัญ" in toc and "แผ่นที่ A-01 ถึงแผ่นที่" in toc and "บัญชีแสดงปริมาณวัสดุ" in toc
     plan = next(s for s in full if s.title == "แปลนพื้นชั้น 1")
     assert "ก" in plan.texts() and "ข" in plan.texts()                # section marks
+
+
+def test_truss_struts_apex_cut_and_hip_caps_on_the_fascia():
+    d = _data([dict(name="ห้อง", x=0, y=0, w=9.6, d=7.2)])
+    d["settings"].update(pitch=35, overhang=1.0)
+    lines = B.roof_lines(d)
+    # every post has its pair of struts and braces
+    assert len(lines["strut"]) == 2 * len(lines["post"]) == len(lines["brace"])
+    for a, b in lines["strut"]:
+        assert abs(a[0] - b[0]) < 1e-9 and abs(a[1] - b[1]) < 1e-9 and b[2] > a[2]
+    groups, count = B.roof_members(d)
+    assert count["strut"] == len(lines["strut"]) and count["brace"] == len(lines["brace"])
+    r = Q.compute(d)
+    assert any("C 100×50×20×2.3" in ln["desc"] for ln in r["lines"])
+    # the middle rafter of each hip end runs to the ridge end and is cut
+    # square there (no wedge along one hip)
+    (ra, rb), = lines["ridge"]
+    mids = [g for g in groups if _kind(g) == "rafter"
+            and any(math.dist(p[:2], q[:2]) < 1e-6 for p in g.ext["wanic_profiles"]["path"]
+                    for q in (ra, rb))]
+    assert len(mids) >= 2
+    for g in mids:
+        path = g.ext["wanic_profiles"]["path"]
+        top = max(path, key=lambda p: p[2])
+        axis = 0 if abs(path[0][1] - path[1][1]) < 1e-9 else 1
+        near = [v.position for v in g.mesh.vertices
+                if math.dist((v.position.x(), v.position.y()), top[:2]) < 0.2]
+        vals = {round((p.x(), p.y())[axis], 4) for p in near}
+        assert len(vals) == 1, vals                      # one plumb square end
+    # hip caps stop inside the fascia corner
+    ov = 1.0
+    caps = [g for g in groups if _kind(g) == "cap"]
+    xs = [v.position.x() for g in caps for v in g.mesh.vertices]
+    ys = [v.position.y() for g in caps for v in g.mesh.vertices]
+    assert min(xs) >= -ov - 0.02 and min(ys) >= -ov - 0.02
+
+
+def test_walkway_and_drain_follow_the_outline_with_settable_offsets():
+    from core import wanic_mep as M
+    d = _data()
+    s = B.settings_of(d)
+    assert s["walk_w"] == 1.0 and s["drain_off"] == 1.5
+    E = B.elements(d)
+    ring, pits = M.ring_length(E, s)
+    assert pits >= 8 and ring > 0
+    box = _data([dict(name="ห้อง", x=0, y=0, w=8, d=6)])
+    r1, _p = M.ring_length(B.elements(box), B.settings_of(box))
+    assert math.isclose(r1, 2 * (8.2 + 3 + 6.2 + 3))         # 1.5 m out each side
+    box["settings"]["drain_off"] = 2.5
+    r2, _p = M.ring_length(B.elements(box), B.settings_of(box))
+    assert math.isclose(r2 - r1, 8.0)
+    groups, count = B.structure_members(_data())
+    pipes = [g for g in groups if _kind(g) == "drain_pipe"]
+    walk = next(g for g in groups if _kind(g) == "walkway")
+    wb = _box(walk)
+    # the drain is 1.5 m out from the column faces, the walkway 1.0 m
+    assert math.isclose(min(_box(p)[0] for p in pipes), -0.1 - 1.5 - 0.15, abs_tol=1e-3)
+    assert math.isclose(wb[0], -0.1 - 1.0, abs_tol=1e-6) and wb[5] <= 0.0
+    cells = M._rect_union_cells([(0, 0, 4, 4), (3, 3, 7, 7)], [(1, 1, 3, 3)])
+    for i, a in enumerate(cells):
+        for b in cells[i + 1:]:
+            assert not (min(a[2], b[2]) - max(a[0], b[0]) > 1e-9 and
+                        min(a[3], b[3]) - max(a[1], b[1]) > 1e-9)
+    r = Q.compute(_data())
+    walk_line = next(ln for ln in r["lines"] if ln["desc"].startswith("ทางเท้ารอบอาคาร"))
+    assert "1.00 ม." in walk_line["desc"]

@@ -2104,6 +2104,10 @@ def build_set(data, info=None,
                for s in E["slabs"]):
             add("A", "แบบขยายห้องน้ำ", lambda sh, _a: a_bathrooms(sh, E),
                 "1:50")
+        add("A", "รายการวัสดุประกอบแบบ", lambda sh, _a: a_materials(sh, E, fcodes), "-")
+        if L:
+            add("A", "แบบขยายเชิงชาย ฝ้าชายคา โครงถักหลังคา",
+                lambda sh, _a: detail_eave_truss(sh, E, L), "1:20")
     if "S" in groups:
         add("S", "สารบัญแบบ รายการประกอบแบบโครงสร้าง",
             lambda sh, all_: s_index(sh, all_, E), "-")
@@ -2123,12 +2127,14 @@ def build_set(data, info=None,
         for k in floors:
             add("SN", f"แปลนระบบสุขาภิบาลชั้น {k + 1}",
                 lambda sh, _a, k=k: sn_plan(sh, E, k))
+        add("SN", "แบบขยายถังบำบัด บ่อพัก ฟลอร์เดรน", lambda sh, _a: sn_details(sh, E), "1:20")
     if "EE" in groups:
         add("EE", "สารบัญแบบ สัญลักษณ์ ตารางโหลด รายการประกอบแบบไฟฟ้า",
             lambda sh, all_: ee_index(sh, all_, E), "-")
         for k in floors:
             add("EE", f"แปลนระบบไฟฟ้าชั้น {k + 1}",
                 lambda sh, _a, k=k: ee_plan(sh, E, k))
+        add("EE", "ผังวงจรไฟฟ้า (Single Line Diagram)", lambda sh, _a: ee_single_line(sh, E), "-")
     if "M" in groups:
         for k in floors:
             add("M", f"แปลนระบบปรับอากาศและระบายอากาศชั้น {k + 1}",
@@ -2150,6 +2156,293 @@ def build_set(data, info=None,
         g_contents(toc, E, info, sheets, boq)
         front = [cover, toc]
     return front + sheets + boq
+
+
+# ---------------------------------------------------------------------------
+# Detail sheets like the standard sets: materials, eave & truss, single
+# line diagram, sanitary details
+# ---------------------------------------------------------------------------
+
+def a_materials(sh, E, fcodes):
+    """รายการวัสดุ: floors (พ), walls (ผ), ceilings (ฝ), trims, the roof —
+    each with its code and description, as on the standard sets."""
+    s = E["settings"]
+    x0, y0, x1, y1 = drawing_area()
+    sh.text((x0 + 85, y1 - 6), "รายการวัสดุประกอบแบบ", 4.0, "center", "text", True)
+    rows = [("พื้น", "")]
+    for code, (tag, name) in fcodes.items():
+        rows.append((tag, name[:70]))
+    rows.append(("ผนัง", ""))
+    for i, ext in enumerate((True, False), 1):
+        sp = B.wall_spec(s, ext)
+        rows.append((f"ผ{i}", f"{'ผนังภายนอก' if ext else 'ผนังภายใน'} {sp['name']} "
+                              f"ฉาบปูนเรียบ {sp['po' if ext else 'pi'] * 100:g} ซม. ทาสีน้ำอะครีลิค"))
+    if any(CAT.finish_of(sl["room"])["wall_tile"] for sl in E["slabs"]):
+        rows.append(("ผ3", "ผนังบุกระเบื้องเซรามิค (ห้องน้ำ/ครัว) ตามความสูงที่ระบุในแบบขยาย"))
+    rows.append(("ฝ้าเพดาน", ""))
+    for i, (key, (name, lab, frame, sub, main)) in enumerate(B.CEILING_TYPES.items(), 1):
+        rows.append((f"ฝ{i}", f"{name} ลวด/สตัดแขวน @{main:.2f} ม."))
+    rows.append((f"ฝ{len(B.CEILING_TYPES) + 1}",
+                 "ฝ้าชายคาระแนงไม้เทียมเว้นร่อง + มุ้งกันแมลง โครงซีลาย สตัดแขวนใต้จันทัน"))
+    rows.append(("บัว", ""))
+    if s.get("skirting"):
+        rows.append(("บ1", B.SKIRTING_TYPES.get(s.get("skirting_type", "ceramic"),
+                                               B.SKIRTING_TYPES["ceramic"])[0]))
+    if s.get("cornice"):
+        rows.append(("บ2", B.CORNICE[0]))
+    rows.append(("หลังคา", ""))
+    tile = CAT.roof_tile(s)[1]["name"]
+    rows.append(("ล1", f"{tile} ลาด {float(s.get('pitch') or 0):.0f}° บนแป {s['purlin']}"))
+    rows.append(("ล2", f"โครงหลังคาเหล็ก: อกไก่/ตะเฆ่ {s['ridge']} จันทัน {s['rafter']} "
+                       f"อะเส/ขื่อ {s['tiebeam']} ตุ๊กตา {s.get('strut', '-')}"))
+    rows.append(("ล3", "เชิงชาย + ทับเชิงชาย ไม้สำเร็จรูป 1\"×8\" + 1\"×6\" ปิดนก PVC"))
+    y = y1 - 12
+    cols = [("สัญลักษณ์", 26, "center"), ("รายการวัสดุ", 190, "left")]
+    out = []
+    for tag, desc in rows:
+        out.append((tag if desc else f"[{tag}]", desc))
+    table(sh, x0, y, cols, out, 2.3, 6.0)
+    # symbols on the right
+    xs = x0 + 232
+    sh.text((xs, y1 - 6), "สัญลักษณ์ประกอบแบบ", 3.6, "left", "text", True)
+    yy = y1 - 18
+    items = [("grid", "แนวเสา (กริด) ระยะศูนย์กลางถึงศูนย์กลาง"),
+             ("level", "ระดับ (เมตร) ±0.00 = ระดับพื้นชั้น 1"),
+             ("cut", "รูปตัดอาคาร ก-ก ข-ข (หัวลูกศรชี้ทางมอง)"),
+             ("door", "ป1 รหัสประตู · น1 รหัสหน้าต่าง"),
+             ("hatch", "ผนังก่ออิฐฉาบปูน (แรเงา) / คอนกรีตตัด (ทึบ)")]
+    for kind, desc in items:
+        if kind == "grid":
+            sh.circle((xs + 4, yy + 1), 2.6, "grid", 0.25)
+            sh.text((xs + 4, yy), "1", 2.4, "center", "grid")
+        elif kind == "level":
+            _level(sh, (xs + 4, yy), 0.0, "", left=False)
+        elif kind == "cut":
+            sh.circle((xs + 4, yy + 1), 2.8, "text", 0.35)
+            sh.text((xs + 4, yy), "ก", 2.6, "center", "text", True)
+        elif kind == "door":
+            sh.text((xs + 1, yy), "ป1", 2.6, "left", "text", True)
+        else:
+            sh.fill([(xs, yy - 1), (xs + 8, yy - 1), (xs + 8, yy + 3), (xs, yy + 3)], "hatch", 0.85)
+        sh.text((xs + 14, yy), desc, 2.3)
+        yy -= 9
+
+
+def detail_eave_truss(sh, E, L):
+    """แบบขยายเชิงชาย-ฝ้าชายคา (1:20) and the roof truss (1:50): the ring
+    beam, column-head plate and J-bolts, wall plate, rafter, purlins, tile,
+    fascia, soffit with its frame and hangers; the truss with tie, ridge
+    beam, king post, struts and braces."""
+    s = E["settings"]
+    x0, y0, x1, y1 = drawing_area()
+    tan = math.tan(math.radians(float(s.get("pitch") or 30)))
+    ov = float(s.get("overhang") or 0.6)
+    # --- eave detail, 1:20 -------------------------------------------------
+    k = 1000.0 / 20
+    ox, oy = x0 + 95, y0 + 75
+
+    def P(u, z):
+        return (ox + u * k, oy + z * k)
+
+    def R(u0, z0, u1, z1, layer="cut", w=0.35, fill=None):
+        pts = [P(u0, z0), P(u1, z0), P(u1, z1), P(u0, z1)]
+        if fill is not None:
+            sh.fill(pts, "hatch", fill)
+        sh.poly(pts, layer, w)
+    lib = E["lib"]
+    bh = float(lib["RB1"]["h"])
+    half = float(lib["C1"]["b"]) / 2
+    R(-half, -bh, half, 0.0, fill=0.75)                    # ring beam
+    R(-half, -bh - 0.8, half, -bh, "cut", 0.25)             # column below
+    sp = B.wall_spec(s, True)
+    R(-half + sp["po"], -bh - 0.8, -half + sp["po"] + sp["t"], -bh, "cut", 0.25, 0.9)
+    R(-0.10, -0.009, 0.10, 0.0, "struct", 0.35, 0.3)        # head plate
+    for u in (-0.05, 0.05):
+        sh.line(P(u, 0.05), P(u, -0.60), "struct", 0.25)
+        sh.line(P(u, -0.60), P(u + (0.08 if u < 0 else -0.08), -0.60), "struct", 0.25)
+    ph = 0.15
+    R(-0.0325, 0.0, 0.0325, ph, "struct", 0.35, 0.5)          # wall plate (C150)
+    # rafter line: underside through (0, ph), rising inward (to the left: −u = inside)
+    ru = [(-1.6, ph + 1.6 * tan), (ov + 0.05, ph - (ov + 0.05) * tan)]
+    sh.line(P(*ru[0]), P(*ru[1]), "struct", 0.5)
+    rd = 0.15 / math.cos(math.atan(tan))
+    sh.line(P(ru[0][0], ru[0][1] + rd), P(ru[1][0], ru[1][1] + rd), "struct", 0.5)
+    # purlins at the batten gauge, tiles over them
+    gauge = float(s.get("purlin_sp") or 0.32) * math.cos(math.atan(tan))
+    u = ov - 0.05
+    while u > -1.55:
+        zt = ph - u * tan + rd
+        R(u - 0.0225, zt, u + 0.0225, zt + 0.075, "struct", 0.25)
+        u -= gauge
+    sh.line(P(-1.6, ph + 1.6 * tan + rd + 0.10), P(ov + 0.05, ph - (ov + 0.05) * tan + rd + 0.10),
+            "roof", 0.7)
+    # fascia at the eave and the soffit under it
+    ze = ph - ov * tan + rd
+    R(ov, ze - 0.20, ov + 0.025, ze, "cut", 0.35, 0.6)
+    zs = ze - 0.20
+    R(half, zs, ov, zs + 0.008, "cut", 0.35, 0.4)
+    R(half, zs + 0.008, ov, zs + 0.032, "struct", 0.18)
+    for uh in (half + 0.25, (half + ov) / 2 + 0.1):
+        zr = ph - uh * tan
+        if zr > zs + 0.05:
+            sh.line(P(uh, zs + 0.032), P(uh, zr), "struct", 0.25)
+    notes = [((ov - 0.3, ph - (ov - 0.3) * tan + rd + 0.10),
+              "กระเบื้อง " + CAT.roof_tile(s)[1]["name"][:30]),
+             ((-0.6, ph + 0.6 * tan + rd + 0.04), f"แป {s['purlin']} หันปากขึ้นอกไก่"),
+             ((-0.9, ph + 0.9 * tan + 0.07), f"จันทัน {s['rafter']}"),
+             ((ov + 0.012, ze - 0.10), "เชิงชาย + ทับเชิงชาย ไม้สำเร็จรูป 1\"×8\" + 1\"×6\""),
+             (((half + ov) / 2, zs + 0.004), "ฝ้าชายคาระแนงไม้เทียม เว้นร่อง + มุ้งกันแมลง"),
+             (((half + ov) / 2 + 0.1, zs + 0.10), "โครงซีลาย @0.60 ม. สตัดแขวน Ø6 มม. ใต้จันทัน"),
+             ((0.0, ph / 2), f"อะเส {s['wallplate']}"),
+             ((0.08, -0.005), "เพลทหัวเสา 200×200×9 มม."),
+             ((0.05, -0.40), "J-bolt 4-DB12 ฝังในเสา 0.60 ม. งอขอ 8 ซม."),
+             ((-half / 2, -bh / 2), "คานรัดรอบ ค.ส.ล. (RB1)")]
+    tx_ = P(ov, 0)[0] + 22
+    ty_ = P(0, ph + 0.5 * tan + 0.3)[1]
+    for (u, z), t in sorted(notes, key=lambda n: -n[0][1]):
+        p_ = P(u, z)
+        sh.line(p_, (tx_ - 2, ty_ + 0.8), "dim", 0.13)
+        sh.circle(p_, 0.5, "dim", 0.13)
+        sh.text((tx_, ty_), t, 2.1, "left", "text")
+        ty_ -= 6.5
+    caption(sh, (ox + 20, y0 + 8), "แบบขยายเชิงชาย ฝ้าชายคา และหัวเสา", "1:20")
+    # --- truss, 1:50 --------------------------------------------------------
+    W = 0.0
+    if L and L.get("tie"):
+        a, b = L["tie"][0]
+        W = math.dist(a[:2], b[:2])
+    W = W or 6.0
+    k2 = 1000.0 / 75
+    tx, ty = x0 + 270, y0 + 150
+
+    def Q(u, z):
+        return (tx + u * k2, ty + z * k2)
+    half_in = W / 2
+    hr = (half_in + ov) * tan
+    sh.line(Q(-half_in, 0.0), Q(half_in, 0.0), "struct", 0.5)              # tie
+    sh.line(Q(-half_in, 0.15), Q(half_in, 0.15), "struct", 0.25)
+    sh.line(Q(-half_in - ov, -ov * tan + 0.15), Q(0, hr - ov * tan + 0.15), "struct", 0.5)
+    sh.line(Q(half_in + ov, -ov * tan + 0.15), Q(0, hr - ov * tan + 0.15), "struct", 0.5)
+    sh.line(Q(0, 0.30), Q(0, hr - ov * tan), "struct", 0.4)               # king post
+    sh.rect(*Q(-0.04, 0.15), *Q(0.04, 0.30), "struct", 0.25)               # ridge beam
+    for side in (-1, 1):
+        q = side * half_in / 2
+        zt = (half_in - abs(q)) * tan + 0.15 - 0.15
+        sh.line(Q(q, 0.15), Q(q, zt), "struct", 0.35)                       # strut
+        sh.line(Q(0, 0.35), Q(q, zt - 0.05), "struct", 0.35)                # brace
+        sh.text(Q(q + 0.1 * side, zt / 2), "ตุ๊กตา", 2.0, "left" if side > 0 else "right")
+    for side in (-1, 1):
+        sh.rect(*Q(side * half_in - 0.1, -0.4), *Q(side * half_in + 0.1, 0.0), "cut", 0.35)
+    sh.text(Q(0.15, hr / 2), "ดั้ง", 2.0)
+    sh.text(Q(half_in / 4, 0.55), "ค้ำยัน", 2.0)
+    sh.text(Q(-half_in + 0.3, -0.35), f"ขื่อ {s['tiebeam']}", 2.0)
+    sh.text(Q(-0.6, hr - ov * tan + 0.45), f"อกไก่ {s['ridge']}", 2.0)
+    caption(sh, (tx, ty - 22), "รูปโครงถักหลังคา (ดั้ง ตุ๊กตา ค้ำยัน)", "1:75")
+
+
+def ee_single_line(sh, E):
+    """ผังวงจรไฟฟ้า (single line diagram): the meter, the main breaker with
+    its earth-leakage device, and every circuit with its breaker, wire and
+    load — from the room services the 3D and the BOQ use."""
+    from core import wanic_mep as MEP
+    x0, y0, x1, y1 = drawing_area()
+    rooms = MEP.plan({}, E)
+    circ = []
+    lights = sum(r["lights"] for r in rooms)
+    outs = sum(r["outlets"] for r in rooms)
+    for i in range(max(1, math.ceil(lights / 10))):
+        n = min(10, lights - i * 10)
+        circ.append((f"แสงสว่าง {i + 1}", "1P 16 A", "THW 2×1.5 ตร.มม.", f"{n} จุด", n * 18))
+    for i in range(max(1, math.ceil(outs / 8))):
+        n = min(8, outs - i * 8)
+        circ.append((f"เต้ารับ {i + 1}", "1P 20 A", "THW 2×2.5 + G 2.5", f"{n} จุด", n * 180))
+    for r in rooms:
+        if r["ac"]:
+            circ.append((f"แอร์ {r['room'].get('name') or ''}", "1P 20 A", "THW 2×4 + G 4",
+                         f"{r['ac']:,} BTU", int(r['ac'] / 9)))
+        if r["heater"]:
+            circ.append((f"น้ำอุ่น {r['room'].get('name') or ''}", "1P 32 A", "THW 2×6 + G 6",
+                         "4,500 W", 4500))
+    total = sum(c[4] for c in circ)
+    amp = total / 220 * 0.8
+    meter = "15(45) A" if amp <= 30 else "30(100) A" if amp <= 75 else "50(150) A"
+    main = next((f"2P {c} A" for c in (32, 50, 63, 80, 100, 125) if c >= amp * 1.1), "2P 150 A")
+    sh.text((x0 + 10, y1 - 8), "ผังวงจรไฟฟ้า (SINGLE LINE DIAGRAM)", 4.0, "left", "text", True)
+    bx = x0 + 30
+    top = y1 - 25
+    sh.circle((bx, top), 5, "elec", 0.35)
+    sh.text((bx, top - 1), "kWh", 2.4, "center", "elec", True)
+    sh.text((bx + 8, top - 1), f"มิเตอร์ กฟภ./กฟน. {meter} 1 เฟส 2 สาย", 2.3)
+    sh.line((bx, top - 5), (bx, top - 18), "elec", 0.5)
+    sh.rect(bx - 4, top - 26, bx + 4, top - 18, "elec", 0.35)
+    sh.text((bx + 8, top - 23), f"เมนเบรกเกอร์ {main} + RCBO 30 mA (ตู้คอนซูมเมอร์ยูนิต)", 2.3)
+    sh.text((bx + 8, top - 28), "สายเมน THW 2×16 ตร.มม. + G 10 ในท่อ IMC Ø 1\"  · หลักดิน 5/8\"×2.40 ม.", 2.1)
+    bus = top - 34
+    sh.line((bx, top - 26), (bx, bus), "elec", 0.5)
+    xe = bx + 30 + 46 * max(len(circ) - 1, 1)
+    xe = min(xe, x1 - 20)
+    step = (xe - bx - 30) / max(len(circ) - 1, 1)
+    sh.line((bx, bus), (xe, bus), "elec", 0.7)
+    for i, (name, cb, wire, load, va) in enumerate(circ):
+        cx = bx + 30 + step * i
+        sh.line((cx, bus), (cx, bus - 8), "elec", 0.35)
+        sh.rect(cx - 2.5, bus - 14, cx + 2.5, bus - 8, "elec", 0.25)
+        sh.line((cx, bus - 14), (cx, bus - 40), "elec", 0.35)
+        sh.text((cx, bus - 46), name[:16], 2.1, "center", "text", True)
+        sh.text((cx, bus - 51), cb, 2.0, "center")
+        sh.text((cx, bus - 56), wire, 1.8, "center")
+        sh.text((cx, bus - 61), load, 2.0, "center")
+        sh.text((cx, bus - 66), f"{va:,} VA", 1.9, "center")
+    sh.text((x0 + 10, y0 + 30), f"โหลดรวม {total:,} VA ประมาณ {total / 220:.1f} A × 0.8 (ค่าดีมานด์) = "
+                                f"{amp:.1f} A → มิเตอร์ {meter} เมน {main}", 2.6, "left", "text", True)
+    sh.text((x0 + 10, y0 + 22), "การเดินสายและติดตั้งตามมาตรฐานการติดตั้งทางไฟฟ้าสำหรับประเทศไทย (วสท. 2001) "
+                                "· วงจรเต้ารับและห้องน้ำมีเครื่องตัดไฟรั่ว 30 mA", 2.2)
+
+
+def sn_details(sh, E):
+    """แบบขยายงานสุขาภิบาล: the septic tank, a manhole and the floor drain."""
+    s = E["settings"]
+    x0, y0, x1, y1 = drawing_area()
+    k = 1000.0 / 20
+
+    def box(ox, oy, w, h, layer="cut", lw=0.35, fill=None):
+        pts = [(ox, oy), (ox + w * k, oy), (ox + w * k, oy + h * k), (ox, oy + h * k)]
+        if fill is not None:
+            sh.fill(pts, "hatch", fill)
+        sh.poly(pts, layer, lw)
+    # septic tank
+    ox, oy = x0 + 20, y0 + 70
+    box(ox, oy, 1.1, 1.6, "pipe", 0.5)
+    sh.line((ox - 10, oy + 1.65 * k), (ox + 1.1 * k + 10, oy + 1.65 * k), "cut", 0.5)
+    box(ox + 0.3 * k, oy + 1.6 * k, 0.5, 0.1, "cut", 0.35, 0.7)
+    sh.line((ox - 20, oy + 1.3 * k), (ox, oy + 1.3 * k), "pipe", 0.5)
+    sh.line((ox + 1.1 * k, oy + 1.2 * k), (ox + 1.1 * k + 20, oy + 1.2 * k), "pipe", 0.5)
+    sh.text((ox - 18, oy + 1.3 * k + 2), "ท่อโสโครกเข้า Ø 4\"", 2.0)
+    sh.text((ox + 1.1 * k + 2, oy + 1.2 * k + 2), "ท่อน้ำทิ้งออก Ø 4\" ลงบ่อพัก", 2.0)
+    sh.text((ox + 0.55 * k, oy + 0.85 * k), "ถังบำบัดน้ำเสีย", 2.6, "center", "text", True)
+    sh.text((ox + 0.55 * k, oy + 0.70 * k), "สำเร็จรูป", 2.6, "center", "text", True)
+    caption(sh, (ox + 0.55 * k, y0 + 10), "แบบขยายถังบำบัดน้ำเสีย", "1:20")
+    # manhole
+    ox2 = x0 + 140
+    box(ox2, oy, 0.8, 0.85, "cut", 0.5, 0.75)
+    box(ox2 + 0.1 * k, oy + 0.1 * k, 0.6, 0.75, "cut", 0.35, 1.0)
+    sh.line((ox2 - 15, oy + 0.4 * k), (ox2, oy + 0.4 * k), "pipe", 0.6)
+    sh.line((ox2 + 0.8 * k, oy + 0.4 * k), (ox2 + 0.8 * k + 15, oy + 0.4 * k), "pipe", 0.6)
+    sh.rect(ox2 + 0.1 * k, oy + 0.81 * k, ox2 + 0.7 * k, oy + 0.85 * k, "struct", 0.35)
+    sh.text((ox2 + 0.4 * k, oy + 0.95 * k), "ฝาตะแกรงเหล็ก", 2.0, "center")
+    sh.text((ox2 - 14, oy + 0.4 * k + 2), "ท่อ คสล. Ø 0.30 ม.", 2.0)
+    caption(sh, (ox2 + 0.4 * k, y0 + 10), f"แบบขยายบ่อพัก ค.ส.ล. 0.60×0.60 ม. "
+                                           f"(ห่างอาคาร {float(s.get('drain_off', 1.5)):.2f} ม.)", "1:20")
+    # floor drain
+    ox3 = x0 + 245
+    sh.line((ox3, oy + 0.6 * k), (ox3 + 0.8 * k, oy + 0.6 * k), "cut", 0.5)
+    box(ox3, oy + 0.45 * k, 0.8, 0.15, "cut", 0.35, 0.7)
+    box(ox3 + 0.34 * k, oy + 0.2 * k, 0.12, 0.40, "pipe", 0.35)
+    sh.line((ox3 + 0.4 * k, oy + 0.2 * k), (ox3 + 0.4 * k, oy + 0.05 * k), "pipe", 0.35)
+    sh.line((ox3 + 0.4 * k, oy + 0.05 * k), (ox3 + 0.8 * k + 10, oy + 0.05 * k), "pipe", 0.35)
+    sh.text((ox3 + 0.4 * k, oy + 0.66 * k), "ตะแกรงฟลอร์เดรนกันกลิ่น Ø 2\" · พื้นลาด 1:100", 2.0, "center")
+    sh.text((ox3 + 0.82 * k, oy + 0.08 * k), "ท่อน้ำทิ้ง PVC Ø 2\"", 2.0)
+    caption(sh, (ox3 + 0.4 * k, y0 + 10), "แบบขยายฟลอร์เดรน", "1:20")
 
 
 def build_sections(data, info=None) -> list:

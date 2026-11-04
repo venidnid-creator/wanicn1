@@ -184,21 +184,69 @@ def members(data, E=None):
                 ["ติดตั้ง", f"ใต้ฝ้า 15 ซม. สูงจากพื้น {top - 0.29 - k * E['H']:.2f} ม."],
                 ["รายการ BOQ", "หมวด 13 งานปรับอากาศ · ว480 5.1 5.4 5.5 5.6"]]
             out.append((g, "ac"))
-        # outdoor unit on its pad, 30 cm off the outside face, at the floor
-        z0 = k * E["H"] if k > 0 else 0.08          # on the walkway
+        # Outdoor unit (คอยล์ร้อน) 30 cm off the outside face. Ground floor:
+        # on a galvanised steel stand (ขาตั้ง) with rubber feet on the
+        # walkway, 0.15 m up so water and dirt pass under it. Upper floors:
+        # on a pair of wall brackets (ขาแขวน) bolted to the wall. The pipes
+        # run from the indoor unit through the wall and down in a cover duct
+        # (รางครอบท่อ); the indoor unit hangs on its mounting plate.
         outer = off + sp["t"] / 2 + sp["po"]
-        b0, b1 = sorted((-sgn * (outer + 0.30), -sgn * (outer + 0.30 + 0.30)))
+        dn, df = outer + 0.30, outer + 0.30 + 0.30          # unit's near / far face
+        b0, b1 = sorted((-sgn * dn, -sgn * df))
         bo = B._Boxes(p0, u, 0.0)
-        bo.box(mid - 0.45, mid + 0.45, b0, b1, z0, z0 + 0.10,
-               {"color": (0.80, 0.80, 0.78)})
-        bo.box(mid - 0.40, mid + 0.40, b0, b1, z0 + 0.10, z0 + 0.10 + 0.55,
-               {"color": (0.93, 0.93, 0.92)})
+        steel = {"color": (0.45, 0.47, 0.50)}
+        rubber = {"color": (0.15, 0.15, 0.15)}
+        if k == 0:
+            zf = -0.05                                   # walkway top
+            zu = zf + 0.17
+            for sx in (mid - 0.36, mid + 0.36):          # legs, rails, feet
+                for dd in (dn + 0.03, df - 0.03):
+                    c0_, c1_ = sorted((-sgn * (dd - 0.02), -sgn * (dd + 0.02)))
+                    bo.box(sx - 0.02, sx + 0.02, c0_, c1_, zf, zf + 0.012, rubber)
+                    bo.box(sx - 0.02, sx + 0.02, c0_, c1_, zf + 0.012, zu, steel)
+                bo.box(sx - 0.02, sx + 0.02, b0, b1, zu - 0.04, zu, steel)
+            stand = "ขาตั้งเหล็กชุบสังกะสีสูง 0.15 ม. พร้อมยางรองกันสั่น วางบนทางเท้า"
+        else:
+            zu = k * E["H"] + 0.30
+            for sx in (mid - 0.32, mid + 0.32):
+                c0_, c1_ = sorted((-sgn * outer, -sgn * (df + 0.05)))
+                bo.box(sx - 0.02, sx + 0.02, c0_, c1_, zu - 0.04, zu, steel)   # arm
+                w0, w1 = sorted((-sgn * outer, -sgn * (outer + 0.006)))
+                bo.box(sx - 0.03, sx + 0.03, w0, w1, zu - 0.40, zu, steel)     # wall leg
+                # the diagonal, as short steps from the wall up to the arm
+                for t in range(8):
+                    f = (t + 0.5) / 8
+                    dd = outer + (df - outer) * f
+                    zz = zu - 0.38 + 0.34 * f
+                    e0, e1 = sorted((-sgn * (dd - 0.03), -sgn * (dd + 0.03)))
+                    bo.box(sx - 0.015, sx + 0.015, e0, e1, zz - 0.02, zz + 0.02, steel)
+            stand = "ขาแขวนเหล็กฉากชุบสังกะสี 2 ตัว ยึดผนังด้วยพุกเหล็ก"
+        bo.box(mid - 0.40, mid + 0.40, b0, b1, zu, zu + 0.55, {"color": (0.93, 0.93, 0.92)})
+        # pipe duct from the indoor unit, through the wall, down to the unit
+        d0_, d1_ = sorted((-sgn * outer, -sgn * (outer + 0.06)))
+        duct = {"color": (0.96, 0.96, 0.94)}
+        xd = mid + 0.30 if mid + 0.30 < L - half - 0.1 else mid - 0.30
+        if top - 0.29 - 0.05 > zu + 0.55:
+            bo.box(xd - 0.04, xd + 0.04, d0_, d1_, zu + 0.30, top - 0.20, duct)
         g = bo.group(f"เครื่องปรับอากาศ {rec['ac']:,} BTU (คอยล์ร้อน) · {rname}",
                      "structure", "ac_out", "คอยล์ร้อน", "IfcUnitaryEquipment")
         if g is not None:
-            g.ext[B.EXT_KEY]["info"] = [["ชนิด", "คอยล์ร้อนบนแท่น ค.ส.ล."],
-                                        ["ระยะ", "ห่างผนัง 30 ซม."]]
+            g.ext[B.EXT_KEY]["info"] = [["ชนิด", "คอยล์ร้อน (Condensing Unit)"],
+                                        ["ฐานรองรับ", stand],
+                                        ["ระยะ", "ห่างผนัง 30 ซม. เว้นช่องระบายลมรอบเครื่อง"],
+                                        ["ท่อ", "ท่อน้ำยาหุ้มฉนวนในรางครอบท่อ PVC 75×60 มม."],
+                                        ["รายการ BOQ", "หมวด 13 งานปรับอากาศ"]]
             out.append((g, "ac_out"))
+        # the indoor unit's mounting plate behind it
+        mp = B._Boxes(p0, u, 0.0)
+        a0p, a1p = sorted((sgn * face, sgn * (face + 0.004)))
+        mp.box(mid - 0.38, mid + 0.38, a0p, a1p, top - 0.27, top - 0.02, steel)
+        g = mp.group(f"แผ่นยึดคอยล์เย็น · {rname}", "structure", "ac_bracket",
+                     "แผ่นยึดคอยล์เย็น", "IfcFastener")
+        if g is not None:
+            g.ext[B.EXT_KEY]["info"] = [["ชนิด", "แผ่นยึดคอยล์เย็น (Mounting Plate) ยึดพุก"],
+                                        ["รายการ BOQ", "หมวด 13 งานปรับอากาศ"]]
+            out.append((g, "ac_bracket"))
     out += install_members(data, E, plan(data, E))
     return out
 
@@ -365,14 +413,16 @@ def install_members(data, E, rooms):
         fx = e["fx"]
         x, y = float(fx["x"]), float(fx["y"])
         z = e["floor"] * H
-        pipes += _run((x, y), (x, y), -0.30, z + 0.55, 0.0125, "supply")
-        drains += _run((x, y), (x, y), -0.45, z, 0.03, "drain")
+        pipes += _run((x, y), (x, y), -0.25, z + 0.55, 0.0125, "supply")
+        drains += _run((x, y), (x, y), -0.70, z, 0.03, "drain")
         main_supply.append((x, y, e["floor"]))
     # the supply main: from the water meter along the front, then to each point
-    meter = (X0 - 1.0, Y0 - 1.5)
+    d_off = max(float(s.get("drain_off", 1.5) or 0.0), 0.4)
+    half_c = float(E["lib"]["C1"]["b"]) / 2
+    meter = (X0 - half_c - d_off - 0.8, Y0 - half_c - d_off - 0.8)
     for (x, y, _k) in main_supply:
-        pipes += _run((meter[0], meter[1]), (x, meter[1]), -0.30, -0.30, 0.0125, "supply")
-        pipes += _run((x, meter[1]), (x, y), -0.30, -0.30, 0.0125, "supply")
+        pipes += _run((meter[0], meter[1]), (x, meter[1]), -0.25, -0.25, 0.0125, "supply")
+        pipes += _run((x, meter[1]), (x, y), -0.25, -0.25, 0.0125, "supply")
     if pipes:
         g = _box(B, "ท่อประปา PVC Ø ½\" (ใต้พื้นและท่อขึ้น)", "pipe_supply", pipes,
                  [("ชนิด", "ท่อ PVC ชั้น 13.5 Ø ½\" ฝังใต้ดิน 0.30 ม."), ("รายการ BOQ", "หมวด 11")],
@@ -392,8 +442,9 @@ def install_members(data, E, rooms):
     tank = None
     if soil_points:
         sx, sy = soil_points[0]
-        dists = [(sx - X0, (X0 - 2.0, sy)), (X1 - sx, (X1 + 2.0, sy)),
-                 (sy - Y0, (sx, Y0 - 2.0)), (Y1 - sy, (sx, Y1 + 2.0))]
+        far = half_c + d_off + 1.0                 # beyond the drain ring
+        dists = [(sx - X0, (X0 - far, sy)), (X1 - sx, (X1 + far, sy)),
+                 (sy - Y0, (sx, Y0 - far)), (Y1 - sy, (sx, Y1 + far))]
         tank = min(dists)[1]
         r = 0.55
         g = _box(B, "ถังบำบัดน้ำเสียสำเร็จรูป", "septic",
@@ -405,8 +456,8 @@ def install_members(data, E, rooms):
         if g is not None:
             out.append((g, "septic"))
         for (px, py) in soil_points:
-            drains += _run((px, py), (tank[0], py), -0.45, -0.45, 0.05, "soil")
-            drains += _run((tank[0], py), tank, -0.45, -0.45, 0.05, "soil")
+            drains += _run((px, py), (tank[0], py), -0.70, -0.70, 0.05, "soil")
+            drains += _run((tank[0], py), tank, -0.70, -0.70, 0.05, "soil")
     if drains:
         g = _box(B, "ท่อน้ำทิ้ง/ท่อโสโครก PVC Ø 2\"–4\" (ใต้พื้น)", "pipe_drain", drains,
                  [("ชนิด", "ท่อน้ำทิ้ง PVC Ø 2\" ท่อโสโครก Ø 4\" ลาด 1:100"),
@@ -419,49 +470,17 @@ def install_members(data, E, rooms):
             continue
         rm = rec["room"]
         cx = float(rm["x"]) + float(rm["w"]) / 2
-        gy = Y1 + 1.0 if float(rm["y"]) + float(rm["d"]) >= Y1 - 1e-6 else Y0 - 1.0
+        far = half_c + d_off + 0.70
+        gy = Y1 + far if float(rm["y"]) + float(rm["d"]) >= Y1 - 1e-6 else Y0 - far
         g = _box(B, "บ่อดักไขมันสำเร็จรูป", "grease",
                  [(cx - 0.25, gy - 0.25, -0.60, cx + 0.25, gy + 0.25, 0.05, "tank")],
                  [("ชนิด", "บ่อดักไขมันสำเร็จรูป"), ("รายการ BOQ", "หมวด 11")], "IfcInterceptor")
         if g is not None:
             out.append((g, "grease"))
-    # outside: walkway, the drain ring with manholes, the project sign
-    w = 0.60
-    walk = [(X0 - w, Y0 - w, -0.02, X1 + w, Y0, 0.08, "concrete"),
-            (X0 - w, Y1, -0.02, X1 + w, Y1 + w, 0.08, "concrete"),
-            (X0 - w, Y0, -0.02, X0, Y1, 0.08, "concrete"),
-            (X1, Y0, -0.02, X1 + w, Y1, 0.08, "concrete")]
-    g = _box(B, "ทางเท้ารอบอาคาร ค.ส.ล. กว้าง 0.60 ม. หนา 0.10 ม.", "walkway", walk,
-             [("ชนิด", "ทางเท้า ค.ส.ล."), ("รายการ BOQ", "หมวด 14 งานภายนอก")], "IfcSlab")
-    if g is not None:
-        out.append((g, "walkway"))
-    ring, holes = [], []
-    rx0, ry0, rx1, ry1 = X0 - 1.0, Y0 - 1.0, X1 + 1.0, Y1 + 1.0
-    r = 0.15
-    ring += [(rx0, ry0 - r, -0.55, rx1, ry0 + r, -0.25, "concrete"),
-             (rx0, ry1 - r, -0.55, rx1, ry1 + r, -0.25, "concrete"),
-             (rx0 - r, ry0, -0.55, rx0 + r, ry1, -0.25, "concrete"),
-             (rx1 - r, ry0, -0.55, rx1 + r, ry1, -0.25, "concrete")]
-    per = 2 * ((rx1 - rx0) + (ry1 - ry0))
-    n = max(4, math.ceil(per / 6.0))
-    for i in range(n):
-        t = per * i / n
-        for (ax, ay), (bx_, by), L in (((rx0, ry0), (rx1, ry0), rx1 - rx0),
-                                       ((rx1, ry0), (rx1, ry1), ry1 - ry0),
-                                       ((rx1, ry1), (rx0, ry1), rx1 - rx0),
-                                       ((rx0, ry1), (rx0, ry0), ry1 - ry0)):
-            if t <= L + 1e-9:
-                f = t / L if L else 0
-                hx, hy = ax + (bx_ - ax) * f, ay + (by - ay) * f
-                holes.append((hx - 0.30, hy - 0.30, -0.70, hx + 0.30, hy + 0.30, 0.03, "concrete"))
-                break
-            t -= L
-    g = _box(B, f"ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม. รอบอาคาร + บ่อพัก {len(holes)} บ่อ", "drain_ring",
-             ring + holes, [("ชนิด", "ท่อ คสล. Ø 0.30 ม. ห่างอาคาร 1.00 ม."),
-                            ("บ่อพัก", f"{len(holes)} บ่อ ทุกระยะไม่เกิน 6 ม."),
-                            ("รายการ BOQ", "หมวด 14 งานภายนอก")], "IfcPipeSegment")
-    if g is not None:
-        out.append((g, "drain_ring"))
+    # outside: the walkway and the drain ring follow the building's own
+    # outline (L, T, U …), from the outer face of the columns
+    for g, kind in outside_members(E, s):
+        out.append((g, kind))
     sx, sy = X0 + 1.0, Y0 - 4.0
     g = _box(B, "ป้ายประชาสัมพันธ์โครงการ 1.20×2.40 ม.", "sign",
              [(sx - 0.05, sy - 0.05, 0.0, sx + 0.05, sy + 0.05, 2.80, "post"),
@@ -471,6 +490,192 @@ def install_members(data, E, rooms):
     if g is not None:
         out.append((g, "sign"))
     return out
+
+
+def _rect_union_cells(rects, holes):
+    """Cells of the rectilinear region (union of ``rects``) less the union
+    of ``holes``, merged into strips: [(x0, y0, x1, y1)] that never
+    overlap — the walkway as tidy slabs meeting edge to edge."""
+    xs = sorted({v for r in rects + holes for v in (r[0], r[2])})
+    ys = sorted({v for r in rects + holes for v in (r[1], r[3])})
+
+    def inside(rs, x, y):
+        return any(r[0] < x < r[2] and r[1] < y < r[3] for r in rs)
+    rows = []
+    for j in range(len(ys) - 1):
+        cy = (ys[j] + ys[j + 1]) / 2
+        run = None
+        for i in range(len(xs) - 1):
+            cx = (xs[i] + xs[i + 1]) / 2
+            on = inside(rects, cx, cy) and not inside(holes, cx, cy)
+            if on and run is None:
+                run = xs[i]
+            if not on and run is not None:
+                rows.append((run, ys[j], xs[i], ys[j + 1]))
+                run = None
+        if run is not None:
+            rows.append((run, ys[j], xs[-1], ys[j + 1]))
+    # merge identical runs of neighbouring rows
+    rows.sort(key=lambda r: (r[0], r[2], r[1]))
+    out = []
+    for r in rows:
+        if out and abs(out[-1][0] - r[0]) < 1e-9 and abs(out[-1][2] - r[2]) < 1e-9 \
+                and abs(out[-1][3] - r[1]) < 1e-9:
+            out[-1] = (out[-1][0], out[-1][1], out[-1][2], r[3])
+        else:
+            out.append(r)
+    return out
+
+
+def _outline(rects):
+    """The outer boundary of a union of rectangles as axis-aligned
+    segments [((x0, y0), (x1, y1))], one per straight run."""
+    xs = sorted({v for r in rects for v in (r[0], r[2])})
+    ys = sorted({v for r in rects for v in (r[1], r[3])})
+
+    def inside(x, y):
+        return any(r[0] - 1e-9 <= x <= r[2] + 1e-9 and r[1] - 1e-9 <= y <= r[3] + 1e-9
+                   for r in rects)
+    e = 1e-4
+    segs = []
+    for y in ys:
+        for a, b in zip(xs, xs[1:]):
+            m = (a + b) / 2
+            if inside(m, y + e) != inside(m, y - e):
+                segs.append(((a, y), (b, y)))
+    for x in xs:
+        for a, b in zip(ys, ys[1:]):
+            m = (a + b) / 2
+            if inside(x + e, m) != inside(x - e, m):
+                segs.append(((x, a), (x, b)))
+    # join collinear neighbours
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(segs)):
+            for j in range(len(segs)):
+                if i == j:
+                    continue
+                (a, b), (c, d) = segs[i], segs[j]
+                if b == c and ((a[0] == b[0] == d[0]) or (a[1] == b[1] == d[1])):
+                    segs[i] = (a, d)
+                    segs.pop(j)
+                    merged = True
+                    break
+            if merged:
+                break
+    return segs
+
+
+def outside_members(E, s):
+    """The walkway (ทางเท้า ค.ส.ล.) round the building, ``walk_w`` wide from
+    the outer face of the columns, and the drain ring (ท่อระบายน้ำ ค.ส.ล.
+    Ø 0.30 ม.) ``drain_off`` out from that face, with a manhole (บ่อพัก)
+    at every corner and at most every 6 ม.; the pipes run between the
+    manholes' walls — nothing passes through anything else."""
+    from core import wanic_building as B
+    from core import wanic_profiles as P
+    lib = E["lib"]
+    half = float(lib["C1"]["b"]) / 2
+    rooms = E["floors"][0]["rooms"]
+    base = [(float(r["x"]), float(r["y"]), float(r["x"]) + float(r["w"]),
+             float(r["y"]) + float(r["d"])) for r in rooms]
+    out = []
+    w = max(float(s.get("walk_w", 1.0) or 0.0), 0.0)
+    face = [(a - half, b - half, c + half, d + half) for a, b, c, d in base]
+    if w > 0.05:
+        grow = [(a - w, b - w, c + w, d + w) for a, b, c, d in face]
+        cells = _rect_union_cells(grow, face)
+        boxes = [(x0, y0, -0.15, x1, y1, -0.05, "concrete") for x0, y0, x1, y1 in cells]
+        area = sum((x1 - x0) * (y1 - y0) for x0, y0, x1, y1 in cells)
+        g = _box(B, f"ทางเท้ารอบอาคาร ค.ส.ล. กว้าง {w:.2f} ม. หนา 0.10 ม.", "walkway", boxes,
+                 [("ชนิด", "ทางเท้า ค.ส.ล. ลาดออกจากอาคาร 1:50"),
+                  ("กว้าง", f"{w:.2f} ม. จากผิวนอกเสา"), ("พื้นที่", f"{area:.2f} ตร.ม."),
+                  ("รายการ BOQ", "หมวด 14 งานภายนอก")], "IfcSlab")
+        if g is not None:
+            out.append((g, "walkway"))
+    d = max(float(s.get("drain_off", 1.5) or 0.0), 0.4)
+    ring = _outline([(a - d, b - d, c + d, e_ + d) for a, b, c, e_ in face])
+    if not ring:
+        return out
+    mh = 0.60                                    # บ่อพัก 0.60 × 0.60 ม.
+    zc = -0.45
+    holes = []
+    pipes = []
+    for (a, b) in ring:
+        L = math.dist(a, b)
+        n = max(1, math.ceil(L / 6.0 - 1e-9))
+        pts = [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(n + 1)]
+        for p in pts:
+            if not any(math.dist(p, q) < 1e-6 for q in holes):
+                holes.append(p)
+        ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+        for p, q in zip(pts, pts[1:]):
+            e_ = mh / 2 + 0.10                      # to the manhole's outer face
+            p2 = (p[0] + ux * e_, p[1] + uy * e_, zc)
+            q2 = (q[0] - ux * e_, q[1] - uy * e_, zc)
+            if math.dist(p2, q2) > 0.05:
+                pipes.append([p2, q2])
+    for i, path in enumerate(pipes):
+        g = P.build_member({"family": "pipe", "params": {"D": 300.0, "t": 40.0},
+                            "path": path, "anchor": "c", "ifc": "IfcPipeSegment",
+                            "name": f"ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม. · ยาว {math.dist(path[0], path[1]):.2f} ม."})
+        if isinstance(g, str) or g is None:
+            continue
+        g.material = {"color": COL["concrete"]}
+        B._tag(g, "structure", "drain_pipe", "ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม.",
+               [("ชนิด", "ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม. (มอก. 128)"),
+                ("ระยะจากอาคาร", f"{d:.2f} ม. จากผิวนอกเสา"),
+                ("ความยาว", f"{math.dist(path[0], path[1]):.2f} ม."),
+                ("รายการ BOQ", "หมวด 14 งานภายนอก")])
+        out.append((g, "drain_pipe"))
+    boxes = []
+    for (hx, hy) in holes:
+        t = 0.10
+        z0, z1 = -0.80, -0.05
+        boxes += [(hx - mh / 2 - t, hy - mh / 2 - t, z0, hx + mh / 2 + t, hy - mh / 2, z1, "concrete"),
+                  (hx - mh / 2 - t, hy + mh / 2, z0, hx + mh / 2 + t, hy + mh / 2 + t, z1, "concrete"),
+                  (hx - mh / 2 - t, hy - mh / 2, z0, hx - mh / 2, hy + mh / 2, z1, "concrete"),
+                  (hx + mh / 2, hy - mh / 2, z0, hx + mh / 2 + t, hy + mh / 2, z1, "concrete"),
+                  (hx - mh / 2, hy - mh / 2, z0, hx + mh / 2, hy + mh / 2, z0 + 0.10, "concrete"),
+                  (hx - mh / 2, hy - mh / 2, z1 - 0.04, hx + mh / 2, hy + mh / 2, z1, "drain")]
+    g = _box(B, f"บ่อพัก ค.ส.ล. 0.60×0.60 ม. พร้อมฝาตะแกรง {len(holes)} บ่อ", "manhole", boxes,
+             [("ชนิด", "บ่อพัก ค.ส.ล. ภายใน 0.60×0.60 ม. ผนังหนา 0.10 ม. ฝาตะแกรงเหล็ก"),
+              ("จำนวน", f"{len(holes)} บ่อ — ทุกมุม และทุกระยะไม่เกิน 6 ม."),
+              ("รายการ BOQ", "หมวด 14 งานภายนอก")], "IfcDistributionChamberElement")
+    if g is not None:
+        out.append((g, "manhole"))
+    return out
+
+
+def ring_length(E, s) -> tuple:
+    """(length of the drain ring, number of manholes) — the BOQ's numbers,
+    the same as the 3D's."""
+    lib = E["lib"]
+    half = float(lib["C1"]["b"]) / 2
+    rooms = E["floors"][0]["rooms"]
+    face = [(float(r["x"]) - half, float(r["y"]) - half, float(r["x"]) + float(r["w"]) + half,
+             float(r["y"]) + float(r["d"]) + half) for r in rooms]
+    d = max(float(s.get("drain_off", 1.5) or 0.0), 0.4)
+    ring = _outline([(a - d, b - d, c + d, e_ + d) for a, b, c, e_ in face])
+    holes = set()
+    for a, b in ring:
+        L = math.dist(a, b)
+        n = max(1, math.ceil(L / 6.0 - 1e-9))
+        for k in range(n + 1):
+            holes.add((round(a[0] + (b[0] - a[0]) * k / n, 4), round(a[1] + (b[1] - a[1]) * k / n, 4)))
+    return sum(math.dist(a, b) for a, b in ring), len(holes)
+
+
+def walk_area(E, s) -> float:
+    lib = E["lib"]
+    half = float(lib["C1"]["b"]) / 2
+    rooms = E["floors"][0]["rooms"]
+    w = max(float(s.get("walk_w", 1.0) or 0.0), 0.0)
+    face = [(float(r["x"]) - half, float(r["y"]) - half, float(r["x"]) + float(r["w"]) + half,
+             float(r["y"]) + float(r["d"]) + half) for r in rooms]
+    grow = [(a - w, b - w, c + w, d + w) for a, b, c, d in face]
+    return sum((x1 - x0) * (y1 - y0) for x0, y0, x1, y1 in _rect_union_cells(grow, face))
 
 
 def bill(data, E, add, labour) -> None:
@@ -640,19 +845,22 @@ def bill(data, E, add, labour) -> None:
 
     # --- 14 ภายนอก ----------------------------------------------------------
     g = "external"
-    ring = perim + 8 * 1.0                               # 1 ม. นอกแนวผนัง
-    add(g, "ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม. รอบอาคาร", ring, "ม.",
-        mat_key="ท่อ คสล. Ø 0.30 ม. (มอก.)", basis=f"รอบอาคารห่าง 1 ม. ({ring:.1f} ม.)",
+    ring, pits = ring_length(E, s)
+    d_off = max(float(s.get("drain_off", 1.5) or 0.0), 0.4)
+    add(g, "ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม. รอบอาคาร", max(ring - pits * 0.60, 0.0), "ม.",
+        mat_key="ท่อ คสล. Ø 0.30 ม. (มอก.)",
+        basis=f"แนวท่อห่างผิวนอกเสา {d_off:.2f} ม. ยาว {ring:.1f} ม. หักบ่อพัก",
         ref="งานระบายน้ำภายนอก", note=unlisted)
-    pits = max(4, math.ceil(ring / 6.0))
     add(g, "บ่อพัก ค.ส.ล. ขนาด 0.60×0.60 ม. พร้อมฝาตะแกรง", pits, "บ่อ",
-        mat_key="บ่อพัก คสล. 0.60×0.60 ม. (พร้อมฝา)", basis="ทุก 6 ม. และทุกมุม",
+        mat_key="บ่อพัก คสล. 0.60×0.60 ม. (พร้อมฝา)", basis="ทุกมุม และทุกระยะไม่เกิน 6 ม.",
         ref="งานระบายน้ำภายนอก", note=unlisted)
-    walk = (perim + 4 * 0.6) * 0.60 * 0.10
-    add(g, "ทางเท้ารอบอาคาร ค.ส.ล. กว้าง 0.60 ม. หนา 0.10 ม.", walk, "ลบ.ม.",
-        mat_key="คอนกรีตผสมเสร็จ 240 กก./ตร.ซม. (ลูกบาศก์)",
-        lab=lab("1.7", "", "ทางเท้า"), basis=f"({perim:.1f} + 2.4) ม. × 0.60 × 0.10",
-        ref=f"{W480} 1.7 (ทางเท้า ทางระบายน้ำ)")
+    walk_w = max(float(s.get("walk_w", 1.0) or 0.0), 0.0)
+    if walk_w > 0.05:
+        wa = walk_area(E, s)
+        add(g, f"ทางเท้ารอบอาคาร ค.ส.ล. กว้าง {walk_w:.2f} ม. หนา 0.10 ม.", wa * 0.10, "ลบ.ม.",
+            mat_key="คอนกรีตผสมเสร็จ 240 กก./ตร.ซม. (ลูกบาศก์)",
+            lab=lab("1.7", "", "ทางเท้า"), basis=f"พื้นที่ {wa:.2f} ตร.ม. × 0.10 ม.",
+            ref=f"{W480} 1.7 (ทางเท้า ทางระบายน้ำ)")
 
     # --- 15 อื่นๆ ------------------------------------------------------------
     g = "misc"

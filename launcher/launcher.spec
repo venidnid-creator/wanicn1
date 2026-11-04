@@ -16,9 +16,9 @@ datas.append((str(BR / "fonts" / "Charm-OFL.txt"), "branding"))
 
 a = Analysis(
     [str(ROOT / "launcher" / "launcher.py")],
-    pathex=[],
+    pathex=[str(ROOT / "launcher")],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=["stats"],
     excludes=["tkinter", "numpy", "PySide6.QtWebEngineCore", "PySide6.QtQml",
               "PySide6.QtQuick", "PySide6.QtMultimedia", "PySide6.Qt3DCore"],
     noarchive=False,
