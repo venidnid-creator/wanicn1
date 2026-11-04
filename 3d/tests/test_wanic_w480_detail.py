@@ -301,9 +301,9 @@ def test_panel_layers_picker_walls_and_the_boq_sidebar(monkeypatch):
     panel.build(("structure", "roof"))
     names2 = {ly.name for ly in scene.layers}
     assert "เสา C1 20×20 ซม." in names2 and col.name not in names2
-    # the BOQ: 15 หมวดงาน in the sidebar, picking one shows only it
+    # the BOQ: 19 หมวด (15 หมวดงาน + ครุภัณฑ์/วัสดุ 16–19) in the sidebar, picking one shows only it
     boq = WB.BoqDialog(panel)
-    assert boq.cats.count() == 16
+    assert boq.cats.count() == 20
     row = next(r for r in range(boq.cats.count())
                if "4. งานโครงสร้างคอนกรีต" in boq.cats.item(r).text())
     boq.cats.setCurrentRow(row)
