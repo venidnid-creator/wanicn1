@@ -950,6 +950,15 @@ class BoqDialog(QDialog):
         from core import wanic_quantities as Q
         self.result = Q.compute(panel.data())
         lay = QVBoxLayout(self)
+        # a newer labour list / Factor F table / rules from กรมบัญชีกลาง:
+        # said here, at the top of the BOQ (checked in the background)
+        self.std_note = QLabel()
+        self.std_note.setWordWrap(True)
+        self.std_note.setStyleSheet("background:#FDECEA;color:#B71C1C;padding:6px;"
+                                    "border-radius:6px;font-weight:bold")
+        self.std_note.hide()
+        lay.addWidget(self.std_note)
+        self._check_standards()
         self._province_bar(lay)
         self.tabs = QTabWidget()
         lay.addWidget(self.tabs, 1)
@@ -976,6 +985,33 @@ class BoqDialog(QDialog):
         sig = QLabel(label_html("WANIC ออกแบบอาคาร · BOQ ตามหลักเกณฑ์ 2569"))
         lay.addWidget(sig)
         self.recompute()
+
+    def _check_standards(self):
+        import threading
+
+        from core import wanic_standards as STD
+        if os.environ.get("WANIC_OFFLINE"):
+            return
+        box = {}
+
+        def work():
+            try:
+                box["lines"] = STD.changes(STD.fetch())
+            except Exception:                       # noqa: BLE001 -- offline
+                box["lines"] = []
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        timer = QTimer(self)
+
+        def poll():
+            if th.is_alive():
+                return
+            timer.stop()
+            if box.get("lines"):
+                self.std_note.setText("⚠ แจ้งเพื่อทราบ: " + "<br>".join(box["lines"]))
+                self.std_note.show()
+        timer.timeout.connect(poll)
+        timer.start(400)
 
     # ---- province -----------------------------------------------------------
     def _province_bar(self, lay):
@@ -1275,7 +1311,20 @@ class BoqDialog(QDialog):
         self.cats.setMaximumWidth(300)
         self.cats.setToolTip("เลือกหมวดงานเพื่อดูเฉพาะหมวดนั้น — «ทั้งหมด» แสดงทุกหมวด")
         self.cats.currentRowChanged.connect(lambda _r: self._filter_cat())
-        split.addWidget(self.cats)
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.addWidget(self.cats, 1)
+        add_x = QPushButton("➕ เพิ่มครุภัณฑ์/วัสดุ (หมวด 16–19)")
+        add_x.setToolTip("ครุภัณฑ์จัดซื้อ (+VAT 7% ไม่คูณ F) · ครุภัณฑ์จัดจ้าง (คูณ F) · "
+                         "วัสดุ และวัสดุคงทน (ไม่คูณ F) — รายการที่ไม่คูณ F แสดงใน ปร.4 "
+                         "ข้อ 2 ค่าครุภัณฑ์จัดซื้อ")
+        add_x.clicked.connect(lambda _=False: _safe(self, self.add_extra))
+        del_x = QPushButton("🗑 ลบรายการหมวด 16–19 ที่เลือก")
+        del_x.clicked.connect(lambda _=False: _safe(self, self.remove_extra))
+        lv.addWidget(add_x)
+        lv.addWidget(del_x)
+        split.addWidget(left)
         right = QWidget()
         v = QVBoxLayout(right)
         v.setContentsMargins(0, 0, 0, 0)
@@ -1473,6 +1522,64 @@ class BoqDialog(QDialog):
         self.tabs.addTab(w, "ตัวเลือก")
 
     # ---- data ---------------------------------------------------------------
+    def add_extra(self, item=None):
+        """A line of หมวด 16–19 (ครุภัณฑ์จัดซื้อ/จัดจ้าง วัสดุ วัสดุคงทน),
+        typed in: what, how many, the unit, its price and installation."""
+        from core import wanic_categories as CG
+        if item is None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("เพิ่มครุภัณฑ์ / วัสดุ")
+            f = QFormLayout(dlg)
+            cat = QComboBox()
+            for no in CG.EXTRA:
+                cat.addItem(f"{no}. {CG.NAME[no]} — {CG.CATEGORIES[no - 1][3]}", no)
+            desc = QLineEdit()
+            qty = QDoubleSpinBox()
+            qty.setRange(0, 1e6)
+            qty.setDecimals(2)
+            qty.setValue(1.0)
+            unit = QLineEdit("ชุด")
+            mat = QDoubleSpinBox()
+            mat.setRange(0, 1e9)
+            mat.setDecimals(2)
+            lab = QDoubleSpinBox()
+            lab.setRange(0, 1e9)
+            lab.setDecimals(2)
+            f.addRow("หมวด", cat)
+            f.addRow("รายการ", desc)
+            f.addRow("จำนวน", qty)
+            f.addRow("หน่วย", unit)
+            f.addRow("ราคา/หน่วย (บาท)", mat)
+            f.addRow("ค่าติดตั้ง/หน่วย (บาท)", lab)
+            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            bb.accepted.connect(dlg.accept)
+            bb.rejected.connect(dlg.reject)
+            f.addRow(bb)
+            if dlg.exec() != QDialog.Accepted or not desc.text().strip():
+                return
+            item = {"cat": cat.currentData(), "desc": desc.text().strip(),
+                    "qty": qty.value(), "unit": unit.text().strip() or "ชุด",
+                    "mat": mat.value(), "lab": lab.value()}
+        import uuid
+        d = self.panel.data()
+        items = list(d.get("extra_items") or [])
+        items.append(dict(item, id=item.get("id") or uuid.uuid4().hex[:8]))
+        d["extra_items"] = items
+        self.panel._write(d)
+        self.recompute()
+
+    def remove_extra(self):
+        it = self.tree.currentItem()
+        xid = it.data(0, Qt.UserRole) if it is not None else None
+        if not xid:
+            QMessageBox.information(self, TITLE, "เลือกรายการของหมวด 16–19 ในตารางก่อน "
+                                    "(รายการที่ถอดจากโมเดลลบไม่ได้)")
+            return
+        d = self.panel.data()
+        d["extra_items"] = [x for x in (d.get("extra_items") or []) if x.get("id") != xid]
+        self.panel._write(d)
+        self.recompute()
+
     def _set_boq_by(self):
         d = self.panel.data()
         o = dict(d.get("boq_options") or {})
@@ -1552,6 +1659,8 @@ class BoqDialog(QDialog):
                     it.setToolTip(c, tip)
                     if 2 <= c <= 10 and c != 5:
                         it.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                if ln.get("extra_id"):
+                    it.setData(0, Qt.UserRole, ln["extra_id"])
                 if ln["note"]:
                     it.setForeground(1, QColor("#B26A00"))
                 if ln["mat_key"] and not ln["mat"]:
@@ -1567,9 +1676,10 @@ class BoqDialog(QDialog):
         ref = self.result.get("price_ref") or ""
         self.total.setText(
             (f"<span style='color:#2E7D4F'>{ref}</span><br>" if ref else "") +
-            f"รวมค่างานต้นทุน {t['total']:,.2f} บาท (ค่าวัสดุ {t['mat']:,.2f} + "
-            f"ค่าแรง {t['lab']:,.2f}) × Factor F {t.get('F', 1.0):.4f} = "
-            f"<b>{t.get('with_f', t['total']):,.2f} บาท (รวม Factor F แล้ว)</b><br>"
+            f"ค่างานต้นทุน {t.get('work', t['total']):,.2f} บาท × Factor F "
+            f"{t.get('F', 1.0):.4f} = {t.get('after_f', t['total']):,.2f}"
+            + (f" + ครุภัณฑ์จัดซื้อ/วัสดุ (ไม่คูณ F) {t['no_f']:,.2f}" if t.get("no_f") else "")
+            + f" — <b>รวมทั้งสิ้น {t.get('with_f', t['total']):,.2f} บาท (รวม Factor F แล้ว)</b><br>"
             f"<span style='color:#B26A00'>{notes}</span>")
         if hasattr(self, "cats"):
             self._fill_cats()
@@ -1926,6 +2036,48 @@ class DrawingDialog(QDialog):
         f.addRow(QLabel(label_html("WANIC ออกแบบอาคาร · แบบก่อสร้าง 2D")))
         self.saved = []
 
+    def _model_picture(self, w=1840, h=1000):
+        """The building as the 3D model shows it (PNG bytes) for the cover:
+        a three-quarter view from the front right, the whole building in the
+        frame — the camera is put back as it was. None without a 3D view or
+        before anything is built."""
+        from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+        from PySide6.QtGui import QVector3D
+        vp = getattr(self.panel.app, "viewport", None)
+        cam = getattr(vp, "camera", None)
+        if cam is None or not hasattr(vp, "render_image"):
+            return None
+        groups = [g for g in B.generated(self.panel.app.scene) if not g.hidden]
+        pts = [v.position for g in groups for v in g.mesh.vertices]
+        if not pts:
+            return None
+        lo = QVector3D(min(p.x() for p in pts), min(p.y() for p in pts),
+                       min(p.z() for p in pts))
+        hi = QVector3D(max(p.x() for p in pts), max(p.y() for p in pts),
+                       max(p.z() for p in pts))
+        keep = {k: getattr(cam, k) for k in ("yaw", "pitch", "distance", "perspective",
+                                              "two_point", "aspect")}
+        keep["target"] = QVector3D(cam.target)
+        try:
+            cam.yaw, cam.pitch = math.radians(-38.0), math.radians(18.0)
+            cam.perspective, cam.two_point = True, True
+            cam.aspect = w / h
+            cam.fit_box(lo, hi, 1.08)
+            img = vp.render_image(w, h, overlays=False)
+        except Exception:                               # noqa: BLE001
+            img = None
+        finally:
+            for k, v in keep.items():
+                setattr(cam, k, v)
+            vp.update()
+        if img is None or img.isNull():
+            return None
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.WriteOnly)
+        img.save(buf, "PNG")
+        return bytes(ba)
+
     def info(self) -> dict:
         i = {k: e.text().strip() for k, e in self.fields.items()}
         i["setback"] = self.setback.value()
@@ -1947,6 +2099,10 @@ class DrawingDialog(QDialog):
         if not info["groups"]:
             QMessageBox.information(self, TITLE, "เลือกหมวดแบบอย่างน้อย 1 หมวด")
             return []
+        if "G" in info["groups"]:
+            pic = self._model_picture()
+            if pic:
+                info["cover_image"] = pic
         sheets = D.build_set(self.panel.data(), info, info["groups"])
         if not sheets:
             QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
@@ -2137,10 +2293,14 @@ class BuildingPanel(QWidget):
             lambda: self.build(("structure",)), 0, 0, "#2E7D4F")
         btn("🏠 สร้าง/อัปเดตหลังคา", "โครงหลังคาเหล็กและแผ่นหลังคา",
             lambda: self.build(("roof",)), 0, 1, "#C46420")
-        btn("👁 แสดงวัตถุที่ซ้อนอยู่",
-            "แสดงทุกวัตถุในโมเดล: ยกเลิกการซ่อนทุกชิ้น (รวมชิ้นที่ซ้อนอยู่ในกลุ่ม) "
+        btn("🙈 ซ่อนวัตถุที่เลือก",
+            "เลือกวัตถุในโมเดลก่อน แล้วกดปุ่มนี้ — วัตถุที่เลือกจะหายไป "
+            "(ไม่ได้ลบ กด «แสดงวัตถุที่ซ่อนกลับคืน» เพื่อให้กลับมาที่เดิม)",
+            self.hide_selected, 1, 0, "#1F7A8C")
+        btn("👁 แสดงวัตถุที่ซ่อนกลับคืน",
+            "ทุกวัตถุที่ซ่อนไว้กลับมาที่เดิม (รวมชิ้นที่ซ้อนอยู่ในกลุ่ม) "
             "เปิดทุกเลเยอร์ และออกจากมุมมองเฉพาะโครงสร้าง",
-            self.show_everything, 1, 0, "#1F7A8C")
+            self.show_everything, 1, 1, "#2E6E7E")
         # Model opacity 0–100 % (ความโปร่งใส): see the frame through walls
         # and roof without hiding anything
         ob = QWidget()
@@ -2161,23 +2321,23 @@ class BuildingPanel(QWidget):
             lambda v: _safe(self, lambda: self.set_transparency(v)))
         ol.addWidget(self.opacity_slider, 1)
         ol.addWidget(self.opacity_label)
-        bb.addWidget(ob, 1, 1)
+        bb.addWidget(ob, 2, 0, 1, 2)
         btn("✅ สร้างทั้งหมด", "โครงสร้าง + หลังคา",
-            lambda: self.build(("structure", "roof")), 2, 0, "#0F2A44")
+            lambda: self.build(("structure", "roof")), 3, 0, "#0F2A44")
         btn("📊 BOQ ตามหลักเกณฑ์ 2569…",
             "ถอดปริมาณตามหลักเกณฑ์กรมบัญชีกลาง (เผื่อตามมาตรฐาน ค่าแรง ว480) "
-            "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 2, 1, "#7B3FA0")
+            "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 3, 1, "#7B3FA0")
         btn("📐 ส่งออกแบบ 2D (A · S · SN · EE · M)…",
             "แบบก่อสร้างครบชุดจากโมเดล: แปลน รูปด้าน รูปตัด ตาราง โครงสร้าง "
             "สุขาภิบาล ไฟฟ้า เครื่องกล — กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)",
-            self.open_drawings, 3, 0, "#8A5A00")
+            self.open_drawings, 4, 0, "#8A5A00")
         btn("✂ รูปตัดอาคาร (แนว X / แนว Y)…",
             "รูปตัดอาคารชั้นละ 1 ชุด (2 รูป แนว X และแนว Y — รูปแรกตัดผ่านห้องน้ำ) "
             "แสดงฐานราก คาน พื้น ผนังตัด ฝ้า โครงหลังคา ระดับ และเส้นบอกระยะ — PDF / DXF",
-            self.export_sections, 4, 0, "#5B6B78")
+            self.export_sections, 5, 0, "#5B6B78")
         btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
-            "(วัดจากโมเดล 3D)", self.send_rates, 3, 1, "#3B6FB6")
+            "(วัดจากโมเดล 3D)", self.send_rates, 4, 1, "#3B6FB6")
         lay.addLayout(bb)
         # The structure on its own, coloured by kind (as engineers check a
         # frame), and the standard looks at it: 3D, plan, four elevations.
@@ -3115,6 +3275,23 @@ class BuildingPanel(QWidget):
                     "ground_beam": (0.96, 0.55, 0.18), "beam": (0.24, 0.50, 0.92)}
     FRAME_KINDS = ("footing", "stump", "pile", "column", "beam", "slab", "stair")
 
+    def hide_selected(self) -> None:
+        """«ซ่อนวัตถุที่เลือก»: the objects selected in the model disappear
+        (hidden, not deleted — undoable, and «แสดงวัตถุที่ซ่อนกลับคืน» puts
+        them back where they were)."""
+        from core.history import HideCommand
+        scene = self.app.scene
+        sel = [e for e in list(getattr(scene, "selection", []) or [])
+               if hasattr(e, "hidden") or hasattr(e, "attrs")]
+        if not sel:
+            self.status.setText("ยังไม่ได้เลือกวัตถุ — คลิกเลือกวัตถุในโมเดลก่อน "
+                                "แล้วกด «ซ่อนวัตถุที่เลือก»")
+            return
+        self.app.viewport.history.execute(HideCommand(sel, True))
+        self.app.viewport.update()
+        self.status.setText(f"ซ่อน {len(sel)} วัตถุแล้ว — กด «แสดงวัตถุที่ซ่อนกลับคืน» "
+                            "เพื่อให้กลับมา")
+
     def show_everything(self) -> None:
         """«แสดงวัตถุที่ซ้อนอยู่»: every object in the model shown again —
         hidden ones (nested in groups too) unhidden, every layer turned on,
@@ -3141,7 +3318,7 @@ class BuildingPanel(QWidget):
         if panel is not None and hasattr(panel, "refresh"):
             panel.refresh()
         self.app.viewport.update()
-        self.status.setText(f"แสดงทุกวัตถุแล้ว — ยกเลิกซ่อน {len(hidden)} ชิ้น · "
+        self.status.setText(f"วัตถุที่ซ่อนกลับมาที่เดิมแล้ว {len(hidden)} ชิ้น · "
                             f"เปิดเลเยอร์ {layers_on} ชั้น")
 
     def set_transparency(self, pct: int) -> None:

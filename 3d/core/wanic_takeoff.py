@@ -56,7 +56,12 @@ SECTIONS = {
     "work": "ค่างานต้นทุน (ปร.1)",
     "equip": "ครุภัณฑ์จัดซื้อ (ปร.2)",
     "special": "ค่าใช้จ่ายพิเศษ (ปร.3)",
+    "supply": "วัสดุ (ไม่คูณ Factor F · ปร.2)",
+    "durable": "วัสดุคงทน (ไม่คูณ Factor F · ปร.2)",
 }
+#: sections priced without Factor F and shown with the bought equipment
+#: (ปร.2 · ปร.4 row 2); bought as they are — no VAT added on top
+NO_F_SUPPLY = ("supply", "durable")
 
 #: Pricing method: the government one multiplies the construction cost by
 #: Factor F (which already holds overhead, interest, profit and VAT) and
@@ -411,6 +416,7 @@ def compute(items: list[dict], data: dict) -> dict:
     subtotal = sum(ln["total"] for ln in lines if ln["section"] == "work")
     equip = sum(ln["total"] for ln in lines if ln["section"] == "equip")
     special = sum(ln["total"] for ln in lines if ln["section"] == "special")
+    supply = sum(ln["total"] for ln in lines if ln["section"] in NO_F_SUPPLY)
     if method == "gov":
         factor_f, ff_note = factor_f_of(subtotal, settings)
     else:
@@ -424,11 +430,11 @@ def compute(items: list[dict], data: dict) -> dict:
         vat = equip_vat + special_vat
     else:
         vat = (after_f + equip + special) * v
-    grand = after_f + equip + special + vat
+    grand = after_f + equip + special + vat + supply
     return {"lines": lines, "status": status, "subtotal": subtotal,
             "factor_f": factor_f, "ff_note": ff_note, "after_f": after_f,
             "equip": equip,
-            "equip_vat": equip_vat, "special": special,
+            "equip_vat": equip_vat, "special": special, "supply": supply,
             "special_vat": special_vat, "vat_pct": vat_pct, "vat": vat,
             "grand": grand, "method": method}
 
@@ -601,6 +607,8 @@ def boq_rows(result: dict):
         tot("ค่าครุภัณฑ์จัดซื้อ (ก่อน VAT)", r["equip"])
     if r.get("special"):
         tot("ค่าใช้จ่ายพิเศษตามข้อกำหนด (ก่อน VAT)", r["special"])
+    if r.get("supply"):
+        tot("วัสดุ และวัสดุคงทน (ไม่คูณ Factor F)", r["supply"])
     if r["vat"]:
         what = ("ของครุภัณฑ์และค่าใช้จ่ายพิเศษ" if r.get("method") == "gov"
                 else "")
@@ -945,16 +953,21 @@ def _pr2(result, st) -> _Sheet:
                   ["", "", "", "", "ราคาต่อหน่วย", "จำนวนเงิน", "ราคาต่อหน่วย",
                    "จำนวนเงิน", "", ""], {4: 5, 6: 7})
     eq = _section_lines(result, "equip")
-    if not eq:
+    sup = [ln for s_ in NO_F_SUPPLY for ln in _section_lines(result, s_)]
+    if not eq and not sup:
         sh.add(["", "(ไม่มีรายการ)"] + [""] * 8, styles=[4] * 10)
-    for i, ln in enumerate(eq, 1):
+    for i, ln in enumerate(eq + sup, 1):
+        what = "" if ln in eq else SECTIONS[ln["section"]].split(" (")[0] + \
+            " — ไม่คูณ Factor F"
         sh.add([ln.get("code") or str(i), ln.get("desc") or "",
                 ln["quantity"], ln.get("unit", ""), _num(ln.get("mat")),
                 ln["mat_total"], _num(ln.get("lab")), ln["lab_total"],
-                ln["total"], ln.get("note") or ""],
+                ln["total"], " · ".join(x for x in (what, ln.get("note") or "") if x)],
                styles=[8, 4, 5, 8, 5, 5, 5, 5, 5, 4])
-    sh.add(["", "รวม", None, "", None, sum(ln["mat_total"] for ln in eq),
-            None, sum(ln["lab_total"] for ln in eq), result["equip"], ""],
+    allr = eq + sup
+    sh.add(["", "รวม", None, "", None, sum(ln["mat_total"] for ln in allr),
+            None, sum(ln["lab_total"] for ln in allr),
+            result["equip"] + result.get("supply", 0.0), ""],
            styles=[4, 6, 4, 4, 4, 7, 4, 7, 7, 4])
     _sign(sh, st, 10)
     return sh
@@ -981,6 +994,16 @@ def _pr2k(result, st, pr2_rows) -> _Sheet:
                 (m + lb) * (1 + v)]
         tot = [a + b for a, b in zip(tot, vals)]
         sh.add([ln.get("code") or str(i), ln.get("desc") or ""] + vals + [""],
+               styles=[8, 4] + [5] * 7 + [4])
+    for s_ in NO_F_SUPPLY:                     # supplies: as bought, no VAT
+        rows_ = _section_lines(result, s_)
+        if not rows_:
+            continue
+        m = sum(ln["mat_total"] for ln in rows_)
+        lb = sum(ln["lab_total"] for ln in rows_)
+        vals = [m, 0.0, m, lb, 0.0, lb, m + lb]
+        tot = [a + b for a, b in zip(tot, vals)]
+        sh.add(["", SECTIONS[s_].split(" (")[0]] + vals + ["ไม่คูณ Factor F"],
                styles=[8, 4] + [5] * 7 + [4])
     sh.add(["", "รวม"] + tot + [""], styles=[4, 6] + [7] * 7 + [4])
     _sign(sh, st, 10)
@@ -1025,7 +1048,9 @@ def _pr4(result, st) -> _Sheet:
     rows = [("1", "ค่างานต้นทุน × Factor F (ตามแบบ ปร.1 (ก))",
              result["after_f"], f"Factor F {result['factor_f']:.4f}"),
             ("2", "ค่าครุภัณฑ์จัดซื้อ (ตามแบบ ปร.2 (ก))",
-             result["equip"] + result["equip_vat"], "รวมภาษีมูลค่าเพิ่ม"),
+             result["equip"] + result["equip_vat"] + result.get("supply", 0.0),
+             "รวมภาษีมูลค่าเพิ่ม" + (" · รวมวัสดุ/วัสดุคงทน (ไม่คูณ Factor F)"
+                                    if result.get("supply") else "")),
             ("3", "ค่าใช้จ่ายพิเศษตามข้อกำหนด (ถ้ามี) (ตามแบบ ปร.3)",
              result["special"] + result["special_vat"], "รวมภาษีมูลค่าเพิ่ม")]
     if result.get("method") == "private":

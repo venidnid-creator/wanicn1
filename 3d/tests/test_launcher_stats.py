@@ -82,3 +82,15 @@ def test_offline_shows_the_last_numbers(ST):
     assert "downloads_error" in info
     t = ST.text(info, {"downloads": {"total": 5, "latest": 2, "tag": "v1"}})
     assert "<b>5</b>" in t
+
+
+def test_latest_release_link(ST):
+    d = ST.summary([{"tag_name": "v2026.11.04.3", "published_at": "2026-11-04T17:30:00Z",
+                     "html_url": "https://github.com/x/y/releases/tag/v2026.11.04.3",
+                     "assets": [{"name": "s.exe", "download_count": 1}]}])
+    assert ST.newer("v2026.11.04.3", "2026.11.04.2") and not ST.newer("v2026.11.04.3", "2026.11.04.3")
+    assert ST.thai_day(d["published"]) == "5 พ.ย. 2569"          # 17:30 UTC is the next day in Thailand
+    line = ST.latest_line(d, "2026.11.04.2")
+    assert "มีรุ่นใหม่ v2026.11.04.3" in line and "releases/tag/v2026.11.04.3" in line
+    assert "ปรับปรุงล่าสุด v2026.11.04.3" in ST.latest_line(d, "2026.11.04.3")
+    assert ST.text({"downloads": d}, version="dev").startswith("<a href=")

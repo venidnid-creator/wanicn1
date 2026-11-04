@@ -63,7 +63,10 @@ def summary(data) -> dict:
     rels = [r for r in data if any(_installer(str(a.get("name") or ""))
                                    for a in r.get("assets") or [])]
     latest = rels[0] if rels else {}
-    return {"total": sum(_count(r, _installer) for r in data),
+    return {"published": str(latest.get("published_at") or latest.get("created_at") or ""),
+            "url": str(latest.get("html_url") or
+                       f"https://github.com/{REPO}/releases/latest"),
+            "total": sum(_count(r, _installer) for r in data),
             "latest": _count(latest, _installer) if latest else 0,
             "tag": latest.get("tag_name", ""), "releases": len(rels),
             "users": sum(_count(r, lambda n: n == INSTALL_FILE) for r in data),
@@ -148,10 +151,58 @@ def fetch_all(settings, version: str, opener=None, count=True) -> dict:
     return out
 
 
-def text(info: dict, cached: dict | None = None) -> str:
+_MONTHS = ("ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.",
+           "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.")
+
+
+def thai_day(iso: str) -> str:
+    """«4 พ.ย. 2569» from GitHub's ``2026-11-04T07:30:00Z`` (the Thai
+    calendar day, UTC+7)."""
+    import datetime as _dt
+    try:
+        t = _dt.datetime.strptime(str(iso)[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return ""
+    t += _dt.timedelta(hours=7)
+    return f"{t.day} {_MONTHS[t.month - 1]} {t.year + 543}"
+
+
+def newer(tag: str, version: str) -> bool:
+    """Whether the release ``tag`` (v2026.11.04.2) is newer than the
+    installed ``version`` (2026.11.04.1)."""
+    def key(v):
+        out = []
+        for part in str(v).lstrip("v").split("."):
+            try:
+                out.append(int(part))
+            except ValueError:
+                return None
+        return out
+    a, b = key(tag), key(version)
+    return bool(a and b and a > b)
+
+
+def latest_line(d: dict, version: str = "") -> str:
+    """The link to the newest release: its version and day; «มีรุ่นใหม่»
+    when it is newer than the one installed."""
+    if not d or not d.get("tag"):
+        return ""
+    day = thai_day(d.get("published", ""))
+    url = d.get("url") or f"https://github.com/{REPO}/releases/latest"
+    new = newer(d["tag"], version)
+    label = (f"🆕 มีรุ่นใหม่ {d['tag']}" if new else f"ปรับปรุงล่าสุด {d['tag']}") + \
+        (f" ({day})" if day else "")
+    tail = " — คลิกเพื่อดาวน์โหลด" if new else " — หน้าดาวน์โหลด"
+    color = "#C0392B" if new else "#1F7A8C"
+    return f"<a href='{url}' style='color:{color}'><b>{label}</b>{tail}</a>"
+
+
+def text(info: dict, cached: dict | None = None, version: str = "") -> str:
     """The corner's lines (Thai, HTML)."""
     d = info.get("downloads") or (cached or {}).get("downloads")
     lines = []
+    if d and latest_line(d, version):
+        lines.append(latest_line(d, version))
     if d:
         lines.append(f"ดาวน์โหลดสะสม <b>{d['total']:,}</b> ครั้ง")
         lines.append(f"รุ่นล่าสุด {d.get('tag', '')}: <b>{d['latest']:,}</b> ครั้ง")

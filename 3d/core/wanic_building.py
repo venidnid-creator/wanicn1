@@ -1786,7 +1786,15 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
             if rx0 + 0.3 < st < rx1 - 0.3:
                 px.add(st)
         beam = rx1 - rx0 > 0.3
-        zb = z0 + (db if beam else 0.0)
+        # A concrete beam under the ridge line (a column line along the
+        # middle of the plan): the คานรับดั้ง lies ON it, level with the
+        # ties, and runs wall to wall; the ties butt on its sides. With no
+        # beam there it sits on the ties, from the first post to the last.
+        on_beam = beam and sum(1 for c in cols
+                               if abs((c[0] if swap else c[1]) - yc) < 1e-4 and
+                               x0 + ov - 1e-4 <= (c[1] if swap else c[0]) <= x1 - ov + 1e-4) >= 2
+        zb = z0 if on_beam else z0 + (db if beam else 0.0)
+        wb = _dim(s.get("tiebeam", s["ridge"]), "B") / 2
         # struts (ตุ๊กตา) from the tie up to the rafters half way to the ridge
         # and braces (ค้ำยัน) from the foot of the post to each strut — the
         # king-post truss of the standard steel roof. All in the plane of
@@ -1804,7 +1812,11 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         inner = half - ov                       # wall line to the ridge line
         for xx in sorted(px):
             out["post"].append([P3(xx, yc, zb), P3(xx, yc, max(zr - dr, zb + 0.1))])
-            out["tie"].append([P3(xx, y0 + ov + pw, z0), P3(xx, y1 - ov - pw, z0)])
+            if on_beam:
+                out["tie"].append([[P3(xx, y0 + ov + pw, z0), P3(xx, yc - wb, z0)],
+                                   [P3(xx, yc + wb, z0), P3(xx, y1 - ov - pw, z0)]])
+            else:
+                out["tie"].append([[P3(xx, y0 + ov + pw, z0), P3(xx, y1 - ov - pw, z0)]])
             st, br = [], []
             if s.get("struts", True) and inner > 1.2:
                 for side in (1, -1):
@@ -1826,7 +1838,10 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
                         br.append([P3(xx, ya, za), P3(xx, yb, zz)])
             out["strut"].append(st)
             out["brace"].append(br)
-        if beam:
+        if on_beam:
+            out["rbeam"].append([P3(x0 + ov + pw, yc, zb), P3(x1 - ov - pw, yc, zb)])
+            out["rbeam_on_beam"] = True
+        elif beam:
             out["rbeam"].append([P3(rx0, yc, zb), P3(rx1, yc, zb)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
@@ -1917,8 +1932,9 @@ def roof_lines(data):
     kept = {}
     for i, (rect, part) in enumerate(zip(rects, parts)):
         if not many:
-            for k in ("ridge", "hip", "rafter", "purlin", "post", "skin", "tie"):
+            for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
                 out[k] += part[k]
+            out["tie"] += [seg for grp in part["tie"] for seg in grp]
             out["rbeam"] += part["rbeam"]
             for k in ("strut", "brace"):
                 out[k] += [m for grp in part[k] for m in grp]
@@ -1941,7 +1957,7 @@ def roof_lines(data):
                                            part["brace"]):
                 if not RC.hidden(b, i, roofs):
                     out["post"].append([a, b])
-                    out["tie"].append(tie)
+                    out["tie"] += tie
                     out["strut"] += st
                     out["brace"] += br
                     kept_posts.append(a)
@@ -1949,6 +1965,11 @@ def roof_lines(data):
             # last — each end on a tie, never out in the air past one
             for a, b in part["rbeam"]:
                 L_ = math.dist(a, b)
+                if part.get("rbeam_on_beam"):
+                    # on its concrete beam, wall to wall (see below for
+                    # where it meets another part's)
+                    out["rbeam"].append([a, b])
+                    continue
                 if L_ < 1e-6 or len(kept_posts) < 2:
                     continue
                 ts = sorted(sum((p[k] - a[k]) * (b[k] - a[k]) for k in range(2)) / L_ ** 2
@@ -1973,6 +1994,29 @@ def roof_lines(data):
                      merge_segments([pl["path"] for pl in out["purlin"]], gap=0.03)]
     out["rafter"] = merge_segments(out["rafter"], gap=0.03)
     out["ridge"] = merge_segments(out["ridge"])
+    # one คานรับดั้ง crossing another (an L / T plan): the later one butts
+    # on the earlier one's sides instead of running through it
+    if many and len(out["rbeam"]) > 1:
+        wb_ = _dim(s.get("tiebeam", s["ridge"]), "B") / 2
+        done = []
+        for a, b in out["rbeam"]:
+            pieces = [[a, b]]
+            for c, d_ in done:
+                nxt = []
+                for p_, q_ in pieces:
+                    cut = _crossing(p_, q_, c, d_)
+                    if cut is None or abs(p_[2] - c[2]) > 0.02:
+                        nxt.append([p_, q_])
+                        continue
+                    L_ = math.dist(p_[:2], q_[:2])
+                    t0, t1 = cut - wb_ / L_, cut + wb_ / L_
+                    if t0 * L_ > 0.1:
+                        nxt.append([p_, tuple(p_[k] + (q_[k] - p_[k]) * t0 for k in range(3))])
+                    if (1 - t1) * L_ > 0.1:
+                        nxt.append([tuple(p_[k] + (q_[k] - p_[k]) * t1 for k in range(3)), q_])
+                pieces = nxt
+            done += pieces
+        out["rbeam"] = done
     if not s.get("tie_beams"):
         out["tie"] = []
         out["rbeam"] = []
@@ -1991,6 +2035,21 @@ def roof_lines(data):
         out["valley"] = sum(math.dist(a, b) for a, b in out["valleys"]) or \
             RC.valley_length(kept, roofs)
     return out
+
+
+def _crossing(a, b, c, d):
+    """Where plan segment a→b crosses c→d, as a fraction of a→b (strictly
+    inside both), or None."""
+    rx, ry = b[0] - a[0], b[1] - a[1]
+    sx, sy = d[0] - c[0], d[1] - c[1]
+    den = rx * sy - ry * sx
+    if abs(den) < 1e-12:
+        return None
+    t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den
+    u = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den
+    if 1e-6 < t < 1 - 1e-6 and -1e-6 <= u <= 1 + 1e-6:
+        return t
+    return None
 
 
 def merge_segments(segs, tol=1e-4, gap=1e-3):

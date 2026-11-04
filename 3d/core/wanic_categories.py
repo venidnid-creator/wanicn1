@@ -25,8 +25,21 @@ CATEGORIES = (
     (12, "งานไฟฟ้า", "💡", "สายไฟ ท่อร้อยสาย ดวงโคม เต้ารับ ตู้ไฟ"),
     (13, "งานปรับอากาศ", "❄️", "เครื่องปรับอากาศ ท่อน้ำยา พัดลมระบายอากาศ"),
     (14, "งานภายนอก", "🌳", "ถนน ทางเท้า รางระบายน้ำ รั้ว ภูมิทัศน์"),
-    (15, "งานอื่นๆ", "📦", "งานเบ็ดเตล็ด ครุภัณฑ์จัดสร้าง"),
+    (15, "งานอื่นๆ", "📦", "งานเบ็ดเตล็ด"),
+    # after the work: what the price is built differently for (หลักเกณฑ์
+    # 2569 · ปร.2) — bought equipment carries VAT, not Factor F; equipment
+    # made on site is construction (× F); supplies and durables are bought
+    # as they are (no F)
+    (16, "ครุภัณฑ์จัดซื้อ", "🛒", "ครุภัณฑ์ที่ซื้อสำเร็จ · บวกภาษีมูลค่าเพิ่ม 7% ไม่คูณ Factor F (ปร.2)"),
+    (17, "ครุภัณฑ์จัดจ้าง", "🛠️", "ครุภัณฑ์ที่จ้างทำ/ติดตั้งในงาน · คูณ Factor F เหมือนค่างาน"),
+    (18, "วัสดุ", "🧺", "วัสดุสิ้นเปลืองที่จัดหาให้ · ไม่คูณ Factor F"),
+    (19, "วัสดุคงทน", "🪑", "วัสดุคงทนที่จัดหาให้ · ไม่คูณ Factor F"),
 )
+#: หมวด whose price is NOT multiplied by Factor F (shown in ปร.4 row 2,
+#: ค่าครุภัณฑ์จัดซื้อ) and those that add VAT on top of the price.
+NO_F = (16, 18, 19)
+ADD_VAT = (16,)
+EXTRA = (16, 17, 18, 19)
 NAME = {no: name for no, name, _i, _e in CATEGORIES}
 ICON = {no: icon for no, _n, icon, _e in CATEGORIES}
 

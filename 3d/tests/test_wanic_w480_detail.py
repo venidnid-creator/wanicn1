@@ -227,7 +227,7 @@ def test_part_prices_layers_and_categories():
     assert col.layer == col.name and col in by[col.name]
     assert B.assign_layers(groups, "") == {} and col.layer is None
     # the 15 หมวดงาน
-    assert [c[0] for c in CG.CATEGORIES] == list(range(1, 16))
+    assert [c[0] for c in CG.CATEGORIES] == list(range(1, 20))
     assert CG.NAME[1] == "งานเตรียมพื้นที่" and CG.NAME[15] == "งานอื่นๆ"
     r = Q.compute(d)
     titles = [th for _k, th, _rows in r["groups"]]
@@ -679,9 +679,19 @@ def test_model_opacity_slider_and_show_everything():
     assert math.isclose(app.viewport.model_opacity, 0.4)
     assert math.isclose(model_opacity(app.viewport), 0.4)
     assert panel.opacity_label.text() == "60 %"
+    from core.group import Group
+    from core.mesh import Mesh
+    g = Group(Mesh(), name="ทดสอบ")
+    scene.groups.append(g)
+    panel.hide_selected()                                   # nothing chosen: nothing hidden
+    assert not g.hidden
+    scene.selection = {g}
+    panel.hide_selected()
+    assert g.hidden
     for ly in scene.layers:
         ly.visible = False
     panel.show_everything()
+    assert not g.hidden
     assert all(ly.visible for ly in scene.layers)
     assert panel.opacity_slider.value() == 0 and model_opacity(app.viewport) is None
 
@@ -702,3 +712,63 @@ def test_per_tonne_prices_and_plaster_cement_are_read_right():
     for ln in r["lines"]:
         if ln["desc"].startswith(("เสาเอ็นและคานทับหลัง", "ฉาบปูนเรียบ")):
             assert 1 < ln["mat"] < 200, ln["desc"]
+
+
+def test_equipment_and_supplies_outside_factor_f():
+    from core import wanic_categories as CG
+    from core import wanic_takeoff as T
+    d = _data()
+    d["prices"] = {"RB6": 21.4, "ทรายหยาบ": 480}
+    base = Q.compute(d)["totals"]
+    d["extra_items"] = [
+        {"id": "a", "cat": 16, "desc": "เครื่องปรับอากาศ 18,000 BTU", "qty": 2, "unit": "เครื่อง",
+         "mat": 20000, "lab": 0},
+        {"id": "b", "cat": 17, "desc": "เคาน์เตอร์ ค.ส.ล. จ้างทำ", "qty": 1, "unit": "ชุด",
+         "mat": 10000, "lab": 2000},
+        {"id": "c", "cat": 18, "desc": "หลอดไฟสำรอง", "qty": 10, "unit": "หลอด", "mat": 100},
+        {"id": "d", "cat": 19, "desc": "โต๊ะทำงาน", "qty": 1, "unit": "ตัว", "mat": 5000}]
+    r = Q.compute(d)
+    t = r["totals"]
+    assert [no for no, *_ in CG.CATEGORIES][-4:] == [16, 17, 18, 19]
+    assert math.isclose(t["work"], base["work"] + 12000, abs_tol=0.01)       # 17 × F
+    assert t["equip"] == 40000 and t["equip_vat"] == 2800                  # 16 + VAT, no F
+    assert t["supply"] == 6000                                             # 18, 19 as bought
+    assert math.isclose(t["with_f"], round(t["work"] * t["F"], 2) + 42800 + 6000, abs_tol=0.02)
+    titles = [th for _k, th, _r in r["groups"]]
+    assert "16. ครุภัณฑ์จัดซื้อ" in titles and "19. วัสดุคงทน" in titles
+    rates = Q.to_rates(r)
+    secs = {x["desc"]: x["section"] for x in rates}
+    assert secs["เครื่องปรับอากาศ 18,000 BTU"] == "equip"
+    assert secs["เคาน์เตอร์ ค.ส.ล. จ้างทำ"] == "work"
+    assert secs["หลอดไฟสำรอง"] == "supply" and secs["โต๊ะทำงาน"] == "durable"
+    res = T.compute([], {"rates": rates, "settings": {"vat": 7.0}})
+    assert math.isclose(res["supply"], 6000) and math.isclose(res["equip"], 40000)
+    pr4 = T._pr4(res, dict(T.DEFAULT_SETTINGS))
+    row2 = next(rw for rw in pr4.rows if rw and rw[0][0] == "2")
+    assert math.isclose(row2[2][0], 40000 * 1.07 + 6000)
+
+
+def test_newer_government_documents_are_announced():
+    import json
+    from pathlib import Path
+
+    from core import wanic_standards as ST
+    here = json.loads((Path(__file__).resolve().parents[2] / "standards.json")
+                      .read_text(encoding="utf-8"))
+    assert ST.changes(ST.fetch(lambda url: here)) == []          # the repo file = this build
+    new = dict(here, labour={"id": "ว999", "date": "2570-01-15",
+                             "title": "หนังสือกรมบัญชีกลาง ว 999 บัญชีค่าแรงงานใหม่"})
+    msg = ST.changes(new)
+    assert len(msg) == 1 and "ว480" in msg[0] and "ว 999" in msg[0]
+    gone = dict(here, factor_f=dict(here["factor_f"], status="cancelled"))
+    assert "ถูกยกเลิก" in ST.changes(gone)[0]
+
+
+def test_cover_shows_the_model_picture():
+    from core import wanic_drawings as D
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    sheets = D.build_set(_data(), {"project": "ทดสอบ", "cover_image": png}, groups=("G", "A"))
+    cover = sheets[0]
+    assert cover.code == "ปก"
+    assert any(it[0] == "image" and it[3] == png for it in cover.items)
+    assert "ภาพจำลองอาคารจากโมเดล 3 มิติ" in cover.texts()

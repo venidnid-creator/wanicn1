@@ -334,7 +334,9 @@ class StartWindow(QWidget):
             cached = json.loads(settings.value("usage/cache") or "{}")
         except (TypeError, ValueError):
             cached = {}
-        self.stats_label.setText(ST.text({}, cached) + "<br><span style='color:#888'>กำลังอัปเดต…</span>")
+        self.stats_label.setOpenExternalLinks(True)
+        self.stats_label.setText(ST.text({}, cached, _version()) +
+                                 "<br><span style='color:#888'>กำลังอัปเดต…</span>")
         state = {"busy": False}
 
         def start(count):
@@ -363,7 +365,7 @@ class StartWindow(QWidget):
             if keep.get("downloads"):
                 cached.update(keep)
                 settings.setValue("usage/cache", json.dumps(cached))
-            self.stats_label.setText(ST.text(info, cached))
+            self.stats_label.setText(ST.text(info, cached, _version()))
         timer.timeout.connect(poll)
         start(True)
         again = QTimer(box)

@@ -931,6 +931,22 @@ def compute(data) -> dict:
     from core import wanic_categories as CG
     for ln in bill.lines:
         ln["cat"] = CG.line_category(ln["group"], ln["desc"])
+    # the items typed in for หมวด 16–19 (ครุภัณฑ์ วัสดุ)
+    for it in (data or {}).get("extra_items") or []:
+        try:
+            cat = int(it.get("cat", 16))
+            qty = float(it.get("qty") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cat not in CG.EXTRA or qty <= 0:
+            continue
+        ln = bill.add("extra", str(it.get("desc") or CG.NAME[cat]), qty,
+                      str(it.get("unit") or "ชุด"), mat=float(it.get("mat") or 0),
+                      lab=float(it.get("lab") or 0),
+                      ref=CG.CATEGORIES[cat - 1][3], note=str(it.get("note") or ""))
+        if ln is not None:
+            ln["cat"] = cat
+            ln["extra_id"] = it.get("id", "")
     groups = []
     if o.get("boq_by", "cat15") == "cat15":
         # the 15 หมวดงาน (งานเตรียมพื้นที่ … งานอื่นๆ)
@@ -943,6 +959,10 @@ def compute(data) -> dict:
             rows = [ln for ln in bill.lines if ln["group"] == key]
             if rows:
                 groups.append((key, th, rows))
+        for no in CG.EXTRA:
+            rows = [ln for ln in bill.lines if ln.get("cat") == no]
+            if rows:
+                groups.append((f"c{no}", CG.title(no), rows))
     for ln in bill.lines:
         if ln["mat_key"]:
             need.setdefault(ln["mat_key"], S.price_unit(ln["mat_key"]) or
@@ -1006,16 +1026,30 @@ def _slab_t_at(E, lib, beam) -> float:
     return max(ts) if ts else 0.0
 
 
+VAT_PCT = 7.0
+
+
 def _totals(lines) -> dict:
-    """Material, labour, the ค่างานต้นทุน, and the price with Factor F
+    """Material, labour, the ค่างานต้นทุน (หมวด 1–15 and 17), Factor F
     (กรมบัญชีกลาง ว 481, งานก่อสร้างอาคาร: no advance payment, no
-    retention, VAT 7 % — the usual case; the takeoff can set others)."""
+    retention, VAT 7 % — the usual case; the takeoff can set others), and
+    what is priced without F: ครุภัณฑ์จัดซื้อ + VAT 7 %, วัสดุ, วัสดุคงทน.
+    ``with_f`` is the whole price: work × F + those."""
+    from core import wanic_categories as CG
     mat = round(sum(ln["mat_total"] for ln in lines), 2)
     lab = round(sum(ln["lab_total"] for ln in lines), 2)
-    cost = round(mat + lab, 2)
+    no_f = [ln for ln in lines if ln.get("cat") in CG.NO_F]
+    cost = round(sum(ln["total"] for ln in lines) - sum(ln["total"] for ln in no_f), 2)
+    buy = round(sum(ln["total"] for ln in no_f if ln.get("cat") in CG.ADD_VAT), 2)
+    buy_vat = round(buy * VAT_PCT / 100.0, 2)
+    supply = round(sum(ln["total"] for ln in no_f if ln.get("cat") not in CG.ADD_VAT), 2)
     F, note = factor_f(cost)
-    return {"mat": mat, "lab": lab, "total": cost, "F": F, "f_note": note,
-            "with_f": round(cost * F, 2)}
+    after_f = round(cost * F, 2)
+    return {"mat": mat, "lab": lab, "total": round(mat + lab, 2), "work": cost,
+            "F": F, "f_note": note, "after_f": after_f, "equip": buy,
+            "equip_vat": buy_vat, "supply": supply,
+            "no_f": round(buy + buy_vat + supply, 2),
+            "with_f": round(after_f + buy + buy_vat + supply, 2)}
 
 
 def factor_f(cost: float) -> tuple[float, str]:
@@ -1049,11 +1083,14 @@ def to_rates(result) -> list[dict]:
                 note = f"เผื่อ {ln['waste']:g}% · " + note
             if ln["note"]:
                 note += " · " + ln["note"]
+            cat = ln.get("cat")
+            section = ("equip" if cat == 16 else "supply" if cat == 18 else
+                       "durable" if cat == 19 else "work")
             out.append(new_rate(
                 id=f"std{gi}.{li}", category=th, code=f"{gi}.{li}",
                 desc=ln["desc"], by="all", value="", qty="manual",
                 manual_qty=ln["qty"], unit=ln["unit"], mat=ln["mat"],
-                lab=ln["lab"], note=note, section="work"))
+                lab=ln["lab"], note=note, section=section))
     return out
 
 

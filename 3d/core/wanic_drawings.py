@@ -2883,6 +2883,8 @@ def g_cover(sh, E, info, sheets, boq):
     sh.rect(m, m, W - m, H_ - m, "frame", 0.7)
     sh.rect(m + 3, m + 3, W - m - 3, H_ - m - 3, "frame", 0.25)
     cx = W / 2
+    if info.get("cover_image"):
+        return _cover_with_picture(sh, E, info, sheets, boq)
     sh.text((cx, H_ - 48), "แบบก่อสร้าง", 9.0, "center", "title", True)
     proj = info.get("project") or "อาคาร"
     for i, line in enumerate(_wrap(proj, 40)[:2]):
@@ -2912,6 +2914,44 @@ def g_cover(sh, E, info, sheets, boq):
     sh.text((cx, m + 18), f"{info.get('office') or 'WANICNSURVEY'} · "
                           f"{info.get('date') or thai_date()}", 3.0, "center", "title")
     sh.text((cx, m + 10), f"จัดทำด้วย WANICNSURVEY · {FULL}", 2.2, "center", "title")
+
+
+def _cover_with_picture(sh, E, info, sheets, boq):
+    """The cover with the building as the 3D model shows it (the picture
+    the export took of the model) under the title, the summary and the
+    sheet families beside each other beneath it."""
+    W, H_ = PAPER
+    m = MARGIN
+    cx = W / 2
+    sh.text((cx, H_ - 28), "แบบก่อสร้าง", 7.0, "center", "title", True)
+    proj = info.get("project") or "อาคาร"
+    sh.text((cx, H_ - 42), _wrap(proj, 60)[0], 7.0, "center", "title", True)
+    box = (cx - 115, H_ - 178, cx + 115, H_ - 52)
+    sh.image(box, info["cover_image"])
+    sh.rect(*box, "frame", 0.25)
+    sh.text((box[2], box[1] - 3.5), "ภาพจำลองอาคารจากโมเดล 3 มิติ", 2.2, "right", "text")
+    y = box[1] - 12
+    lines = list(info.get("summary") or [])
+    if info.get("location"):
+        lines.append(f"สถานที่ก่อสร้าง {info['location']}")
+    if info.get("owner"):
+        lines.append(f"เจ้าของ {info['owner']}")
+    for i, line in enumerate(lines[:7]):
+        sh.text((cx - 112, y - i * 6.0), line, 3.4, "left", "text")
+    groups = []
+    for g, th in GROUP_TH.items():
+        n = sum(1 for s in sheets if s.group == g) if g != "BOQ" else len(boq)
+        if n and g != "G":
+            groups.append(f"{th} {n} แผ่น")
+    for i, line in enumerate(groups[:7]):
+        sh.text((cx + 18, y - i * 6.0), "• " + line, 3.2, "left", "text")
+    yb = m + 30
+    sh.line((cx - 45, yb + 8), (cx + 45, yb + 8), "title", 0.13, True)
+    sh.text((cx, yb + 3), f"({NAME})", 4.0, "center", "title", True)
+    sh.text((cx, yb - 3), ROLE, 3.2, "center", "title")
+    sh.text((cx, m + 12), f"{info.get('office') or 'WANICNSURVEY'} · "
+                          f"{info.get('date') or thai_date()} · จัดทำด้วย WANICNSURVEY · {FULL}",
+            2.4, "center", "title")
 
 
 def g_contents(sh, E, info, sheets, boq):
@@ -3007,17 +3047,31 @@ def boq_rows(result, show_prices=True):
                                  _money(m, show_prices), "",
                                  _money(lab, show_prices),
                                  _money(m + lab, show_prices), ""]))
-    summary.append(("total", ["", "รวมค่าวัสดุและค่าแรงงาน (ค่างานต้นทุน)", "",
+    from core import wanic_quantities as Q
+    t = result.get("totals") or Q._totals(result.get("lines") or [])
+    summary.append(("total", ["", "รวมค่าวัสดุและค่าแรงงาน", "",
                               "", "", _money(gm, show_prices), "",
                               _money(gl, show_prices),
                               _money(gm + gl, show_prices), ""]))
-    from core import wanic_quantities as Q
-    F, _note = Q.factor_f(gm + gl)
+    F = t.get("F", 1.0)
+    summary.append(("item", ["", "ค่างานต้นทุน (หมวด 1–15 และ 17 ครุภัณฑ์จัดจ้าง)", "", "",
+                             "", "", "", "", _money(t.get("work", gm + gl), show_prices),
+                             ""]))
     summary.append(("item", ["", "Factor F (ว 481 งานก่อสร้างอาคาร)", "", "", "", "",
                              "", "", f"× {F:.4f}" if show_prices else "",
                              "ค่าจ้างล่วงหน้า 0% ประกันผลงาน 0% VAT 7%"]))
+    summary.append(("item", ["", "ค่างานต้นทุน × Factor F", "", "", "", "", "", "",
+                             _money(t.get("after_f", (gm + gl) * F), show_prices), ""]))
+    if t.get("no_f"):
+        summary.append(("item", ["", f"ครุภัณฑ์จัดซื้อ + ภาษีมูลค่าเพิ่ม {Q.VAT_PCT:g}%",
+                                 "", "", "", "", "", "",
+                                 _money(t["equip"] + t["equip_vat"], show_prices),
+                                 "ไม่คูณ Factor F (ปร.2)"]))
+        summary.append(("item", ["", "วัสดุ และวัสดุคงทน", "", "", "", "", "", "",
+                                 _money(t["supply"], show_prices), "ไม่คูณ Factor F"]))
     summary.append(("total", ["", "รวมเป็นเงินทั้งสิ้น (รวม Factor F แล้ว)", "", "",
-                              "", "", "", "", _money((gm + gl) * F, show_prices),
+                              "", "", "", "", _money(t.get("with_f", (gm + gl) * F),
+                                                     show_prices),
                               "ราคานี้รวม Factor F แล้ว"]))
     body = []
     for gi, (_k, th, rows) in enumerate(groups, 1):
