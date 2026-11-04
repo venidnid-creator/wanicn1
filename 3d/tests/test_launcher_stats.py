@@ -33,32 +33,47 @@ class _Settings(dict):
 
 def test_downloads_and_users(ST):
     calls = []
+    counts = {"usage-install.txt": 4, "usage-open.txt": 30}
 
     def opener(url, timeout):
         calls.append(url)
         if "api.github.com" in url:
-            return [{"tag_name": "v2", "assets": [{"download_count": 7}]},
-                    {"tag_name": "v1", "assets": [{"download_count": 5}, {"download_count": 1}]}]
+            return [{"tag_name": "v2", "assets": [
+                        {"name": "wanicnsurvey-setup-2.exe", "download_count": 7},
+                        {"name": "usage-install.txt", "download_count": counts["usage-install.txt"]},
+                        {"name": "usage-open.txt", "download_count": counts["usage-open.txt"]}]},
+                    {"tag_name": "v1", "assets": [{"name": "a.exe", "download_count": 5},
+                                                  {"name": "b.exe", "download_count": 1}]}]
+        if "/releases/download/" in url:
+            name = url.rsplit("/", 1)[1]
+            counts[name] += 1
+            return b"ok"
         assert "id=" in url and "e=open" in url
         return {"online": 3, "today": 9, "total": 41}
     s = _Settings()
-    info = ST.fetch_all(s, "2026.11.04", opener)
-    assert info["downloads"] == {"total": 13, "latest": 7, "tag": "v2", "releases": 2}
-    assert "usage" not in info and info["usage_off"]          # no counter yet: nothing sent
-    assert len(calls) == 1
-    s.setValue("usage/url", "https://script.example/exec")
-    info = ST.fetch_all(s, "2026.11.04", opener)
-    assert info["usage"] == {"online": 3, "today": 9, "total": 41}
-    iid = s["usage/id"]
-    ST.fetch_all(s, "2026.11.04", opener)
-    assert s["usage/id"] == iid and len(iid) == 32            # one random id per install
+    info = ST.fetch_all(s, "2", opener)
+    # this computer counted once, this opening once; installer downloads only
+    assert info["sent"] == ["usage-install.txt", "usage-open.txt"]
+    assert info["downloads"]["total"] == 13 and info["downloads"]["latest"] == 7
+    assert info["downloads"]["users"] == 5 and info["downloads"]["opens"] == 31
+    assert any(c.endswith("/v2/usage-install.txt") for c in calls)
+    info = ST.fetch_all(s, "2", opener)
+    assert info["sent"] == ["usage-open.txt"]                  # not a new user
+    assert info["downloads"]["users"] == 5 and info["downloads"]["opens"] == 32
+    n = len(calls)
+    info = ST.fetch_all(s, "2", opener, count=False)          # a refresh only reads
+    assert len(calls) == n + 1 and "sent" not in info
     t = ST.text(info)
-    assert "ดาวน์โหลดสะสม <b>13</b>" in t and "ใช้งานอยู่ขณะนี้ <b>3</b>" in t and "<b>41</b>" in t
+    assert "ดาวน์โหลดสะสม <b>13</b>" in t and "ผู้ใช้งานสะสม <b>5</b>" in t
+    assert "ข้อมูล ณ" in t
+    s.setValue("usage/url", "https://script.example/exec")
+    info = ST.fetch_all(s, "2", opener)
+    assert info["usage"] == {"online": 3, "today": 9, "total": 41}
+    assert "ใช้งานอยู่ขณะนี้ <b>3</b>" in ST.text(info)
     s.setValue("usage/off", "1")
     n = len(calls)
-    ST.fetch_all(s, "x", opener)
-    assert len(calls) == n + 1                                 # downloads only
-
+    info = ST.fetch_all(s, "2", opener)
+    assert info["sent"] == [] and len(calls) == n + 1         # downloads only
 
 def test_offline_shows_the_last_numbers(ST):
     def opener(url, timeout):

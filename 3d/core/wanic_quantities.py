@@ -71,9 +71,37 @@ def options_of(data) -> dict:
     return o
 
 
+#: A material priced by the kilogram above this (baht) was read from a list
+#: that prices it by the tonne (rebar, cement, wire …): it is per tonne.
+KG_PER_TONNE_ABOVE = 400.0
+_KG_KEYS = None
+
+
+def kg_keys() -> set:
+    """Every price key whose unit is the kilogram (the standard keys and
+    the 2569 recipe materials)."""
+    global _KG_KEYS
+    if _KG_KEYS is None:
+        keys = {k for k, u in S.PRICE_KEYS if u == "กก."}
+        for rc in RC.RECIPES:
+            keys |= {it["name"] for it in rc.get("items", []) if it.get("unit") == "กก."}
+        _KG_KEYS = keys
+    return _KG_KEYS
+
+
+def sane_price(key: str, value: float) -> float:
+    """The price per the key's unit: a per-kilogram price that is really a
+    per-tonne one (21,400 for a steel bar that costs 21.40 บาท/กก.) is
+    divided by 1,000 — the mistake that put เสาเอ็น at 31,711 บาท/ม."""
+    v = float(value)
+    if key in kg_keys() and v > KG_PER_TONNE_ABOVE:
+        return v / 1000.0
+    return v
+
+
 def prices_of(data) -> dict:
     p = S.empty_prices()
-    p.update({k: float(v) for k, v in ((data or {}).get("prices") or {})
+    p.update({k: sane_price(k, v) for k, v in ((data or {}).get("prices") or {})
               .items() if _isnum(v)})
     return p
 
@@ -126,6 +154,12 @@ class _Bill:
 #: Recipe item names that mean a price-list key under another name.
 ALIASES = {"เหล็กเสริม RB Ø 6 มม.": "RB6", "เหล็กเสริม RB Ø 9 มม.": "RB9",
            "ตะปู": "ตะปูตอกไม้ 3\"", "น้ำผสมคอนกรีต": None}
+#: A material the province's list seldom names, priced as the one that does
+#: the same job when it has no price of its own: plaster is laid with the
+#: mixed cement «สำหรับงานก่อ ฉาบ» (มอก. 80), the plaster admixture as the
+#: masonry one.
+FALLBACKS = {"ปูนซีเมนต์ผสม (Silica Cement)": "ปูนซีเมนต์ผสม (มอก. 80/2566)",
+             "น้ำยาผสมปูนฉาบ": "น้ำยาผสมปูนก่อ"}
 
 
 def recipe_price(code, prices) -> tuple[float, str]:
@@ -136,6 +170,9 @@ def recipe_price(code, prices) -> tuple[float, str]:
     for name, key in ALIASES.items():
         if not p.get(name):
             p[name] = prices.get(key, 0.0) if key else 0.0164
+    for name, key in FALLBACKS.items():
+        if not p.get(name) and p.get(key):
+            p[name] = p[key]
     # «ไม้แบบคิด 50 %» is formwork per m² (A·B·C formula).
     for it in rc["items"]:
         if it["name"].startswith("ไม้แบบ") and it["unit"] == "ตร.ม.":
@@ -970,9 +1007,28 @@ def _slab_t_at(E, lib, beam) -> float:
 
 
 def _totals(lines) -> dict:
+    """Material, labour, the ค่างานต้นทุน, and the price with Factor F
+    (กรมบัญชีกลาง ว 481, งานก่อสร้างอาคาร: no advance payment, no
+    retention, VAT 7 % — the usual case; the takeoff can set others)."""
     mat = round(sum(ln["mat_total"] for ln in lines), 2)
     lab = round(sum(ln["lab_total"] for ln in lines), 2)
-    return {"mat": mat, "lab": lab, "total": round(mat + lab, 2)}
+    cost = round(mat + lab, 2)
+    F, note = factor_f(cost)
+    return {"mat": mat, "lab": lab, "total": cost, "F": F, "f_note": note,
+            "with_f": round(cost * F, 2)}
+
+
+def factor_f(cost: float) -> tuple[float, str]:
+    """(Factor F, how it was found) for a building whose ค่างานต้นทุน is
+    ``cost`` baht — 1.0 for nothing to price."""
+    if cost <= 0:
+        return 1.0, ""
+    from core import wanic_factor_f as FF
+    try:
+        r = FF.lookup(cost, kind="building")
+        return r.value, r.note()
+    except ValueError as e:                        # pragma: no cover - table gap
+        return 1.0, str(e)
 
 
 # ---------------------------------------------------------------------------

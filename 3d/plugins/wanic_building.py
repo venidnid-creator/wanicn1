@@ -1567,10 +1567,10 @@ class BoqDialog(QDialog):
         ref = self.result.get("price_ref") or ""
         self.total.setText(
             (f"<span style='color:#2E7D4F'>{ref}</span><br>" if ref else "") +
-            f"<b>รวมค่างานต้นทุน {t['total']:,.2f} บาท</b> (ค่าวัสดุ {t['mat']:,.2f} + "
-            f"ค่าแรง {t['lab']:,.2f}) — ยังไม่คูณ Factor F · ส่งเข้า «ถอดปริมาณ» "
-            f"เพื่อคิด Factor F และพิมพ์แบบ ปร.<br><span style='color:#B26A00'>{notes}"
-            "</span>")
+            f"รวมค่างานต้นทุน {t['total']:,.2f} บาท (ค่าวัสดุ {t['mat']:,.2f} + "
+            f"ค่าแรง {t['lab']:,.2f}) × Factor F {t.get('F', 1.0):.4f} = "
+            f"<b>{t.get('with_f', t['total']):,.2f} บาท (รวม Factor F แล้ว)</b><br>"
+            f"<span style='color:#B26A00'>{notes}</span>")
         if hasattr(self, "cats"):
             self._fill_cats()
 
@@ -2146,14 +2146,14 @@ class BuildingPanel(QWidget):
         ob = QWidget()
         ol = QHBoxLayout(ob)
         ol.setContentsMargins(4, 0, 4, 0)
-        ol.addWidget(QLabel("🔍 ความโปร่งใส"))
+        ol.addWidget(QLabel("🪟 กระจก/โปร่งใส"))
         self.opacity_slider = QSlider(Qt.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setSingleStep(5)
         self.opacity_slider.setPageStep(10)
         self.opacity_slider.setValue(0)
         self.opacity_slider.setToolTip(
-            "เลื่อนความโปร่งใสของวัตถุในโมเดล 0–100 % (0 = ทึบปกติ, 100 = เห็นเฉพาะเส้นขอบ) "
+            "เลื่อนความโปร่งใสของวัตถุในโมเดล 0–100 % ผิวเป็นสีกระจกใส (0 = ทึบปกติ, 100 = กระจกใสที่สุด) "
             "— ไม่ได้แก้ไขวัตถุ แค่การแสดงผล")
         self.opacity_label = QLabel("0 %")
         self.opacity_label.setMinimumWidth(42)
@@ -2401,6 +2401,7 @@ class BuildingPanel(QWidget):
             0.0, 40.0, 0.1, 1, "")
         num("fascia_h", "เชิงชาย หน้ากว้าง", 0.10, 0.40, 0.025)
         num("fascia_t", "เชิงชาย หนา", 0.01, 0.06, 0.005)
+        num("hip_cap_out", "ครอบตะเข้สันยื่นพ้นชายคา", 0.0, 0.30, 0.01)
         sf = sf_keep
         lay.addWidget(rf)
         note = QLabel("ขนาดชิ้นส่วนและเหล็กเสริมเป็นค่าเริ่มต้น — วิศวกรผู้ออกแบบต้องกำหนด"
@@ -3323,21 +3324,34 @@ def _downloads_corner(win) -> None:
     win._wanic_downloads = lab
     if os.environ.get("WANIC_OFFLINE"):
         return
-    box = {}
-
-    def work():
-        try:
-            box["info"] = WD.fetch()
-        except Exception as e:                      # noqa: BLE001 -- offline
-            box["error"] = str(e)
-    th = threading.Thread(target=work, daemon=True)
-    th.start()
+    box = {"busy": False}
+    marks = QSettings(*WD.SETTINGS)
     timer = QTimer(lab)
 
+    def start(count):
+        # fresh numbers each time the program opens and every 10 minutes;
+        # this opening counted once (a computer once, ever)
+        if box["busy"]:
+            return
+        box.update(busy=True, info=None, done=False)
+        ver = WD.version() if count else ""
+
+        def work():
+            try:
+                if ver:
+                    WD.ping(marks, ver, opening=False)
+                box["info"] = WD.fetch()
+            except Exception as e:                  # noqa: BLE001 -- offline
+                box["error"] = str(e)
+            box["done"] = True
+        threading.Thread(target=work, daemon=True).start()
+        timer.start(500)
+
     def poll():
-        if th.is_alive():
+        if not box.get("done"):
             return
         timer.stop()
+        box["busy"] = False
         info = box.get("info")
         if info:
             lab.setText(WD.text(info))
@@ -3347,4 +3361,7 @@ def _downloads_corner(win) -> None:
             except Exception:                       # noqa: BLE001
                 pass
     timer.timeout.connect(poll)
-    timer.start(500)
+    start(True)
+    again = QTimer(lab)
+    again.timeout.connect(lambda: start(False))
+    again.start(10 * 60 * 1000)

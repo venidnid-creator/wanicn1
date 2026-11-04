@@ -167,7 +167,8 @@ def test_the_book_ends_with_por4():
                                      range(1, len(boq) + 1)]
     first = " ".join(boq[0].texts())
     for t in ("แบบ ปร.1", "ค่างานต้นทุน", "สรุปงาน",
-              "2. งานดิน", "3. งานฐานราก", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ",
+              "2. งานดิน", "3. งานฐานราก", "รวมค่าวัสดุและค่าแรงงาน (ค่างานต้นทุน)",
+              "รวมเป็นเงินทั้งสิ้น (รวม Factor F แล้ว)", "ราคานี้รวม Factor F แล้ว",
               "สถานที่ก่อสร้าง  จังหวัดลพบุรี", "แบบเลขที่  WN-001",
               "สำนักงานพาณิชย์จังหวัดลพบุรี", "หน่วย : บาท", "ราคาหน่วยละ",
               "จำนวนเงิน", "ค่าแรงงาน", f"แผ่นที่ 1 / {len(boq)}"):
@@ -177,8 +178,10 @@ def test_the_book_ends_with_por4():
     assert "ผู้ประมาณราคา" in " ".join(boq[-1].texts())
     # The summary total is the BOQ's total.
     from core import wanic_quantities as Q
-    total = Q.compute(d)["totals"]["total"]
+    tt = Q.compute(d)["totals"]
+    total = tt["total"]
     assert f"{total:,.2f}" in first
+    assert tt["F"] > 1.0 and f"{tt['with_f']:,.2f}" in first and f"× {tt['F']:.4f}" in first
     # Without prices: the department's blank form.
     S2 = D.build_set(d, dict(INFO, boq_prices=False), ("BOQ",))
     assert S2 and all(s.group == "BOQ" for s in S2)

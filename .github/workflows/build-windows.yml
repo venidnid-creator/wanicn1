@@ -194,6 +194,13 @@ jobs:
           path: dist/wanicnsurvey-setup-*.exe
           if-no-files-found: error
 
+      - name: Usage files (users ever / openings, counted by GitHub)
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+        shell: bash
+        run: |
+          printf 'WANICNSURVEY usage counter — opened the first time on a computer. Not a download for people.\n' > dist/usage-install.txt
+          printf 'WANICNSURVEY usage counter — opened the program. Not a download for people.\n' > dist/usage-open.txt
+
       - name: Publish the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         uses: softprops/action-gh-release@v2
@@ -202,4 +209,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: WANICNSURVEY ${{ steps.ver.outputs.version }}
           body_path: installer/release-notes.md
-          files: dist/wanicnsurvey-setup-*.exe
+          files: |
+            dist/wanicnsurvey-setup-*.exe
+            dist/usage-install.txt
+            dist/usage-open.txt

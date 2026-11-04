@@ -335,12 +335,22 @@ class StartWindow(QWidget):
         except (TypeError, ValueError):
             cached = {}
         self.stats_label.setText(ST.text({}, cached) + "<br><span style='color:#888'>กำลังอัปเดต…</span>")
-        state = {}
+        state = {"busy": False}
 
-        def work():
-            state["info"] = ST.fetch_all(settings_bg, _version())
-        settings_bg = settings
-        threading.Thread(target=work, daemon=True).start()
+        def start(count):
+            # fresh numbers every time the program opens (and every 10
+            # minutes while it stays open); this opening is counted once
+            if state["busy"]:
+                return
+            state["busy"], state["info"] = True, None
+
+            def work():
+                try:
+                    state["info"] = ST.fetch_all(settings, _version(), count=count)
+                except Exception as e:                   # noqa: BLE001
+                    state["info"] = {"downloads_error": str(e)}
+            threading.Thread(target=work, daemon=True).start()
+            timer.start(300)
         timer = QTimer(box)
 
         def poll():
@@ -348,15 +358,24 @@ class StartWindow(QWidget):
             if info is None:
                 return
             timer.stop()
-            keep = {k: v for k, v in info.items() if k in ("downloads", "usage")}
-            if keep:
-                merged = dict(cached, **keep)
-                settings.setValue("usage/cache", json.dumps(merged))
+            state["busy"] = False
+            keep = {k: v for k, v in info.items() if k in ("downloads", "usage", "at")}
+            if keep.get("downloads"):
+                cached.update(keep)
+                settings.setValue("usage/cache", json.dumps(cached))
             self.stats_label.setText(ST.text(info, cached))
         timer.timeout.connect(poll)
-        timer.start(300)
-        box.setToolTip("ยอดดาวน์โหลดนับจาก GitHub Releases · ผู้ใช้งานนับจากการเปิดโปรแกรม "
-                       "(ส่งเพียงรหัสสุ่มของเครื่องและรุ่นโปรแกรม ไม่มีข้อมูลส่วนตัว)")
+        start(True)
+        again = QTimer(box)
+        again.timeout.connect(lambda: start(False))
+        again.start(10 * 60 * 1000)
+        ref = QLabel("<a href='#' style='color:#1F7A8C'>↻ อัปเดตตัวเลข</a>")
+        ref.setStyleSheet("font-size: 11px;")
+        ref.linkActivated.connect(lambda _l: start(False))
+        col.addWidget(ref, 0, Qt.AlignRight)
+        box.setToolTip("ยอดดาวน์โหลดนับจาก GitHub Releases · ผู้ใช้งานสะสมนับเครื่องที่เคยเปิดโปรแกรม "
+                       "(ดาวน์โหลดไฟล์เล็ก usage-install.txt ครั้งแรกครั้งเดียว และ usage-open.txt "
+                       "ทุกครั้งที่เปิด — ไม่ส่งข้อมูลส่วนตัว)")
         return box
 
     def _support_panel(self) -> QFrame:

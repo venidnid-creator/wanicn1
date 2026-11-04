@@ -31,7 +31,3 @@ retired when the offline `.igz` set replaced it, and the bed went with it at
 the author's request. `formats/glb.py` still imports the format — it is what
 a user's own download arrives as.
 
-`wanic.png` — the default scale figure of WANICNSURVEY: the engineer figure
-with the face of the developer (นายเวนิช ธัมมะวงษ์, from his own photograph,
-used at his request — smoothed and toned to the drawing) and the WANICNSURVEY
-compass logo on the hard hat and the vest.

@@ -490,12 +490,12 @@ def test_truss_struts_apex_cut_and_hip_caps_on_the_fascia():
                 if math.dist((v.position.x(), v.position.y()), top[:2]) < 0.2]
         vals = {round((p.x(), p.y())[axis], 4) for p in near}
         assert len(vals) == 1, vals                      # one plumb square end
-    # hip caps stop inside the fascia corner
+    # hip caps run on past the eave corner, about 10 cm (hip_cap_out)
     ov = 1.0
     caps = [g for g in groups if _kind(g) == "cap"]
     xs = [v.position.x() for g in caps for v in g.mesh.vertices]
     ys = [v.position.y() for g in caps for v in g.mesh.vertices]
-    assert min(xs) >= -ov - 0.02 and min(ys) >= -ov - 0.02
+    assert -ov - 0.30 <= min(xs) < -ov - 0.05 and -ov - 0.30 <= min(ys) < -ov - 0.05
 
 
 def test_walkway_and_drain_follow_the_outline_with_settable_offsets():
@@ -617,12 +617,29 @@ def test_bath_elevations_and_rebar_details_in_the_set():
 
 def test_download_count_reads_the_public_release_list():
     from core import wanic_downloads as WD
-    data = [{"tag_name": "v2", "assets": [{"download_count": 5}]},
-            {"tag_name": "v1", "assets": [{"download_count": 60}, {"download_count": 8}]}]
+    data = [{"tag_name": "v2", "assets": [{"name": "s-2.exe", "download_count": 5},
+                                          {"name": "usage-install.txt", "download_count": 3},
+                                          {"name": "usage-open.txt", "download_count": 9}]},
+            {"tag_name": "v1", "assets": [{"name": "s-1.exe", "download_count": 60},
+                                          {"name": "x.exe", "download_count": 8}]}]
     info = WD.fetch(lambda url: data)
-    assert info == {"total": 73, "latest": 5, "tag": "v2", "releases": 2}
-    assert "<b>73</b>" in WD.text(info) and "v2" in WD.text(info)
+    assert (info["total"], info["latest"], info["tag"], info["releases"]) == (73, 5, "v2", 2)
+    assert info["users"] == 3 and info["opens"] == 9
+    assert "<b>73</b>" in WD.text(info) and "ผู้ใช้งานสะสม <b>3</b>" in WD.text(info)
     assert "ออฟไลน์" in WD.text(None)
+
+    class St(dict):
+        def value(self, k, d=None):
+            return self.get(k, d)
+
+        def setValue(self, k, v):
+            self[k] = v
+    hits = []
+    st = St()
+    assert WD.ping(st, "2", hits.append, opening=False) == ["usage-install.txt"]
+    assert WD.ping(st, "2", hits.append, opening=False) == []      # once per computer
+    assert hits == [WD.ASSET.format(version="2", name="usage-install.txt")]
+    assert WD.ping(st, "dev", hits.append) == []
 
 
 def test_model_opacity_slider_and_show_everything():
@@ -667,3 +684,21 @@ def test_model_opacity_slider_and_show_everything():
     panel.show_everything()
     assert all(ly.visible for ly in scene.layers)
     assert panel.opacity_slider.value() == 0 and model_opacity(app.viewport) is None
+
+
+def test_per_tonne_prices_and_plaster_cement_are_read_right():
+    d = _data()
+    d["prices"] = {"RB6": 21400, "RB9": 21000, "ปูนซีเมนต์ผสม (มอก. 80/2566)": 2.8,
+                   "ทรายหยาบ": 480, "หินเบอร์ 1-2": 560, "ทรายละเอียด": 450,
+                   "น้ำยาผสมปูนก่อ": 40, "ลวดผูกเหล็ก": 45, "ตะปูตอกไม้ 3\"": 38}
+    p = Q.prices_of(d)
+    assert p["RB6"] == 21.4 and p["ทรายหยาบ"] == 480        # per tonne → per kg only
+    band, _n = Q.recipe_price("4.1", p)
+    plaster, _n = Q.recipe_price("7.2", p)
+    assert 20 < band < 200 and 20 < plaster < 200
+    r = Q.compute(d)
+    t = r["totals"]
+    assert t["F"] > 1.0 and math.isclose(t["with_f"], round(t["total"] * t["F"], 2))
+    for ln in r["lines"]:
+        if ln["desc"].startswith(("เสาเอ็นและคานทับหลัง", "ฉาบปูนเรียบ")):
+            assert 1 < ln["mat"] < 200, ln["desc"]

@@ -3007,11 +3007,18 @@ def boq_rows(result, show_prices=True):
                                  _money(m, show_prices), "",
                                  _money(lab, show_prices),
                                  _money(m + lab, show_prices), ""]))
-    summary.append(("total", ["", "รวมค่าวัสดุและค่าแรงงานเป็นเงินประมาณ", "",
+    summary.append(("total", ["", "รวมค่าวัสดุและค่าแรงงาน (ค่างานต้นทุน)", "",
                               "", "", _money(gm, show_prices), "",
                               _money(gl, show_prices),
-                              _money(gm + gl, show_prices),
-                              "ยังไม่รวม Factor F"]))
+                              _money(gm + gl, show_prices), ""]))
+    from core import wanic_quantities as Q
+    F, _note = Q.factor_f(gm + gl)
+    summary.append(("item", ["", "Factor F (ว 481 งานก่อสร้างอาคาร)", "", "", "", "",
+                             "", "", f"× {F:.4f}" if show_prices else "",
+                             "ค่าจ้างล่วงหน้า 0% ประกันผลงาน 0% VAT 7%"]))
+    summary.append(("total", ["", "รวมเป็นเงินทั้งสิ้น (รวม Factor F แล้ว)", "", "",
+                              "", "", "", "", _money((gm + gl) * F, show_prices),
+                              "ราคานี้รวม Factor F แล้ว"]))
     body = []
     for gi, (_k, th, rows) in enumerate(groups, 1):
         body.append(("head", [str(gi), th] + [""] * 8))
@@ -3167,7 +3174,8 @@ def build_boq(data, info=None) -> list:
                 1.8, "left", "title")
         sh.text((MARGIN + 5, MARGIN + 4), "หมายเหตุ: ปริมาณตามหลักเกณฑ์การคำนวณ"
                 "ราคากลางงานก่อสร้าง พ.ศ. 2569 (เผื่อตามมาตรฐาน) ค่าแรงตามบัญชี ว480 · "
-                "ราคารวมนี้คือค่างานต้นทุน ยังไม่คูณ Factor F (ดูแบบ ปร.1 (ก) และ ปร.4)", 2.0)
+                "ราคาแต่ละรายการคือค่างานต้นทุน · ราคารวมทั้งสิ้นในสรุปงานรวม Factor F แล้ว "
+                "(ว 481 งานอาคาร)", 2.0)
     return pages
 
 

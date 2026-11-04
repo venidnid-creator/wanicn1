@@ -99,7 +99,7 @@ DEFAULT_SETTINGS = {
     # PL 200×200×9 มม. on 4 J-bolts DB12 cast 0.60 ม. into the column
     "head_plate": True,
     # struts (ตุ๊กตา) and braces (ค้ำยัน) of the king-post trusses
-    "struts": True, "strut": "C 100×50×20×2.3",
+    "struts": True, "strut": "C 100×50×20×2.3", "hip_cap_out": 0.10,
     # outside: the walkway (ทางเท้า) from the outer face, the drain ring
     # (ท่อระบายน้ำ) this far out from the building
     "walk_w": 1.0, "drain_off": 1.5,
@@ -2500,15 +2500,15 @@ def roof_members(data) -> tuple[list, dict]:
         amp = tile["wave"][2]
         up = lift + amp + 0.02
         each = float(tile.get("cap") or 0.33)
-        # The hip caps end on the fascia: their lower end is drawn back
-        # (in plan) by the cap's half width, so the cap and its end piece
-        # (หางมน) sit inside the corner of the fascia boards instead of
-        # running out past them.
+        # The hip caps run on past the eave corner by ``hip_cap_out``
+        # (10 cm in plan, set in the settings) so the end piece (หางมน)
+        # sits clear beyond the fascia, the way a tiler finishes a hip.
+        out_ = float(s.get("hip_cap_out", 0.10))
         hips = []
         for a_, b_ in lines["hip"]:
             lo, hi = (a_, b_) if a_[2] <= b_[2] else (b_, a_)
             L2 = math.hypot(hi[0] - lo[0], hi[1] - lo[1])
-            t = min(0.19 / L2, 0.3) if L2 > 1e-6 else 0.0
+            t = -out_ / L2 if L2 > 1e-6 else 0.0
             lo2 = tuple(lo[i] + (hi[i] - lo[i]) * t for i in range(3))
             hips.append([lo2, hi] if a_[2] <= b_[2] else [hi, lo2])
         cap_lines = dict(lines, hip=hips)

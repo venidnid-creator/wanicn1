@@ -31,7 +31,7 @@ KEY_IMAGE = "new_document/scale_figure_image"    # CUSTOM: the stored copy
 KEY_HEIGHT = "new_document/scale_figure_height"  # CUSTOM: metres
 KEY_NAME = "new_document/scale_figure_name"      # CUSTOM: the group's name
 
-DEFAULT_PICK = "wanic"
+DEFAULT_PICK = "ingeniero"
 CUSTOM = "custom"
 #: The mark in ``Group.ext`` (the slot extensions use, saved in the .igz).
 MARK = "scale_figure"

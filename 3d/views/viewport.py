@@ -980,6 +980,14 @@ def edit_fade_color(background) -> tuple:
     being edited keeps its colours."""
     return tuple(0.5 * float(c) + 0.5 * 0.55 for c in list(background)[:3])
 
+#: The model-opacity slider draws the faces as clear glass: their colour
+#: washed this far toward a pale blue-green glass tone.
+GLASS_COLOR = (0.66, 0.84, 0.88)
+GLASS_TINT = 0.55
+#: Even at 100 % a face keeps this much, so the glass still reads.
+GLASS_MIN_OPACITY = 0.10
+
+
 def model_opacity(viewport):
     """The model-opacity slider's value (0.0–1.0) when it makes the faces
     see-through, else ``None`` (opaque, the usual drawing). Set it with
@@ -990,7 +998,7 @@ def model_opacity(viewport):
         return None
     if v >= 0.999:
         return None
-    return max(0.0, v)
+    return max(GLASS_MIN_OPACITY, v)
 
 
 #: X-ray: how opaque each translucent face layer is. Layers stack, so a face
@@ -2395,6 +2403,11 @@ class Viewport(QOpenGLWidget):
                 self._program.setUniformValue1f(self._loc_opacity,
                                                 see_through)
                 self._gl.glDepthMask(GL_FALSE)
+                if mode != "xray":
+                    # the slider's look: tinted like clear glass
+                    self._program.setUniformValue(
+                        self._loc_fade_color, QVector3D(*GLASS_COLOR))
+                    self._program.setUniformValue1f(self._loc_fade, GLASS_TINT)
             self._faces_vao.bind()
             if split_f is None:
                 for _vs, _vc in face_spans:
@@ -2425,6 +2438,12 @@ class Viewport(QOpenGLWidget):
             if see_through is not None:
                 self._program.setUniformValue1f(self._loc_opacity, 1.0)
                 self._gl.glDepthMask(GL_TRUE)
+                if mode != "xray":
+                    self._program.setUniformValue1f(self._loc_fade, 0.0)
+                    if self.scene.edit_group is not None:
+                        self._program.setUniformValue(
+                            self._loc_fade_color, QVector3D(*edit_fade_color(
+                                style.background)))
             self._program.setUniformValue(self._loc_use_vcolor, 0)
             self._gl.glDisable(GL_POLYGON_OFFSET_FILL)
 
