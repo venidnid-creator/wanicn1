@@ -980,6 +980,19 @@ def edit_fade_color(background) -> tuple:
     being edited keeps its colours."""
     return tuple(0.5 * float(c) + 0.5 * 0.55 for c in list(background)[:3])
 
+def model_opacity(viewport):
+    """The model-opacity slider's value (0.0–1.0) when it makes the faces
+    see-through, else ``None`` (opaque, the usual drawing). Set it with
+    ``viewport.model_opacity = 0.4`` and repaint."""
+    try:
+        v = float(getattr(viewport, "model_opacity", 1.0))
+    except (TypeError, ValueError):
+        return None
+    if v >= 0.999:
+        return None
+    return max(0.0, v)
+
+
 #: X-ray: how opaque each translucent face layer is. Layers stack, so a face
 #: seen through another reads darker and an opening (no face) stays clear.
 XRAY_FACE_OPACITY = 0.6
@@ -2373,11 +2386,14 @@ class Viewport(QOpenGLWidget):
                 # calls per frame.
                 self._program.setUniformValue(self._loc_use_vcolor, 1)
                 self._set_back_face_color()
-            if mode == "xray":
-                # X-ray: translucent faces that do not occlude — edges stay
-                # fully visible because nothing writes depth.
+            see_through = XRAY_FACE_OPACITY if mode == "xray" else \
+                model_opacity(self)
+            if see_through is not None:
+                # X-ray (or the model-opacity slider): translucent faces
+                # that do not occlude — edges stay fully visible because
+                # nothing writes depth.
                 self._program.setUniformValue1f(self._loc_opacity,
-                                                XRAY_FACE_OPACITY)
+                                                see_through)
                 self._gl.glDepthMask(GL_FALSE)
             self._faces_vao.bind()
             if split_f is None:
@@ -2406,7 +2422,7 @@ class Viewport(QOpenGLWidget):
                 self._gl.glDrawArrays(GL_TRIANGLES, fstart, fcount)
                 self._gl.glDisable(GL_CULL_FACE)
             self._faces_vao.release()
-            if mode == "xray":
+            if see_through is not None:
                 self._program.setUniformValue1f(self._loc_opacity, 1.0)
                 self._gl.glDepthMask(GL_TRUE)
             self._program.setUniformValue(self._loc_use_vcolor, 0)
@@ -2457,9 +2473,11 @@ class Viewport(QOpenGLWidget):
             self._gl.glEnable(GL_POLYGON_OFFSET_FILL)
             self._gl.glPolygonOffset(1.0, 1.0)
             self._program.setUniformValue(self._loc_use_tex, 1)
-            if mode == "xray":
+            tex_through = XRAY_FACE_OPACITY if mode == "xray" else \
+                model_opacity(self)
+            if tex_through is not None:
                 self._program.setUniformValue1f(self._loc_opacity,
-                                                XRAY_FACE_OPACITY)
+                                                tex_through)
                 self._gl.glDepthMask(GL_FALSE)
             self._tex_faces_vao.bind()
             run_parts = getattr(self, "_tex_run_parts", None)
@@ -2488,7 +2506,7 @@ class Viewport(QOpenGLWidget):
             self._program.setUniformValue1f(self._loc_fade, 0.0)
             self._set_cutout(False)
             self._tex_faces_vao.release()
-            if mode == "xray":
+            if tex_through is not None:
                 self._program.setUniformValue1f(self._loc_opacity, 1.0)
                 self._gl.glDepthMask(GL_TRUE)
             self._program.setUniformValue1f(self._loc_shade, 1.0)

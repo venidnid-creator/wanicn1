@@ -527,3 +527,143 @@ def test_walkway_and_drain_follow_the_outline_with_settable_offsets():
     r = Q.compute(_data())
     walk_line = next(ln for ln in r["lines"] if ln["desc"].startswith("ทางเท้ารอบอาคาร"))
     assert "1.00 ม." in walk_line["desc"]
+
+
+def _collinear_gaps(segs, most=0.3):
+    """Pairs of pieces on one line with a small gap between them (pieces
+    that should have been one member)."""
+    out = []
+    for i, (a, b) in enumerate(segs):
+        L = math.dist(a, b)
+        u = [(b[k] - a[k]) / L for k in range(3)]
+        for c, d in segs[i + 1:]:
+            Lv = math.dist(c, d)
+            v = [(d[k] - c[k]) / Lv for k in range(3)]
+            if abs(sum(u[k] * v[k] for k in range(3))) < 0.9999:
+                continue
+            tc = sum((c[k] - a[k]) * u[k] for k in range(3))
+            if math.dist(c, [a[k] + u[k] * tc for k in range(3)]) > 0.01:
+                continue
+            td = sum((d[k] - a[k]) * u[k] for k in range(3))
+            lo, hi = sorted((tc, td))
+            gap = max(lo - L, -hi)
+            if gap < most:
+                out.append(gap)
+    return out
+
+
+def test_one_plane_of_two_roofs_has_one_set_of_rafters_and_purlins():
+    # an L: the wing's hipped end and the main roof's side make one face
+    d = _data([dict(name="a", x=0, y=0, w=9, d=4), dict(name="b", x=0, y=4, w=4, d=5)])
+    d["settings"]["roof"] = "hip"
+    L = B.roof_lines(d)
+    assert not _collinear_gaps([p["path"] for p in L["purlin"]])
+    assert not _collinear_gaps(L["rafter"])
+    # the beam under the posts ends on a tie at both ends
+    ties = L["tie"]
+    for a, b in L["rbeam"]:
+        for e in (a, b):
+            assert any(abs((e[0] - t0[0]) * (t1[1] - t0[1]) - (e[1] - t0[1]) * (t1[0] - t0[0]))
+                       / math.dist(t0[:2], t1[:2]) < 1e-6 for t0, t1 in ties)
+
+
+def test_truss_members_butt_and_the_hip_stays_in_the_fascia_corner():
+    d = _data([dict(name="ห้อง", x=0, y=0, w=6, d=9)])
+    d["settings"]["roof"] = "hip"
+    s = B.settings_of(d)
+    L = B.roof_lines(d)
+    pw = B._dim(s["wallplate"], "B") / 2
+    # a tie stops on the wall plate's face, not inside it
+    for a, b in L["tie"]:
+        assert math.isclose(min(a[0], b[0]), 0.0 + pw, abs_tol=1e-6) or \
+            math.isclose(min(a[1], b[1]), 0.0 + pw, abs_tol=1e-6)
+    hp = B._dim(s["post"])
+    hs = B._dim(s["strut"])
+    posts = [(p[0][0], p[0][1]) for p in L["post"]]
+    struts = [(p[0][0], p[0][1]) for p in L["strut"]]
+    for a, b in L["brace"]:
+        # from the post's face to the strut's face, both plumb cuts
+        pa = min(posts, key=lambda q: math.dist(q, a[:2]))
+        pb = min(struts, key=lambda q: math.dist(q, b[:2]))
+        assert math.isclose(math.dist(pa, a[:2]), hp / 2, abs_tol=1e-6)
+        assert math.isclose(math.dist(pb, b[:2]), hs / 2, abs_tol=1e-6)
+    groups, _c = B.roof_members(d)
+    ft = float(s["fascia_t"])
+    ov = float(s["overhang"])
+    for g in (g for g in groups if _kind(g) == "hip"):
+        x0, y0, _z0, x1, y1, _z1 = _box(g)
+        assert x0 >= -ov + ft / 2 - 1e-3 and y0 >= -ov + ft / 2 - 1e-3
+        assert x1 <= 6 + ov - ft / 2 + 1e-3 and y1 <= 9 + ov - ft / 2 + 1e-3
+
+
+def test_bath_elevations_and_rebar_details_in_the_set():
+    from core import wanic_drawings as D
+    d = _data()
+    d["floors"][0]["fixtures"] = [{"type": "WC1", "x": 0.5, "y": 5.3, "dir": 0},
+                                  {"type": "LV", "x": 1.8, "y": 5.1, "dir": 0}]
+    sheets = D.build_set(d, {"project": "ทดสอบ"}, groups=("A", "S"))
+    titles = {s.title: s for s in sheets}
+    el = titles["รูปด้านภายในห้องน้ำ"]
+    txt = " ".join(el.texts())
+    assert "รูปด้านภายใน ก" in txt and "รูปด้านภายใน ง" in txt
+    assert "WC1 โถส้วม" in txt and "กระจกเงา" in txt
+    rb = titles["แบบขยายเหล็กเสริมฐานรากและคาน"]
+    txt = " ".join(rb.texts())
+    assert "รูปตัดฐานราก F1" in txt and "รูปตัด A-A (ที่หัวเสา)" in txt
+    assert "L/4 @0.075" in txt and rb.count("circle", "rebar") > 8
+    assert D._bars("2-DB12")[:3] == (2, "DB12", 12)
+    assert D._bars("DB12@0.15")[3] == 0.15
+
+
+def test_download_count_reads_the_public_release_list():
+    from core import wanic_downloads as WD
+    data = [{"tag_name": "v2", "assets": [{"download_count": 5}]},
+            {"tag_name": "v1", "assets": [{"download_count": 60}, {"download_count": 8}]}]
+    info = WD.fetch(lambda url: data)
+    assert info == {"total": 73, "latest": 5, "tag": "v2", "releases": 2}
+    assert "<b>73</b>" in WD.text(info) and "v2" in WD.text(info)
+    assert "ออฟไลน์" in WD.text(None)
+
+
+def test_model_opacity_slider_and_show_everything():
+    import pytest
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    from core.history import History
+    from core.scene import Scene
+    from plugins.wanic_building import BuildingPanel
+    from views.viewport import model_opacity
+    QApplication.instance() or QApplication([])
+
+    class Vp:
+        def __init__(self, scene):
+            self.scene, self.history = scene, History(scene)
+
+        def update(self):
+            pass
+
+    class App:
+        def __init__(self, scene):
+            self.scene, self.viewport, self.window = scene, Vp(scene), object()
+            self.data = None
+
+        def document_data(self, default=None):
+            return default if self.data is None else self.data
+
+        def set_document_data(self, value):
+            self.data = value
+
+    scene = Scene()
+    app = App(scene)
+    panel = BuildingPanel(app)
+    assert model_opacity(app.viewport) is None
+    panel.opacity_slider.setValue(60)
+    assert math.isclose(app.viewport.model_opacity, 0.4)
+    assert math.isclose(model_opacity(app.viewport), 0.4)
+    assert panel.opacity_label.text() == "60 %"
+    for ly in scene.layers:
+        ly.visible = False
+    panel.show_everything()
+    assert all(ly.visible for ly in scene.layers)
+    assert panel.opacity_slider.value() == 0 and model_opacity(app.viewport) is None

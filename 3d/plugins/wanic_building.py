@@ -16,6 +16,7 @@ from __future__ import annotations
 from core.wanic_ui import safe as _safe
 
 import copy
+import json
 import os
 
 import math
@@ -25,11 +26,12 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
 )
 
 from core import wanic_building as B
 from core import wanic_catalog as CAT
+from core import wanic_downloads as WD
 from core.wanic_sign import label_html
 
 TITLE = "ออกแบบอาคาร"
@@ -2135,22 +2137,47 @@ class BuildingPanel(QWidget):
             lambda: self.build(("structure",)), 0, 0, "#2E7D4F")
         btn("🏠 สร้าง/อัปเดตหลังคา", "โครงหลังคาเหล็กและแผ่นหลังคา",
             lambda: self.build(("roof",)), 0, 1, "#C46420")
+        btn("👁 แสดงวัตถุที่ซ้อนอยู่",
+            "แสดงทุกวัตถุในโมเดล: ยกเลิกการซ่อนทุกชิ้น (รวมชิ้นที่ซ้อนอยู่ในกลุ่ม) "
+            "เปิดทุกเลเยอร์ และออกจากมุมมองเฉพาะโครงสร้าง",
+            self.show_everything, 1, 0, "#1F7A8C")
+        # Model opacity 0–100 % (ความโปร่งใส): see the frame through walls
+        # and roof without hiding anything
+        ob = QWidget()
+        ol = QHBoxLayout(ob)
+        ol.setContentsMargins(4, 0, 4, 0)
+        ol.addWidget(QLabel("🔍 ความโปร่งใส"))
+        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setSingleStep(5)
+        self.opacity_slider.setPageStep(10)
+        self.opacity_slider.setValue(0)
+        self.opacity_slider.setToolTip(
+            "เลื่อนความโปร่งใสของวัตถุในโมเดล 0–100 % (0 = ทึบปกติ, 100 = เห็นเฉพาะเส้นขอบ) "
+            "— ไม่ได้แก้ไขวัตถุ แค่การแสดงผล")
+        self.opacity_label = QLabel("0 %")
+        self.opacity_label.setMinimumWidth(42)
+        self.opacity_slider.valueChanged.connect(
+            lambda v: _safe(self, lambda: self.set_transparency(v)))
+        ol.addWidget(self.opacity_slider, 1)
+        ol.addWidget(self.opacity_label)
+        bb.addWidget(ob, 1, 1)
         btn("✅ สร้างทั้งหมด", "โครงสร้าง + หลังคา",
-            lambda: self.build(("structure", "roof")), 1, 0, "#0F2A44")
+            lambda: self.build(("structure", "roof")), 2, 0, "#0F2A44")
         btn("📊 BOQ ตามหลักเกณฑ์ 2569…",
             "ถอดปริมาณตามหลักเกณฑ์กรมบัญชีกลาง (เผื่อตามมาตรฐาน ค่าแรง ว480) "
-            "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 1, 1, "#7B3FA0")
+            "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 2, 1, "#7B3FA0")
         btn("📐 ส่งออกแบบ 2D (A · S · SN · EE · M)…",
             "แบบก่อสร้างครบชุดจากโมเดล: แปลน รูปด้าน รูปตัด ตาราง โครงสร้าง "
             "สุขาภิบาล ไฟฟ้า เครื่องกล — กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)",
-            self.open_drawings, 2, 0, "#8A5A00")
+            self.open_drawings, 3, 0, "#8A5A00")
         btn("✂ รูปตัดอาคาร (แนว X / แนว Y)…",
             "รูปตัดอาคารชั้นละ 1 ชุด (2 รูป แนว X และแนว Y — รูปแรกตัดผ่านห้องน้ำ) "
             "แสดงฐานราก คาน พื้น ผนังตัด ฝ้า โครงหลังคา ระดับ และเส้นบอกระยะ — PDF / DXF",
-            self.export_sections, 3, 0, "#5B6B78")
+            self.export_sections, 4, 0, "#5B6B78")
         btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
-            "(วัดจากโมเดล 3D)", self.send_rates, 2, 1, "#3B6FB6")
+            "(วัดจากโมเดล 3D)", self.send_rates, 3, 1, "#3B6FB6")
         lay.addLayout(bb)
         # The structure on its own, coloured by kind (as engineers check a
         # frame), and the standard looks at it: 3D, plan, four elevations.
@@ -3087,6 +3114,43 @@ class BuildingPanel(QWidget):
                     "ground_beam": (0.96, 0.55, 0.18), "beam": (0.24, 0.50, 0.92)}
     FRAME_KINDS = ("footing", "stump", "pile", "column", "beam", "slab", "stair")
 
+    def show_everything(self) -> None:
+        """«แสดงวัตถุที่ซ้อนอยู่»: every object in the model shown again —
+        hidden ones (nested in groups too) unhidden, every layer turned on,
+        the frame-only view left and the model opaque again."""
+        from core.history import HideCommand
+        from core.purge import iter_groups
+        scene = self.app.scene
+        if getattr(self, "frame_btn", None) is not None and self.frame_btn.isChecked():
+            self.frame_btn.setChecked(False)          # restores the colours
+        hidden = [g for g in iter_groups(scene.groups) if getattr(g, "hidden", False)]
+        hidden += [f for f in scene.mesh.faces if f.attrs.get("hidden")]
+        if hidden:
+            self.app.viewport.history.execute(HideCommand(hidden, hidden=False))
+        layers_on = 0
+        for ly in getattr(scene, "layers", []) or []:
+            if not getattr(ly, "visible", True):
+                ly.visible = True
+                layers_on += 1
+        if getattr(self, "opacity_slider", None) is not None:
+            self.opacity_slider.setValue(0)
+        scene.version += 1
+        win = getattr(self.app, "window", None)
+        panel = getattr(getattr(win, "tray", None), "layers", None)
+        if panel is not None and hasattr(panel, "refresh"):
+            panel.refresh()
+        self.app.viewport.update()
+        self.status.setText(f"แสดงทุกวัตถุแล้ว — ยกเลิกซ่อน {len(hidden)} ชิ้น · "
+                            f"เปิดเลเยอร์ {layers_on} ชั้น")
+
+    def set_transparency(self, pct: int) -> None:
+        """The model's faces see-through by ``pct`` % (0 = solid)."""
+        pct = max(0, min(100, int(pct)))
+        self.app.viewport.model_opacity = 1.0 - pct / 100.0
+        if getattr(self, "opacity_label", None) is not None:
+            self.opacity_label.setText(f"{pct} %")
+        self.app.viewport.update()
+
     def frame_view(self, on: bool) -> None:
         """Show the concrete frame alone, coloured by kind — or the whole
         building again. Undoable, and a rebuild starts from normal colours."""
@@ -3221,3 +3285,66 @@ def setup(app) -> None:
                         tip="วางผังห้อง แล้วสร้างฐานราก เสา คาน พื้น ผนัง "
                             "และโครงหลังคาอัตโนมัติ")
     QTimer.singleShot(0, lambda: _join_tray(app.window, dock))
+    QTimer.singleShot(0, lambda: _downloads_corner(app.window))
+
+
+def _downloads_corner(win) -> None:
+    """The download count in the top-right corner of the main window
+    (beside the menus): every release's installer downloads from GitHub,
+    and the latest release's. Read off the UI thread; the last answer is
+    kept so the corner still shows it offline. Click: the releases page."""
+    import threading
+
+    from PySide6.QtCore import QSettings, QUrl
+    from PySide6.QtGui import QDesktopServices
+    if win is None or getattr(win, "_wanic_downloads", None) is not None:
+        return
+    bar = win.menuBar() if hasattr(win, "menuBar") else None
+    if bar is None:
+        return
+    lab = QLabel()
+    lab.setObjectName("wanicDownloads")
+    lab.setTextFormat(Qt.RichText)
+    lab.setStyleSheet("QLabel#wanicDownloads{background:#0F2A44;color:#FFFFFF;"
+                      "border-radius:9px;padding:2px 10px;margin:2px 6px;}")
+    lab.setCursor(Qt.PointingHandCursor)
+    st = QSettings("WANICNSURVEY", "downloads")
+    cached = None
+    try:
+        raw = st.value("cache")
+        cached = json.loads(raw) if raw else None
+    except Exception:                               # noqa: BLE001
+        cached = None
+    lab.setText(WD.text(cached, offline=bool(cached)))
+    lab.setToolTip(WD.tooltip(cached))
+    lab.mousePressEvent = lambda _e: QDesktopServices.openUrl(QUrl(WD.PAGE))
+    bar.setCornerWidget(lab, Qt.TopRightCorner)
+    lab.show()
+    win._wanic_downloads = lab
+    if os.environ.get("WANIC_OFFLINE"):
+        return
+    box = {}
+
+    def work():
+        try:
+            box["info"] = WD.fetch()
+        except Exception as e:                      # noqa: BLE001 -- offline
+            box["error"] = str(e)
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    timer = QTimer(lab)
+
+    def poll():
+        if th.is_alive():
+            return
+        timer.stop()
+        info = box.get("info")
+        if info:
+            lab.setText(WD.text(info))
+            lab.setToolTip(WD.tooltip(info))
+            try:
+                st.setValue("cache", json.dumps(info))
+            except Exception:                       # noqa: BLE001
+                pass
+    timer.timeout.connect(poll)
+    timer.start(500)

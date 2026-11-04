@@ -2104,6 +2104,10 @@ def build_set(data, info=None,
                for s in E["slabs"]):
             add("A", "แบบขยายห้องน้ำ", lambda sh, _a: a_bathrooms(sh, E),
                 "1:50")
+            baths = bathrooms(E)
+            for i in range(0, len(baths), 2):
+                add("A", "รูปด้านภายในห้องน้ำ" + (f" ({i // 2 + 1})" if len(baths) > 2 else ""),
+                    lambda sh, _a, rr=baths[i:i + 2]: a_bath_elevations(sh, E, rr), "1:50")
         add("A", "รายการวัสดุประกอบแบบ", lambda sh, _a: a_materials(sh, E, fcodes), "-")
         if L:
             add("A", "แบบขยายเชิงชาย ฝ้าชายคา โครงถักหลังคา",
@@ -2121,6 +2125,8 @@ def build_set(data, info=None,
             add("S", "แปลนโครงหลังคา", lambda sh, _a: s_roof_frame(sh, E, L))
         add("S", "ตารางฐานราก เสา คาน พื้น",
             lambda sh, _a: s_schedules(sh, E), "-")
+        add("S", "แบบขยายเหล็กเสริมฐานรากและคาน",
+            lambda sh, _a: s_rebar_details(sh, E), "ตามระบุ")
     if "SN" in groups:
         add("SN", "สารบัญแบบ สัญลักษณ์ รายการประกอบแบบสุขาภิบาล",
             lambda sh, all_: sn_index(sh, all_), "-")
@@ -2443,6 +2449,406 @@ def sn_details(sh, E):
     sh.text((ox3 + 0.4 * k, oy + 0.66 * k), "ตะแกรงฟลอร์เดรนกันกลิ่น Ø 2\" · พื้นลาด 1:100", 2.0, "center")
     sh.text((ox3 + 0.82 * k, oy + 0.08 * k), "ท่อน้ำทิ้ง PVC Ø 2\"", 2.0)
     caption(sh, (ox3 + 0.4 * k, y0 + 10), "แบบขยายฟลอร์เดรน", "1:20")
+
+
+# ---------------------------------------------------------------------------
+# Bathroom interior elevations, rebar details of footings and beams
+# ---------------------------------------------------------------------------
+
+def bathrooms(E):
+    """[(floor, room)] of every bathroom, in plan order."""
+    return [(sl["floor"], sl["room"]) for sl in E["slabs"]
+            if (sl["room"].get("name") or "").startswith("ห้องน้ำ")]
+
+
+def _dim_h(sh, a, b, y, text, layer="dim"):
+    sh.line((a, y), (b, y), layer, 0.13)
+    for t in (a, b):
+        sh.line((t - 0.8, y - 0.8), (t + 0.8, y + 0.8), layer, 0.25)
+        sh.line((t, y - 1.2), (t, y + 1.2), layer, 0.13)
+    sh.text(((a + b) / 2, y + 0.9), text, 2.0, "center", layer)
+
+
+def _dim_v(sh, x, a, b, text, layer="dim"):
+    sh.line((x, a), (x, b), layer, 0.13)
+    for t in (a, b):
+        sh.line((x - 0.8, t - 0.8), (x + 0.8, t + 0.8), layer, 0.25)
+        sh.line((x - 1.2, t), (x + 1.2, t), layer, 0.13)
+    sh.text((x - 0.9, (a + b) / 2), text, 2.0, "center", layer, angle=90)
+
+
+#: how a fixture shows in an elevation: (bottom, height) when the catalogue
+#: gives no height of its own
+_FX_FACE = {"WC": "โถส้วม", "UR": "โถปัสสาวะ", "LV": "อ่างล้างหน้า", "SH": "ฝักบัว",
+            "BT": "อ่างอาบน้ำ", "SK": "ซิงค์", "FD": "ฟลอร์เดรน"}
+
+
+def bath_elevation(sh, E, k, rm, side, ox, oy, sc=50):
+    """One interior elevation of a bathroom wall (``side`` 0 S, 1 E, 2 N,
+    3 W — seen from inside the room): the wall to the ceiling, the tiles
+    to their height in 0.30×0.60 courses, the door / window in it, the
+    fixtures against it, the levels and the sizes. Returns its width (mm)."""
+    kk = 1000.0 / sc
+    x0, y0, x1, y1 = B.room_inner(E, rm, k)
+    H = E["H"]
+    zc = B.ceiling_z(E, k) - k * H                   # ceiling over the floor
+    fin = CAT.finish_of(rm)
+    th = min(float(fin.get("tile_h") or 2.0), zc)
+    # the wall's ends seen from inside, left → right, and its line in plan
+    walls = {0: ((x1, y0), (x0, y0)), 1: ((x1, y1), (x1, y0)),
+             2: ((x0, y1), (x1, y1)), 3: ((x0, y0), (x0, y1))}
+    a, b = walls[side]
+    W = math.dist(a, b)
+    u = ((b[0] - a[0]) / W, (b[1] - a[1]) / W)
+
+    def P(s_, z):
+        return (ox + s_ * kk, oy + z * kk)
+    # tiles: courses 0.30 high, joints every 0.60 (staggered half a tile)
+    zt = 0.30
+    row = 0
+    while zt < th - 1e-6:
+        sh.line(P(0, zt), P(W, zt), "hatch", 0.09)
+        zt += 0.30
+    z_ = 0.0
+    while z_ < th - 1e-6:
+        x_ = 0.30 if row % 2 else 0.60
+        while x_ < W - 1e-6:
+            sh.line(P(x_, z_), P(x_, min(z_ + 0.30, th)), "hatch", 0.09)
+            x_ += 0.60
+        z_ += 0.30
+        row += 1
+    sh.line(P(0, th), P(W, th), "wall", 0.25)
+    # openings in this wall
+    line_c = {0: rm["y"], 1: rm["x"] + rm["w"], 2: rm["y"] + rm["d"], 3: rm["x"]}[side]
+    for o in (o for o in E["openings"] if o["floor"] == k):
+        op = o["op"]
+        ox_, oy_ = float(op["x"]), float(op["y"])
+        on = abs((oy_ if side in (0, 2) else ox_) - line_c) < 0.06
+        if not on:
+            continue
+        s_ = (ox_ - a[0]) * u[0] + (oy_ - a[1]) * u[1]
+        w_, h_, sill = float(o["w"]), float(o["h"]), float(o["sill"])
+        if s_ + w_ / 2 < 0 or s_ - w_ / 2 > W:
+            continue
+        lo, hi = max(s_ - w_ / 2, 0.0), min(s_ + w_ / 2, W)
+        pts = [P(lo, sill), P(hi, sill), P(hi, sill + h_), P(lo, sill + h_)]
+        sh.fill(pts, "hatch", 1.0)                   # no tiles through it
+        sh.poly(pts, "window" if o["type"] == "window" else "door", 0.35)
+        inset = 0.05
+        sh.poly([P(lo + inset, sill + (inset if o["type"] == "window" else 0)),
+                 P(hi - inset, sill + (inset if o["type"] == "window" else 0)),
+                 P(hi - inset, sill + h_ - inset), P(lo + inset, sill + h_ - inset)],
+                "window" if o["type"] == "window" else "door", 0.18)
+        if o["type"] == "window":
+            sh.line(P((lo + hi) / 2, sill + inset), P((lo + hi) / 2, sill + h_ - inset),
+                    "window", 0.13)
+        else:
+            sh.line(P(hi - 0.12, sill + 0.95), P(hi - 0.20, sill + 0.95), "door", 0.25)
+        sh.text(P((lo + hi) / 2, sill + h_ + 0.05), (o.get("name") or "").split(" ")[0],
+                1.8, "center", "door")
+    # fixtures with their back to this wall
+    for f in (f for f in E["fixtures"] if f["floor"] == k and _inside(f["fx"], rm)):
+        fx = f["fx"]
+        t = str(fx.get("type", ""))
+        spec = CAT.SANITARY.get(t)
+        if not spec:
+            continue
+        pts = fixture_rect(fx)
+        # a fixture stands against the wall nearest its centre — drawn on
+        # that wall's elevation only (not again side-on from the corner)
+        fxx, fyy = float(fx["x"]), float(fx["y"])
+        gaps = (fyy - y0, x1 - fxx, y1 - fyy, fxx - x0)
+        if min(range(4), key=lambda i: gaps[i]) != side:
+            continue
+        ss = [(p[0] - a[0]) * u[0] + (p[1] - a[1]) * u[1] for p in pts]
+        lo, hi = max(min(ss), 0.0), min(max(ss), W)
+        if hi - lo < 0.05:
+            continue
+        zb, hh = float(spec[5]), float(spec[6])
+        if t.startswith("SH"):
+            sh.circle(P((lo + hi) / 2, 1.95), 0.08 * kk, "fixture", 0.25)
+            sh.line(P((lo + hi) / 2, 1.95), P((lo + hi) / 2, 1.10), "fixture", 0.18)
+            sh.rect(*P((lo + hi) / 2 - 0.04, 1.05), *P((lo + hi) / 2 + 0.04, 1.15),
+                    "fixture", 0.25)
+        elif t.startswith("WC"):
+            sh.rect(*P(lo + 0.03, 0.0), *P(hi - 0.03, 0.40), "fixture", 0.3)
+            if hh > 0.4:
+                sh.rect(*P(lo, 0.40), *P(hi, hh), "fixture", 0.3)
+        elif t.startswith("LV") or t.startswith("SK"):
+            top = (zb + hh) if zb else 0.85
+            sh.rect(*P(lo, top - 0.18), *P(hi, top), "fixture", 0.3)
+            sh.line(P((lo + hi) / 2, top - 0.18), P((lo + hi) / 2, 0.45), "pipe", 0.18)
+            sh.rect(*P((lo + hi) / 2 - 0.02, top), *P((lo + hi) / 2 + 0.02, top + 0.15),
+                    "fixture", 0.2)
+            if t.startswith("LV") and top + 0.25 < zc:
+                sh.rect(*P(lo, top + 0.20), *P(hi, min(top + 0.95, zc - 0.10)),
+                        "fixture", 0.18)
+                sh.text(P((lo + hi) / 2, min(top + 0.95, zc - 0.10) - 0.15), "กระจกเงา",
+                        1.6, "center", "fixture")
+        else:
+            sh.rect(*P(lo, zb), *P(hi, zb + max(hh, 0.1)), "fixture", 0.3)
+        name = next((v for kk_, v in _FX_FACE.items() if t.startswith(kk_)), t)
+        sh.text(P((lo + hi) / 2, -0.16), f"{t} {name}", 1.5, "center", "fixture")
+    # outline, floor and ceiling
+    sh.rect(*P(0, 0), *P(W, zc), "cut", 0.5)
+    sh.line(P(-0.15, 0), P(W + 0.15, 0), "cut", 0.7)
+    sh.line(P(-0.15, zc), P(W + 0.15, zc), "cut", 0.35)
+    sh.text(P(W / 2, th + (zc - th) / 2 - 0.05), "ฉาบปูนเรียบ ทาสีกันชื้น", 1.8, "center")
+    _dim_h(sh, P(0, 0)[0], P(W, 0)[0], P(0, -0.50)[1], f"{W:.2f}")
+    _dim_v(sh, P(W + 0.30, 0)[0], P(0, 0)[1], P(0, th)[1], f"{th:.2f}")
+    _dim_v(sh, P(W + 0.55, 0)[0], P(0, 0)[1], P(0, zc)[1], f"{zc:.2f}")
+    _level(sh, P(0, 0), -0.05, "พื้นห้องน้ำ", left=True)
+    _level(sh, P(0, zc), zc, "ใต้ฝ้า", left=True)
+    return W * kk
+
+
+def a_bath_elevations(sh, E, rooms):
+    """รูปด้านภายในห้องน้ำ: the four walls of each bathroom (two rooms a
+    sheet) at 1:50, side by side, named ก ข ค ง round the room."""
+    x0, y0, x1, y1 = drawing_area()
+    names = ("ก", "ข", "ค", "ง")
+    side_name = ("ทิศใต้", "ทิศตะวันออก", "ทิศเหนือ", "ทิศตะวันตก")
+    y = y1 - 20
+    for k, rm in rooms:
+        sc = 50
+        kk = 1000.0 / sc
+        zc = B.ceiling_z(E, k) - k * E["H"]
+        widths = []
+        ix0, iy0, ix1, iy1 = B.room_inner(E, rm, k)
+        for side in range(4):
+            widths.append(((ix1 - ix0) if side in (0, 2) else (iy1 - iy0)) * kk)
+        need = sum(widths) + 4 * 44
+        if need > x1 - x0:
+            sc = 75
+            kk = 1000.0 / sc
+            widths = [w_ * 50 / 75 for w_ in widths]
+        oy = y - zc * kk - 6
+        x = x0 + 26
+        for side in range(4):
+            w_ = bath_elevation(sh, E, k, rm, side, x, oy, sc)
+            sh.text((x + w_ / 2, oy - 13), f"รูปด้านภายใน {names[side]}", 2.8, "center",
+                    "text", True)
+            th_ = min(float(CAT.finish_of(rm).get("tile_h") or 2.0), zc)
+            sh.text((x + w_ / 2, oy - 17), f"({side_name[side]}) 1:{sc} · กรุกระเบื้อง "
+                                           f"0.30×0.60 สูง {th_:.2f} ม.", 2.0, "center")
+            x += w_ + 44
+        sh.text((x0 + 2, y + 6), f"{rm.get('name')} · ชั้น {k + 1} · "
+                                 f"{rm['w']:.2f}×{rm['d']:.2f} ม. — พื้นต่ำกว่าห้องข้างเคียง "
+                                 f"0.05 ม. ลาดเข้าฟลอร์เดรน 1:100", 3.0, "left", "text", True)
+        y = oy - 30
+    notes_block(sh, x0 + 2, y0 + 30, "หมายเหตุ", [
+        "1. กระเบื้องผนัง 0.30×0.60 ม. ปูด้วยกาวซีเมนต์ ยาแนวกันเชื้อรา แนวตั้งสลับครึ่งแผ่น",
+        "2. ผนังเหนือกระเบื้องฉาบปูนเรียบ ทาสีชนิดกันชื้น ฝ้าเพดานเป็นชนิดกันชื้น",
+        "3. ระดับและตำแหน่งสุขภัณฑ์เป็นค่าโดยประมาณ ให้ตรวจสอบกับสุขภัณฑ์ที่ใช้จริง"],
+        width=120)
+    caption(sh, ((x0 + x1) / 2, y0 + 6), "รูปด้านภายในห้องน้ำ", "1:50")
+    return True
+
+
+def _bars(text):
+    """("2-DB12") → (2, "DB12", 12) · ("DB12@0.15") → (0, "DB12", 12, 0.15)."""
+    import re
+    t = str(text or "")
+    m = re.match(r"\s*(\d+)\s*-\s*([A-Z]+)\s*(\d+)", t)
+    if m:
+        return int(m.group(1)), f"{m.group(2)}{m.group(3)}", int(m.group(3)), 0.0
+    m = re.match(r"\s*([A-Z]+)\s*(\d+)\s*@\s*([\d.]+)", t)
+    if m:
+        return 0, f"{m.group(1)}{m.group(2)}", int(m.group(2)), float(m.group(3))
+    return 0, t, 12, 0.0
+
+
+def s_rebar_details(sh, E):
+    """แบบขยายเหล็กเสริมฐานรากและคาน: each footing type in section and
+    plan (the mat, the stump's starter bars, cover, lean concrete, sand,
+    piles), then each beam type along a span (top and bottom bars, the
+    stirrups closer at the supports, laps) with its sections A-A, B-B."""
+    x0, y0, x1, y1 = drawing_area()
+    lib = E["lib"]
+    used = {e["mark"] for key in ("footings", "stumps", "beams") for e in E[key]}
+    foots = sorted(m for m in used if lib.get(m, {}).get("kind") == "footing")[:2]
+    stump = next((lib[m] for m in sorted(used) if lib.get(m, {}).get("kind") == "stump"),
+                 {"b": 0.2, "h": 0.2, "main": "4-DB12", "tie": "RB6@0.15"})
+    k = 1000.0 / 25                                   # footings 1:25
+    x = x0 + 18
+    ytop = y1 - 12
+    for m in foots:
+        f = lib[m]
+        w, l, t = float(f["w"]), float(f["l"]), float(f["t"])
+        depth = float(f.get("depth") or 1.5)
+        sand, lean = float(f.get("sand") or 0.05), float(f.get("lean") or 0.05)
+        n_, bar, dmm, sp = _bars(f.get("bars"))
+        base = ytop - (depth + sand + lean + 0.1) * k
+        gy = base + (sand + lean + depth) * k           # ground line
+        # sand, lean concrete, the footing
+        sh.rect(x - 0.05 * k, base, x + (w + 0.05) * k, base + sand * k, "hatch", 0.18)
+        sh.fill([(x - 0.05 * k, base + sand * k), (x + (w + 0.05) * k, base + sand * k),
+                 (x + (w + 0.05) * k, base + (sand + lean) * k),
+                 (x - 0.05 * k, base + (sand + lean) * k)], "hatch", 0.85)
+        fb = base + (sand + lean) * k
+        sh.rect(x, fb, x + w * k, fb + t * k, "cut", 0.5)
+        # the stump up to the ground line
+        sb = float(stump["b"])
+        cx = x + w * k / 2
+        sh.rect(cx - sb * k / 2, fb + t * k, cx + sb * k / 2, gy + 0.3 * k, "cut", 0.5)
+        # bottom mat: bars across (dots) and one along with 90° hooks
+        cov = 0.075
+        zb = fb + cov * k
+        nb = max(int(round(w / (sp or 0.15))), 2)
+        for i in range(nb + 1):
+            bx = x + (cov + (w - 2 * cov) * i / nb) * k
+            sh.circle((bx, zb + 0.4), 0.45, "rebar", 0.25)
+        hook = min(0.20, t - 2 * cov + 0.05)
+        sh.poly([(x + cov * k, zb + hook * k), (x + cov * k, zb - 0.1),
+                 (x + (w - cov) * k, zb - 0.1), (x + (w - cov) * k, zb + hook * k)],
+                "rebar", 0.45, closed=False)
+        # starter bars of the stump, bent 0.30 into the mat
+        for sx in (-1, 1):
+            bx = cx + sx * (sb / 2 - 0.04) * k
+            sh.poly([(bx, gy + 0.3 * k), (bx, zb + 0.9), (bx + sx * 0.30 * k, zb + 0.9)],
+                    "rebar", 0.45, closed=False)
+        for j in range(1, 6):                            # stump ties
+            zz = fb + t * k + j * 0.15 * k
+            if zz > gy + 0.25 * k:
+                break
+            sh.line((cx - (sb / 2 - 0.03) * k, zz), (cx + (sb / 2 - 0.03) * k, zz),
+                    "rebar", 0.25)
+        piles = int(f.get("piles") or 0)
+        if piles:
+            pb = float(f.get("pile_b") or 0.18)
+            for i in range(min(piles, 2)):
+                px_ = x + w * k * ((i + 1) / (min(piles, 2) + 1))
+                sh.rect(px_ - pb * k / 2, base - 0.6 * k, px_ + pb * k / 2, fb + 0.05 * k,
+                        "cut", 0.35, dash=True)
+            sh.text((x + w * k / 2, base - 0.6 * k - 4),
+                    f"เสาเข็ม {piles} ต้น {pb:.2f}×{pb:.2f}×{float(f.get('pile_len') or 6):.0f} ม.",
+                    2.0, "center")
+        sh.line((x - 0.4 * k, gy), (x + (w + 0.4) * k, gy), "cut", 0.35)
+        sh.text((x + (w + 0.4) * k, gy + 1), "ระดับดินเดิม", 1.8, "right")
+        # notes on the right of it
+        tx = x + (w + 0.15) * k + 2
+        sh.text((tx, fb + t * k * 0.5), f"{bar}@{sp or 0.15:.2f} ทั้ง 2 ทาง", 2.0)
+        sh.text((tx, fb + t * k * 0.5 - 3), "งอฉาก 90° ปลายเหล็ก", 1.8)
+        sh.text((tx, fb - 1.5), f"คอนกรีตหยาบ {lean:.2f} ม. · ทรายอัดแน่น {sand:.2f} ม.", 1.8)
+        sh.text((tx, gy - 6), f"ตอม่อ {stump['b']:.2f}×{stump['h']:.2f} ม.", 1.8)
+        sh.text((tx, gy - 9), f"{stump.get('main', '')} ปลอก {stump.get('tie', '')}", 1.8)
+        _dim_h(sh, x, x + w * k, base - 3, f"{w:.2f}")
+        _dim_v(sh, x - 6, fb, fb + t * k, f"{t:.2f}")
+        _dim_v(sh, x - 11, fb + t * k, gy, f"{(gy - fb - t * k) / k:.2f}")
+        sh.text((x + w * k / 2, base - 12), f"รูปตัดฐานราก {m}", 2.8, "center", "text", True)
+        sh.text((x + w * k / 2, base - 16), f"{w:.2f}×{l:.2f}×{t:.2f} ม. · ลึก {depth:.2f} ม. · 1:25",
+                2.0, "center")
+        # plan of the mat
+        py = base - 70
+        pw, pl = w * k * 0.6, l * k * 0.6               # 1:40 plan
+        sh.rect(x, py, x + pw, py + pl, "cut", 0.4)
+        nbx = max(int(round(w / (sp or 0.15))), 2)
+        nby = max(int(round(l / (sp or 0.15))), 2)
+        c_ = cov * k * 0.6
+        for i in range(nbx + 1):
+            bx = x + c_ + (pw - 2 * c_) * i / nbx
+            sh.line((bx, py + c_), (bx, py + pl - c_), "rebar", 0.18)
+        for i in range(nby + 1):
+            by = py + c_ + (pl - 2 * c_) * i / nby
+            sh.line((x + c_, by), (x + pw - c_, by), "rebar", 0.18)
+        sh.rect(x + pw / 2 - sb * k * 0.3, py + pl / 2 - sb * k * 0.3,
+                x + pw / 2 + sb * k * 0.3, py + pl / 2 + sb * k * 0.3, "cut", 0.35)
+        sh.text((x + pw / 2, py - 5), f"แปลนเหล็กเสริมฐานราก {m} 1:40", 2.2, "center",
+                "text", True)
+        x += max(w * k, pw) + 80
+    # beams: a typical span 1:30 and two sections 1:15
+    beams = sorted(m for m in used if lib.get(m, {}).get("kind") == "beam")
+    seen, kinds = set(), []
+    for m in beams:
+        sp_ = lib[m]
+        key = (sp_.get("b"), sp_.get("h"), sp_.get("top"), sp_.get("bot"), sp_.get("stir"))
+        if key in seen:
+            continue
+        seen.add(key)
+        kinds.append((m, sp_, [mm for mm in beams if (lib[mm].get("b"), lib[mm].get("h"),
+                                                     lib[mm].get("top"), lib[mm].get("bot"),
+                                                     lib[mm].get("stir")) == key]))
+    yb = y0 + 78
+    if len(kinds) > 1:
+        sh.text((x0 + 2, y0 + 20), "คานเบอร์อื่น: รายละเอียดการเสริมเหล็กเหมือนรูปขยายนี้ "
+                "ขนาดและจำนวนเหล็กตามตารางคาน", 2.0)
+    for m, b_, marks in kinds[:1]:
+        kb = 1000.0 / 30
+        b, h = float(b_["b"]), float(b_["h"])
+        span = 3.0
+        cw = 0.20
+        bx0 = x0 + 22
+        top_n, top_bar, top_d, _ = _bars(b_.get("top"))
+        bot_n, bot_bar, bot_d, _ = _bars(b_.get("bot"))
+        _n, st_bar, _d, st_sp = _bars(b_.get("stir"))
+        st_sp = st_sp or 0.15
+        Y = yb
+        # columns at both ends, beam between
+        for cxm in (0.0, span + cw):
+            sh.rect(bx0 + cxm * kb, Y - 0.5 * kb, bx0 + (cxm + cw) * kb, Y + (h + 0.4) * kb,
+                    "cut", 0.35)
+        sh.rect(bx0 + cw * kb, Y, bx0 + (cw + span) * kb, Y + h * kb, "cut", 0.5)
+        cv = 0.03
+        # top and bottom bars, run into the columns with 90° hooks
+        ytb, ybb = Y + (h - cv - 0.01) * kb, Y + (cv + 0.01) * kb
+        xa, xb = bx0 + 0.04 * kb, bx0 + (span + 2 * cw - 0.04) * kb
+        sh.poly([(xa, ytb - 0.25 * kb), (xa, ytb), (xb, ytb), (xb, ytb - 0.25 * kb)],
+                "rebar", 0.5, closed=False)
+        sh.poly([(xa, ybb + 0.25 * kb), (xa, ybb), (xb, ybb), (xb, ybb + 0.25 * kb)],
+                "rebar", 0.5, closed=False)
+        # stirrups: s/2 over L/4 at each support, s in the middle
+        q = span / 4
+        z_ = 0.05
+        while z_ <= span - 0.05 + 1e-6:
+            xs_ = bx0 + (cw + z_) * kb
+            sh.line((xs_, Y + cv * kb), (xs_, Y + (h - cv) * kb), "rebar", 0.18)
+            near = z_ < q or z_ > span - q
+            z_ += st_sp / 2 if near else st_sp
+        _dim_h(sh, bx0 + cw * kb, bx0 + (cw + q) * kb, Y - 5, f"L/4 @{st_sp / 2:.3f}")
+        _dim_h(sh, bx0 + (cw + q) * kb, bx0 + (cw + span - q) * kb, Y - 5, f"L/2 @{st_sp:.2f}")
+        _dim_h(sh, bx0 + (cw + span - q) * kb, bx0 + (cw + span) * kb, Y - 5,
+               f"L/4 @{st_sp / 2:.3f}")
+        sh.text((bx0 + (cw + span / 2) * kb, Y + h * kb + 7),
+                f"เหล็กบน {b_.get('top', '')} · เหล็กล่าง {b_.get('bot', '')} · "
+                f"ปลอก {st_bar} (ช่วงหัวเสา @{st_sp / 2:.3f} กลางช่วง @{st_sp:.2f})",
+                2.0, "center")
+        sh.text((bx0 + (cw + span / 2) * kb, Y - 13),
+                f"รูปขยายคาน {', '.join(marks)} {b:.2f}×{h:.2f} ม. 1:30", 2.8, "center",
+                "text", True)
+        sh.text((bx0 + (cw + span / 2) * kb, Y - 17),
+                "ต่อทาบเหล็กบนช่วงกลางคาน เหล็กล่างที่หัวเสา ระยะทาบ 40d (DB) / 48d (RB)",
+                1.8, "center")
+        for cxm, lab in ((cw + 0.6, "A"), (cw + span / 2, "B")):
+            xx = bx0 + cxm * kb
+            sh.line((xx, Y - 2), (xx, Y + h * kb + 2), "dim", 0.25, dash=True)
+            sh.text((xx + 1, Y + h * kb + 2.5), lab, 2.2, "left", "dim", True)
+        # sections A-A (support) and B-B (mid span) 1:15
+        ks = 1000.0 / 15
+        for i, (lab, n_top, n_bot) in enumerate((("A-A (ที่หัวเสา)", top_n, bot_n),
+                                                 ("B-B (กลางช่วง)", top_n, bot_n))):
+            sx = bx0 + (span + 2 * cw) * kb + 25 + i * (b * ks + 32)
+            sh.rect(sx, Y, sx + b * ks, Y + h * ks, "cut", 0.5)
+            sh.rect(sx + cv * ks, Y + cv * ks, sx + (b - cv) * ks, Y + (h - cv) * ks,
+                    "rebar", 0.25)
+            sh.line((sx + (b - cv) * ks, Y + (h - cv) * ks),
+                    (sx + (b - cv - 0.05) * ks, Y + (h - cv - 0.05) * ks), "rebar", 0.25)
+            for nn, yy in ((max(n_top, 2), Y + (h - cv - 0.012) * ks),
+                           (max(n_bot, 2), Y + (cv + 0.012) * ks)):
+                for j in range(nn):
+                    bxx = sx + (cv + 0.012 + (b - 2 * cv - 0.024) * j / max(nn - 1, 1)) * ks
+                    sh.circle((bxx, yy), 0.9, "rebar", 0.35)
+            sh.text((sx + b * ks / 2, Y + h * ks + 2.5), b_.get("top", ""), 1.8, "center")
+            sh.text((sx + b * ks / 2, Y - 3.5), b_.get("bot", ""), 1.8, "center")
+            sh.text((sx + b * ks + 1.5, Y + h * ks / 2), st_bar, 1.6, "left")
+            sh.text((sx + b * ks / 2, Y - 9), f"รูปตัด {lab}", 2.2, "center", "text", True)
+            _dim_h(sh, sx, sx + b * ks, Y + h * ks + 6, f"{b:.2f}")
+    notes_block(sh, x1 - 120, y1 - 10, "หมายเหตุเหล็กเสริม", [
+        "1. ระยะหุ้มคอนกรีต: ฐานราก 7.5 ซม. ตอม่อ/เสา 3.5 ซม. คาน 3.0 ซม. พื้น 2.0 ซม.",
+        "2. เหล็กปลอกงอขอ 135° ยาวไม่น้อยกว่า 6d ระยะแรกห่างผิวเสา 5 ซม.",
+        "3. ระยะทาบ: เหล็กข้ออ้อย 40d เหล็กเส้นกลม 48d (มีขอ) ห้ามต่อทาบในตำแหน่งเดียวกันเกิน 50%",
+        "4. เหล็กเสริมตามมาตรฐาน มอก. 24 (SD40) และ มอก. 20 (SR24)"], width=118)
+    caption(sh, ((x0 + x1) / 2, y0 + 4), "แบบขยายเหล็กเสริมฐานรากและคาน", "ตามระบุ")
+    return True
 
 
 def build_sections(data, info=None) -> list:

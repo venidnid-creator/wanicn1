@@ -19,7 +19,7 @@ from core import wanic_std2569 as S
 STEEL_KG_M3 = 7850.0
 CONCRETE_KINDS = ("footing", "stump", "column", "beam", "slab", "stair", "band")
 STEEL_KINDS = ("ridge", "hip", "rafter", "purlin", "post", "valley",
-               "wallplate", "tiebeam")
+               "wallplate", "tiebeam", "rbeam", "strut", "brace")
 
 
 def _vol(g) -> float:
