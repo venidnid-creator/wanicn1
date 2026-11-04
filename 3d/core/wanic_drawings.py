@@ -2067,7 +2067,7 @@ def build_set(data, info=None,
         f"พื้นที่ใช้สอยรวมประมาณ {area:,.2f} ตร.ม.",
         f"ห้องน้ำ {sum(1 for s in E['slabs'] if (s['room'].get('name') or '').startswith('ห้องน้ำ'))} ห้อง "
         f"ห้องนอน {sum(1 for s in E['slabs'] if (s['room'].get('name') or '').startswith('ห้องนอน'))} ห้อง",
-        f"หลังคา {'ปั้นหยา' if E['settings'].get('roof') == 'hip' else 'จั่ว' if E['settings'].get('roof') == 'gable' else 'ไม่มี'} "
+        f"หลังคา {B.ROOF_TYPES.get(E['settings'].get('roof'), 'ไม่มี')} "
         f"ลาด {float(E['settings'].get('pitch') or 0):.0f}°"])
     codes = opening_codes(E)
     fcodes = finish_codes(E)
@@ -2097,6 +2097,9 @@ def build_set(data, info=None,
             cuts = section_cuts(E, k)
             title = " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด"
             add("A", title, lambda sh, _a, k=k: _set_scale(sh, a_section_sheet(sh, E, L, k)))
+        if info.get("axo_sections"):
+            for title, paint in axo_sheets(data):
+                add("A", title, paint, "-")
         if E["openings"]:
             add("A", "ตารางประตู-หน้าต่าง วัสดุตกแต่ง",
                 lambda sh, _a: a_schedules(sh, E, codes, fcodes), "1:50")
@@ -2851,6 +2854,128 @@ def s_rebar_details(sh, E):
     return True
 
 
+# ---------------------------------------------------------------------------
+# รูปตัดทัศนียภาพ: the building cut open along a section line and drawn as a
+# parallel 3D view, hidden lines removed, the cut walls / beams / slabs
+# filled black — vectors, so the PDF and the DXF carry the same drawing
+# ---------------------------------------------------------------------------
+
+#: parts left out of the cut-away view: the covering (the frame shows, as
+#: the standard 3D sections do), small fixings, services and the yard
+AXO_SKIP = {"tiles", "skin", "cap", "headplate", "ceiling_frame", "soffit_fix",
+            "light", "outlet", "panel", "ground_rod", "fan", "pipe_supply",
+            "pipe_drain", "septic", "grease", "meter", "walkway", "drain_ring",
+            "drain_pipe", "manhole", "ac_out", "ac_bracket", "sign", "gutter"}
+
+
+def _axo_geometry(groups):
+    import numpy as np
+    tris, hard = [], []
+    for g in groups:
+        rec = (getattr(g, "ext", None) or {}).get(B.EXT_KEY) or {}
+        if rec.get("kind") in AXO_SKIP or getattr(g, "hidden", False):
+            continue
+        for f in g.mesh.faces:
+            for a, b, c in f.triangulate():
+                tris.append(((a.x(), a.y(), a.z()), (b.x(), b.y(), b.z()),
+                             (c.x(), c.y(), c.z())))
+        for e in g.mesh.edges:
+            if getattr(e, "soft", False) or getattr(e, "hidden", False):
+                continue
+            p0, p1 = e.v0.position, e.v1.position
+            hard.append(((p0.x(), p0.y(), p0.z()), (p1.x(), p1.y(), p1.z())))
+    return (np.array(tris, dtype=float).reshape(-1, 3, 3),
+            np.array(hard, dtype=float).reshape(-1, 2, 3),
+            np.empty((0, 2, 3)), np.empty((0, 2, 3)))
+
+
+def section_axo(groups, cut, yaw_off=35.0, pitch=26.0):
+    """The cut-away drawing of ``groups`` along ``cut`` (a
+    :func:`section_cuts` entry): the part on the near side of the cut is
+    taken away and the rest seen from there, obliquely from above —
+    a :class:`core.hlr.HlrDrawing` (camera-plane metres)."""
+    from PySide6.QtGui import QVector3D
+
+    from core import hlr
+    from core.camera import OrbitCamera
+    from core.section import SectionPlane
+    axis, at = cut[0], float(cut[1])
+    geo = _axo_geometry(groups)
+    if not len(geo[0]):
+        return None
+    if axis == "x":
+        plane = SectionPlane(QVector3D(at, 0, 0), QVector3D(-1, 0, 0), active=True)
+        yaw = 180.0 + yaw_off
+    else:
+        plane = SectionPlane(QVector3D(0, at, 0), QVector3D(0, -1, 0), active=True)
+        yaw = -90.0 - yaw_off
+
+    class _Cut:
+        show_section_cuts = True
+
+        def active_section(self):
+            return plane
+    pts = geo[0].reshape(-1, 3)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    cam = OrbitCamera()
+    cam.perspective = False
+    cam.yaw, cam.pitch = math.radians(yaw), math.radians(pitch)
+    cam.fit_box(QVector3D(*lo), QVector3D(*hi))
+    return hlr.hlr_drawing(_Cut(), cam, geometry=geo)
+
+
+def a_axo_sheet(sh, dr, cut, k):
+    """One cut-away on a sheet: fitted to the drawing area, the cut faces
+    filled, the cut chords heavy, outlines medium, the rest fine."""
+    x0, y0, x1, y1 = drawing_area()
+    if dr is None or not len(dr.segs):
+        sh.text(((x0 + x1) / 2, (y0 + y1) / 2), "ไม่มีชิ้นส่วนสำหรับรูปตัด", 4, "center")
+        return
+    import numpy as np
+    xs = np.concatenate([dr.segs[:, 0], dr.segs[:, 2]])
+    ys = np.concatenate([dr.segs[:, 1], dr.segs[:, 3]])
+    w, h = float(xs.max() - xs.min()) or 1.0, float(ys.max() - ys.min()) or 1.0
+    bw, bh = (x1 - x0) - 20, (y1 - y0) - 34
+    sc = min(bw / w, bh / h)
+    ox = x0 + 10 + (bw - w * sc) / 2 - float(xs.min()) * sc
+    oy = y0 + 24 + (bh - h * sc) / 2 - float(ys.min()) * sc
+
+    def P(x, y):
+        return (ox + x * sc, oy + y * sc)
+    from core import hlr
+    for loop in dr.loops:
+        if len(loop) >= 3:
+            sh.fill([P(*q) for q in loop], "hatch", 0.18)
+    widths = {getattr(hlr, "KIND_CUT", 2): 0.35, getattr(hlr, "KIND_PROFILE", 1): 0.25}
+    for (a, b, c, d), kind in zip(dr.segs, dr.kinds):
+        sh.line(P(a, b), P(c, d), "cut" if kind == getattr(hlr, "KIND_CUT", 2) else "wall",
+                widths.get(int(kind), 0.13))
+    caption(sh, ((x0 + x1) / 2, y0 + 10),
+            f"รูปตัดทัศนียภาพ {cut[2]} (ตัดผ่าน{cut[3]})", "ภาพ 3 มิติ ไม่ระบุมาตราส่วน")
+
+
+def axo_sheets(data, group="A"):
+    """(Sheet, painter) for every floor's two cuts as cut-away 3D views."""
+    E = B.elements(data)
+    if not E["floors"] or not E["footings"]:
+        return []
+    d = dict(data, settings=dict(data.get("settings") or {}, tiles_3d=False))
+    groups, _c = B.build(d)
+    out = []
+    seen = set()
+    for k in range(E["n"]):
+        for cut in section_cuts(E, k):
+            key = (cut[0], round(float(cut[1]), 3))
+            if key in seen:                 # the same plane cuts every floor
+                continue
+            seen.add(key)
+
+            def paint(sh, _a, cut=cut, k=k):
+                a_axo_sheet(sh, section_axo(groups, cut), cut, k)
+            out.append((f"รูปตัดทัศนียภาพ {cut[2]}", paint))
+    return out
+
+
 def build_sections(data, info=None) -> list:
     """The building sections alone: one sheet per floor (X and Y, the
     first through a bathroom), framed and numbered."""
@@ -2865,9 +2990,15 @@ def build_sections(data, info=None) -> list:
         sh = Sheet(f"A-S{k + 1}", " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด",
                    "-", "A")
         out.append(sh)
-    for i, sh in enumerate(out, 1):
+    painters = [lambda sh, i=i: _set_scale(sh, a_section_sheet(sh, E, L, i))
+                for i in range(len(out))]
+    if info.get("axo_sections"):
+        for title, paint in axo_sheets(data):
+            out.append(Sheet(f"A-S{len(out) + 1}", title, "-", "A"))
+            painters.append(lambda sh, p=paint: p(sh, None))
+    for i, (sh, paint) in enumerate(zip(out, painters), 1):
         sh.number = i
-        _set_scale(sh, a_section_sheet(sh, E, L, i - 1))
+        paint(sh)
         frame(sh, info, len(out))
     return out
 

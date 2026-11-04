@@ -110,7 +110,7 @@ KIND_CATEGORY = {
     "ridge": 5, "hip": 5, "rafter": 5, "purlin": 5, "post": 5, "valley": 5,
     "wallplate": 5, "tiebeam": 5, "brace": 5, "headplate": 5, "rbeam": 5, "strut": 5,
     "wall": 6, "plaster": 6,
-    "skin": 7, "tiles": 7, "cap": 7, "fascia": 7, "barge": 7, "gutter": 7,
+    "skin": 7, "tiles": 7, "cap": 7, "fascia": 7, "barge": 7, "gutter": 7, "gable": 7,
     "door": 8, "window": 8,
     "soffit": 10, "soffit_frame": 10, "ceiling": 10, "ceiling_frame": 10, "soffit_fix": 10,
     "skirting": 10, "cornice": 10, "light": 12, "outlet": 12, "ac": 13,

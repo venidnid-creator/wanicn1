@@ -100,6 +100,10 @@ DEFAULT_SETTINGS = {
     "head_plate": True,
     # struts (ตุ๊กตา) and braces (ค้ำยัน) of the king-post trusses
     "struts": True, "strut": "C 100×50×20×2.3", "hip_cap_out": 0.10,
+    "truss": "kingpost", "manila_f": 0.5,
+    # วางเดี่ยว / วางคู่ (two C back to back) for อกไก่ ตะเฆ่สัน ตะเฆ่ราง ดั้ง อะเส
+    "dbl_ridge": False, "dbl_hip": False, "dbl_valley": False, "dbl_post": False,
+    "dbl_wallplate": False,
     # outside: the walkway (ทางเท้า) from the outer face, the drain ring
     # (ท่อระบายน้ำ) this far out from the building
     "walk_w": 1.0, "drain_off": 1.5,
@@ -807,13 +811,27 @@ def _floor_name(k) -> str:
     return f"ชั้น {int(k) + 1}"
 
 
+#: the roof forms (แบบหลังคา) most built in Thailand
+ROOF_TYPES = {"hip": "ปั้นหยา", "gable": "จั่ว",
+              "manila": "มะนิลา (ปั้นหยาผสมจั่ว)", "shed": "เพิงหมาแหงน (ลาดเดียว)"}
+
+#: the truss forms (แบบโครงถัก) the roof frame can be made as
+TRUSS_TYPES = {"kingpost": "ดั้งกลาง + ตุ๊กตา + ค้ำยัน (King Post)",
+               "howe": "Howe — ตุ๊กตาทุกช่วง ค้ำยันเอียงเข้าหาดั้ง",
+               "pratt": "Pratt — ตุ๊กตาทุกช่วง ค้ำยันเอียงออกหาผนัง",
+               "fink": "Fink (W) — ค้ำยันรูปตัว W ไม่มีตุ๊กตา"}
+
+#: members that can be laid single or double (two C back to back)
+DOUBLE_KINDS = ("ridge", "hip", "post", "wallplate")
+
+
 def _member(part, kind, mark, family, params, path, anchor="c", ifc="",
             name=None, closed=False, offset=(0.0, 0.0), info=None, key=None,
-            rotation=0.0):
+            rotation=0.0, mirror=False):
     g = P.build_member({"family": family, "params": params, "path": path,
                         "anchor": anchor, "ifc": ifc, "name": name or mark,
                         "closed": closed, "offset": offset,
-                        "rotation": rotation})
+                        "rotation": rotation, "mirror": mirror})
     if isinstance(g, str):
         return None
     return _tag(g, part, kind, mark, info, key)
@@ -1646,6 +1664,10 @@ def _rafter_stations(rect, s, cols):
     if x1 - x0 > 2 * half + 0.3:            # the hip apexes (ridge ends)
         stations.add(round(x0 + half, 4))
         stations.add(round(x1 - half, 4))
+    if s.get("roof") == "manila":           # the small gables' planes
+        fm = min(max(float(s.get("manila_f", 0.5)), 0.2), 0.9)
+        stations.add(round(x0 + half * fm, 4))
+        stations.add(round(x1 - half * fm, 4))
     stations = sorted(stations)
     xs = []
     for a_, b_ in zip(stations, stations[1:]):
@@ -1689,20 +1711,37 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
            "strut": [], "brace": []}
     zr = h(half)
     yc = y0 + half
-    if s["roof"] == "hip":
+    manila = s["roof"] == "manila"
+    if s["roof"] in ("hip", "manila"):
         h0 = h1 = True
     else:
         h0, h1 = covered(x0), covered(x1)
-    rx0 = x0 + half if h0 else x0
-    rx1 = x1 - half if h1 else x1
+    # how far each hipped end climbs: the whole half width on a hip; on a
+    # มะนิลา (hip-and-gable) only part of it, a small gable above
+    fm = min(max(float(s.get("manila_f", 0.5)), 0.2), 0.9)
+    dd0 = (half * fm if manila and not covered(x0) else half) if h0 else 0.0
+    dd1 = (half * fm if manila and not covered(x1) else half) if h1 else 0.0
+    rx0 = x0 + dd0
+    rx1 = x1 - dd1
     if rx1 < rx0:
         rx0 = rx1 = (x0 + x1) / 2
     if rx1 - rx0 > 1e-6:
         out["ridge"].append([P3(rx0, yc, zr), P3(rx1, yc, zr)])
-    for hipped, cx, ex in ((h0, x0, rx0), (h1, x1, rx1)):
+    for hipped, cx, ex, dd, sg in ((h0, x0, rx0, dd0, 1), (h1, x1, rx1, dd1, -1)):
         if hipped:
-            for cy in (y0, y1):
-                out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
+            for cy, sy in ((y0, 1), (y1, -1)):
+                if dd >= half - 1e-9:
+                    out["hip"].append([P3(cx, cy, h(0)), P3(ex, yc, zr)])
+                else:
+                    out["hip"].append([P3(cx, cy, h(0)), P3(cx + sg * dd, cy + sy * dd, h(dd))])
+            if dd < half - 1e-9:
+                # the small gable: its rakes (ปั้นลม) and the beam at its foot
+                gx = cx + sg * dd
+                out["barge"].append([P3(gx, y0 + dd, h(dd)), P3(gx, yc, zr)])
+                out["barge"].append([P3(gx, y1 - dd, h(dd)), P3(gx, yc, zr)])
+                out["rafter"].append([P3(gx, y0 + dd, h(dd)), P3(gx, y1 - dd, h(dd))])
+                out.setdefault("gable", []).append(
+                    [P3(gx, y0 + dd, h(dd)), P3(gx, y1 - dd, h(dd)), P3(gx, yc, zr)])
     sp, psp_slope = roof_spacing(s)
     big = 1e9
     # Rafters (จันทัน) on every column line (จันทันเอก on the column heads),
@@ -1710,7 +1749,8 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
     # (จันทันพราง).
     _axis, xs, stations = _rafter_stations(rect, s, cols)
     for x in xs:
-        reach = min(half, (x - x0) if h0 else big, (x1 - x) if h1 else big)
+        reach = min(half, (x - x0) if h0 and x - x0 < dd0 - 1e-6 else big,
+                    (x1 - x) if h1 and x1 - x < dd1 - 1e-6 else big)
         if reach <= 0.05:
             continue
         out["rafter"].append([P3(x, y0, h(0)), P3(x, y0 + reach, h(reach))])
@@ -1729,11 +1769,11 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         cand = [y0] + near + [y1]
         if all(b_ - a_ <= sp * 1.05 + 1e-6 for a_, b_ in zip(cand, cand[1:])):
             jacks = cand
-    for hipped, ex, sgn in ((h0, x0, 1), (h1, x1, -1)):
+    for hipped, ex, sgn, dd in ((h0, x0, 1, dd0), (h1, x1, -1, dd1)):
         if not hipped:                       # jack rafters on a hipped end
             continue
         for y in jacks:
-            reach = min(half, y - y0, y1 - y)
+            reach = min(dd, y - y0, y1 - y)
             if reach <= 0.05:
                 continue
             out["rafter"].append([P3(ex, y, h(0)),
@@ -1764,14 +1804,14 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
     if ds and top - ds[-1] > 0.02:
         ds.append(top)
     for d in ds:
-        a0 = x0 + d if h0 else x0
-        a1 = x1 - d if h1 else x1
+        a0 = x0 + min(d, dd0) if h0 else x0
+        a1 = x1 - min(d, dd1) if h1 else x1
         if a1 - a0 > 1e-6:
             for yy in (y0 + d, y1 - d):
                 purlin(P3(a0, yy, h(d)), P3(a1, yy, h(d)))
-            if h0:
+            if h0 and d < dd0 - 0.02:
                 purlin(P3(a0, y0 + d, h(d)), P3(a0, y1 - d, h(d)))
-            if h1:
+            if h1 and d < dd1 - 0.02:
                 purlin(P3(a1, y0 + d, h(d)), P3(a1, y1 - d, h(d)))
     if zr - z0 > 0.1:
         # King posts (ดั้ง) at the ridge ends and on every column line under
@@ -1818,7 +1858,8 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
             else:
                 out["tie"].append([[P3(xx, y0 + ov + pw, z0), P3(xx, y1 - ov - pw, z0)]])
             st, br = [], []
-            if s.get("struts", True) and inner > 1.2:
+            ttype = s.get("truss", "kingpost")
+            if s.get("struts", True) and inner > 1.2 and ttype == "kingpost":
                 for side in (1, -1):
                     q = yc - side * inner / 2          # half way wall → ridge
                     dist = abs(q - (y0 if side == 1 else y1))
@@ -1836,6 +1877,64 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
                         za, zz = zb + 0.03 + lift_, zt - 0.10 - lift_
                     if zz - za > 0.05 and run > 0.3:
                         br.append([P3(xx, ya, za), P3(xx, yb, zz)])
+            elif s.get("struts", True) and inner > 1.2:
+                # the standard truss webs (Howe · Pratt · Fink), panel points
+                # as fractions of the half span wall → ridge: verticals
+                # (ตุ๊กตา) and diagonals (ค้ำยัน) butting on their faces
+                panels = 4 if inner > 2.4 else 2
+                pts = [i / panels for i in range(1, panels)]
+                if ttype == "howe":
+                    verts = pts
+                    diags = [(a, b) for a, b in zip(pts, pts[1:] + [1.0])]
+                elif ttype == "pratt":
+                    verts = pts
+                    diags = [(b, a) for a, b in zip(pts, pts[1:] + [1.0])]
+                else:                                   # fink (W)
+                    verts = []
+                    diags = [(2 / 3, 0.5), (2 / 3, 1.0)]
+                for side in (1, -1):
+                    wall = (y0 + ov) if side == 1 else (y1 - ov)
+
+                    def Y(t):
+                        return wall + side * t * inner
+
+                    def under(y, half=0.0):
+                        d_ = abs(y - (y0 if side == 1 else y1)) - half
+                        return h(d_) - dra / cosp
+                    for t in verts:
+                        q = Y(t)
+                        zt = under(q, hs / 2)
+                        if zt - z0 > 0.35:
+                            st.append([P3(xx, q, z0), P3(xx, q, zt)])
+                    for tb, tt in diags:
+                        # bottom end (on the tie / at a vertical / at the
+                        # post's foot), top end (under the rafter / at a
+                        # vertical / at the post's face)
+                        toward = 1 if tt > tb else -1
+                        if tb >= 1.0:
+                            ya, base = yc - side * hp / 2, zb
+                        elif tb in verts:
+                            ya, base = Y(tb) + side * toward * hs / 2, z0
+                        else:
+                            ya, base = Y(tb) + side * toward * hb / 2, z0
+                        if tt >= 1.0:
+                            yb_ = yc - side * hp / 2
+                        elif tt in verts:
+                            yb_ = Y(tt) - side * toward * hs / 2
+                        else:
+                            yb_ = Y(tt)
+                        top = under(yb_, hb / 2) if tt < 1.0 else zr - dr - 0.02
+                        run = abs(yb_ - ya)
+                        # under a vertical's / the post's head: clear of the
+                        # rafter; free under the rafter: up against it
+                        gap = 0.10 if (tt >= 1.0 or tt in verts) else 0.015
+                        za, zz = base + 0.03, top - gap
+                        for _k in range(2):
+                            ang = math.atan2(max(zz - za, 1e-3), max(run, 1e-3))
+                            lift_ = hb / 2 / max(math.cos(ang), 0.2)
+                            za, zz = base + 0.03 + lift_, top - gap - lift_
+                        if zz - za > 0.05 and run > 0.2:
+                            br.append([P3(xx, ya, za), P3(xx, yb_, zz)])
             out["strut"].append(st)
             out["brace"].append(br)
         if on_beam:
@@ -1863,11 +1962,73 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         if len(outp) > 1 and math.dist(outp[0], outp[-1]) < 1e-9:
             outp.pop()
         return outp
-    out["skin"] = [poly(e[0], e[1], r1, r0), poly(e[2], e[3], r0, r1)]
+    # where each hip meets the small gable of a มะนิลา (on a hip: the apex)
+    a0 = P3(x0 + dd0, y0 + dd0, h(dd0)) if h0 and dd0 < half - 1e-9 else r0
+    b0 = P3(x0 + dd0, y1 - dd0, h(dd0)) if h0 and dd0 < half - 1e-9 else r0
+    a1 = P3(x1 - dd1, y0 + dd1, h(dd1)) if h1 and dd1 < half - 1e-9 else r1
+    b1 = P3(x1 - dd1, y1 - dd1, h(dd1)) if h1 and dd1 < half - 1e-9 else r1
+    out["skin"] = [poly(e[0], e[1], a1, r1, r0, a0), poly(e[2], e[3], b0, r0, r1, b1)]
     if h1:
-        out["skin"].append(poly(e[1], e[2], r1))
+        out["skin"].append(poly(e[1], e[2], b1, a1))
     if h0:
-        out["skin"].append(poly(e[3], e[0], r0))
+        out["skin"].append(poly(e[3], e[0], a0, b0))
+    return out
+
+
+def _roof_shed(rect, z0, s, cols=(), lift=0.0, purlin_step=0.0):
+    """A เพิงหมาแหงน (shed / lean-to): one slope across the short side,
+    low eave on one side, high on the other; rafters wall to wall, purlins
+    across the slope, a tie and a post on the high wall at every column
+    line, a strut half way."""
+    ov = float(s["overhang"])
+    tan = math.tan(math.radians(float(s["pitch"])))
+    x0, y0, x1, y1 = rect[0] - ov, rect[1] - ov, rect[2] + ov, rect[3] + ov
+    swap = (y1 - y0) > (x1 - x0)
+    if swap:
+        x0, y0, x1, y1 = y0, x0, y1, x1
+    W = y1 - y0
+
+    def h(dist):
+        return z0 + lift + (dist - ov) * tan
+
+    def P3(x, y, z):
+        return (y, x, z) if swap else (x, y, z)
+    out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
+           "skin": [], "eave": [], "barge": [], "tie": [], "rbeam": [],
+           "strut": [], "brace": []}
+    _axis, xs, stations = _rafter_stations(rect, dict(s, roof="gable"), cols)
+    for x in xs:
+        out["rafter"].append([P3(x, y0, h(0)), P3(x, y1, h(W))])
+    sp, psp_slope = roof_spacing(s)
+    psp = psp_slope * math.cos(math.radians(float(s["pitch"])))
+    step = purlin_step or psp
+    n_ = max(int(math.ceil((W - 0.10) / step - 1e-9)), 1)
+    for i in range(n_ + 1):
+        d = 0.05 + (W - 0.10) * i / n_
+        out["purlin"].append({"closed": False, "path": [P3(x0, y0 + d, h(d)),
+                                                         P3(x1, y0 + d, h(d))]})
+    e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(W)), P3(x0, y1, h(W))]
+    out["eave"] = [[e[0], e[1]], [e[3], e[2]]]
+    out["barge"] = [[e[0], e[3]], [e[1], e[2]]]
+    out["skin"] = [[e[0], e[1], e[2], e[3]]]
+    dra = _dim(s["rafter"])
+    cosp = math.cos(math.radians(float(s["pitch"])))
+    pw = _dim(s["wallplate"], "B") / 2 if s.get("wall_plate") else 0.0
+    hs = _dim(s.get("strut", s["post"]))
+    for st in stations:
+        if not (x0 + ov - 1e-6 <= st <= x1 - ov + 1e-6):
+            continue
+        yh = y1 - ov                                   # the high wall
+        zt = h(W - ov - _dim(s["post"]) / 2) - dra / cosp
+        if zt - z0 < 0.2:
+            continue
+        out["tie"].append([[P3(st, y0 + ov + pw, z0), P3(st, yh - pw, z0)]])
+        out["post"].append([P3(st, yh - pw - _dim(s["post"]) / 2, z0),
+                            P3(st, yh - pw - _dim(s["post"]) / 2, zt)])
+        q = y0 + ov + (W - 2 * ov) / 2
+        zq = h(q - y0 - hs / 2) - dra / cosp
+        out["strut"].append([[P3(st, q, z0), P3(st, q, zq)]] if zq - z0 > 0.3 else [])
+        out["brace"].append([])
     return out
 
 
@@ -1878,7 +2039,7 @@ def roof_lines(data):
     when there is no roof to make."""
     s = settings_of(data)
     floors, _skipped = stacked(data)
-    if not floors or s.get("roof") not in ("hip", "gable"):
+    if not floors or s.get("roof") not in ROOF_TYPES:
         return None
     top = floors[-1]["rooms"]
     z0 = len(floors) * float(s["floor_h"])
@@ -1888,7 +2049,7 @@ def roof_lines(data):
     else:
         rects = plan_rectangles(top)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
-           "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0,
+           "skin": [], "eave": [], "barge": [], "rects": rects, "z0": z0, "gable": [],
            "valley": 0.0, "valleys": [], "tie": [], "plate": [], "rbeam": [],
            "strut": [], "brace": []}
     # The steel wall plate (อะเส) on the ring beams lifts the frame by its
@@ -1924,12 +2085,17 @@ def roof_lines(data):
     for rect in rects:
         ax_, xs_, _st = _rafter_stations(rect, s, cols)
         grid[ax_] += xs_
-    parts = [_roof_rect(rect, z0, s, boxes[:i], cols, lift, pstep, grid)
-             for i, rect in enumerate(rects)]
+    if s.get("roof") == "shed":
+        parts = [_roof_shed(rect, z0, s, cols, lift, pstep) for rect in rects]
+    else:
+        parts = [_roof_rect(rect, z0, s, boxes[:i], cols, lift, pstep, grid)
+                 for i, rect in enumerate(rects)]
     roofs = [RC.Roof((r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
                      part["skin"]) for r, part in zip(rects, parts)]
     many = len(rects) > 1
     kept = {}
+    for part in parts:
+        out["gable"] += part.get("gable") or []
     for i, (rect, part) in enumerate(zip(rects, parts)):
         if not many:
             for k in ("ridge", "hip", "rafter", "purlin", "post", "skin"):
@@ -2435,27 +2601,36 @@ def roof_members(data) -> tuple[list, dict]:
         paths = lines["valleys"] if kind == "valley" else lines[kind]
         if kind == "hip":
             paths = [hip_in(p_) for p_ in paths]
+        dbl = bool(s.get(f"dbl_{kind}"))
+        bw = _profile_width(sizes[kind])
         for path in paths:
             L = math.dist(path[0], path[-1])
             kgm = P.weight_per_m(fam, params)
-            g = _member("roof", kind, names[kind], fam, params, path,
-                        anchor="tc" if kind != "post" else "c",
-                        rotation=truss_turn(path) if kind == "post" else 0.0,
-                        ifc="IfcMember", key=f"{names[kind]} {sizes[kind]}",
-                        name=f"{names[kind]} {sizes[kind]} · ยาว {L:.2f} ม.",
-                        info=[("ชนิด", f"{names[kind]} (โครงหลังคาเหล็ก)"),
-                              ("หน้าตัด", sizes[kind]),
-                              ("ความยาว", f"{L:.2f} ม."),
-                              ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
-                              ("รายการ BOQ", "โครงหลังคาเหล็ก + ทาสีกันสนิม")])
-            if kind in ("rafter", "hip", "valley", "ridge"):
-                g = cut_member(g, path, _end_planes(
-                    path, creases, widths if kind == "rafter" else no_width))
-            elif kind == "post" and g is not None:
-                # under the ridge, and under the rafters that meet it there
-                head_to_rafter(g, path, lines["skin"], lift_of(s) / math.cos(
-                    math.radians(float(s["pitch"]))), cap=max(path[0][2], path[-1][2]))
-            add(g, kind)
+            # วางคู่: two C back to back, their webs on the member's line
+            sides = [((bw / 2, 0.0), False), ((-bw / 2, 0.0), True)] if dbl else \
+                [((0.0, 0.0), False)]
+            for off, mir in sides:
+                g = _member("roof", kind, names[kind], fam, params, path,
+                            anchor="tc" if kind != "post" else "c",
+                            rotation=truss_turn(path) if kind == "post" else 0.0,
+                            offset=off, mirror=mir,
+                            ifc="IfcMember", key=f"{names[kind]} {sizes[kind]}",
+                            name=f"{names[kind]} {sizes[kind]}"
+                                 f"{' (วางคู่)' if dbl else ''} · ยาว {L:.2f} ม.",
+                            info=[("ชนิด", f"{names[kind]} (โครงหลังคาเหล็ก)"),
+                                  ("หน้าตัด", sizes[kind] + (" วางคู่ (2 ตัวประกบ)"
+                                                            if dbl else " วางเดี่ยว")),
+                                  ("ความยาว", f"{L:.2f} ม."),
+                                  ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
+                                  ("รายการ BOQ", "โครงหลังคาเหล็ก + ทาสีกันสนิม")])
+                if kind in ("rafter", "hip", "valley", "ridge"):
+                    g = cut_member(g, path, _end_planes(
+                        path, creases, widths if kind == "rafter" else no_width))
+                elif kind == "post" and g is not None:
+                    # under the ridge, and under the rafters that meet it there
+                    head_to_rafter(g, path, lines["skin"], lift_of(s) / math.cos(
+                        math.radians(float(s["pitch"]))), cap=max(path[0][2], path[-1][2]))
+                add(g, kind)
     for kind, key, label, why in (
             ("wallplate", "wallplate", "อะเส",
              "อะเสเหล็กบนคานรัดรอบ รับจันทัน (ยึดเพลทฝังในคาน ค.ส.ล.)"),
@@ -2473,9 +2648,22 @@ def roof_members(data) -> tuple[list, dict]:
             if kind in ("strut", "brace") and not s.get("struts", True):
                 continue
             L = math.dist(path[0], path[-1])
+            if kind == "wallplate" and s.get("dbl_wallplate"):
+                bw_ = _profile_width(s[key])
+                g2 = _member("roof", kind, label, fam, params, path, anchor="tc",
+                             offset=(-bw_ / 2, 0.0), mirror=True, ifc="IfcMember",
+                             key=f"{label} {s[key]}", name=f"{label} {s[key]} (วางคู่) · ยาว {L:.2f} ม.",
+                             info=[("ชนิด", f"{label} (โครงหลังคาเหล็ก)"),
+                                   ("หน้าตัด", f"{s[key]} วางคู่ (2 ตัวประกบ)"),
+                                   ("ความยาว", f"{L:.2f} ม."),
+                                   ("รายการ BOQ", "หมวด 5 งานโครงสร้างเหล็ก")])
+                if g2 is not None:
+                    add(cut_member(g2, path, mitre_planes(path, lines.get("plate") or [])), kind)
             g = _member("roof", kind, label, fam, params, path,
                         anchor="c" if kind in ("strut", "brace") else "tc",
                         rotation=truss_turn(path) if kind == "strut" else 0.0,
+                        offset=(_profile_width(s[key]) / 2, 0.0)
+                        if kind == "wallplate" and s.get("dbl_wallplate") else (0.0, 0.0),
                         ifc="IfcMember", key=f"{label} {s[key]}",
                         name=f"{label} {s[key]} · ยาว {L:.2f} ม.",
                         info=[("ชนิด", f"{label} (โครงหลังคาเหล็ก)"),
@@ -2541,6 +2729,13 @@ def roof_members(data) -> tuple[list, dict]:
         if k in ("fascia", "barge"):
             g.material = {"color": COLORS["fascia"]}
     lift = float(params.get("H", params.get("D", params.get("A", 80)))) / 1000.0
+    if lines.get("gable"):
+        # the small gables of a มะนิลา closed with boards (ปิดหน้าจั่ว)
+        g = roof_skin(lines["gable"], 0.0)
+        if g is not None:
+            g.material = {"color": (0.93, 0.92, 0.88), "mat": "ปิดหน้าจั่ว"}
+            add(_tag(g, "roof", "gable", "ปิดหน้าจั่ว",
+                     [("ชนิด", "ปิดหน้าจั่วหลังคามะนิลา (ไม้ฝาสำเร็จรูป)")]), "gable")
     if s.get("skin") and lines["skin"]:
         g = roof_skin(lines["skin"], lift)
         if g is not None:

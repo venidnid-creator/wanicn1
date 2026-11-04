@@ -58,7 +58,8 @@ def suite_root() -> Path:
 
 CONTACT_TEXT = "ติดต่อผู้พัฒนาระบบ"
 CONTACT_PHONE = "093-5838348"
-CONTACT_QR = "contact-qr.png"          # tel:0935838348 (tools/qr.py)
+CONTACT_QR = "contact-qr.png"          # LINE: https://line.me/ti/p/E-p-C9tCEx (tools/qr.py)
+CONTACT_LINE = "https://line.me/ti/p/E-p-C9tCEx"
 SCRIPT_FONT = "Charm-Bold.ttf"         # ลายมือไทย Charm (SIL Open Font License)
 
 
@@ -400,7 +401,7 @@ class StartWindow(QWidget):
         photo.setAlignment(Qt.AlignCenter)
         photo.setStyleSheet("border-radius: 10px;")
         col.addWidget(photo, 0, Qt.AlignHCenter)
-        # contact: a QR code that dials the developer beside the number in a
+        # contact: a QR code that adds the developer on LINE beside the number in a
         # Thai calligraphic face (Charm, SIL OFL)
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -410,9 +411,10 @@ class StartWindow(QWidget):
             qm = qpix.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             qr.setPixmap(qm)
             qr.setFixedSize(qm.size())
-        qr.setToolTip(f"สแกนเพื่อโทร {CONTACT_PHONE}")
+        qr.setToolTip("สแกนด้วยมือถือเพื่อเพิ่มเพื่อนทาง LINE กับผู้พัฒนา")
         row.addWidget(qr)
-        contact = QLabel(f"{CONTACT_TEXT}<br><span style='font-size:22px'>{CONTACT_PHONE}</span>")
+        contact = QLabel(f"{CONTACT_TEXT}<br><span style='font-size:22px'>{CONTACT_PHONE}</span>"
+                         f"<br><span style='font-size:14px;color:#06C755'>สแกนเพิ่มเพื่อน LINE</span>")
         contact.setAlignment(Qt.AlignCenter)
         contact.setWordWrap(True)
         contact.setTextInteractionFlags(Qt.TextSelectableByMouse)

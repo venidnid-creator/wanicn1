@@ -772,3 +772,49 @@ def test_cover_shows_the_model_picture():
     assert cover.code == "ปก"
     assert any(it[0] == "image" and it[3] == png for it in cover.items)
     assert "ภาพจำลองอาคารจากโมเดล 3 มิติ" in cover.texts()
+
+
+def test_truss_forms_roof_forms_and_double_members():
+    rect = [dict(name="ห้อง", x=3 * i, y=3 * j, w=3, d=3) for i in range(2) for j in range(3)]
+    counts = {}
+    for t in B.TRUSS_TYPES:
+        d = _data(rect)
+        d["settings"].update(roof="hip", truss=t)
+        L = B.roof_lines(d)
+        counts[t] = (len(L["strut"]), len(L["brace"]))
+    assert counts["kingpost"] == (4, 4)
+    assert counts["howe"][0] > counts["kingpost"][0] and counts["pratt"][0] == counts["howe"][0]
+    assert counts["fink"][0] == 0 and counts["fink"][1] == 8      # the W, no verticals
+    for roof in ("manila", "shed"):
+        d = _data(rect)
+        d["settings"]["roof"] = roof
+        L = B.roof_lines(d)
+        assert L is not None and L["rafter"] and L["purlin"] and L["skin"]
+        groups, c = B.roof_members(d)
+        if roof == "manila":
+            assert c.get("gable") == 1 and len(L["barge"]) == 4 and len(L["hip"]) == 4
+        else:
+            assert not L["ridge"] and not L["hip"] and len(L["skin"]) == 1
+    d = _data(rect)
+    d["settings"].update(roof="hip", dbl_ridge=True, dbl_wallplate=True)
+    _g, c2 = B.roof_members(d)
+    d["settings"].update(dbl_ridge=False, dbl_wallplate=False)
+    _g, c1 = B.roof_members(d)
+    assert c2["ridge"] == 2 * c1["ridge"] and c2["wallplate"] == 2 * c1["wallplate"]
+
+
+def test_cut_away_section_views_are_vectors():
+    from core import wanic_drawings as D
+    d = _data([dict(name="ห้องน้ำ", x=0, y=0, w=3, d=3), dict(name="ห้องนอน", x=3, y=0, w=3, d=3)])
+    sheets = D.build_sections(d, {"project": "ทดสอบ", "axo_sections": True})
+    axo = [s for s in sheets if s.title.startswith("รูปตัดทัศนียภาพ")]
+    assert len(axo) == 2
+    for s in axo:
+        assert s.count("line") > 100 and s.count("fill") > 0       # cut faces filled
+    assert D.dxf_bytes(axo)[:1]
+
+
+def test_standard_door_and_window_sizes():
+    sizes = CAT.STANDARD_SIZES
+    assert (0.90, 2.00) in [(w, h) for w, h, _ in sizes["door"]]
+    assert (1.20, 1.10) in [(w, h) for w, h, _ in sizes["window"]]

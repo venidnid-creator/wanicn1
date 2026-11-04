@@ -2010,6 +2010,9 @@ class DrawingDialog(QDialog):
         self.prices = QCheckBox("แสดงราคาใน ปร.1 (ไม่ติ๊ก = เว้นช่องราคาว่างแบบเล่มกรมโยธาฯ)")
         self.prices.setChecked(bool(info.get("boq_prices", True)))
         f.addRow(self.prices)
+        self.axo = QCheckBox("รูปตัดทัศนียภาพ 3 มิติ (ตัดอาคารเห็นโครงสร้างภายใน · ใช้เวลาเพิ่มเล็กน้อย)")
+        self.axo.setChecked(True)
+        f.addRow(self.axo)
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
         self.pdf.setChecked(True)
         self.dxf = QCheckBox("DXF (เปิดใน WANICNSURVEY CAD / AutoCAD — ทุกแผ่นเรียงกัน)")
@@ -2083,6 +2086,7 @@ class DrawingDialog(QDialog):
         i["setback"] = self.setback.value()
         i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
         i["boq_prices"] = self.prices.isChecked()
+        i["axo_sections"] = self.axo.isChecked() if hasattr(self, "axo") else True
         st = self.panel.takeoff_data().get("settings") or {}
         i["preparer"] = st.get("preparer") or "นายเวนิช ธัมมะวงษ์"
         i["preparer_role"] = st.get("preparer_role") or "วิศวกรสำรวจ"
@@ -2247,6 +2251,12 @@ class BuildingPanel(QWidget):
                                        ("ขอบล่าง", self.op_sill))):
             og.addWidget(QLabel(lab), 1, c * 2)
             og.addWidget(sp, 1, c * 2 + 1)
+        self.op_size = QComboBox()
+        self.op_size.setToolTip("ขนาดประตู/หน้าต่างที่ผลิตและขายทั่วไป (กว้าง × สูง) — "
+                                "เลือกแล้วช่องกว้าง/สูงเปลี่ยนตาม แก้ต่อเองได้")
+        self.op_size.activated.connect(lambda _i: _safe(self, self._size_chosen))
+        og.addWidget(QLabel("ขนาดมาตรฐาน"), 2, 0)
+        og.addWidget(self.op_size, 2, 1, 1, 5)
         lay.addWidget(self.op_row)
         # Sanitary ware.
         self.fx_row = QWidget()
@@ -2462,6 +2472,7 @@ class BuildingPanel(QWidget):
               "ท่อน้ำทิ้ง ฟลอร์เดรน ถังบำบัด (มยผ.) · ท่อระบายน้ำรอบอาคาร ทางเท้า")
         check("head_plate", "เพลทหัวเสา 200×200×9 มม. + J-bolt 4-DB12 ฝัง 60 ซม.")
         check("struts", "ตุ๊กตาและค้ำยันในโครงถัก (ดั้ง-ขื่อ-จันทัน)")
+        combo("truss", "แบบโครงถัก", list(B.TRUSS_TYPES.items()))
         num("walk_w", "ทางเท้ารอบอาคาร กว้าง (จากผิวเสา)", 0.0, 3.0, 0.05)
         num("drain_off", "ท่อระบายน้ำห่างอาคาร (จากผิวเสา)", 0.4, 5.0, 0.1)
         sf = sf_keep
@@ -2480,8 +2491,7 @@ class BuildingPanel(QWidget):
         rf = QGroupBox("หลังคา")
         rff = QFormLayout(rf)
         self.roof = QComboBox()
-        for k, v in (("hip", "ปั้นหยา"), ("gable", "จั่ว"),
-                     ("none", "ไม่สร้างหลังคา")):
+        for k, v in list(B.ROOF_TYPES.items()) + [("none", "ไม่สร้างหลังคา")]:
             self.roof.addItem(v, k)
         self.roof.currentIndexChanged.connect(lambda _i: self._save_settings())
         rff.addRow("แบบหลังคา", self.roof)
@@ -2522,7 +2532,27 @@ class BuildingPanel(QWidget):
                               Qt.ToolTipRole)
             c.currentIndexChanged.connect(lambda _i: self._save_settings())
             self.steel[key] = c
-            rff.addRow(th, c)
+            if key in B.DOUBLE_KINDS:
+                # วางเดี่ยว / วางคู่: one C, or two back to back (a box)
+                roww = QWidget()
+                rl = QHBoxLayout(roww)
+                rl.setContentsMargins(0, 0, 0, 0)
+                rl.addWidget(c, 1)
+                dbl = QCheckBox("วางคู่")
+                dbl.setToolTip(f"{th}: ติ๊ก = เหล็กตัวซี 2 ตัวประกบหลังชนกัน (วางคู่) · "
+                               "ไม่ติ๊ก = ตัวเดียว (วางเดี่ยว) — น้ำหนักใน BOQ คิดตามจริง")
+                dbl.toggled.connect(lambda _v: self._save_settings())
+                self.checks[f"dbl_{key}"] = dbl
+                rl.addWidget(dbl)
+                rff.addRow(th, roww)
+                if key == "hip":
+                    dv = QCheckBox("วางคู่")
+                    dv.setToolTip("ตะเฆ่ราง: ติ๊ก = เหล็กตัวซี 2 ตัวประกบหลังชนกัน (วางคู่)")
+                    dv.toggled.connect(lambda _v: self._save_settings())
+                    self.checks["dbl_valley"] = dv
+                    rff.addRow("ตะเฆ่ราง (ขนาดเดียวกับตะเฆ่สัน)", dv)
+            else:
+                rff.addRow(th, c)
         self.skin = QCheckBox("สร้างแผ่นหลังคา (คิดพื้นที่มุงหลังคา)")
         self.skin.toggled.connect(lambda _v: self._save_settings())
         rff.addRow(self.skin)
@@ -2888,8 +2918,30 @@ class BuildingPanel(QWidget):
             self.status.setText(f"แบบ {dlg.code} {CAT.OPENING_TYPES[dlg.code]['name']}"
                                 " — คลิกบนผนังในผังเพื่อวาง")
 
+    def _fill_sizes(self, spec):
+        kind = (spec or {}).get("kind") or (self.tool() if self.tool() in ("door", "window")
+                                            else "door")
+        self.op_size.blockSignals(True)
+        self.op_size.clear()
+        if spec:
+            self.op_size.addItem(f"ตามแบบ {spec['w']:.2f} × {spec['h']:.2f} ม.",
+                                 (spec["w"], spec["h"]))
+        for w, h, what in CAT.STANDARD_SIZES.get(kind, []):
+            self.op_size.addItem(f"{w:.2f} × {h:.2f} ม. — {what}", (w, h))
+        self.op_size.blockSignals(False)
+
+    def _size_chosen(self):
+        wh = self.op_size.currentData()
+        if not wh:
+            return
+        self.op_w.setValue(wh[0])
+        self.op_h.setValue(wh[1])
+        self.status.setText(f"ขนาด {wh[0]:.2f} × {wh[1]:.2f} ม. — คลิกบนผนังในผังเพื่อวาง")
+
     def _style_changed(self):
         spec = CAT.OPENING_TYPES.get(self.op_style.currentData())
+        if hasattr(self, "op_size"):
+            self._fill_sizes(spec)
         if spec:
             self.op_w.setValue(spec["w"])
             self.op_h.setValue(spec["h"])
@@ -3053,6 +3105,10 @@ class BuildingPanel(QWidget):
             return []
         info = dict(d.get("drawing_info") or {})
         info.setdefault("project", "บ้านพักอาศัย")
+        info["axo_sections"] = True
+        from PySide6.QtWidgets import QApplication
+        self.status.setText("กำลังสร้างรูปตัดทัศนียภาพ 3 มิติ (ลบเส้นที่ถูกบัง) …")
+        QApplication.processEvents()
         sheets = D.build_sections(d, info)
         if not sheets:
             return []

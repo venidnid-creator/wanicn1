@@ -743,22 +743,26 @@ def compute(data) -> dict:
     g = "roof"
     lines = B.roof_lines(data)
     if lines:
-        roof = s["roof"]
+        # a มะนิลา is hipped (its waste and tiling are the hip's)
+        roof = "hip" if s["roof"] == "manila" else s["roof"]
         tcode, tile = CAT.roof_tile(s)
         per: dict[str, float] = {}
         for kind in ("ridge", "hip", "rafter", "post"):
+            n2 = 2 if s.get(f"dbl_{kind}") else 1          # วางคู่: 2 ตัว
             for path in lines[kind]:
-                per[s[kind]] = per.get(s[kind], 0.0) + P.path_length(path)
+                per[s[kind]] = per.get(s[kind], 0.0) + n2 * P.path_length(path)
         for path in lines.get("valleys") or []:          # ตะเฆ่ราง
-            per[s["hip"]] = per.get(s["hip"], 0.0) + P.path_length(path)
+            n2 = 2 if s.get("dbl_valley") else 1
+            per[s["hip"]] = per.get(s["hip"], 0.0) + n2 * P.path_length(path)
         for pl in lines["purlin"]:
             per[s["purlin"]] = per.get(s["purlin"], 0.0) + \
                 P.path_length(pl["path"], pl["closed"])
         for key, kind in (("wallplate", "plate"), ("tiebeam", "tie"),
                           ("tiebeam", "rbeam"), ("strut", "strut"),
                           ("strut", "brace")):    # อะเส ขื่อ คานรับดั้ง ตุ๊กตา ค้ำยัน
+            n2 = 2 if kind == "plate" and s.get("dbl_wallplate") else 1
             for path in lines.get(kind) or []:
-                per[s[key]] = per.get(s[key], 0.0) + P.path_length(path)
+                per[s[key]] = per.get(s[key], 0.0) + n2 * P.path_length(path)
         paint_a = 0.0
         for label, length in per.items():
             fam, params = B.steel_lookup(label)
@@ -767,7 +771,7 @@ def compute(data) -> dict:
             kg = pieces * S.STEEL_BAR_LENGTH * kgm
             bill.add(g, f"โครงหลังคาเหล็ก {label}", kg, "กก.",
                      mat_key="เหล็กรูปพรรณ (ทั่วไป)", lab_code="1.11.1",
-                     basis=f"ยาว {length:.2f} ม. + {S.STEEL_ROOF_WASTE[roof]:g}%"
+                     basis=f"ยาว {length:.2f} ม. + {S.STEEL_ROOF_WASTE.get(roof, 3.0):g}%"
                            f" = {with_w:.2f} ม. → {pieces} ท่อน × 6 ม. × "
                            f"{kgm:.2f} กก./ม.",
                      ref="หลักเกณฑ์ 4.1 ข้อ 6.3 · ว480 1.11.1")
