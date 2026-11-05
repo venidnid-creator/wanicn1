@@ -1011,7 +1011,7 @@ def structure_members(data) -> tuple[list, dict]:
         fx = e["fx"]
         rm = room_at(rooms_of[e["floor"]], float(fx["x"]), float(fx["y"]))
         z = e["floor"] * E["H"] - (drop if is_wet(rm) else 0.0)
-        add(fixture_member(fx, z), "fixture")
+        add(fixture_member(fx, z, rm), "fixture")
     if s.get("ceiling_type", "cline") != "none":
         for g, kind in ceiling_members(E):
             add(g, kind)
@@ -1230,20 +1230,107 @@ def trim_members(E):
     return out
 
 
-def fixture_member(fx, z):
-    """A sanitary fitting as a simple block (size from the catalog)."""
-    from core.wanic_catalog import SANITARY
+def _fixture_frame(fx, room, w, d):
+    """(u, front sign) for a fitting: ``u`` runs along its width with the
+    front (away from the wall it stands on) on its left."""
+    x, y = float(fx["x"]), float(fx["y"])
+    along_x = int(fx.get("dir", 0)) % 2 == 0
+    if room is not None:
+        x0, y0 = float(room["x"]), float(room["y"])
+        x1, y1 = x0 + float(room["w"]), y0 + float(room["d"])
+    else:
+        x0 = y0 = -1e9
+        x1 = y1 = 1e9
+    if along_x:
+        front_pos = (y - y0) <= (y1 - y)          # the wall below → face +y
+        return ((1.0, 0.0) if front_pos else (-1.0, 0.0))
+    front_pos = (x - x0) <= (x1 - x)              # wall on the left → face +x
+    return ((0.0, -1.0) if front_pos else (0.0, 1.0))
+
+
+def fixture_member(fx, z, room=None):
+    """A sanitary fitting modelled as it looks: a close-coupled WC with its
+    cistern, a vanity with a counter-top basin and mixer, a shower set
+    (valve, riser, rain head), a bath, grab rails, mirror … (sizes from the
+    catalog, its back against the nearest wall of the room)."""
+    from core.wanic_catalog import COLORS, SANITARY
     spec = SANITARY.get(fx.get("type"))
     if spec is None:
         return None
     name, _item, _rate, w, d, z0, height = spec
-    if int(fx.get("dir", 0)) % 2:
-        w, d = d, w
+    t = fx.get("type")
+    u = _fixture_frame(fx, room, w, d)
     x, y = float(fx["x"]), float(fx["y"])
-    return _member("structure", "fixture", fx["type"], "rect",
-                   dict(b=_mm(w), h=_mm(d)),
-                   [(x, y, z + z0), (x, y, z + z0 + max(height, 0.01))],
-                   ifc="IfcSanitaryTerminal", name=name)
+    bx = _Boxes((x, y), u, z)
+    white = {"color": COLORS["sanitary"]}
+    chrome = {"color": (0.80, 0.82, 0.85)}
+    dark = {"color": (0.25, 0.25, 0.27)}
+    wood = {"color": COLORS["teak"]}
+    stone = {"color": (0.86, 0.84, 0.80)}
+    mirror = {"color": (0.78, 0.86, 0.92)}
+    b = -d / 2                                      # the back, against the wall
+    if t == "WC1":
+        bx.box(-0.18, 0.18, b, b + 0.17, 0.40, 0.76, white)          # cistern
+        bx.box(-0.19, 0.19, b - 0.005, b + 0.18, 0.76, 0.79, white)  # its lid
+        bx.frustum(0.0, b + 0.40, 0.11, 0.15, 0.13, 0.18, 0.0, 0.22, white)   # pedestal
+        bx.frustum(0.0, b + 0.40, 0.13, 0.18, 0.18, 0.25, 0.22, 0.38, white)  # bowl
+        bx.frustum(0.0, b + 0.40, 0.185, 0.255, 0.185, 0.255, 0.38, 0.41, white)  # seat
+        bx.box(-0.18, 0.18, b + 0.13, b + 0.20, 0.38, 0.43, white)   # seat hinge
+        bx.frustum(0.0, b + 0.085, 0.025, 0.025, 0.025, 0.025, 0.79, 0.80, chrome)  # button
+    elif t == "WC2":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, 0.05, white)
+        bx.frustum(0.0, 0.03, 0.13, 0.20, 0.13, 0.20, 0.05, 0.06, dark)
+        bx.box(-0.10, -0.04, b + 0.05, b + 0.15, 0.05, 0.07, white)
+        bx.box(0.04, 0.10, b + 0.05, b + 0.15, 0.05, 0.07, white)
+    elif t == "LV":
+        bx.box(-w / 2 - 0.10, w / 2 + 0.10, b, b + 0.50, 0.15, 0.78, wood)   # vanity
+        bx.box(-w / 2 - 0.10, w / 2 + 0.10, b + 0.50, b + 0.51, 0.20, 0.74, {"color": COLORS["teak_dark"]})
+        bx.box(-w / 2 - 0.12, w / 2 + 0.12, b, b + 0.53, 0.78, 0.81, stone)  # counter
+        bx.frustum(0.0, b + 0.30, 0.17, 0.13, 0.21, 0.16, 0.81, 0.94, white)  # basin
+        bx.frustum(0.0, b + 0.30, 0.18, 0.14, 0.18, 0.14, 0.935, 0.94, dark)
+        bx.frustum(0.0, b + 0.08, 0.02, 0.02, 0.02, 0.02, 0.81, 1.06, chrome)  # mixer
+        bx.box(-0.012, 0.012, b + 0.08, b + 0.20, 1.03, 1.06, chrome)
+        bx.box(-0.04, -0.005, b + 0.06, b + 0.10, 1.06, 1.08, chrome)
+    elif t == "SH":
+        bx.box(-0.07, 0.07, b, b + 0.015, 0.93, 1.07, chrome)          # valve plate
+        bx.box(-0.01, 0.07, b + 0.015, b + 0.05, 0.98, 1.02, chrome)
+        bx.frustum(0.0, b + 0.03, 0.012, 0.012, 0.012, 0.012, 1.07, 2.00, chrome)  # riser
+        bx.box(-0.012, 0.012, b + 0.02, b + 0.30, 1.98, 2.01, chrome)  # arm
+        bx.frustum(0.0, b + 0.30, 0.11, 0.11, 0.11, 0.11, 1.95, 1.97, chrome)  # rain head
+        bx.box(-0.40, 0.40, b, b + 0.80, -0.002, 0.0, {"color": (0.70, 0.72, 0.74)})  # wet zone
+    elif t == "BT":
+        bx.box(-w / 2, w / 2, b, b + 0.06, 0.0, 0.55, white)
+        bx.box(-w / 2, w / 2, -b - 0.06, -b, 0.0, 0.55, white)
+        bx.box(-w / 2, -w / 2 + 0.06, b, -b, 0.0, 0.55, white)
+        bx.box(w / 2 - 0.06, w / 2, b, -b, 0.0, 0.55, white)
+        bx.box(-w / 2, w / 2, b, -b, 0.0, 0.10, white)
+        bx.frustum(w / 2 - 0.20, b + 0.05, 0.02, 0.02, 0.02, 0.02, 0.55, 0.70, chrome)
+    elif t == "UR":
+        bx.frustum(0.0, b + 0.16, 0.16, 0.14, 0.19, 0.17, 0.45, 1.05, white)
+        bx.frustum(0.0, b + 0.03, 0.015, 0.015, 0.015, 0.015, 1.05, 1.25, chrome)
+    elif t == "SP":
+        bx.box(-0.03, 0.03, b, b + 0.04, 0.47, 0.53, chrome)
+        bx.box(-0.02, 0.02, b + 0.04, b + 0.07, 0.40, 0.55, chrome)
+    elif t == "MR":
+        bx.box(-w / 2, w / 2, b, b + 0.01, z0, z0 + height, {"color": (0.55, 0.57, 0.60)})
+        bx.box(-w / 2 + 0.01, w / 2 - 0.01, b + 0.01, b + 0.015, z0 + 0.01,
+               z0 + height - 0.01, mirror)
+    elif t in ("TR", "GB"):
+        bx.box(-w / 2, -w / 2 + 0.03, b, b + 0.08, z0 - 0.02, z0 + 0.03, chrome)
+        bx.box(w / 2 - 0.03, w / 2, b, b + 0.08, z0 - 0.02, z0 + 0.03, chrome)
+        bx.box(-w / 2, w / 2, b + 0.06, b + 0.085, z0, z0 + 0.025, chrome)
+    elif t in ("TP", "SD"):
+        bx.box(-w / 2, w / 2, b, b + d, z0, z0 + height, chrome)
+    elif t == "FD":
+        bx.box(-w / 2, w / 2, b, -b, -0.004, 0.002, chrome)
+    else:
+        bx.box(-w / 2, w / 2, b, -b, z0, z0 + max(height, 0.01),
+               chrome if t.startswith("SK") else white)
+    g = bx.group(name, "structure", "fixture", t, "IfcSanitaryTerminal")
+    if g is not None:
+        g.ext[EXT_KEY]["info"] = [["ชนิด", name], ["รหัส", t],
+                                  ["ระดับติดตั้ง", f"{z0:.2f} ม. จากพื้น" if z0 else "วางบนพื้น"]]
+    return g
 
 
 def wall_offset(E, wl) -> float:
@@ -1419,6 +1506,26 @@ class _Boxes:
             if attrs and f is not None:
                 f.attrs.update(attrs)
 
+    def frustum(self, s, d, rs0, rd0, rs1, rd1, z0, z1, attrs=None, n=20):
+        """An elliptic frustum standing at (s, d): radii (rs0, rd0) at z0
+        and (rs1, rd1) at z1, capped both ends (bowls, pedestals, pipes)."""
+        if z1 - z0 < 1e-4:
+            return
+        ring0 = [self.P(s + rs0 * math.cos(2 * math.pi * i / n),
+                        d + rd0 * math.sin(2 * math.pi * i / n), z0) for i in range(n)]
+        ring1 = [self.P(s + rs1 * math.cos(2 * math.pi * i / n),
+                        d + rd1 * math.sin(2 * math.pi * i / n), z1) for i in range(n)]
+        faces = [ring1, ring0[::-1]]
+        for i in range(n):
+            j = (i + 1) % n
+            faces.append([ring0[i], ring0[j], ring1[j], ring1[i]])
+        # ccw seen from outside: the left normal frame flips when u×n < 0
+        flip = self.u[0] * self.n[1] - self.u[1] * self.n[0] < 0
+        for q in faces:
+            f = self.mesh.add_face(q[::-1] if flip else q)
+            if attrs and f is not None:
+                f.attrs.update(attrs)
+
     def group(self, name, part, kind, mark, ifc):
         from core.group import Group
         if not self.mesh.faces:
@@ -1478,7 +1585,8 @@ def opening_set(op, s, p0, u, z, a, b, sill, top, wt):
     else:
         lw = (i1 - i0) / n
         leaf_col = _paint("pvc" if spec["leaf"] == "prefab" else
-                          "alu" if spec["leaf"] == "alu" else "wood")
+                          "alu" if spec["leaf"] == "alu" else
+                          "teak" if spec["leaf"] == "teak" else "wood")
         for k in range(n):
             s0 = i0 + k * lw + gap
             s1 = i0 + (k + 1) * lw - gap
@@ -1492,7 +1600,8 @@ def opening_set(op, s, p0, u, z, a, b, sill, top, wt):
                 bx.box(s1 - 0.03, s1, -0.03, 0.03, j0, j1, leaf_col)
                 continue
             if spec["glass"] > 0:
-                st = 0.04 if spec["leaf"] == "alu" else 0.06
+                st = 0.012 if spec["glass"] >= 0.95 else \
+                    0.04 if spec["leaf"] == "alu" else 0.06
                 d0, d1 = -0.0175 + d_off, 0.0175 + d_off
                 bx.box(s0, s0 + st, d0, d1, j0, j1, leaf_col)
                 bx.box(s1 - st, s1, d0, d1, j0, j1, leaf_col)
@@ -1510,8 +1619,23 @@ def opening_set(op, s, p0, u, z, a, b, sill, top, wt):
             else:
                 bx.box(s0, s1, -0.0175 + d_off, 0.0175 + d_off, j0, j1,
                        leaf_col)
+                if door and spec.get("panels") and j1 - j0 > 1.2:
+                    # a carved teak leaf: six raised panels (ลูกฟัก) in two
+                    # columns, a deeper bead round each
+                    pc = _paint("teak_dark")
+                    cw = (s1 - s0 - 0.24) / 2
+                    rows = ((j0 + 0.12, j0 + 0.70), (j0 + 0.82, j0 + 1.30),
+                            (j0 + 1.42, j1 - 0.12))
+                    for cx_ in (s0 + 0.08, s0 + 0.16 + cw):
+                        for z0p, z1p in rows:
+                            for dz0, dz1, sg in ((0.0175, 0.0225, 1), (-0.0225, -0.0175, -1)):
+                                bx.box(cx_, cx_ + cw, dz0 + d_off, dz1 + d_off, z0p, z1p, pc)
+                                bx.box(cx_ + 0.03, cx_ + cw - 0.03,
+                                       dz0 + d_off + (0.004 if sg > 0 else -0.004),
+                                       dz1 + d_off + (0.004 if sg > 0 else -0.004),
+                                       z0p + 0.03, z1p - 0.03, leaf_col)
                 # Two raised panels so a solid leaf reads as a door.
-                if door and j1 - j0 > 1.2:
+                elif door and j1 - j0 > 1.2:
                     pc = _paint("wood_dark") if spec["leaf"] == "wood" \
                         else _paint("alu")
                     for z0p, z1p in ((j0 + 0.15, j0 + 0.85),
@@ -2779,7 +2903,122 @@ def roof_members(data) -> tuple[list, dict]:
     if s.get("soffit", True):
         for g in soffit_members(data, lines, s):
             add(g, ((g.ext or {}).get(EXT_KEY) or {}).get("kind", "soffit"))
+    seen_cols = []
+    for inf in gable_infill(data, lines):
+        add(infill_member(inf), "infill")
+        # tie columns (เสาเอ็น) at the ends of each panel, up to the rafters
+        t = wall_spec(s, True)["t"]
+        for (a, zt), (px, py) in ((inf["prof"][0], inf["p0"]), (inf["prof"][-1], inf["p1"])):
+            if zt - inf["z0"] < 0.3 or any(math.hypot(px - q[0], py - q[1]) < 0.05
+                                           for q in seen_cols):
+                continue
+            seen_cols.append((px, py))
+            add(_member("roof", "band", "เสาเอ็นผนังหน้าจั่ว", "rect",
+                        dict(b=_mm(t), h=_mm(t)),
+                        [(px, py, inf["z0"]), (px, py, zt - 0.02)], ifc="IfcColumn",
+                        info=[("ชนิด", "เสาเอ็น ค.ส.ล. ผนังหน้าจั่ว/ใต้หลังคา")]), "band")
     return out, count
+
+
+def gable_infill(data, lines=None) -> list:
+    """The brick walls between the top ring beam and the roof where the
+    roof rises over an outside wall — a gable end (หน้าจั่ว), the high
+    side and the two sloping sides of a เพิงหมาแหงน: [{"p0", "p1" (the
+    wall's centre line), "z0", "prof": [(dist, z top)…], "t", "area"}].
+    The top follows the underside of the rafters, any pitch."""
+    lines = lines if lines is not None else roof_lines(data)
+    if not lines or not lines.get("skin"):
+        return []
+    E = elements(data)
+    s = E["settings"]
+    if not s.get("walls", True) or not E["n"]:
+        return []
+    k = E["n"] - 1
+    z0 = E["n"] * E["H"]
+    cosp = math.cos(math.radians(float(s["pitch"]))) or 1.0
+    under = _dim(s["rafter"]) / cosp + 0.01
+    sp = wall_spec(s, True)
+    out = []
+    for wl in E["walls"]:
+        if wl["floor"] != k or wl["L"] < 0.3:
+            continue
+        p0, p1, L = wl["p0"], wl["p1"], wl["L"]
+        ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+        if not wl.get("exterior"):
+            # an inside wall only where two roofs meet at a step (the
+            # high side of one shed over the other): close the step
+            mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+            zs = [skin_z(mx - uy * d, my + ux * d, lines["skin"]) for d in (0.6, 0.3, -0.3, -0.6)]
+            if any(z_ is None for z_ in zs):
+                continue
+            # each side's surface carried to the wall line: a step, not a slope
+            za, zb = 2 * zs[1] - zs[0], 2 * zs[2] - zs[3]
+            if abs(za - zb) < 0.15:
+                continue
+        off = wall_offset(E, wl)
+        ox, oy = wl.get("out") or (0.0, 0.0)
+        c0 = (p0[0] + ox * off, p0[1] + oy * off)
+        n_ = max(int(L / 0.05), 2)
+        prof = []
+        for i in range(n_ + 1):
+            a = L * i / n_
+            zz = skin_z(c0[0] + ux * a, c0[1] + uy * a, lines["skin"])
+            prof.append((a, (zz - under) if zz is not None else z0))
+        if max(zt - z0 for _a, zt in prof) < 0.25:
+            continue
+        # keep the corners of the profile only
+        keep = [prof[0]]
+        for i in range(1, len(prof) - 1):
+            (a0, z_0), (a1, z_1), (a2, z_2) = keep[-1], prof[i], prof[i + 1]
+            if abs((z_1 - z_0) * (a2 - a0) - (z_2 - z_0) * (a1 - a0)) > 1e-4:
+                keep.append(prof[i])
+        keep.append(prof[-1])
+        keep = [(a, max(zt, z0)) for a, zt in keep]
+        area = sum((b - a) * ((za - z0) + (zb - z0)) / 2
+                   for (a, za), (b, zb) in zip(keep, keep[1:]))
+        out.append({"p0": c0, "p1": (c0[0] + ux * L, c0[1] + uy * L), "z0": z0,
+                    "prof": keep, "t": sp["T"], "area": area, "wall": wl})
+    return out
+
+
+def infill_member(inf):
+    """One gable/shed infill wall as a closed prism, tagged a wall."""
+    from PySide6.QtGui import QVector3D
+
+    from core.group import Group
+    from core.mesh import Mesh
+    (x0, y0), (x1, y1) = inf["p0"], inf["p1"]
+    L = math.hypot(x1 - x0, y1 - y0) or 1.0
+    ux, uy = (x1 - x0) / L, (y1 - y0) / L
+    nx, ny = -uy, ux
+    t = inf["t"] / 2
+    z0 = inf["z0"]
+    prof = [(a, z0) for a in (inf["prof"][-1][0], inf["prof"][0][0])]
+    outline = [(a, z) for a, z in inf["prof"] if True]
+    # the face polygon: along the top, back along the bottom
+    face = outline + prof
+    face = [p for i, p in enumerate(face) if i == 0 or
+            abs(p[0] - face[i - 1][0]) + abs(p[1] - face[i - 1][1]) > 1e-6]
+
+    def P3(a, z, d):
+        return QVector3D(x0 + ux * a + nx * d, y0 + uy * a + ny * d, z)
+    mesh = Mesh()
+    front = [P3(a, z, t) for a, z in face]
+    back = [P3(a, z, -t) for a, z in face]
+    mesh.add_face(front[::-1])
+    mesh.add_face(back)
+    m = len(face)
+    for i in range(m):
+        j = (i + 1) % m
+        mesh.add_face([front[i], front[j], back[j], back[i]])
+    g = Group(mesh, name="ผนังก่ออิฐปิดหน้าจั่ว/ใต้หลังคา")
+    g.ifc = {"class": "IfcWall", "name": "ผนังก่ออิฐปิดหน้าจั่ว"}
+    g.material = {"color": (0.93, 0.91, 0.86), "mat": "ผนังฉาบปูนทาสี"}
+    return _tag(g, "roof", "infill", "ผนังปิดหน้าจั่ว",
+                [("ชนิด", "ผนังก่ออิฐฉาบปูนปิดหน้าจั่ว / ใต้หลังคา (ก่อจากคานบนถึงใต้จันทัน)"),
+                 ("พื้นที่", f"{inf['area']:.2f} ตร.ม."),
+                 ("ความหนารวม", f"{inf['t'] * 100:g} ซม."),
+                 ("หมายเหตุ", "ทำเสาเอ็น/ทับหลังตามแนวลาดทุก 2.5 ม. ตามมาตรฐานงานก่อ")])
 
 
 # ---------------------------------------------------------------------------

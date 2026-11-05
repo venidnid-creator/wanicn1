@@ -58,6 +58,15 @@ OPENING_TYPES = {
                frame="wood", leaf="wood", leaves=2, glass=0.0, slide=True),
     "D5": dict(kind="door", name="ประตูกระจกกรอบอลูมิเนียม", w=0.90, h=2.00,
                frame="alu", leaf="alu", leaves=1, glass=0.8, slide=False),
+    "D15": dict(kind="door", name="ประตูไม้สักบานเปิดเดี่ยว ลูกฟักแกะลาย", w=0.90,
+                h=2.00, frame="teak", leaf="teak", leaves=1, glass=0.0, slide=False,
+                panels=True),
+    "D16": dict(kind="door", name="ประตูไม้สักบานเปิดคู่ ลูกฟักแกะลาย", w=1.60,
+                h=2.00, frame="teak", leaf="teak", leaves=2, glass=0.0, slide=False,
+                panels=True),
+    "D17": dict(kind="door", name="ประตูกระจกเปลือยบานเปิดคู่ (เทมเปอร์ 10 มม.)",
+                w=1.60, h=2.10, frame="alu", leaf="alu", leaves=2, glass=0.95,
+                slide=False),
     "W1": dict(kind="window", name="หน้าต่างบานเปิดคู่ ไม้", w=1.20, h=1.10,
                sill=0.90, frame="wood", leaf="wood", leaves=2, glass=0.7,
                slide=False),
@@ -352,6 +361,7 @@ def tiles_per_m2(spec, s=None) -> float:
 #: Colours of the 3D parts (RGB 0–1).
 COLORS = {
     "wood": (0.55, 0.36, 0.20), "wood_dark": (0.40, 0.25, 0.14),
+    "teak": (0.66, 0.40, 0.17), "teak_dark": (0.45, 0.25, 0.10),
     "pvc": (0.93, 0.92, 0.88), "alu": (0.78, 0.80, 0.82),
     "glass": (0.62, 0.80, 0.90), "concrete": (0.80, 0.80, 0.78),
     "metal": (0.30, 0.30, 0.32), "fascia": (0.95, 0.95, 0.93),

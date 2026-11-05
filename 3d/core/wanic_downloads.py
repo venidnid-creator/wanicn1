@@ -113,10 +113,24 @@ def ping(settings, ver: str, opener=None, opening=True) -> list:
     return sent
 
 
-def text(info, offline: bool = False) -> str:
-    """One short line for the corner (HTML)."""
+def _newer(tag: str, version: str) -> bool:
+    def key(v):
+        try:
+            return [int(x) for x in str(v).lstrip("v").split(".")]
+        except ValueError:
+            return None
+    a, b = key(tag), key(version)
+    return bool(a and b and a > b)
+
+
+def text(info, offline: bool = False, version: str = "") -> str:
+    """One short line for the corner (HTML); a warning when the program
+    is older than the latest release."""
     if not info:
         return "⬇ ยอดดาวน์โหลด — (ออฟไลน์)"
+    if version and _newer(info.get("tag", ""), version):
+        return (f"⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง (v{version}) — ให้ดาวน์โหลดเวอร์ชันใหม่ "
+                f"<b>{info['tag']}</b> (คลิก) · ⬇ ดาวน์โหลดสะสม <b>{int(info['total']):,}</b> ครั้ง")
     tag = info.get("tag") or ""
     line = (f"⬇ ดาวน์โหลดสะสม <b>{int(info['total']):,}</b> ครั้ง · "
             f"รุ่นล่าสุด {tag} <b>{int(info['latest']):,}</b> ครั้ง")

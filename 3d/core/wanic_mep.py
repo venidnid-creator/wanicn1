@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import math
 
+from core import wanic_catalog as CAT
+
 AC_SIZES = (9000, 12000, 15000, 18000, 24000, 30000, 36000)
 AC_BTU_M2 = {"bed": 800, "living": 900}
 LIGHT_M2 = 9.0
@@ -301,6 +303,158 @@ def _run(a, b, z0, z1, r, c):
     return out
 
 
+SOIL_TYPES = ("WC1", "WC2", "UR")
+GREY_TYPES = ("LV", "SH", "BT", "FD", "SK1", "SK2")
+SLOPE = 0.01                          # 1:100
+
+
+def _sloped(points, z0, slope=SLOPE):
+    """A run through plan ``points`` starting at height z0, falling
+    ``slope`` per metre: [((x, y, z), (x, y, z))…] legs."""
+    legs, z = [], z0
+    for a, b in zip(points, points[1:]):
+        L = math.dist(a, b)
+        if L < 1e-6:
+            continue
+        z1 = z - L * slope
+        legs.append(((a[0], a[1], z), (b[0], b[1], z1)))
+        z = z1
+    return legs, z
+
+
+def drain_routes(E, fx_pts, tank, box, half_c, d_off):
+    """Soil and grey-water legs [((x, y, z), (x, y, z))…], every run
+    falling 1:100.
+
+    Each bathroom has two mains square to its nearest outside wall, 0.40 m
+    apart: soil (WC, urinal, Ø 4") 0.75 m deep to the septic tank — under
+    the drain ring — and grey water (basin, shower, floor drain, Ø 2")
+    0.35 m deep to the drain ring. A fitting's branch runs along the wall
+    into its main; upstairs the branches run in the ceiling void to a stack
+    inside the outside wall that drops into the main. The two depths keep
+    the systems apart, and a grey branch steps round any soil drop it
+    would meet — nothing rides over anything else."""
+    from core import wanic_building as B
+    H = E["H"]
+    X0, Y0, X1, Y1 = box
+    soil, grey = [], []
+    base = E["floors"][0]["rooms"]
+    SIDES = (((-1, 0), lambda: -(X0 - half_c)), ((1, 0), lambda: X1 + half_c),
+             ((0, -1), lambda: -(Y0 - half_c)), ((0, 1), lambda: Y1 + half_c))
+
+    def ac(nrm, x, y):                     # plan → (along the wall, out)
+        return (y, x * nrm[0]) if nrm[0] else (x, y * nrm[1])
+
+    def xy(nrm, a, c):
+        return (c * nrm[0], a) if nrm[0] else (a, c * nrm[1])
+
+    clusters = {}
+    for e, (x, y), _n in fx_pts:
+        t = e["fx"].get("type")
+        if t not in SOIL_TYPES + GREY_TYPES:
+            continue
+        rm = B.room_at(base, x, y)
+        key = rm.get("id") if rm else (round(x), round(y))
+        clusters.setdefault(key, []).append((e, x, y, t in SOIL_TYPES))
+    for items in clusters.values():
+        cx = sum(i[1] for i in items) / len(items)
+        cy = sum(i[2] for i in items) / len(items)
+        nrm, face_c = min(((n_, f()) for n_, f in SIDES),
+                          key=lambda nf: nf[1] - ac(nf[0], cx, cy)[1])
+        a_c = ac(nrm, cx, cy)[0]
+        s_items = [i for i in items if i[3]]
+        g_items = [i for i in items if not i[3]]
+        a_s = sum(ac(nrm, i[1], i[2])[0] for i in s_items) / len(s_items) if s_items else a_c
+        if g_items:
+            ga = sum(ac(nrm, i[1], i[2])[0] for i in g_items) / len(g_items)
+            a_g = a_s + (0.40 if ga >= a_s else -0.40)
+        else:
+            a_g = a_s + 0.40
+        c_in = face_c - half_c - 0.12              # the stacks, inside the wall
+        drops = []                                 # soil verticals (x, y)
+        for system, its, a_m, deep, legs in (
+                ("soil", s_items, a_s, -0.75, soil), ("grey", g_items, a_g, -0.35, grey)):
+            if not its:
+                continue
+            ground = [i for i in its if i[0]["floor"] == 0]
+            upper = [i for i in its if i[0]["floor"] > 0]
+            cs = [ac(nrm, i[1], i[2])[1] for i in ground] + ([c_in] if upper else [])
+            c0 = min(cs)
+
+            def zm(c, c0=c0, deep=deep):           # the main's height at c
+                return deep - (c - c0) * SLOPE
+            # the main: from the deepest fitting out through the wall
+            if system == "soil" and tank is not None:
+                ta, tc = ac(nrm, *tank)
+                if abs(ta - a_m) < 0.05:
+                    pts = [(a_m, c0), (a_m, tc - 0.55)]
+                else:
+                    pts = [(a_m, c0), (a_m, tc), (ta - math.copysign(0.55, ta - a_m), tc)]
+            else:
+                pts = [(a_m, c0), (a_m, face_c + d_off)]
+            run, _z = _sloped([xy(nrm, a_, c_) for a_, c_ in pts], deep)
+            legs += run
+            for e, x, y, _s in ground:
+                fa, fc = ac(nrm, x, y)
+                zj = zm(fc)
+                path = [(fa, fc), (a_m, fc)]
+                if system == "grey":
+                    # step round a soil drop on the way
+                    for dx_, dy_ in drops:
+                        da, dc = ac(nrm, dx_, dy_)
+                        if abs(dc - fc) < 0.15 and min(fa, a_m) - 0.1 <= da <= max(fa, a_m) + 0.1:
+                            jog = fc + (0.20 if dc <= fc else -0.20)
+                            path = [(fa, fc), (fa, jog), (a_m, jog)]
+                            zj = zm(jog)
+                            break
+                length = sum(math.dist(p_, q_) for p_, q_ in zip(path, path[1:]))
+                z_top = zj + length * SLOPE
+                legs.append(((x, y, e["floor"] * H), (x, y, z_top)))
+                if system == "soil":
+                    drops.append((x, y))
+                r_, _z = _sloped([xy(nrm, a_, c_) for a_, c_ in path], z_top)
+                legs += r_
+            if upper:
+                st = xy(nrm, a_m, c_in)
+                zc_low = None
+                for e, x, y, _s in upper:
+                    fa, fc = ac(nrm, x, y)
+                    zc = e["floor"] * H - 0.30
+                    legs.append(((x, y, e["floor"] * H), (x, y, zc)))
+                    r_, zend = _sloped([xy(nrm, a_, c_) for a_, c_ in
+                                        ((fa, fc), (a_m, fc), (a_m, c_in))], zc)
+                    legs += r_
+                    zc_low = zend if zc_low is None else min(zc_low, zend)
+                legs.append(((st[0], st[1], zc_low), (st[0], st[1], zm(c_in))))
+                if system == "soil":
+                    drops.append(st)
+    return soil, grey
+
+
+def _pipes_group(B, legs, D, color, name, kind, info):
+    """Pipe legs (round, ``D`` mm) as one group."""
+    from core import wanic_profiles as P
+    from core.group import Group
+    from core.mesh import Mesh
+    mesh = Mesh()
+    for a, b in legs:
+        if math.dist(a, b) < 0.01:
+            continue
+        g = P.build_member({"family": "round", "params": {"D": D}, "path": [a, b],
+                            "anchor": "c", "ifc": "IfcPipeSegment", "name": name})
+        if isinstance(g, str) or g is None:
+            continue
+        for f in g.mesh.faces:
+            mesh.add_face([v.position for v in f.loop])
+    if not mesh.faces:
+        return None
+    g = Group(mesh, name=name)
+    g.ifc = {"class": "IfcPipeSegment", "name": name}
+    g.material = {"color": color}
+    B._tag(g, "structure", kind, name, info)
+    return g
+
+
 def install_members(data, E, rooms):
     """Switches, outlets, the consumer unit, water heaters, exhaust fans,
     supply and drain pipes, floor drains, the septic tank and grease trap,
@@ -317,6 +471,7 @@ def install_members(data, E, rooms):
     panel_done = False
     main_supply = []          # points (x, y) where a room's supply leaves the slab
     soil_points = []
+    room_drains = []          # the floor drain in the middle of each bathroom
     for rec in rooms:
         rm, k = rec["room"], rec["floor"]
         x0, y0, x1, y1 = B.room_inner(E, rm, k)
@@ -407,15 +562,26 @@ def install_members(data, E, rooms):
             main_supply.append(((x0 + x1) / 2, y0 if abs(y0 - Y0) < abs(y1 - Y1) else y1, k))
             if rec["kind"] == "wet":
                 soil_points.append(((x0 + x1) / 2, (y0 + y1) / 2))
-    # fixtures: a riser from each up the wall, the supply under the slab
-    pipes, drains = [], []
+                room_drains.append(((x0 + x1) / 2, (y0 + y1) / 2, k))
+    # fixtures: the supply riser up the wall behind each one; the drains
+    # are laid out with the septic tank below
+    pipes = []
+    fx_pts = []                      # (fixture entry, outlet (x, y), back normal)
     for e in E["fixtures"]:
         fx = e["fx"]
         x, y = float(fx["x"]), float(fx["y"])
         z = e["floor"] * H
-        pipes += _run((x, y), (x, y), -0.25, z + 0.55, 0.0125, "supply")
-        drains += _run((x, y), (x, y), -0.70, z, 0.03, "drain")
-        main_supply.append((x, y, e["floor"]))
+        rm = B.room_at(E["floors"][e["floor"]]["rooms"], x, y)
+        spec = CAT.SANITARY.get(fx.get("type"))
+        dep = float(spec[4]) if spec else 0.4
+        u = B._fixture_frame(fx, rm, 0, 0)
+        n = (-u[1], u[0])
+        back = (x - n[0] * (dep / 2 - 0.04) + u[0] * 0.15, y - n[1] * (dep / 2 - 0.04) + u[1] * 0.15)
+        pipes += _run(back, back, -0.25, z + 0.55, 0.0125, "supply")
+        main_supply.append((back[0], back[1], e["floor"]))
+        fx_pts.append((e, (x, y), n))
+    for (px, py, k) in room_drains:
+        fx_pts.append(({"floor": k, "fx": {"type": "FD"}}, (px, py), None))
     # the supply main: from the water meter along the front, then to each point
     d_off = max(float(s.get("drain_off", 1.5) or 0.0), 0.4)
     half_c = float(E["lib"]["C1"]["b"]) / 2
@@ -450,20 +616,29 @@ def install_members(data, E, rooms):
         g = _box(B, "ถังบำบัดน้ำเสียสำเร็จรูป", "septic",
                  [(tank[0] - r, tank[1] - r, -1.60, tank[0] + r, tank[1] + r, 0.05, "tank"),
                   (tank[0] - 0.25, tank[1] - 0.25, 0.05, tank[0] + 0.25, tank[1] + 0.25, 0.10,
-                   "concrete")],
-                 [("ชนิด", "ถังบำบัดน้ำเสียสำเร็จรูปไร้อากาศ"), ("ฝัง", "ใต้ดิน ห่างอาคาร 2.00 ม."),
+                   "concrete"),
+                  (tank[0] + r - 0.08, tank[1] - 0.03, 0.05, tank[0] + r - 0.02, tank[1] + 0.03,
+                   0.60, "soil")],
+                 [("ชนิด", "ถังบำบัดน้ำเสียสำเร็จรูปไร้อากาศ (มอก. 2550-2554)"),
+                  ("ฝัง", "ใต้ดิน ห่างอาคาร 2.00 ม."),
+                  ("ท่อเข้า/ออก", "ท่อเข้า Ø 4\" ท่อออก Ø 4\" ท่อระบายอากาศ Ø 2\""),
                   ("รายการ BOQ", "หมวด 11")], "IfcTank")
         if g is not None:
             out.append((g, "septic"))
-        for (px, py) in soil_points:
-            drains += _run((px, py), (tank[0], py), -0.70, -0.70, 0.05, "soil")
-            drains += _run((tank[0], py), tank, -0.70, -0.70, 0.05, "soil")
-    if drains:
-        g = _box(B, "ท่อน้ำทิ้ง/ท่อโสโครก PVC Ø 2\"–4\" (ใต้พื้น)", "pipe_drain", drains,
-                 [("ชนิด", "ท่อน้ำทิ้ง PVC Ø 2\" ท่อโสโครก Ø 4\" ลาด 1:100"),
-                  ("รายการ BOQ", "หมวด 11")], "IfcPipeSegment")
+    soil, grey = drain_routes(E, fx_pts, tank, (X0, Y0, X1, Y1), half_c, d_off)
+    for legs, D, name, kind, info in (
+            (soil, 100.0, "ท่อโสโครก PVC Ø 4\" ลาด 1:100 (ส้วม → ถังบำบัด)", "pipe_drain",
+             [("ชนิด", "ท่อโสโครก PVC ชั้น 8.5 Ø 4\" ลาดเอียง 1:100"),
+              ("แนวท่อ", "ใต้ดิน ลึก 0.75 ม. ใต้ท่อระบายน้ำรอบอาคาร ไม่ตัดกับท่ออื่น"),
+              ("รายการ BOQ", "หมวด 11")]),
+            (grey, 55.0, "ท่อน้ำทิ้ง PVC Ø 2\" ลาด 1:100 (อ่าง ฝักบัว ฟลอร์เดรน → บ่อพัก)",
+             "pipe_drain",
+             [("ชนิด", "ท่อน้ำทิ้ง PVC ชั้น 8.5 Ø 2\" ลาดเอียง 1:100"),
+              ("แนวท่อ", "ใต้พื้น ลึก 0.35 ม. เหนือท่อโสโครก ลงบ่อพัก/ท่อระบายน้ำรอบอาคาร"),
+              ("รายการ BOQ", "หมวด 11")])):
+        g = _pipes_group(B, legs, D, COL["soil" if D > 80 else "drain"], name, kind, info)
         if g is not None:
-            out.append((g, "pipe_drain"))
+            out.append((g, kind))
     # grease trap outside each kitchen
     for rec in rooms:
         if rec["kind"] != "kitchen":

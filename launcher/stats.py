@@ -194,7 +194,15 @@ def latest_line(d: dict, version: str = "") -> str:
         (f" ({day})" if day else "")
     tail = " — คลิกเพื่อดาวน์โหลด" if new else " — หน้าดาวน์โหลด"
     color = "#C0392B" if new else "#1F7A8C"
-    return f"<a href='{url}' style='color:{color}'><b>{label}</b>{tail}</a>"
+    line = f"<a href='{url}' style='color:{color}'><b>{label}</b>{tail}</a>"
+    if version and version != "dev":
+        line += f"<br>รุ่นที่ใช้อยู่: v{str(version).lstrip('v')}"
+        if new:
+            line += (f"<br><a href='{url}' style='color:#C0392B'><b>⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง "
+                     f"(v{str(version).lstrip('v')}) — ให้ดาวน์โหลดเวอร์ชันใหม่ {d['tag']}</b></a>")
+        else:
+            line += " <span style='color:#2E7D32'>✓ เป็นรุ่นล่าสุดแล้ว</span>"
+    return line
 
 
 def text(info: dict, cached: dict | None = None, version: str = "") -> str:

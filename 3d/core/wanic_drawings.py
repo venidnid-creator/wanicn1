@@ -490,6 +490,84 @@ def dim_chain(sh, v, vals, at, axis):
                     "center", "dim", angle=90)
 
 
+#: wall types tagged on the plans (a triangle with the number)
+WALL_TYPES = {
+    1: "ผนังภายนอก ก่ออิฐมอญครึ่งแผ่น ฉาบปูนเรียบสองด้าน ทาสีภายนอก",
+    2: "ผนังภายใน ก่ออิฐมอญครึ่งแผ่น ฉาบปูนเรียบสองด้าน ทาสีภายใน",
+    3: "ผนังห้องน้ำ ก่ออิฐมอญครึ่งแผ่น ฉาบปูน บุกระเบื้องด้านใน สูงถึงฝ้า",
+}
+
+
+def wall_type(E, w) -> int:
+    """1 exterior, 2 interior, 3 along a bathroom."""
+    (x0, y0), (x1, y1) = w["p0"], w["p1"]
+    L = math.hypot(x1 - x0, y1 - y0) or 1.0
+    mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+    nx, ny = (y1 - y0) / L, -(x1 - x0) / L
+    for k, rm in bathrooms(E):
+        if k != w["floor"]:
+            continue
+        for sg in (-1, 1):
+            px, py = mx + nx * 0.06 * sg, my + ny * 0.06 * sg
+            if rm["x"] <= px <= rm["x"] + rm["w"] and rm["y"] <= py <= rm["y"] + rm["d"]:
+                return 3
+    return 1 if w["exterior"] else 2
+
+
+def wall_tag(sh, p, n, r=2.6):
+    """The wall-type triangle with its number."""
+    h = r * 1.6
+    sh.poly([(p[0] - r, p[1] - h / 3), (p[0] + r, p[1] - h / 3), (p[0], p[1] + h * 2 / 3)],
+            "text", 0.25)
+    sh.text((p[0], p[1] - h / 3 + 0.6), str(n), 2.0, "center", "text", bold=True)
+
+
+def draw_wall_tags(sh, v, E, k, t):
+    """One tag per wall long enough, off its face (outside for exterior
+    walls), clear of the openings."""
+    rooms = E["floors"][k]["rooms"]
+    placed = opening_on_wall(E, k)
+    used = []
+    for w in (w for w in E["walls"] if w["floor"] == k):
+        (x0, y0), (x1, y1) = w["p0"], w["p1"]
+        L = w["L"]
+        if L < 1.2:
+            continue
+        ux, uy = (x1 - x0) / L, (y1 - y0) / L
+        cuts = sorted((s_ - el["w"] / 2, s_ + el["w"] / 2) for ww, s_, el in placed if ww is w)
+        # the widest clear stretch of the wall
+        best, a = (0.0, 0.0), 0.3
+        for c0, c1 in cuts + [(L - 0.3, L)]:
+            if c0 - a > best[1] - best[0]:
+                best = (a, c0)
+            a = max(a, c1)
+        if best[1] - best[0] < 0.5:
+            continue
+        sm = (best[0] + best[1]) / 2
+        no = outward(w, rooms) if w["exterior"] else (-uy, ux)
+        d = t / 2 + (0.55 if w["exterior"] else 0.35)
+        q = (x0 + ux * sm + no[0] * d, y0 + uy * sm + no[1] * d)
+        if not w["exterior"] and any(
+                kk == k and rm["x"] <= q[0] <= rm["x"] + rm["w"] and rm["y"] <= q[1] <= rm["y"] + rm["d"]
+                for kk, rm in bathrooms(E)):
+            # keep the bathroom clear: tag the wall from the other side
+            q = (x0 + ux * sm - no[0] * d, y0 + uy * sm - no[1] * d)
+        if any(math.hypot(q[0] - u[0], q[1] - u[1]) < 0.8 for u in used):
+            continue
+        used.append(q)
+        wall_tag(sh, v(*q), wall_type(E, w))
+
+
+def wall_legend(sh, x, y, E):
+    """Key to the wall tags (only the types used)."""
+    used = sorted({wall_type(E, w) for w in E["walls"]})
+    sh.text((x, y), "สัญลักษณ์ผนัง", 2.4, "left", "text", bold=True)
+    for i, n in enumerate(used):
+        yy = y - 5.5 - i * 5.0
+        wall_tag(sh, (x + 3, yy + 1.0), n, 2.0)
+        sh.text((x + 7, yy), WALL_TYPES[n], 2.0, "left", "text")
+
+
 def draw_walls(sh, v, E, k, t, codes=None, swings=True, tags=True):
     """Walls of floor ``k`` as two lines ``t`` thick, broken at openings,
     with door swings and window sashes."""
@@ -565,6 +643,8 @@ def _door(sh, v, p0, u, n, c0, c1, t, el, wall, rooms):
                                  CAT.OPENING_TYPES["D1"])
     side = outward(wall, rooms) if wall["exterior"] else n
     inn = (-side[0], -side[1])
+    if el["op"].get("swing") == "out":            # เปิดออกนอก
+        inn = side
     leaves = max(1, int(spec.get("leaves") or 1))
     if spec.get("slide"):
         for off, (a, b) in ((t * 0.15, (c0, (c0 + c1) / 2 + 0.05)),
@@ -573,7 +653,10 @@ def _door(sh, v, p0, u, n, c0, c1, t, el, wall, rooms):
             q = (p0[0] + u[0] * b + n[0] * off, p0[1] + u[1] * b + n[1] * off)
             sh.line(v(*p), v(*q), "door", 0.35)
         return
-    hinges = [(c0, 1)] if leaves == 1 else [(c0, 1), (c1, -1)]
+    if leaves == 1:
+        hinges = [(c1, -1)] if el["op"].get("hinge") == "right" else [(c0, 1)]
+    else:
+        hinges = [(c0, 1), (c1, -1)]
     leaf = (c1 - c0) / len(hinges)
     for hs, sgn in hinges:
         hp = (p0[0] + u[0] * hs + inn[0] * t / 2, p0[1] + u[1] * hs + inn[1] * t / 2)
@@ -708,16 +791,99 @@ def a_index(sh, sheets, info):
                     A_NOTES, 2.3, 58)
     y = notes_block(sh, x0 + 200, y - 4, "ข้อมูลอาคาร",
                     info.get("summary") or [], 2.3, 58)
-    sh.text((x0 + 200, y - 4), "สัญลักษณ์", 3.4, "left", "text", True)
-    yy = y - 10
-    for sym, desc in SYMBOLS:
-        if sym == "grid":
-            sh.circle((x0 + 207, yy + 1), 2.6, "grid", 0.25)
-            sh.text((x0 + 207, yy), "1", 2.4, "center", "grid")
+    symbols_legend(sh, x0 + 264, y1 - 6, min(60.0, x1 - x0 - 266))
+
+
+def symbols_legend(sh, x, y, w=60.0):
+    """สัญลักษณ์แบบ: each symbol drawn as it appears on the sheets, with
+    what it means — dimensions, wall hatches, tags, section and detail
+    marks, levels and grid lines."""
+    sh.text((x, y), "สัญลักษณ์แบบ", 3.4, "left", "text", True)
+    rh = 7.5
+    sx, tx = x + 12, x + 25
+    yy = y - 7
+    sh.rect(x, yy - 16 * rh - 1, x + w, yy + 3.5, "text", 0.25)
+    sh.line((x + 23.5, yy + 3.5), (x + 23.5, yy - 16 * rh - 1), "text", 0.18)
+
+    def row(text):
+        nonlocal yy
+        sh.text((tx, yy - 0.8), text, 1.9)
+        sh.line((x, yy - rh / 2 - 0.5), (x + w, yy - rh / 2 - 0.5), "text", 0.1)
+        yy -= rh
+
+    def dim(kind):
+        a, b = sx - 9, sx + 9
+        sh.line((a, yy), (b, yy), "dim", 0.13)
+        for t in (a, b):
+            if kind == "arrow":
+                sh.poly([(t, yy), (t + (1.6 if t == a else -1.6), yy + 0.6),
+                         (t + (1.6 if t == a else -1.6), yy - 0.6)], "dim", 0.13)
+            elif kind == "tick":
+                sh.line((t - 0.8, yy - 0.8), (t + 0.8, yy + 0.8), "dim", 0.25)
+            else:
+                sh.circle((t, yy), 0.5, "dim", 0.13)
+            sh.line((t, yy - 1.4), (t, yy + 1.4), "dim", 0.13)
+        sh.text((sx, yy + 0.8), "2.00", 1.6, "center", "dim")
+    dim("arrow")
+    row("ระยะ ริม – ริม")
+    dim("tick")
+    row("ระยะ ริม – ศูนย์กลาง")
+    dim("dot")
+    row("ระยะ ศูนย์กลาง – ศูนย์กลาง")
+    sh.line((sx - 9, yy - 1), (sx - 5, yy + 1.2), "text", 0.13)
+    sh.line((sx - 5, yy + 1.2), (sx + 9, yy + 1.2), "text", 0.13)
+    sh.text((sx + 2, yy + 1.6), "ระบุ", 1.6, "center")
+    row("เส้นชี้แสดงรายละเอียด")
+    for kind, text in (("brick", "ผนังก่ออิฐฉาบปูน"), ("conc", "ผนัง/โครงสร้าง ค.ส.ล."),
+                       ("light", "ผนังโครงเบา (ยิปซัม/ไฟเบอร์ซีเมนต์)"), ("soil", "รูปตัดดิน")):
+        a, b = sx - 9, sx + 9
+        if kind == "soil":
+            sh.line((a, yy - 1), (b, yy - 1), "cut", 0.35)
+            for i in range(9):
+                sh.line((a + i * 2, yy - 1), (a + i * 2 + 1.5, yy + 1), "hatch", 0.13)
         else:
-            sh.text((x0 + 204, yy), sym, 2.6, "left", "text", True)
-        sh.text((x0 + 222, yy), desc, 2.3)
-        yy -= 6
+            sh.rect(a, yy - 1.2, b, yy + 1.2, "wall", 0.3)
+            if kind == "brick":
+                for i in range(1, 6):
+                    sh.line((a + i * 3, yy - 1.2), (a + i * 3, yy + 1.2), "hatch", 0.13)
+            elif kind == "conc":
+                sh.fill([(a, yy - 1.2), (b, yy - 1.2), (b, yy + 1.2), (a, yy + 1.2)], "hatch", 0.55)
+            else:
+                sh.line((a, yy), (b, yy), "hatch", 0.13, True)
+        row(text)
+    # room tag
+    sh.rect(sx - 8, yy - 2.2, sx + 8, yy + 2.2, "text", 0.18)
+    sh.text((sx, yy + 0.3), "ชื่อห้อง", 1.6, "center", "text", True)
+    sh.text((sx, yy - 1.9), "พ1  ฝ1  ±0.00", 1.3, "center")
+    row("ชื่อห้อง วัสดุพื้น ฝ้า ระดับพื้น")
+    sh.text((sx, yy - 0.8), "ป1", 2.4, "center", "door")
+    row("หมายเลขประตู (ตารางประตู)")
+    sh.circle((sx, yy), 2.4, "window", 0.18)
+    sh.text((sx, yy - 0.9), "น1", 2.0, "center", "window")
+    row("หมายเลขหน้าต่าง (ตารางหน้าต่าง)")
+    wall_tag(sh, (sx, yy), 1, 2.2)
+    row("หมายเลขชนิดผนัง (ตามสัญลักษณ์ผนัง)")
+    # section mark
+    sh.circle((sx - 5, yy), 2.6, "text", 0.25)
+    sh.line((sx - 7.6, yy), (sx - 2.4, yy), "text", 0.18)
+    sh.text((sx - 5, yy + 0.4), "ก", 1.6, "center")
+    sh.text((sx - 5, yy - 2.0), "A-08", 1.2, "center")
+    sh.line((sx - 2.4, yy), (sx + 8, yy), "text", 0.35, True)
+    row("แนวตัด (รูปตัด / เลขแผ่น)")
+    sh.circle((sx, yy), 2.8, "text", 0.25)
+    sh.line((sx - 2.8, yy), (sx + 2.8, yy), "text", 0.18)
+    sh.text((sx, yy + 0.5), "1", 1.6, "center")
+    sh.text((sx, yy - 2.0), "S-09", 1.2, "center")
+    row("แบบขยาย (เลข / แผ่นที่)")
+    sh.poly([(sx - 1.5, yy + 1.5), (sx + 1.5, yy + 1.5), (sx, yy)], "dim", 0.18)
+    sh.line((sx - 5, yy), (sx + 8, yy), "dim", 0.13)
+    sh.text((sx + 3, yy + 0.6), "+0.00", 1.5)
+    row("ระดับ (อ้างอิง ±0.00 = พื้นชั้น 1)")
+    sh.circle((sx, yy), 2.6, "grid", 0.25)
+    sh.text((sx, yy - 0.9), "A", 2.2, "center", "grid")
+    row("แนวเสา (กริดไลน์)")
+    yy -= 2
+    sh.text((x, yy - 1), "หมายเหตุ: ใช้ตัวเลขที่เขียนกำกับ ห้ามวัดจากแบบ", 1.8)
 
 
 def a_site(sh, E, info):
@@ -778,8 +944,10 @@ def a_floor(sh, E, k, codes, fcodes):
     draw_stairs(sh, v, E, k)
     draw_fixtures(sh, v, E, k)
     section_marks(sh, v, E, k)
+    draw_wall_tags(sh, v, E, k, t)
     x0, y0, x1, y1 = drawing_area()
     north(sh, (x1 - 10, y1 - 12))
+    wall_legend(sh, x0 + 4, y0 + 30, E)
     name = "แปลนพื้นชั้น 1" if k == 0 else f"แปลนพื้นชั้น {k + 1}"
     caption(sh, ((x0 + x1) / 2, y0 + 6), name, f"1:{sc}")
     return sc
@@ -845,11 +1013,12 @@ def elevation(sh, E, L, side, box):
     umin, umax = min(us) - ov - 0.5, max(us) + ov + 0.5
     ztop = n * H + 3.0
     zmin = -0.6
-    bw, bh = box[2] - box[0] - 40, box[3] - box[1] - 40
+    lm = 30.0                       # room on the left for the wall note
+    bw, bh = box[2] - box[0] - 40 - lm, box[3] - box[1] - 40
     sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), PLAN_SCALES)
     sh.scale = f"1:{sc}"
     k = 1000.0 / sc
-    ox = box[0] + 4 + (bw - (umax - umin) * k) / 2
+    ox = box[0] + 4 + lm + (bw - (umax - umin) * k) / 2
     oy = box[1] + 28 + max(0.0, (bh - (ztop - zmin) * k) / 2)
 
     def P(u, z):
@@ -910,7 +1079,43 @@ def elevation(sh, E, L, side, box):
         tile = CAT.roof_tile(E["settings"])[1]["name"]
         top = max(p[2] for poly in L["skin"] for p in poly) if L.get("skin") else n * H
         sh.text(P((umin + umax) / 2, top + 0.45), f"หลังคา{tile[:38]}", 2.0, "center", "text")
-    sh.text(P(umin + 0.9, H * 0.5), "ผนังก่ออิฐฉาบปูนเรียบ ทาสี", 1.9, "left", "text")
+    # the wall note outside the building, its leader to the wall face
+    wall_u = [u for f in range(n) for w in _ext_walls(E, f, side)
+              for u in (u_of(*w["p0"]), u_of(*w["p1"]))]
+    if wall_u:
+        wl = min(wall_u)
+        tip = P(wl + 0.25, H * 0.35)
+        lab = (min(P(umin, 0)[0], P(wl, 0)[0] - 4), P(0, H * 0.80)[1])
+        sh.line(tip, (lab[0], lab[1] - 1.2), "text", 0.13)
+        sh.circle(tip, 0.5, "text", 0.18)
+        sh.line((lab[0] - 28, lab[1] - 1.2), (lab[0], lab[1] - 1.2), "text", 0.13)
+        sh.text((lab[0] - 28, lab[1]), "ผนังก่ออิฐฉาบปูนเรียบ ทาสี", 1.9, "left", "text")
+    # heights of the doors and windows: sill and head off the floor, a
+    # chain on the left of each opening
+    done_dims = set()
+    for f in range(n):
+        for w in _ext_walls(E, f, side):
+            for op in w["openings"]:
+                el = next((o for o in E["openings"] if o["op"] is op), None)
+                if el is None:
+                    continue
+                uc = u_of(float(op["x"]), float(op["y"]))
+                key = (round(uc, 2), f)
+                if key in done_dims:
+                    continue
+                done_dims.add(key)
+                du = uc - el["w"] / 2 - 0.25
+                z0 = f * H
+                chain = [z0] + ([z0 + el["sill"]] if el["sill"] > 0.01 else []) + \
+                    [z0 + el["sill"] + el["h"]]
+                for za, zb in zip(chain, chain[1:]):
+                    a_, b_ = P(du, za), P(du, zb)
+                    sh.line(a_, b_, "dim", 0.13)
+                    for q in (a_, b_):
+                        sh.line((q[0] - 0.7, q[1] - 0.7), (q[0] + 0.7, q[1] + 0.7), "dim", 0.25)
+                        sh.line((q[0] - 0.4, q[1]), (q[0] + 1.6, q[1]), "dim", 0.13)
+                    sh.text((a_[0] - 0.7, (a_[1] + b_[1]) / 2), f"{zb - za:.2f}", 1.6,
+                            "center", "dim", angle=90)
     # grid bubbles under the face
     xs_, ys_ = grids(E)
     names = [(x, str(i + 1)) for i, x in enumerate(xs_)] if ax[1] == 0 else \
@@ -1347,6 +1552,8 @@ def section_detail(sh, E, L, cut, box):
         for q in (pa, pb):
             sh.line((q[0] - 1, q[1] - 1), (q[0] + 1, q[1] + 1), "dim", 0.18)
         sh.text((xr + 1.5, (pa[1] + pb[1]) / 2 - 1), f"{zb - za:.2f}", 2.0, "left", "dim")
+    if L:
+        roof_leaders(sh, E, L, P, U, C, axis, at, xr + 12)
     # grid: dimension chain and bubbles below
     yb = P(0, zmin + 0.35)[1]
     for g0, g1 in zip(grid_u, grid_u[1:]):
@@ -1363,6 +1570,59 @@ def section_detail(sh, E, L, cut, box):
         sh.circle((q, yb), 3.0, "grid", 0.25)
         sh.text((q, yb - 1.2), nm, 2.6, "center", "grid")
     return sc
+
+
+def roof_leaders(sh, E, L, P, U, C, axis, at, lx):
+    """Name the roof's parts on a section, each with a leader to a label
+    column at paper x ``lx`` (as the standard sets do), and mark the
+    pitch with its slope symbol."""
+    s = E["settings"]
+    segs = [sg for sg in (_cut_poly(poly, axis, at) for poly in L["skin"]) if sg]
+    segs = [((ua, za), (ub, zb)) for (ua, za), (ub, zb) in segs if abs(ub - ua) > 0.3]
+    if not segs:
+        return
+    # the slope on the right (falling to the right); else the longest
+    right = [sg for sg in segs if (sg[1][1] - sg[0][1]) * (sg[1][0] - sg[0][0]) < 0] or segs
+    (ua, za), (ub, zb) = max(right, key=lambda sg: max(sg[0][0], sg[1][0]))
+    if ua > ub:
+        (ua, za), (ub, zb) = (ub, zb), (ua, za)
+
+    def on(t, dz=0.0):
+        return P(ua + (ub - ua) * t, za + (zb - za) * t + dz)
+    hi = (ua, za) if za > zb else (ub, zb)
+    lo = (ub, zb) if za > zb else (ua, za)
+    tile = CAT.roof_tile(s)[1]["name"]
+    st = lambda k_, d_="": str(s.get(k_) or d_)        # noqa: E731
+    items = [(P(hi[0], hi[1] + 0.16), "ครอบสันหลังคา"),
+             (on(0.35, 0.10), f"หลังคา{tile[:26]}"),
+             (on(0.50, 0.04), f"แปเหล็ก {st('purlin')}"),
+             (on(0.65, -0.05), f"จันทันเหล็ก {st('rafter')}"),
+             (P(hi[0], hi[1] - 0.10), f"อกไก่เหล็ก {st('ridge')}")]
+    if L.get("post"):
+        items.append((P(hi[0], (hi[1] + E["n"] * E["H"]) / 2), f"ดั้งเหล็ก {st('post')}"))
+    if s.get("wall_plate", True):
+        items.append((P(lo[0] - math.copysign(float(s.get('overhang') or 0.6), lo[0] - hi[0]),
+                        E["n"] * E["H"] + 0.05), f"อะเสเหล็ก {st('wallplate')}"))
+    items.append((P(lo[0], lo[1] - 0.10), "เชิงชายไม้สังเคราะห์ 1×8\" · ฝ้าชายคา"))
+    items.sort(key=lambda it: -it[0][1])
+    ytop = items[0][0][1] + 4
+    for i, (pt, text) in enumerate(items):
+        ty = ytop - i * 4.2
+        sh.circle(pt, 0.35, "text", 0.18)
+        sh.line(pt, (lx - 1, ty + 0.7), "text", 0.13)
+        sh.line((lx - 1, ty + 0.7), (lx + 1, ty + 0.7), "text", 0.13)
+        sh.text((lx + 1.5, ty), text, 1.9, "left", "text")
+    # the slope symbol: a small triangle under the right slope with its angle
+    m = on(0.5, 0.45)
+    run = 6.0
+    k_ = abs((zb - za) / (ub - ua)) if ub != ua else 0
+    rise = run * k_
+    sgn = -1 if zb < za else 1
+    a_ = (m[0] - run / 2, m[1])
+    b_ = (m[0] + run / 2, m[1])
+    c_ = (b_[0], m[1] + sgn * rise) if sgn > 0 else (a_[0], m[1] + rise)
+    sh.poly([a_, b_, c_], "dim", 0.18)
+    sh.text((m[0], m[1] + rise + 1.2), f"ลาดเอียง {float(s['pitch']):g}°", 1.9, "center", "dim")
 
 
 def a_section_sheet(sh, E, L, k):
@@ -2115,6 +2375,8 @@ def build_set(data, info=None,
         if L:
             add("A", "แบบขยายเชิงชาย ฝ้าชายคา โครงถักหลังคา",
                 lambda sh, _a: detail_eave_truss(sh, E, L), "1:20")
+        add("A", "ข้อกำหนดความปลอดภัยในการก่อสร้าง อุปกรณ์ดับเพลิง",
+            lambda sh, _a: a_safety(sh, E), "ตามระบุ")
     if "S" in groups:
         add("S", "สารบัญแบบ รายการประกอบแบบโครงสร้าง",
             lambda sh, all_: s_index(sh, all_, E), "-")
@@ -2151,8 +2413,11 @@ def build_set(data, info=None,
     sheets = [s for s, _f in plan]
     for i, s in enumerate(sheets, 1):
         s.number = i
+    pic = info.get("plan_picture")
     for s, fn in plan:
         fn(s, sheets)
+        if pic:
+            inset_picture(s, pic)
         frame(s, info, len(sheets))
     boq = build_boq(data, info) if "BOQ" in groups else []
     front = []
@@ -2165,6 +2430,57 @@ def build_set(data, info=None,
         g_contents(toc, E, info, sheets, boq)
         front = [cover, toc]
     return front + sheets + boq
+
+
+def _item_points(sh):
+    """Points every drawn item touches (text: its approximate extent)."""
+    pts = []
+    for it in sh.items:
+        k = it[0]
+        if k == "line":
+            x0, y0, x1, y1 = it[1]
+            pts += [(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t) for t in (0, 0.25, 0.5, 0.75, 1)]
+        elif k in ("poly", "fill"):
+            ps = list(it[1])
+            for a, b in zip(ps, ps[1:] + ps[:1]):
+                pts += [(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+                        for t in (0, 0.25, 0.5, 0.75)]
+        elif k in ("circle", "arc"):
+            x, y, r = it[1][:3]
+            pts += [(x - r, y), (x + r, y), (x, y - r), (x, y + r)]
+        elif k == "text":
+            (x, y), txt, h, al = it[1], it[2], it[3], it[4]
+            w = 0.55 * h * len(txt)
+            x0 = x - w if al == "right" else x - w / 2 if al == "center" else x
+            pts += [(x0 + w * t, y + h * 0.5) for t in (0, 0.25, 0.5, 0.75, 1)]
+        elif k == "image":
+            x0, y0, x1, y1 = it[1]
+            pts += [(x0, y0), (x1, y1), (x0, y1), (x1, y0), ((x0 + x1) / 2, (y0 + y1) / 2)]
+    return pts
+
+
+def inset_picture(sh, data: bytes, sizes=((100.0, 56.0), (80.0, 45.0), (64.0, 36.0))):
+    """The 3D picture of the building in a free corner of a drawing sheet
+    (the first corner, largest size first, that nothing else is drawn in).
+    Returns the box or None when the sheet has no room."""
+    if not data or sh.group in ("G", "BOQ"):
+        return None
+    X0, Y0, X1, Y1 = drawing_area()
+    pts = _item_points(sh)
+    for w, h in sizes:
+        h_all = h + 5.0                          # the caption under it
+        for cx, cy in ((X1 - w - 2, Y1 - h_all - 14), (X0 + 2, Y1 - h_all - 2),
+                       (X1 - w - 2, Y0 + 16), (X0 + 2, Y0 + 2)):
+            box = (cx - 1.5, cy - 1.5, cx + w + 1.5, cy + h_all + 1.5)
+            if any(box[0] <= x <= box[2] and box[1] <= y <= box[3] for x, y in pts):
+                continue
+            pic = (cx, cy + 5.0, cx + w, cy + 5.0 + h)
+            sh.items.insert(0, ("image", pic, "image", data))
+            sh.rect(*pic, "frame", 0.25)
+            sh.text((cx + w / 2, cy + 1.2), "ภาพทัศนียภาพ 3 มิติ (ประกอบแบบ)", 2.0,
+                    "center", "text")
+            return pic
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2419,18 +2735,12 @@ def sn_details(sh, E):
         if fill is not None:
             sh.fill(pts, "hatch", fill)
         sh.poly(pts, layer, lw)
-    # septic tank
-    ox, oy = x0 + 20, y0 + 70
-    box(ox, oy, 1.1, 1.6, "pipe", 0.5)
-    sh.line((ox - 10, oy + 1.65 * k), (ox + 1.1 * k + 10, oy + 1.65 * k), "cut", 0.5)
-    box(ox + 0.3 * k, oy + 1.6 * k, 0.5, 0.1, "cut", 0.35, 0.7)
-    sh.line((ox - 20, oy + 1.3 * k), (ox, oy + 1.3 * k), "pipe", 0.5)
-    sh.line((ox + 1.1 * k, oy + 1.2 * k), (ox + 1.1 * k + 20, oy + 1.2 * k), "pipe", 0.5)
-    sh.text((ox - 18, oy + 1.3 * k + 2), "ท่อโสโครกเข้า Ø 4\"", 2.0)
-    sh.text((ox + 1.1 * k + 2, oy + 1.2 * k + 2), "ท่อน้ำทิ้งออก Ø 4\" ลงบ่อพัก", 2.0)
-    sh.text((ox + 0.55 * k, oy + 0.85 * k), "ถังบำบัดน้ำเสีย", 2.6, "center", "text", True)
-    sh.text((ox + 0.55 * k, oy + 0.70 * k), "สำเร็จรูป", 2.6, "center", "text", True)
-    caption(sh, (ox + 0.55 * k, y0 + 10), "แบบขยายถังบำบัดน้ำเสีย", "1:20")
+    # septic tank: section to standard practice
+    ox, oy = x0 + 100, y1 - 150
+    septic_section(sh, ox, oy, k)
+    caption(sh, (ox + 0.55 * k, oy - 24), "แบบขยายถังบำบัดน้ำเสียสำเร็จรูป (รูปตัด)", "1:20")
+    septic_table(sh, x0 + 4, y1 - 8)
+    oy = y0 + 32
     # manhole
     ox2 = x0 + 140
     box(ox2, oy, 0.8, 0.85, "cut", 0.5, 0.75)
@@ -2452,6 +2762,195 @@ def sn_details(sh, E):
     sh.text((ox3 + 0.4 * k, oy + 0.66 * k), "ตะแกรงฟลอร์เดรนกันกลิ่น Ø 2\" · พื้นลาด 1:100", 2.0, "center")
     sh.text((ox3 + 0.82 * k, oy + 0.08 * k), "ท่อน้ำทิ้ง PVC Ø 2\"", 2.0)
     caption(sh, (ox3 + 0.4 * k, y0 + 10), "แบบขยายฟลอร์เดรน", "1:20")
+
+
+#: prefabricated septic tanks (anaerobic filter): litres → persons, size
+SEPTIC_SIZES = [(600, 5, "Ø 0.88 × 1.40"), (800, 7, "Ø 0.98 × 1.45"),
+                (1000, 10, "Ø 1.05 × 1.55"), (1200, 12, "Ø 1.10 × 1.65"),
+                (1600, 16, "Ø 1.20 × 1.80"), (2000, 20, "Ø 1.35 × 1.90")]
+
+
+def septic_table(sh, x, y):
+    sh.text((x, y), "ตารางเลือกขนาดถังบำบัดน้ำเสียสำเร็จรูป (ไร้อากาศ ชนิดมีตัวกลาง)", 2.4,
+            "left", "text", True)
+    return table(sh, x, y - 2, [("ขนาด (ลิตร)", 22.0, "center"), ("ผู้ใช้ (คน)", 20.0, "center"),
+                                ("ขนาดถังโดยประมาณ (ม.)", 38.0, "center")],
+                 [(f"{l_:,}", str(p_), d_) for l_, p_, d_ in SEPTIC_SIZES],
+                 h=2.0, row_h=4.4, head_h=5.2)
+
+
+def septic_section(sh, ox, oy, k):
+    """รูปตัดถังบำบัดน้ำเสียสำเร็จรูป ``ox, oy`` = the tank's bottom left
+    (paper mm), ``k`` mm per metre."""
+    W, Hh = 1.10, 1.60                   # tank Ø × height
+    soil = 0.25                          # cover of soil over the shoulder
+    gl = oy + (Hh + soil) * k            # the ground line
+
+    def X(m):
+        return ox + m * k
+
+    def Y(m):
+        return oy + m * k
+    # excavation, sand and lean concrete
+    sh.poly([(X(-0.30), gl), (X(-0.30), Y(-0.15)), (X(W + 0.30), Y(-0.15)), (X(W + 0.30), gl)],
+            "hidden", 0.18, closed=False, dash=True)
+    sh.fill([(X(-0.25), Y(-0.15)), (X(W + 0.25), Y(-0.15)), (X(W + 0.25), Y(-0.10)),
+             (X(-0.25), Y(-0.10))], "hatch", 0.55)
+    sh.rect(X(-0.25), Y(-0.15), X(W + 0.25), Y(-0.10), "cut", 0.25)
+    sh.rect(X(-0.25), Y(-0.10), X(W + 0.25), Y(0.0), "cut", 0.18)
+    for i in range(int((W + 0.5) / 0.05)):
+        sh.circle((X(-0.22 + i * 0.05), Y(-0.05)), 0.25, "hatch", 0.1)
+    # ground
+    sh.line((X(-0.9), gl), (X(W + 0.9), gl), "cut", 0.6)
+    for i in range(int((W + 1.8) / 0.10)):
+        xx = X(-0.9 + i * 0.10)
+        sh.line((xx, gl), (xx - 1.2, gl - 1.2), "hatch", 0.13)
+    # the tank: shell, a baffle and the filter media
+    sh.poly([(X(0.05), Y(0)), (X(W - 0.05), Y(0)), (X(W), Y(0.08)), (X(W), Y(Hh - 0.12)),
+             (X(W - 0.15), Y(Hh)), (X(0.15), Y(Hh)), (X(0), Y(Hh - 0.12)), (X(0), Y(0.08))],
+            "pipe", 0.5)
+    sh.line((X(W * 0.45), Y(0.25)), (X(W * 0.45), Y(Hh - 0.10)), "pipe", 0.35)
+    for i in range(6):
+        for j in range(5):
+            sh.circle((X(W * 0.52 + i * 0.075), Y(0.35 + j * 0.13)), 0.9, "hatch", 0.13)
+    wl_ = Hh - 0.40                       # the water line
+    sh.line((X(0.03), Y(wl_)), (X(W - 0.03), Y(wl_)), "pipe", 0.13, True)
+    sh.text((X(W * 0.22), Y(0.55)), "ห้องตกตะกอน", 1.8, "center")
+    sh.text((X(W * 0.72), Y(1.05)), "ห้องกรองไร้อากาศ", 1.8, "center")
+    sh.text((X(W * 0.72), Y(0.95)), "(ตัวกลางพลาสติก)", 1.6, "center")
+    # inlet and outlet tees (outlet 5 cm lower)
+    zi, zo = Hh - 0.30, Hh - 0.35
+    sh.line((X(-0.9), Y(zi) + 1.2), (X(0.12), Y(zi) + 1.2), "pipe", 0.6)
+    sh.line((X(0.12), Y(zi - 0.35)), (X(0.12), Y(zi + 0.15)), "pipe", 0.6)
+    sh.line((X(W - 0.12), Y(zo - 0.40)), (X(W - 0.12), Y(zo + 0.15)), "pipe", 0.6)
+    sh.line((X(W - 0.12), Y(zo) + 1.2), (X(W + 0.9), Y(zo) + 1.2), "pipe", 0.6)
+    # access cover and vent
+    sh.rect(X(W / 2 - 0.25), Y(Hh), X(W / 2 + 0.25), gl + 0.05 * k, "pipe", 0.35)
+    sh.rect(X(W / 2 - 0.30), gl + 0.05 * k, X(W / 2 + 0.30), gl + 0.09 * k, "struct", 0.35)
+    sh.line((X(W - 0.25), Y(Hh - 0.04)), (X(W - 0.25), gl + 0.85 * k), "pipe", 0.35)
+    sh.line((X(W - 0.31), gl + 0.85 * k), (X(W - 0.19), gl + 0.85 * k), "pipe", 0.35)
+
+    def lead(pt, tx, ty, text):
+        sh.line(pt, (tx, ty + 0.6), "text", 0.13)
+        sh.line((tx, ty + 0.6), (tx + (2 if tx > pt[0] else -2), ty + 0.6), "text", 0.13)
+        sh.text((tx + (2.5 if tx > pt[0] else -2.5), ty), text, 1.8,
+                "left" if tx > pt[0] else "right")
+    R = X(W + 1.1)
+    lead((X(W - 0.25), gl + 0.6 * k), R, gl + 0.70 * k,
+         "ท่อระบายอากาศ PVC Ø 2\" สูงจากดินไม่น้อยกว่า 2.00 ม. ปลายติดหมวกกันฝน")
+    lead((X(W / 2 + 0.30), gl + 0.07 * k), R, gl + 0.25 * k,
+         "ฝาเปิดถัง Ø 0.50 ม. สูงกว่าดิน 0.05–0.10 ม. (ฝาปิดสนิท)")
+    lead((X(W + 0.5), Y(zo) + 1.2), R, Y(zo) - 3, "ท่อออก PVC Ø 4\" → บ่อพัก/ท่อระบายสาธารณะ")
+    lead((X(W - 0.12), Y(zo - 0.35)), R, Y(zo - 0.35) - 5, "ท่อ T ออก (ต่ำกว่าท่อเข้า 0.05 ม.)")
+    lead((X(W * 0.8), Y(0.5)), R, Y(0.5) - 3, "ถังไฟเบอร์กลาส/PE สำเร็จรูป มอก. 2550-2554")
+    lead((X(W + 0.25), Y(-0.05)), R, Y(-0.05) - 6, "ทรายหยาบอัดแน่น 0.10 ม.")
+    lead((X(W + 0.2), Y(-0.13)), R, Y(-0.13) - 10, "คอนกรีตหยาบ (Lean) 0.05 ม.")
+    lead((X(W + 0.27), Y(0.9)), R, Y(0.9) + 2, "ถมกลับด้วยทราย อัดแน่นเป็นชั้น (ห้ามใช้หิน/เศษปูน)")
+    L_ = X(-1.0)
+    lead((X(0.12), Y(zi) + 1.2), L_, Y(zi) + 6, "ท่อเข้า PVC Ø 4\" ลาด 1:100 จากส้วม")
+    lead((X(0.12), Y(zi - 0.35)), L_, Y(zi - 0.35), "ท่อ T เข้า")
+    lead((X(0.2), Y(wl_)), L_, Y(wl_) - 6, "ระดับน้ำในถัง")
+    # dimensions
+    _dim_v(sh, X(-0.55), Y(0), Y(Hh), f"{Hh:.2f}")
+    _dim_v(sh, X(-0.55), Y(Hh), gl, f"{soil:.2f}")
+    _dim_v(sh, X(-0.55), Y(-0.15), Y(0), "0.15")
+    _dim_h(sh, X(0), X(W), Y(-0.15) - 6, f"Ø {W:.2f}")
+    sh.text((X(-0.9), gl + 1.2), "±0.00 ระดับดิน", 1.8)
+
+
+SAFETY_NOTES = [
+    "1. จัดทำรั้ว/โครงป้องกันวัสดุตกหล่นรอบอาคารที่ก่อสร้างตั้งแต่ 2 ชั้นขึ้นไป ตามกฎกระทรวง "
+    "ฉบับที่ 4 (พ.ศ. 2526) ออกตามความในพระราชบัญญัติควบคุมอาคาร พ.ศ. 2522",
+    "2. โครงเหล็กท่อกลม Ø 1½\" หนา 3.2 มม. ระยะห่าง 2.00 ม. ทั้งทางตั้งและทางนอน "
+    "ปิดช่องว่างด้วยผ้าใบหรือตาข่ายกันวัสดุตก",
+    "3. ยึดโครงเหล็กเข้ากับโครงสร้างอาคารทุกชั้น ด้วยเหล็กท่อ Ø 1\" ทุกระยะ 2.00 ม.",
+    "4. ฐานรองรับเสาโครงเหล็กใช้แผ่นเหล็ก 0.30×0.30 ม. หนา 6 มม. ทุกจุด",
+    "5. ความสูงของโครงป้องกันสูงกว่าระดับที่ทำการก่อสร้างไม่น้อยกว่า 2.00 ม. "
+    "และเพิ่มความสูงตามการก่อสร้างจนแล้วเสร็จ",
+    "6. ผู้ปฏิบัติงานบนที่สูงเกิน 2.00 ม. ต้องสวมเข็มขัดนิรภัย/สายช่วยชีวิต หมวกนิรภัย "
+    "และรองเท้านิรภัยตลอดเวลา",
+    "7. ติดตั้งเครื่องดับเพลิงชนิดผงเคมีแห้ง ขนาด 4 กก. สูงจากพื้นถึงหูแขวน 1.50 ม. "
+    "ในที่มองเห็นและหยิบใช้ได้สะดวก",
+    "8. ติดตั้งป้ายเตือนอันตรายและป้ายโครงการให้มองเห็นชัดเจนตลอดระยะเวลาก่อสร้าง",
+]
+
+
+def a_safety(sh, E):
+    """ข้อกำหนดความปลอดภัย: the protective steel frame round the building
+    (elevation, section, plan strip), the fire-hose cabinet and the hand
+    extinguisher — after the standard sets."""
+    x0, y0, x1, y1 = drawing_area()
+    k = 1000.0 / 100                       # 1:100 for the frame
+    ox, oy = x0 + 20, y1 - 118
+    bays, tiers = 4, 5
+    sh.text((ox, y1 - 6), "ตามกฎกระทรวง ฉบับที่ 4 (พ.ศ. 2526) ออกตามความในพระราชบัญญัติ"
+                          "ควบคุมอาคาร พ.ศ. 2522", 2.2, "left", "text", True)
+    W, Hh = bays * 2.0 * k, tiers * 2.0 * k
+    for i in range(bays + 1):
+        x = ox + i * 2.0 * k
+        sh.line((x, oy), (x, oy + Hh + 1.0 * k), "struct", 0.4)
+        sh.rect(x - 1.5, oy - 0.6, x + 1.5, oy, "struct", 0.25)
+    for j in range(tiers + 1):
+        y = oy + j * 2.0 * k
+        sh.line((ox - 1.0 * k, y), (ox + W + 1.0 * k, y), "struct", 0.35)
+        sh.line((ox - 1.0 * k, y + 0.8), (ox + W + 1.0 * k, y + 0.8), "struct", 0.18)
+    for i in range(bays):
+        for j in range(1, tiers):
+            a = (ox + i * 2.0 * k, oy + j * 2.0 * k)
+            b = (a[0] + 2.0 * k, a[1] + 2.0 * k)
+            sh.line(a, b, "elec", 0.18)
+            sh.line((a[0], b[1]), (b[0], a[1]), "elec", 0.18)
+    for i in range(bays):
+        _dim_h(sh, ox + i * 2.0 * k, ox + (i + 1) * 2.0 * k, oy - 5, "2.00")
+    for j in range(tiers):
+        _dim_v(sh, ox - 1.0 * k - 4, oy + j * 2.0 * k, oy + (j + 1) * 2.0 * k, "2.00")
+    sh.line((ox + 2.6 * k, oy + 7.2 * k), (ox + W + 2.0 * k, oy + Hh + 0.6 * k), "text", 0.13)
+    sh.text((ox + W + 2.3 * k, oy + Hh + 0.5 * k),
+            "โครงเหล็ก Ø 1½\" หนา 3.2 มม. ระยะห่าง 2.00 ม.", 2.0)
+    sh.line((ox + 3.0 * k, oy + 5.0 * k), (ox + W + 2.0 * k, oy + 7.0 * k), "text", 0.13)
+    sh.text((ox + W + 2.3 * k, oy + 6.9 * k), "ช่องว่างปิดด้วยผ้าใบ/ตาข่ายกันวัสดุตก", 2.0)
+    caption(sh, (ox + W / 2, oy - 14), "รูปด้านหน้า โครงป้องกันวัสดุตกหล่น", "1:100")
+    # section
+    sx = ox + W + 4.0 * k + 40
+    sh.line((sx, oy), (sx, oy + Hh + 1.0 * k), "struct", 0.4)
+    sh.line((sx - 1.0 * k, oy), (sx + 4.0 * k, oy), "cut", 0.5)
+    sh.line((sx, oy + 4.0 * k), (sx + 2.0 * k, oy + 2.4 * k), "struct", 0.3)
+    sh.line((sx, oy + 1.2 * k), (sx + 1.8 * k, oy), "struct", 0.3)
+    sh.circle((sx, oy), 3.0, "elec", 0.25)
+    for zz, text in ((Hh + 0.8 * k, "ระดับโครงเหล็กป้องกันของตกหล่น (เพิ่มตามความสูงอาคาร)"),
+                     (Hh - 1.2 * k, "ระดับความสูงสุดในแต่ละช่วงที่ทำการก่อสร้าง"),
+                     (4.0 * k, "ยึดโครงสร้างอาคารด้วยเหล็ก Ø 1\" หนา 3.2 มม. ทุก 2.00 ม."),
+                     (0.0, "ฐานรองรับเหล็กแผ่น 0.30×0.30 ม. หนา 6 มม. ทุกจุด")):
+        sh.line((sx, oy + zz), (sx + 6, oy + zz + 2), "text", 0.13)
+        sh.text((sx + 7, oy + zz + 1.4), text, 1.9)
+    _dim_v(sh, sx - 6, oy + Hh - 1.2 * k, oy + Hh + 0.8 * k, "2.00 (min)")
+    caption(sh, (sx + 20, oy - 14), "รูปตัด ก", "1:100")
+    # fire-hose cabinet and extinguisher at 1:20
+    k2 = 1000.0 / 20
+    cx, cy = x0 + 20, y0 + 30
+    sh.rect(cx, cy, cx + 1.00 * k2, cy + 1.20 * k2, "cut", 0.5)
+    sh.rect(cx + 3, cy + 3, cx + 1.00 * k2 - 3, cy + 1.20 * k2 - 3, "elec", 0.25)
+    for i in range(7):
+        sh.circle((cx + 0.35 * k2, cy + 0.40 * k2 + i * 0), 6 + i * 0.0, "fixture", 0.13)
+    for i in range(6):
+        sh.rect(cx + 0.18 * k2 + i * 1.8, cy + 0.12 * k2, cx + 0.18 * k2 + i * 1.8 + 1.2,
+                cy + 0.75 * k2, "fixture", 0.13)
+    sh.rect(cx + 0.72 * k2, cy + 0.12 * k2, cx + 0.84 * k2, cy + 0.60 * k2, "elec", 0.25)
+    sh.line((cx + 0.20 * k2, cy + 0.95 * k2), (cx + 0.70 * k2, cy + 0.95 * k2), "fixture", 0.3)
+    _dim_h(sh, cx, cx + 1.00 * k2, cy + 1.20 * k2 + 5, "1.00")
+    _dim_v(sh, cx + 1.00 * k2 + 6, cy, cy + 1.20 * k2, "1.20")
+    sh.rect(cx + 1.00 * k2 + 18, cy, cx + 1.35 * k2 + 18, cy + 1.20 * k2, "cut", 0.4)
+    _dim_h(sh, cx + 1.00 * k2 + 18, cx + 1.35 * k2 + 18, cy + 1.20 * k2 + 5, "0.35")
+    caption(sh, (cx + 0.65 * k2 + 10, cy - 14), "ตู้ใส่อุปกรณ์ดับเพลิง (สายฉีด ขวาน ถังดับเพลิง)", "1:20")
+    ex = cx + 1.35 * k2 + 75
+    sh.line((ex - 20, cy), (ex + 30, cy), "cut", 0.5)
+    sh.text((ex - 20, cy + 1.2), "±0.00", 1.9)
+    sh.rect(ex - 4, cy + 1.00 * k2, ex + 4, cy + 1.45 * k2, "elec", 0.35)
+    sh.circle((ex, cy + 1.50 * k2), 2.5, "elec", 0.25)
+    _dim_v(sh, ex + 14, cy, cy + 1.50 * k2, "1.50")
+    caption(sh, (ex + 5, cy - 14), "ถังดับเพลิงพร้อมอุปกรณ์ติดตั้ง", "1:20")
+    notes_block(sh, x0 + 205, y0 + 92, "หมายเหตุความปลอดภัย", SAFETY_NOTES, 2.0, 62)
+    _ = E
 
 
 # ---------------------------------------------------------------------------
@@ -2639,6 +3138,10 @@ def a_bath_elevations(sh, E, rooms):
                                  f"{rm['w']:.2f}×{rm['d']:.2f} ม. — พื้นต่ำกว่าห้องข้างเคียง "
                                  f"0.05 ม. ลาดเข้าฟลอร์เดรน 1:100", 3.0, "left", "text", True)
         y = oy - 30
+    if y - (y0 + 36) >= 66:
+        bot = bath_heights_table(sh, x0 + 2, y)
+        bath_pipe_section(sh, x0 + 150, y - 4, min(x1 - x0 - 155, 210), y - y0 - 40)
+        _ = bot
     notes_block(sh, x0 + 2, y0 + 30, "หมายเหตุ", [
         "1. กระเบื้องผนัง 0.30×0.60 ม. ปูด้วยกาวซีเมนต์ ยาแนวกันเชื้อรา แนวตั้งสลับครึ่งแผ่น",
         "2. ผนังเหนือกระเบื้องฉาบปูนเรียบ ทาสีชนิดกันชื้น ฝ้าเพดานเป็นชนิดกันชื้น",
@@ -2646,6 +3149,98 @@ def a_bath_elevations(sh, E, rooms):
         width=120)
     caption(sh, ((x0 + x1) / 2, y0 + 6), "รูปด้านภายในห้องน้ำ", "1:50")
     return True
+
+
+#: mounting heights in a bathroom, from its finished floor (มาตรฐานทั่วไป
+#: ของแบบบ้าน/อาคารราชการ — ตรวจกับสุขภัณฑ์ที่ใช้จริง)
+BATH_HEIGHTS = [
+    ("สายฉีดชำระ", "0.30"),
+    ("โถส้วมชักโครก (ขอบบนโถ)", "0.40"),
+    ("ราวจับ (โถส้วม / อ่างล้างหน้า)", "0.70–0.80"),
+    ("ที่ใส่กระดาษชำระ", "0.80"),
+    ("อ่างล้างหน้า (ขอบบนอ่าง)", "0.80"),
+    ("ก๊อกฝักบัว / วาล์วผสม", "1.00"),
+    ("กระจกเงา (ขอบล่าง เหนืออ่าง 0.20)", "1.00"),
+    ("ที่ใส่สบู่", "1.20"),
+    ("ราวแขวนผ้า", "1.50"),
+    ("เต้ารับเครื่องทำน้ำอุ่น (กันน้ำ)", "1.60"),
+    ("ฝักบัวก้านแข็ง (เหนือก๊อก 0.80)", "1.80"),
+]
+
+
+def bath_heights_table(sh, x, y):
+    """ตารางระดับติดตั้งสุขภัณฑ์และอุปกรณ์ — returns the y below it."""
+    sh.text((x, y + 1.5), "ตารางระดับติดตั้งสุขภัณฑ์และอุปกรณ์ (จากระดับพื้นห้องน้ำ)", 2.6,
+            "left", "text", True)
+    return table(sh, x, y - 1, [("รายการ", 100.0, "left"), ("สูงจากพื้น (ม.)", 36.0, "center")],
+                 BATH_HEIGHTS, h=2.1, row_h=4.6, head_h=5.5)
+
+
+def bath_pipe_section(sh, x, y, w, h):
+    """รูปตัดแสดงแนวท่อห้องน้ำ (ไม่ตามมาตราส่วน): the WC dropping into
+    the soil pipe to the septic tank, the basin, shower and floor drain
+    into the grey-water pipe to the manhole — each falling 1:100, the two
+    at different depths so they never cross; the vent from the tank."""
+    if w < 120 or h < 62:
+        return
+    sh.text((x, y + 1.5), "รูปตัดแสดงแนวท่อน้ำทิ้ง/ท่อโสโครกห้องน้ำ (ไม่ตามมาตราส่วน)", 2.6,
+            "left", "text", True)
+    gy = y - 36.0                         # ground / floor line
+    wall_x = x + w * 0.55
+    # floor slab and the outside wall
+    sh.rect(x, gy - 3, wall_x + 3, gy, "cut", 0.35)
+    sh.line((x, gy + 0.6), (wall_x, gy + 0.6), "hatch", 0.13)
+    sh.rect(wall_x, gy, wall_x + 3, y - 8, "cut", 0.35)
+    sh.line((wall_x + 3, gy), (x + w, gy), "cut", 0.5)
+    for i in range(int((x + w - wall_x - 3) / 3)):
+        xx = wall_x + 4 + i * 3
+        sh.line((xx, gy), (xx - 1.5, gy - 1.5), "hatch", 0.13)
+    sh.text((x + 1, gy + 1.5), "พื้นห้องน้ำ -0.05", 1.8)
+    # WC
+    wx = x + 12
+    sh.rect(wx - 4, gy + 9, wx + 1, gy + 19, "fixture", 0.25)
+    sh.poly([(wx - 1, gy), (wx + 7, gy), (wx + 9, gy + 8), (wx - 3, gy + 8)], "fixture", 0.25)
+    sh.text((wx + 2, gy + 21), "โถส้วม", 1.8, "center")
+    # basin
+    bx_ = x + 34
+    sh.poly([(bx_ - 5, gy + 16), (bx_ + 5, gy + 16), (bx_ + 3, gy + 13), (bx_ - 3, gy + 13)],
+            "fixture", 0.25)
+    sh.line((bx_, gy + 13), (bx_, gy + 9), "pipe", 0.35)
+    sh.arc((bx_ + 1.5, gy + 9), 1.5, 180, 360, "pipe", 0.35)
+    sh.line((bx_ + 3, gy + 9), (bx_ + 3, gy), "pipe", 0.35)
+    sh.text((bx_, gy + 18), "อ่างล้างหน้า (P-trap)", 1.8, "center")
+    # shower + floor drain
+    sx_ = x + 52
+    sh.line((sx_, gy + 10), (sx_, gy + 27), "pipe", 0.25)
+    sh.line((sx_, gy + 27), (sx_ - 4, gy + 27), "pipe", 0.25)
+    sh.circle((sx_ - 4, gy + 25.8), 1.2, "fixture", 0.25)
+    sh.rect(sx_ - 1, gy - 0.5, sx_ + 2, gy + 0.5, "fixture", 0.25)
+    sh.text((sx_, gy + 29), "ฝักบัว · ฟลอร์เดรน", 1.8, "center")
+    # soil pipe: deep, to the tank
+    zs0, zs1 = gy - 9, gy - 12
+    tank_x0 = x + w - 34
+    sh.line((wx + 3, gy), (wx + 3, zs0), "pipe", 0.6)
+    sh.line((wx + 3, zs0), (tank_x0, zs1), "pipe", 0.6)
+    sh.rect(tank_x0, gy - 30, x + w - 8, gy + 1.5, "struct", 0.35)
+    sh.line((x + w - 12, gy + 1.5), (x + w - 12, gy + 14), "pipe", 0.35)
+    sh.text((x + w - 11, gy + 14.5), "ท่ออากาศ PVC Ø 2\"", 1.7)
+    sh.text(((tank_x0 + x + w - 8) / 2, gy - 18), "ถังบำบัดสำเร็จรูป", 1.8, "center")
+    sh.text(((tank_x0 + x + w - 8) / 2, gy - 21.5), "(มอก.) ท่อออก Ø 4\"", 1.6, "center")
+    sh.text(((wx + tank_x0) / 2, zs0 - 4.5),
+            "ท่อโสโครก PVC Ø 4\" ลาดเอียง 1:100 (ลึก 0.75 ม.)", 1.8, "center")
+    # grey water: shallow, to the manhole
+    zg0, zg1 = gy - 4, gy - 5.5
+    mh_x = wall_x + 18
+    sh.line((bx_ + 3, gy), (bx_ + 3, zg0), "pipe", 0.35)
+    sh.line((sx_ + 0.5, gy - 0.5), (sx_ + 0.5, zg0 + 0.2), "pipe", 0.35)
+    sh.line((bx_ + 3, zg0), (mh_x - 4, zg1), "pipe", 0.35, True)
+    sh.rect(mh_x - 4, gy - 10, mh_x + 4, gy + 0.8, "struct", 0.35)
+    sh.text((mh_x, gy + 2.2), "บ่อพัก", 1.7, "center")
+    sh.text(((bx_ + mh_x) / 2 + 6, zg1 + 1.6), "ท่อน้ำทิ้ง PVC Ø 2\" ลาด 1:100 (ลึก 0.35 ม.)",
+            1.7, "center")
+    sh.text((x, gy - 26),
+            "ท่อน้ำทิ้งอยู่สูงกว่าท่อโสโครก ไม่ตัด/ไม่ขี่กัน · ทุกจุดเปลี่ยนทิศใช้ข้อโค้ง 45° 2 ตัว "
+            "หรือ Y-branch และมีช่องทำความสะอาด (Cleanout)", 1.7)
 
 
 def _bars(text):

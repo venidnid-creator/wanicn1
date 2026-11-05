@@ -1979,10 +1979,12 @@ class DrawingDialog(QDialog):
               ("M", "แบบวิศวกรรมเครื่องกล (M)"),
               ("BOQ", "ต่อท้ายเล่มด้วยแบบ ปร.1 (แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน)")]
 
-    def __init__(self, panel):
+    def __init__(self, panel, with_3d=False):
         super().__init__(panel)
         self.panel = panel
-        self.setWindowTitle("ส่งออกแบบก่อสร้าง 2D — WANIC ออกแบบอาคาร")
+        self.with_3d = bool(with_3d)
+        self.setWindowTitle("ส่งออก PDF แบบ 2D + ภาพ 3D ทุกแผ่น — WANIC ออกแบบอาคาร"
+                            if self.with_3d else "ส่งออกแบบก่อสร้าง 2D — WANIC ออกแบบอาคาร")
         info = dict(panel.data().get("drawing_info") or {})
         tk = (panel.takeoff_data().get("settings") or {})
         f = QFormLayout(self)
@@ -2013,6 +2015,9 @@ class DrawingDialog(QDialog):
         self.axo = QCheckBox("รูปตัดทัศนียภาพ 3 มิติ (ตัดอาคารเห็นโครงสร้างภายใน · ใช้เวลาเพิ่มเล็กน้อย)")
         self.axo.setChecked(True)
         f.addRow(self.axo)
+        self.pic3d = QCheckBox("ภาพทัศนียภาพ 3 มิติประกอบในทุกแผ่น (วางมุมที่ว่างของแผ่น)")
+        self.pic3d.setChecked(self.with_3d)
+        f.addRow(self.pic3d)
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
         self.pdf.setChecked(True)
         self.dxf = QCheckBox("DXF (เปิดใน WANICNSURVEY CAD / AutoCAD — ทุกแผ่นเรียงกัน)")
@@ -2107,6 +2112,10 @@ class DrawingDialog(QDialog):
             pic = self._model_picture()
             if pic:
                 info["cover_image"] = pic
+        if getattr(self, "pic3d", None) is not None and self.pic3d.isChecked():
+            small = self._model_picture(1200, 672)
+            if small:
+                info["plan_picture"] = small
         sheets = D.build_set(self.panel.data(), info, info["groups"])
         if not sheets:
             QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
@@ -2118,6 +2127,8 @@ class DrawingDialog(QDialog):
         if not path:
             return []
         stem = os.path.splitext(path)[0]
+        if self.with_3d:
+            stem += "_3D"
         self.saved = []
         if self.pdf.isChecked():
             render_pdf(sheets, stem + ".pdf")
@@ -2251,6 +2262,17 @@ class BuildingPanel(QWidget):
                                        ("ขอบล่าง", self.op_sill))):
             og.addWidget(QLabel(lab), 1, c * 2)
             og.addWidget(sp, 1, c * 2 + 1)
+        self.op_swing = QComboBox()
+        self.op_swing.addItem("เปิดเข้าใน", "in")
+        self.op_swing.addItem("เปิดออกนอก", "out")
+        self.op_swing.setToolTip("ทิศทางการเปิดบานประตู (ผนังภายนอก: เข้าใน = เข้าอาคาร · "
+                                 "ผนังภายใน: เข้าใน = เข้าห้องที่คลิก)")
+        self.op_hinge = QComboBox()
+        self.op_hinge.addItem("บานพับซ้าย", "left")
+        self.op_hinge.addItem("บานพับขวา", "right")
+        og.addWidget(QLabel("ทิศทางเปิด"), 3, 0)
+        og.addWidget(self.op_swing, 3, 1, 1, 2)
+        og.addWidget(self.op_hinge, 3, 3, 1, 3)
         self.op_size = QComboBox()
         self.op_size.setToolTip("ขนาดประตู/หน้าต่างที่ผลิตและขายทั่วไป (กว้าง × สูง) — "
                                 "เลือกแล้วช่องกว้าง/สูงเปลี่ยนตาม แก้ต่อเองได้")
@@ -2345,6 +2367,9 @@ class BuildingPanel(QWidget):
             "รูปตัดอาคารชั้นละ 1 ชุด (2 รูป แนว X และแนว Y — รูปแรกตัดผ่านห้องน้ำ) "
             "แสดงฐานราก คาน พื้น ผนังตัด ฝ้า โครงหลังคา ระดับ และเส้นบอกระยะ — PDF / DXF",
             self.export_sections, 5, 0, "#5B6B78")
+        btn("🖼 ส่งออก PDF แบบ 2D + ภาพ 3D…",
+            "แบบก่อสร้างชุดเดียวกับ «ส่งออกแบบ 2D» เป็น PDF แต่ทุกแผ่นมีภาพทัศนียภาพ "
+            "3 มิติของอาคารประกอบที่มุมว่างของแผ่น", self.open_drawings_3d, 5, 1, "#2E7D5B")
         btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
             "(วัดจากโมเดล 3D)", self.send_rates, 4, 1, "#3B6FB6")
@@ -2875,6 +2900,9 @@ class BuildingPanel(QWidget):
               "y": hit[1], "w": w, "h": h}
         if kind == "window":
             op["sill"] = sill
+        elif hasattr(self, "op_swing"):
+            op["swing"] = self.op_swing.currentData()      # in / out
+            op["hinge"] = self.op_hinge.currentData()      # left / right
         f.setdefault("openings", []).append(op)
         self._write(d)
         return oid
@@ -3124,13 +3152,17 @@ class BuildingPanel(QWidget):
         self.status.setText(f"รูปตัดอาคาร {len(sheets)} แผ่น: {cuts} → {stem}.pdf / .dxf")
         return [stem + ".pdf", stem + ".dxf"]
 
-    def open_drawings(self):
+    def open_drawings(self, with_3d=False):
         d = self.data()
         if not any(f.get("rooms") for f in d["floors"]):
             QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง — วางห้องก่อน")
             return
-        dlg = DrawingDialog(self)
+        dlg = DrawingDialog(self, with_3d=with_3d)
         dlg.exec()
+
+    def open_drawings_3d(self):
+        """The same set as a PDF, a 3D picture of the building on each sheet."""
+        self.open_drawings(with_3d=True)
 
     # ---- standard BOQ -------------------------------------------------------------
     def open_boq(self):
@@ -3587,7 +3619,7 @@ def _downloads_corner(win) -> None:
         box["busy"] = False
         info = box.get("info")
         if info:
-            lab.setText(WD.text(info))
+            lab.setText(WD.text(info, version=WD.version()))
             lab.setToolTip(WD.tooltip(info))
             try:
                 st.setValue("cache", json.dumps(info))

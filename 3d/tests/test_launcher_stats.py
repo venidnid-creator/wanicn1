@@ -92,5 +92,7 @@ def test_latest_release_link(ST):
     assert ST.thai_day(d["published"]) == "5 พ.ย. 2569"          # 17:30 UTC is the next day in Thailand
     line = ST.latest_line(d, "2026.11.04.2")
     assert "มีรุ่นใหม่ v2026.11.04.3" in line and "releases/tag/v2026.11.04.3" in line
+    assert "คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง (v2026.11.04.2)" in line
     assert "ปรับปรุงล่าสุด v2026.11.04.3" in ST.latest_line(d, "2026.11.04.3")
+    assert "เป็นรุ่นล่าสุดแล้ว" in ST.latest_line(d, "2026.11.04.3")
     assert ST.text({"downloads": d}, version="dev").startswith("<a href=")

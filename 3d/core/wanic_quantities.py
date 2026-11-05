@@ -528,6 +528,16 @@ def compute(data) -> dict:
                 int_face += a
             else:
                 int_face += 2 * a
+        # Brick infill from the top ring beam up to the roof on gable ends
+        # and the sides of a shed roof (outside plaster on one face).
+        if s.get("roof") in B.ROOF_TYPES:
+            for inf in B.gable_infill(data):
+                a = float(inf["area"])
+                wall_a += a
+                sp = B.wall_spec(s, True)
+                key = (True, sp["recipe"])
+                by_type[key] = by_type.get(key, 0.0) + a
+                ext_face += a
         # Wall tiles inside rooms that have them (bathroom, kitchen …).
         for e in E["slabs"]:
             rm = e["room"]

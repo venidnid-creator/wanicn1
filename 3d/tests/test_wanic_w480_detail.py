@@ -818,3 +818,90 @@ def test_standard_door_and_window_sizes():
     sizes = CAT.STANDARD_SIZES
     assert (0.90, 2.00) in [(w, h) for w, h, _ in sizes["door"]]
     assert (1.20, 1.10) in [(w, h) for w, h, _ in sizes["window"]]
+
+
+def test_outdated_version_warning_in_the_corner():
+    from core import wanic_downloads as WD
+    info = {"total": 1005, "latest": 40, "tag": "v2026.11.04.5", "releases": 30, "users": 23}
+    old = WD.text(info, version="2026.11.04.4")
+    assert "คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง" in old and "v2026.11.04.5" in old
+    assert "ยังไม่ปรับปรุง" not in WD.text(info, version="2026.11.04.5")
+
+
+def test_door_swing_and_new_doors():
+    from core import wanic_drawings as D
+    for code in ("D15", "D16", "D17"):
+        assert code in CAT.OPENING_TYPES
+    rooms = [dict(name="ห้องนอน", x=0, y=0, w=4, d=4)]
+    d = _data(rooms)
+    d["floors"][0]["openings"] = [{"type": "door", "x": 2.0, "y": 0.0, "style": "D15",
+                                   "swing": "out", "hinge": "right"}]
+    sheets = D.build_set(d, {"project": "ทดสอบ"}, ("A",))
+    assert any(s.code == "A-03" for s in sheets)
+
+
+def test_wall_tags_legend_and_elevation_heights():
+    from core import wanic_drawings as D
+    d = _data()
+    E = B.elements(d)
+    types = {D.wall_type(E, w) for w in E["walls"]}
+    assert types == {1, 2, 3}                          # outside, inside, bathroom
+    sheets = {s.code: s for s in D.build_set(d, {"project": "ทดสอบ"}, ("A",))}
+    plan = sheets["A-03"]
+    assert "สัญลักษณ์ผนัง" in plan.texts() and D.WALL_TYPES[3] in plan.texts()
+    elev = next(s for s in sheets.values() if s.title.startswith("รูปด้านหน้า"))
+    note = [it for it in elev.items if it[0] == "text" and it[2].startswith("ผนังก่ออิฐฉาบ")]
+    assert note
+    walls = [it[1] for it in elev.items if it[0] == "poly" and it[2] == "wall"]
+    for it in note:                                    # the note sits off the building
+        x, y = it[1]
+        for poly in walls:
+            xs, ys = [p[0] for p in poly], [p[1] for p in poly]
+            assert not (min(xs) <= x <= max(xs) and min(ys) <= y <= max(ys))
+    assert elev.count(layer="dim") > 10                # sill and head heights
+    assert "สัญลักษณ์แบบ" in sheets["A-01"].texts()
+    assert any(s.title.startswith("ข้อกำหนดความปลอดภัย") for s in sheets.values())
+
+
+def test_shed_roof_closed_from_the_top_beam():
+    d = _data([dict(name="ห้องนอน", x=0, y=0, w=6, d=4)])
+    for pitch in (10, 25):
+        d["settings"].update(roof="shed", pitch=pitch)
+        inf = B.gable_infill(d)
+        assert inf and all(i["area"] > 0 for i in inf)
+        groups, c = B.roof_members(d)
+        assert c.get("infill") == len(inf)
+    d["settings"].update(roof="hip", pitch=30)
+    assert not B.gable_infill(d)                       # a hip roof leaves no gap
+    d["settings"].update(roof="gable")
+    assert B.gable_infill(d)                           # the gable ends are filled
+
+
+def test_drains_fall_and_never_meet():
+    from core import wanic_mep as M
+    d = _data()
+    E = B.elements(d)
+    pts = [({"floor": 0, "fx": {"type": t}}, xy, None)
+           for t, xy in (("WC1", (0.6, 5.3)), ("LV", (1.8, 5.3)), ("FD", (1.25, 6.0)))]
+    soil, grey = M.drain_routes(E, pts, (-3.0, 6.0), (0, 0, 9.6, 14.4), 0.1, 1.5)
+    assert soil and grey
+    for a, b in soil + grey:
+        run = math.dist(a[:2], b[:2])
+        if run > 0.01:
+            assert abs((a[2] - b[2]) / run - M.SLOPE) < 1e-6
+    assert max(p[2] for a, b in soil for p in (a, b) if p[2] < 0) < \
+        min(p[2] for a, b in grey for p in (a, b) if p[2] < 0)
+
+
+def test_bath_section_safety_septic_and_3d_picture():
+    from core import wanic_drawings as D
+    d = _data()
+    pic = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    sheets = D.build_set(d, {"project": "ทดสอบ", "plan_picture": pic}, ("A", "SN"))
+    with_pic = [s for s in sheets if any(it[0] == "image" for it in s.items)]
+    assert len(with_pic) >= len(sheets) - 2
+    sn = next(s for s in sheets if s.title.startswith("แบบขยายถังบำบัด"))
+    assert any("ท่อระบายอากาศ" in t for t in sn.texts())
+    assert any("ตารางเลือกขนาดถังบำบัด" in t for t in sn.texts())
+    sec = [s for s in sheets if s.title.startswith("รูปตัด ")]
+    assert any(any(t.startswith("จันทันเหล็ก") for t in s.texts()) for s in sec)
