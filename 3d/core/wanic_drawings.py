@@ -582,8 +582,10 @@ def draw_walls(sh, v, E, k, t, codes=None, swings=True, tags=True):
             continue
         ux, uy = (x1 - x0) / L, (y1 - y0) / L
         nx, ny = -uy, ux
-        cuts = sorted((s_ - el["w"] / 2, s_ + el["w"] / 2, el)
-                      for ww, s_, el in placed if ww is w)
+        # by position only: two openings at the same place must not make
+        # the sort compare their dicts
+        cuts = sorted(((s_ - el["w"] / 2, s_ + el["w"] / 2, el)
+                       for ww, s_, el in placed if ww is w), key=lambda c: (c[0], c[1]))
         spans, a = [], 0.0
         for c0, c1, _el in cuts:
             spans.append((a, max(a, c0)))

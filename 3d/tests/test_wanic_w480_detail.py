@@ -905,3 +905,16 @@ def test_bath_section_safety_septic_and_3d_picture():
     assert any("ตารางเลือกขนาดถังบำบัด" in t for t in sn.texts())
     sec = [s for s in sheets if s.title.startswith("รูปตัด ")]
     assert any(any(t.startswith("จันทันเหล็ก") for t in s.texts()) for s in sec)
+
+
+def test_two_openings_at_one_place_still_draw():
+    from core import wanic_drawings as D
+    d = _data([dict(name="ห้องนอน", x=0, y=0, w=4, d=4)])
+    d["floors"][0]["openings"] = [{"type": "door", "x": 2.0, "y": 0.0, "style": "D1"},
+                                  {"type": "door", "x": 2.0, "y": 0.0, "style": "D1",
+                                   "swing": "out", "hinge": "right"},
+                                  {"type": "window", "x": 0.0, "y": 2.0, "style": "W1"},
+                                  {"type": "window", "x": 0.0, "y": 2.0, "style": "W1", "note": "2"}]
+    pic = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    sheets = D.build_set(d, {"project": "ทดสอบ", "plan_picture": pic})
+    assert sheets and D.dxf_bytes(sheets)
