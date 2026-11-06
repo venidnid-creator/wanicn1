@@ -307,9 +307,9 @@ def test_panel_door_types_fixtures_fascia(monkeypatch):
     assert op["style"] == "W2" and op["w"] == 1.5 and op["h"] == 1.2
     assert B.opening_name(op, B.settings_of(panel.data())).startswith("W2 ")
     # The standard bathroom set goes into the bathroom only.
-    n = panel.fill_standard_sets()
+    n = panel.fill_standard_sets()                    # laid out by the room's size
     assert n == len(__import__("core.wanic_catalog", fromlist=["x"])
-                    .BATHROOM_SET)
+                    .bathroom_layout(2.0, 3.0))
     assert panel.fill_standard_sets() == 0            # not twice
     panel.set_tool("fixture")
     fid = panel.place_fixture(1.0, 1.0, "SK1")
