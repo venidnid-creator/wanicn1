@@ -209,6 +209,17 @@ SANITARY = {
             0.80, 0.50, 0.80, 0.10),
     "SK2": ("ซิงค์สแตนเลส 2 หลุมพร้อมก๊อกคอยาว (ครบชุด)", "2.6.30", 328,
             1.20, 0.50, 0.80, 0.10),
+    "LV2": ("อ่างล้างหน้าวางบนเคาน์เตอร์ 2 อ่าง พร้อมเคาน์เตอร์หินและตู้ (ครบชุด)",
+            "2.6.6", 461, 1.40, 0.55, 0.80, 0.15),
+    "BT2": ("อ่างอาบน้ำตั้งพื้นทรงรี (Freestanding) พร้อมก๊อกตั้งพื้น", "2.6.7", 1025,
+            1.60, 0.80, 0.0, 0.60),
+}
+
+#: decorations and screens drawn and modelled with the fittings but not
+#: billed as sanitary ware (name, w, d, z0, height)
+DECOR = {
+    "GP": ("ฉากกั้นอาบน้ำกระจกนิรภัยใส 10 มม.", 0.90, 0.03, 0.0, 2.00),
+    "PL": ("กระถางต้นไม้ประดับ", 0.40, 0.40, 0.0, 0.90),
 }
 
 #: The fittings «ชุดห้องน้ำมาตรฐาน» puts into a bathroom, with where along
@@ -217,6 +228,61 @@ BATHROOM_SET = [("WC1", 0.25, 0.80), ("SP", 0.08, 0.80), ("TP", 0.45, 0.92),
                 ("LV", 0.75, 0.85), ("MR", 0.75, 0.97), ("SH", 0.80, 0.15),
                 ("SD", 0.95, 0.30), ("TR", 0.30, 0.05), ("FD", 0.70, 0.30)]
 KITCHEN_SET = [("SK1", 0.50, 0.88), ("FD", 0.50, 0.50)]
+
+
+def bathroom_layout(w: float, d: float, wall: float = 0.08) -> list:
+    """Fittings for a bathroom ``w`` × ``d`` (grid size, m), laid out along
+    its long wall the way a designer would — the wet zone (shower behind a
+    glass screen, or a freestanding bath when there is room) at one end,
+    the WC in the middle with its spray and paper holder, the vanity (two
+    basins on a long counter when it is long enough) with its mirror at
+    the other end, a towel rail by the shower, a floor drain in the wet
+    zone and, in a big room, a plant. [(code, x, y, dir)] from the room's
+    corner; ``dir`` 0 = along x."""
+    long_x = w >= d
+    L, S = (w, d) if long_x else (d, w)
+    back = S - wall                     # the long wall the fittings stand on
+    items = []
+
+    def put(code, along, depth_from_back, extra=None):
+        items.append((code, along, back - depth_from_back, extra))
+    tub = L >= 3.4 and S >= 2.2
+    wet = 1.90 if tub else 1.00 if L < 3.2 else 1.20
+    if tub:
+        put("BT2", wet / 2, 0.80 / 2 + 0.20)
+        put("FD", wet / 2, 0.80 + 0.40)
+    else:
+        put("SH", wet / 2, 0.10)
+        put("FD", wet / 2, 0.55)
+        put("GP", wet + 0.02, 0.45, "screen")
+    put("TR", wet / 2, -0.04 + (S - 2 * wall) if S > 1.6 else 0.04)
+    rest = L - wet - 0.10
+    vanity = "LV2" if rest >= 2.30 and S >= 1.6 else "LV"
+    vw = 1.40 if vanity == "LV2" else 0.60
+    wc_x = wet + 0.10 + max((rest - vw) / 2, 0.45)
+    if vanity == "LV" and rest < 1.30:
+        wc_x = wet + 0.10 + 0.40
+    put("WC1", wc_x, 0.35)
+    put("SP", wc_x - 0.35, 0.05)
+    put("TP", wc_x + 0.35, 0.05)
+    vx = L - vw / 2 - 0.05
+    if vx - vw / 2 < wc_x + 0.45:                   # no room: the basin on the
+        vx = wc_x                                   # opposite wall instead
+        items.append((vanity, vx, wall + 0.30, "front"))
+        items.append(("MR", vx, wall + 0.02, "front"))
+    else:
+        put(vanity, vx, (0.55 if vanity == "LV2" else 0.45) / 2)
+        put("MR", vx, 0.02)
+    if L >= 3.0 and S >= 1.8:
+        put("PL", L - 0.30, S - 2 * wall - 0.30)
+    out = []
+    for code, a, b, extra in items:
+        x, y = (a, b) if long_x else (b, a)
+        dir_ = 0 if long_x else 1
+        if extra == "screen":
+            dir_ = 1 - dir_                         # the screen stands across
+        out.append((code, round(x, 3), round(y, 3), dir_))
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -356,7 +356,7 @@ def test_openings_snap_to_three_places_and_heads_line_up():
 
 def test_column_heads_ceilings_trims_and_services():
     d = _data()
-    d["settings"].update(skirting=True, cornice=True)
+    d["settings"].update(skirting=True, cornice=True, floor_lift=0.0)
     groups, count = B.build(d)
     # a plate with four J-bolts on every top column, in the bill
     assert count["headplate"] == len(B.nodes(d["floors"][0]["rooms"]))
@@ -918,3 +918,137 @@ def test_two_openings_at_one_place_still_draw():
     pic = b"\x89PNG\r\n\x1a\n" + b"0" * 64
     sheets = D.build_set(d, {"project": "ทดสอบ", "plan_picture": pic})
     assert sheets and D.dxf_bytes(sheets)
+
+
+def _uhouse():
+    rooms = [dict(name="ห้องนอน", x=0, y=0, w=4.5, d=4.5), dict(name="ห้องนอน", x=4.5, y=0, w=4.5, d=4.5),
+             dict(name="ห้องน้ำ", x=0, y=4.5, w=2.5, d=2.4), dict(name="ห้องน้ำ", x=0, y=6.9, w=2.5, d=2.1),
+             dict(name="ทางเดิน", x=2.5, y=4.5, w=2.0, d=4.5),
+             dict(name="ห้องนอน", x=0, y=9.0, w=4.5, d=4.5), dict(name="ห้องนอน", x=4.5, y=9.0, w=4.5, d=4.5)]
+    d = _data(rooms)
+    d["floors"][0]["fixtures"] = [{"type": "WC1", "x": 0.6, "y": 6.5, "dir": 0},
+                                  {"type": "LV", "x": 1.9, "y": 6.6, "dir": 0},
+                                  {"type": "SH", "x": 1.5, "y": 4.8, "dir": 0},
+                                  {"type": "WC1", "x": 0.6, "y": 8.6, "dir": 0}]
+    return d
+
+
+def test_raised_floor_pipes_under_the_beams_with_fittings():
+    from core import wanic_mep as M
+    d = _uhouse()
+    E = B.elements(d)
+    lift = B.floor_lift(E["settings"])
+    assert 0.5 <= lift <= 0.8 and E["GL"] == -lift
+    f = E["footings"][0]
+    assert abs(f["z0"] - (-lift - float(E["lib"][f["mark"]]["depth"]))) < 1e-9
+    assert all(sl["mark"] == "S2" for sl in E["slabs"])          # on the beams, not the ground
+    cap = {}
+    orig = M.supply_routes
+    M.supply_routes = lambda *a, **k: cap.setdefault("s", orig(*a, **k))
+    try:
+        M.install_members(d, E, M.plan(d, E))
+    finally:
+        M.supply_routes = orig
+    gb_h = float(E["settings"]["gb_h"])
+    flat = [(a, b) for a, b in cap["s"]["legs"] if abs(a[2] - b[2]) < 1e-9]
+    inside = [(a, b) for a, b in flat if a[2] > E["GL"]]
+    assert inside and all(a[2] < -gb_h for a, b in inside)       # never inside a beam
+    assert M._fittings(cap["s"]["legs"], 20.0)                    # elbows and tees
+    # in 3D the ground is z = 0: the building stands lift above it
+    groups, _c = B.build(d, ("structure",))
+    slab = [g for g in groups if g.ext[B.EXT_KEY]["kind"] == "slab"]
+    ztop = max(v.position.z() for g in slab for f_ in g.mesh.faces for v in f_.loop)
+    assert abs(ztop - lift) < 0.02
+
+
+def test_drain_ring_bridges_a_narrow_notch_and_no_twin_rafters():
+    from core import wanic_mep as M
+    d = _uhouse()
+    rects = [(0, 0, 9, 4.5), (0, 9, 9, 13.5)]
+    assert len(M._close_notches(rects, 5.0)) == 3
+    ring = M._outline(M._close_notches(
+        [(a - 1.6, b - 1.6, c + 1.6, e + 1.6) for a, b, c, e in
+         [(-0.1, -0.1, 9.1, 4.6), (-0.1, 4.4, 4.6, 9.1), (-0.1, 8.9, 9.1, 13.6)]]))
+    assert len(ring) == 4                                          # a plain rectangle
+    d["settings"].update(roof="hip", pitch=30)
+    L = B.roof_lines(d)
+    xs = sorted({round(r[0][0], 3) for r in L["rafter"] if abs(r[0][0] - r[-1][0]) < 1e-6})
+    assert all(b - a > 0.3 for a, b in zip(xs, xs[1:]))
+
+
+def test_shed_ceiling_follows_rafters_side_caps_and_gutters():
+    d = _data([dict(name="ห้องนอน", x=0, y=0, w=4, d=5), dict(name="ห้องนั่งเล่น", x=4, y=0, w=5, d=5)])
+    d["settings"].update(roof="shed", pitch=15, skin=True)
+    E = B.elements(d)
+    L = B.roof_lines(d)
+    sl = B.sloped_ceiling(E, E["slabs"][0]["room"], 0, L)
+    assert sl and max(p[2] for p in sl) - min(p[2] for p in sl) > 1.0
+    groups, c = B.roof_members(d)
+    assert c.get("cap") == 3                                     # high edge + 2 sides
+    assert c.get("eave_gutter") == 1 and c.get("downspout") == 1  # the low edge only
+    names = [g.name for g in groups if g.ext[B.EXT_KEY]["kind"] == "cap"]
+    assert all(n.startswith("ครอบข้าง") for n in names)
+    d["settings"].update(roof="hip", pitch=30)
+    _g, c = B.roof_members(d)
+    assert c.get("eave_gutter", 0) >= 4 and c.get("downspout") == 1
+
+
+def test_bathroom_layout_fits_the_room():
+    from core import wanic_drawings as D
+    for w, dd in ((4.0, 2.6), (2.5, 2.1), (2.0, 3.2), (3.6, 2.4)):
+        lay = CAT.bathroom_layout(w, dd)
+        codes = [c for c, *_r in lay]
+        assert "WC1" in codes and ("LV" in codes or "LV2" in codes) and "FD" in codes
+        big = []
+        for code, x, y, dir_ in lay:
+            r = D.fixture_rect({"type": code, "x": x, "y": y, "dir": dir_})
+            assert all(-0.01 <= p[0] <= w + 0.01 and -0.01 <= p[1] <= dd + 0.01 for p in r), (w, dd, code)
+            if code in ("WC1", "LV", "LV2", "BT2", "SH"):
+                big.append((code, r))
+        for i, (ca, ra) in enumerate(big):
+            for cb, rb in big[i + 1:]:
+                ox = min(ra[1][0], rb[1][0]) - max(ra[0][0], rb[0][0])
+                oy = min(ra[2][1], rb[2][1]) - max(ra[0][1], rb[0][1])
+                assert ox <= 0.01 or oy <= 0.01, (w, dd, ca, cb)
+    assert "BT2" in [c for c, *_r in CAT.bathroom_layout(4.0, 2.6)]
+
+
+def test_lamps_quantities_and_iso_sheet():
+    from core import wanic_drawings as D
+    from core import wanic_mep as M
+    d = _uhouse()
+    E = B.elements(d)
+    assert M.wall_lamp_points(E)
+    groups, _c = B.build(d, ("structure", "roof"))
+    rows = [dict((r[0], r[1]) for r in g.ext[B.EXT_KEY].get("info") or [] if len(r) > 1)
+            for g in groups]
+    assert all("ปริมาณ" in r for r in rows)
+    units = {r["ปริมาณ"].split()[-1] for r in rows}
+    assert {"ลบ.ม.", "ตร.ม.", "ม.", "กก."} <= units | {u for r in rows for u in r["ปริมาณ"].split()}
+    sheets = D.build_set(d, {"project": "ทดสอบ"}, ("A", "SN"))
+    iso = next(s for s in sheets if s.title.startswith("ภาพ 3 มิติ การต่อท่อ"))
+    assert any(it[0] == "line" and it[2] == "iso_supply" for it in iso.items)
+    assert any(it[0] == "line" and it[2] == "iso_drain" for it in iso.items)
+    x0, y0, x1, y1 = D.drawing_area()
+    for s in sheets:                                   # nothing runs into the title block
+        for it in s.items:
+            if it[0] == "text" and s.group in ("A", "SN") and it[4] == "left" and \
+                    it[1][0] < x1 and not it[7]:
+                # (the title block's own words start right of the drawing area)
+                assert it[1][0] + 0.5 * it[3] * len(it[2]) < x1 + 4, (s.code, it[2])
+    elev = [s for s in sheets if s.title.startswith(("รูปด้านหน้า", "รูปด้านหลัง"))]
+    assert elev and all(s.scale == "1:100" for s in elev)
+
+
+def test_side_by_side_2d_and_3d_sheets():
+    from core import wanic_drawings as D
+    d = _data([dict(name="ห้องนอน", x=0, y=0, w=4, d=3)])
+    sheets = D.build_set(d, {"project": "ทดสอบ", "side3d": True}, ("A",))
+    x0, y0, x1, y1 = D.drawing_area()
+    mid = (x0 + x1) / 2
+    plan = next(s for s in sheets if s.title.startswith("แปลนพื้นชั้น 1"))
+    left = [it for it in plan.items if it[0] == "line" and max(it[1][0], it[1][2]) < mid - 1]
+    right = [it for it in plan.items if it[0] == "line" and min(it[1][0], it[1][2]) > mid + 1]
+    assert left and right
+    dims = [it for it in plan.items if it[0] == "text" and it[1][0] > mid and it[5] == "dim"]
+    assert len(dims) >= 2                                   # dimensions on the 3-D view

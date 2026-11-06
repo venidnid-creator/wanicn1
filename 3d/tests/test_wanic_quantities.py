@@ -28,6 +28,7 @@ def _one_room():
     d = B.default_data()
     d["floors"][0]["rooms"] = [dict(id="a", name="ห้องนอน", x=0, y=0, w=3.0,
                                     d=3.0)]
+    d["settings"]["floor_lift"] = 0.0          # the slab on the ground, as before
     return d
 
 

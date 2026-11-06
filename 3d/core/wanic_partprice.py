@@ -151,3 +151,101 @@ def annotate(groups, data) -> int:
         g.ext = ext
         n += 1
     return n
+
+
+#: what a part is counted in when it has no price row of its own
+COUNT_UNIT = {"door": "บาน", "window": "บาน", "fixture": "ชุด", "light": "ชุด", "light_out": "ชุด",
+              "outlet": "ชุด", "panel": "ชุด", "ac": "ชุด", "ac_out": "ชุด",
+              "ac_bracket": "ชุด", "fan": "ชุด", "septic": "ถัง", "grease": "ถัง",
+              "meter": "ชุด", "tap": "จุด", "manhole": "บ่อ", "ground_rod": "ต้น",
+              "sign": "ป้าย", "headplate": "แผ่น", "pile": "ต้น", "cap": "แผ่น"}
+LENGTH_KINDS = ("pipe_supply", "pipe_drain", "drain_pipe", "gutter", "eave_gutter", "downspout",
+                "fascia", "barge", "skirting", "cornice", "ceiling_frame", "soffit_frame")
+AREA_KINDS = ("skin", "tiles", "gable", "infill", "soffit", "walkway", "ceiling")
+
+
+def _area(g, up_only=False) -> float:
+    """The plan of a plate: the area of its faces facing the most common
+    way (one side of a wall, the top of a slab, the roof faces up)."""
+    import math
+    best: dict = {}
+    for f in g.mesh.faces:
+        for a, b, c in f.triangulate():
+            ux, uy, uz = b.x() - a.x(), b.y() - a.y(), b.z() - a.z()
+            vx, vy, vz = c.x() - a.x(), c.y() - a.y(), c.z() - a.z()
+            nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+            ar = 0.5 * math.sqrt(nx * nx + ny * ny + nz * nz)
+            if ar < 1e-12:
+                continue
+            n = (nx / (2 * ar), ny / (2 * ar), nz / (2 * ar))
+            if up_only:
+                if n[2] > 0.1:
+                    best[0] = best.get(0, 0.0) + ar
+                continue
+            key = (round(n[0], 1), round(n[1], 1), round(n[2], 1))
+            best[key] = best.get(key, 0.0) + ar
+    return max(best.values()) if best else 0.0
+
+
+def _num(text):
+    try:
+        return float(str(text).replace(",", "").split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def annotate_units(groups) -> int:
+    """A «ปริมาณ» row on every part that has none yet, in the unit it is
+    counted in: ลบ.ม. for concrete, ตร.ม. for walls, roofs and ceilings,
+    ม. for pipes and boards, กก. for steel, ชุด/บาน/บ่อ/จุด for things."""
+    import re
+    n = 0
+    for g in groups:
+        ext = dict(g.ext or {})
+        rec = dict(ext.get(B.EXT_KEY) or {})
+        info = [list(r) for r in (rec.get("info") or []) if r]
+        if any(r[0] == "ปริมาณ" for r in info):
+            continue
+        rows = {r[0]: r[1] for r in info if len(r) > 1}
+        kind = rec.get("kind", "")
+        q = None
+        if kind in CONCRETE_KINDS:
+            q = f"{_vol(g):,.3f} ลบ.ม."
+        elif kind in STEEL_KINDS:
+            L = _num(rows.get("ความยาว"))
+            kg = _vol(g) * STEEL_KG_M3
+            q = (f"{L:,.2f} ม. · " if L else "") + f"{kg:,.2f} กก."
+        elif kind in LENGTH_KINDS:
+            L = _num(rows.get("ความยาวรวม") or rows.get("ความยาว"))
+            if L is None:
+                m = re.search(r"ยาว(?:รวม)?\s*([\d,.]+)\s*ม", getattr(g, "name", "") or "")
+                L = _num(m.group(1)) if m else None
+            if L is not None:
+                q = f"{L:,.2f} ม."
+            else:
+                A = _num(rows.get("พื้นที่"))
+                q = f"{A:,.2f} ตร.ม." if A is not None else f"{_area(g, True):,.2f} ตร.ม. (ตามแปลน)"
+        elif kind in AREA_KINDS:
+            A = _num(rows.get("พื้นที่"))
+            if A is None:
+                A = _area(g, up_only=kind in ("skin", "tiles", "ceiling", "soffit", "walkway"))
+            q = f"{A:,.2f} ตร.ม."
+        elif kind in ("wall", "plaster"):
+            q = f"{_area(g):,.2f} ตร.ม."
+        else:
+            unit = COUNT_UNIT.get(kind)
+            m = re.search(r"([\d,]+)\s*(ชุด|บ่อ|จุด|บาน|แผ่น|ต้น|ตัว)", getattr(g, "name", "") or "")
+            if m:
+                q = f"{m.group(1)} {m.group(2)}"
+            elif unit:
+                q = f"1 {unit}"
+            else:
+                v = _vol(g)
+                q = f"{v:,.3f} ลบ.ม." if v > 1e-6 else "1 ชิ้น"
+        if q:
+            info.append(["ปริมาณ", q])
+            rec["info"] = info
+            ext[B.EXT_KEY] = rec
+            g.ext = ext
+            n += 1
+    return n

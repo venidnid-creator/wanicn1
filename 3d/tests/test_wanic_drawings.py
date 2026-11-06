@@ -25,6 +25,7 @@ def house():
                 sill=0.9)]
     fx = [dict(id="x1", type="WC1", x=7.8, y=5.8, dir=0),
           dict(id="x2", type="LV", x=6.0, y=6.0, dir=0)]
+    d["settings"]["floor_lift"] = 0.0          # ground floor on the ground
     d["floors"] = [
         {"rooms": g, "openings": ops, "fixtures": fx,
          "stairs": [dict(id="s1", x=4.2, y=2.0, dir=1, w=1.0)]},

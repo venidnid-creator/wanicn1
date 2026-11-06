@@ -303,8 +303,9 @@ def compute(data) -> dict:
                    lab_code=code, basis="; ".join(exc_basis),
                    ref="หลักเกณฑ์ 4.1 ข้อ 1 (ลึก ≤ 2 ม. เผื่อ 30% / ลึกเกิน "
                        "2 ม. เผื่อข้างละ 0.50 ม.) · ว480 1.3.1")
+    gl = float(E.get("GL", 0.0))
     stump_below = sum(float(lib[e["mark"]]["b"]) * float(lib[e["mark"]]["h"])
-                      * (e["z1"] - e["z0"]) for e in E["stumps"])
+                      * max(min(e["z1"], gl) - e["z0"], 0.0) for e in E["stumps"])
     if exc:
         bill.add(g, "งานถมดินคืน (ใช้ดินที่ขุด)",
                  exc["qty"] - conc_f - stump_below, "ลบ.ม.",
@@ -855,6 +856,20 @@ def compute(data) -> dict:
                     bill.add(g, nm, acc[key], "แผ่น", mat_key=nm,
                              basis="นับจากจุดต่อของสัน ตะเข้ และปั้นลม",
                              ref="หลักเกณฑ์ 4.2 ข้อ 1.2 (ค่าแรงรวมในงานครอบ)")
+        if s.get("gutters", True):
+            runs = B.gutter_runs(lines, s)
+            glen = sum(math.hypot(b_[0] - a_[0], b_[1] - a_[1]) for a_, b_, _n in runs)
+            if glen > 0.05:
+                bill.add(g, "รางน้ำชายคาไวนิล/สังกะสี 6\" พร้อมตะขอแขวนและข้อต่อ", glen, "ม.",
+                         mat_key="รางน้ำชายคา 6\" (รวมตะขอ/ข้อต่อ)", lab_code="2.1.10c",
+                         basis="ความยาวแนวชายคาที่น้ำไหลลง", ref="ว480 2.1.10")
+                spouts = sum(max(2, 1 + int(math.ceil(math.hypot(b_[0] - a_[0], b_[1] - a_[1])
+                                                     / 10.0))) for a_, b_, _n in runs)
+                spouts = max(len(runs), spouts - len(runs))       # corners are shared
+                h_sp = E["n"] * E["H"] + B.floor_lift(s)
+                bill.add(g, "ท่อลงน้ำ (งวงช้าง) PVC Ø 3\" พร้อมแคลมป์และข้องอ", spouts * h_sp, "ม.",
+                         mat_key="ท่อลงน้ำ PVC 3\" (รวมแคลมป์/ข้องอ)",
+                         basis=f"{spouts} จุด × สูง {h_sp:.2f} ม.", ref="มยผ. 1201")
         valley = float(lines.get("valley") or 0.0)
         if valley > 0.05:
             bill.add(g, "รางน้ำตะเข้สำเร็จรูป (สแตนเลส)", valley, "ม.",

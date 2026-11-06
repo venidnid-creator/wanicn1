@@ -86,6 +86,7 @@ def test_takeoff_from_a_build():
     hist = History(scene)
     d = B.default_data()
     d["floors"][0]["rooms"] = _grid2x2()
+    d["settings"]["floor_lift"] = 0.0          # the slab on the ground
     groups, _c = B.build(d)
     hist.execute(CompoundCommand([InsertGroupCommand(g) for g in groups]))
     assert len(B.generated(scene)) == len(groups)

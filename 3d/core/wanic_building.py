@@ -48,6 +48,9 @@ ROOM_PRESETS = [
 DEFAULT_SETTINGS = {
     "floor_h": 3.0, "grid": 0.5,
     "footing_w": 1.0, "footing_t": 0.3, "footing_depth": 1.5,
+    # ระดับพื้นชั้น 1 สูงจากดินเดิม (ม.): ใต้คานคอดินเหลือช่องเดินท่อประปา
+    # และท่อน้ำทิ้ง (ใต้ถุน) — ท่อไม่ฝังในคาน
+    "floor_lift": 0.60,
     "stump": 0.2, "col": 0.2,
     "gb_b": 0.2, "gb_h": 0.4, "b_b": 0.2, "b_h": 0.4,
     "rb_b": 0.2, "rb_h": 0.4, "slab_t": 0.10,
@@ -60,6 +63,7 @@ DEFAULT_SETTINGS = {
     "door_w": 0.9, "door_h": 2.0, "win_w": 1.2, "win_h": 1.1,
     "win_sill": 0.9, "stair_w": 1.0, "riser_max": 0.18, "going": 0.25,
     "stair_t": 0.15, "fascia": True, "fascia_h": 0.20, "fascia_t": 0.025,
+    "gutters": True,
     "band": 0.10, "tile": "R1", "tiles_m2": 0.0, "caps": True,
     "tile_color": "ตามวัสดุ", "tiles_3d": True,
     # wet rooms sit lower than the floor they open onto (water stays in)
@@ -388,11 +392,13 @@ def beam_mark(data, lib, level, n, p0, p1) -> str:
     return ROLE_DEFAULT["GB" if level == 0 else "RB" if level == n else "B"]
 
 
-def slab_mark(lib, room, floor) -> str:
+def slab_mark(lib, room, floor, raised=False) -> str:
+    """The room's slab; by default the ground floor lies on the ground
+    (S1) unless the building is raised off it (then on the beams, S2)."""
     m = room.get("slab")
     if m in lib and lib[m].get("kind") == "slab":
         return m
-    return ROLE_DEFAULT["S1" if floor == 0 else "S2"]
+    return ROLE_DEFAULT["S1" if floor == 0 and not raised else "S2"]
 
 
 def _on_edge(room, px, py, tol=1e-6) -> bool:
@@ -423,10 +429,12 @@ def elements(data) -> dict:
     ground = set()
     for rooms in rooms_of:
         ground |= set(nodes(rooms))
+    gl = -floor_lift(s)
+    E["GL"] = gl
     for (x, y) in sorted(ground):
         fm = node_mark(data, lib, x, y, "F")
         f = lib[fm]
-        base = -float(f["depth"])
+        base = gl - float(f["depth"])
         top = base + float(f["t"])
         E["footings"].append({"mark": fm, "x": x, "y": y, "z0": base,
                               "z1": top})
@@ -456,7 +464,8 @@ def elements(data) -> dict:
     drop = max(float(s.get("wet_drop") or 0.0), 0.0)
     for k, rooms in enumerate(rooms_of):
         for rm in rooms:
-            E["slabs"].append({"mark": slab_mark(lib, rm, k), "room": rm,
+            E["slabs"].append({"mark": slab_mark(lib, rm, k, floor_lift(s) >= 0.30),
+                               "room": rm,
                                "floor": k, "z": k * H,
                                "drop": drop if is_wet(rm) else 0.0})
     for k, f in enumerate(floors):
@@ -1013,7 +1022,7 @@ def structure_members(data) -> tuple[list, dict]:
         z = e["floor"] * E["H"] - (drop if is_wet(rm) else 0.0)
         add(fixture_member(fx, z, rm), "fixture")
     if s.get("ceiling_type", "cline") != "none":
-        for g, kind in ceiling_members(E):
+        for g, kind in ceiling_members(E, data):
             add(g, kind)
     if s.get("skirting") or s.get("cornice"):
         for g, kind in trim_members(E):
@@ -1086,13 +1095,43 @@ def room_inner(E, rm, k):
             x1 - inset(x1, cy), y1 - inset(cx, y1))
 
 
-def ceiling_members(E):
+def sloped_ceiling(E, rm, k, lines):
+    """Under a lean-to (เพิงหมาแหงน) the top floor's ceiling follows the
+    rafters: the four corners of the board just under the rafters, or None
+    when the room is not under one roof plane."""
+    s = E["settings"]
+    if s.get("roof") != "shed" or k != E["n"] - 1 or not lines or not lines.get("skin"):
+        return None
+    x0, y0, x1, y1 = room_inner(E, rm, k)
+    cosp = math.cos(math.radians(float(s["pitch"]))) or 1.0
+    under = _dim(s["rafter"]) / cosp + 0.012
+    pts = []
+    for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+        z = skin_z(x, y, lines["skin"])
+        if z is None:
+            return None
+        pts.append((x, y, z - under))
+    # one plane: the fourth corner on the plane of the first three
+    (a, b, c, d) = pts
+    if abs((a[2] + c[2]) - (b[2] + d[2])) > 0.02:
+        return None
+    return pts
+
+
+def ceiling_members(E, data=None):
     """Every room's ceiling: the board under the beams and its frame — the
     furring channels (โครงซอย), main runners (โครงหลัก), the wall angle
-    (ฉากริมผนัง) and the hangers (ลวดแขวน/สตัด) up to the structure."""
+    (ฉากริมผนัง) and the hangers (ลวดแขวน/สตัด) up to the structure.
+    Under a lean-to roof the top floor's ceiling slopes with the rafters."""
     s, H = E["settings"], E["H"]
     G = Grid(E)
     out = []
+    lines = None
+    if data is not None and s.get("roof") == "shed":
+        try:
+            lines = roof_lines(data)
+        except Exception:                               # noqa: BLE001 -- flat as before
+            lines = None
     for e in E["slabs"]:
         rm, k = e["room"], e["floor"]
         ct = ceiling_type(s, rm)
@@ -1101,6 +1140,29 @@ def ceiling_members(E):
         name, lab, frame, sub, main = CEILING_TYPES[ct]
         x0, y0, x1, y1 = room_inner(E, rm, k)
         if x1 - x0 < 0.3 or y1 - y0 < 0.3:
+            continue
+        slope = sloped_ceiling(E, rm, k, lines)
+        if slope is not None:
+            from PySide6.QtGui import QVector3D
+
+            from core.group import Group
+            from core.mesh import Mesh
+            mesh = Mesh()
+            q = [QVector3D(*p_) for p_ in slope]
+            _prism(mesh, q, QVector3D(0, 0, -0.009), {"color": (0.96, 0.96, 0.94)})
+            g = Group(mesh, name=f"ฝ้าลาดเอียงตามจันทัน · {rm.get('name') or 'ห้อง'}")
+            g.ifc = {"class": "IfcCovering", "name": "ฝ้าเพดาน"}
+            (a_, b_, c_, d_) = slope
+            area = math.dist(a_, b_) * math.dist(b_, c_)
+            _tag(g, "structure", "ceiling", "ฝ้าเพดาน",
+                 [("ชนิด", f"{name} — ลาดเอียงตามแนวจันทัน ยึดโครงคร่าวใต้จันทัน"),
+                  ("ห้อง", rm.get("name") or "ห้อง"), ("ชั้น", _floor_name(k)),
+                  ("ระดับฝ้า", f"+{min(p_[2] for p_ in slope) - k * H:.2f} ถึง "
+                               f"+{max(p_[2] for p_ in slope) - k * H:.2f} ม. จากพื้น"),
+                  ("พื้นที่", f"{area:.2f} ตร.ม. (ตามแนวลาด)"),
+                  ("รายการ BOQ", "หมวด 10 งานพื้น/ฝ้า")])
+            g.ext[EXT_KEY]["key"] = name
+            out.append((g, "ceiling"))
             continue
         zc = ceiling_z(E, k)
         area = (x1 - x0) * (y1 - y0)
@@ -1253,8 +1315,11 @@ def fixture_member(fx, z, room=None):
     cistern, a vanity with a counter-top basin and mixer, a shower set
     (valve, riser, rain head), a bath, grab rails, mirror … (sizes from the
     catalog, its back against the nearest wall of the room)."""
-    from core.wanic_catalog import COLORS, SANITARY
+    from core.wanic_catalog import COLORS, DECOR, SANITARY
     spec = SANITARY.get(fx.get("type"))
+    if spec is None and fx.get("type") in DECOR:
+        nm, w_, d_, z_, h_ = DECOR[fx.get("type")]
+        spec = (nm, "", 0, w_, d_, z_, h_)
     if spec is None:
         return None
     name, _item, _rate, w, d, z0, height = spec
@@ -1291,6 +1356,40 @@ def fixture_member(fx, z, room=None):
         bx.frustum(0.0, b + 0.08, 0.02, 0.02, 0.02, 0.02, 0.81, 1.06, chrome)  # mixer
         bx.box(-0.012, 0.012, b + 0.08, b + 0.20, 1.03, 1.06, chrome)
         bx.box(-0.04, -0.005, b + 0.06, b + 0.10, 1.06, 1.08, chrome)
+    elif t == "LV2":
+        # a long stone counter on a wood vanity, two vessel basins on top
+        bx.box(-w / 2, w / 2, b, b + 0.52, 0.12, 0.76, wood)
+        for k_ in range(4):
+            x_ = -w / 2 + (k_ + 0.5) * w / 4
+            bx.box(x_ - w / 8 + 0.01, x_ + w / 8 - 0.01, b + 0.52, b + 0.53, 0.18, 0.72,
+                   {"color": COLORS["teak_dark"]})
+        bx.box(-w / 2 - 0.02, w / 2 + 0.02, b, b + 0.55, 0.76, 0.80, stone)
+        for x_ in (-w / 4, w / 4):
+            bx.frustum(x_, b + 0.30, 0.10, 0.08, 0.20, 0.17, 0.80, 0.95, white)
+            bx.frustum(x_, b + 0.30, 0.19, 0.16, 0.19, 0.16, 0.947, 0.95, dark)
+            bx.frustum(x_, b + 0.05, 0.016, 0.016, 0.016, 0.016, 0.80, 1.12, chrome)
+            bx.box(x_ - 0.01, x_ + 0.01, b + 0.04, b + 0.20, 1.10, 1.12, chrome)
+    elif t == "BT2":
+        # a freestanding oval bath: a tapered shell on the floor, a floor mixer
+        bx.frustum(0.0, 0.0, w / 2 - 0.12, d / 2 - 0.10, w / 2, d / 2, 0.0, 0.58, white)
+        bx.frustum(0.0, 0.0, w / 2 - 0.07, d / 2 - 0.07, w / 2 - 0.07, d / 2 - 0.07,
+                   0.58, 0.585, {"color": (0.80, 0.86, 0.90)})
+        bx.frustum(w / 2 + 0.12, 0.0, 0.02, 0.02, 0.02, 0.02, 0.0, 0.95, chrome)
+        bx.box(w / 2 - 0.02, w / 2 + 0.13, -0.01, 0.01, 0.92, 0.95, chrome)
+    elif t == "GP":
+        # the glass screen: clear panel, a slim chrome frame at its edges
+        glass = {"color": (0.82, 0.92, 0.96), "opacity": 0.35}
+        bx.box(-w / 2, w / 2, -0.005, 0.005, 0.02, 2.00, glass)
+        bx.box(-w / 2, -w / 2 + 0.02, -0.012, 0.012, 0.0, 2.00, chrome)
+        bx.box(-w / 2, w / 2, -0.012, 0.012, 0.0, 0.03, chrome)
+    elif t == "PL":
+        bx.frustum(0.0, 0.0, 0.14, 0.14, 0.19, 0.19, 0.0, 0.40, {"color": (0.70, 0.66, 0.60)})
+        leaf = {"color": (0.30, 0.55, 0.28)}
+        for k_ in range(5):
+            a_ = 2 * math.pi * k_ / 5
+            bx.frustum(0.08 * math.cos(a_), 0.08 * math.sin(a_), 0.10, 0.10, 0.02, 0.02,
+                       0.40 + 0.05 * k_, 0.80 + 0.04 * k_, leaf)
+        bx.frustum(0.0, 0.0, 0.16, 0.16, 0.05, 0.05, 0.40, 0.90, leaf)
     elif t == "SH":
         bx.box(-0.07, 0.07, b, b + 0.015, 0.93, 1.07, chrome)          # valve plate
         bx.box(-0.01, 0.07, b + 0.015, b + 0.05, 0.98, 1.02, chrome)
@@ -1785,13 +1884,16 @@ def _rafter_stations(rect, s, cols):
         cx = c[1] if swap else c[0]
         if x0 + 1e-6 < cx < x1 - 1e-6:
             stations.add(round(cx, 4))
+    extra = set()
     if x1 - x0 > 2 * half + 0.3:            # the hip apexes (ridge ends)
-        stations.add(round(x0 + half, 4))
-        stations.add(round(x1 - half, 4))
+        extra |= {round(x0 + half, 4), round(x1 - half, 4)}
     if s.get("roof") == "manila":           # the small gables' planes
         fm = min(max(float(s.get("manila_f", 0.5)), 0.2), 0.9)
-        stations.add(round(x0 + half * fm, 4))
-        stations.add(round(x1 - half * fm, 4))
+        extra |= {round(x0 + half * fm, 4), round(x1 - half * fm, 4)}
+    # an apex a hand's breadth from a column line would put two rafters
+    # side by side (one is enough): the column line's rafter stands for it
+    near = min(0.45, sp * 0.45)
+    stations |= {e for e in extra if all(abs(e - c) >= near for c in stations)}
     stations = sorted(stations)
     xs = []
     for a_, b_ in zip(stations, stations[1:]):
@@ -2890,16 +2992,26 @@ def roof_members(data) -> tuple[list, dict]:
             lo2 = tuple(lo[i] + (hi[i] - lo[i]) * t for i in range(3))
             hips.append([lo2, hi] if a_[2] <= b_[2] else [hi, lo2])
         cap_lines = dict(lines, hip=hips)
-        for kind, paths, name, piece in (
-                ("ridge", lines["ridge"], "ครอบสัน", each),
-                ("hip", cap_lines["hip"], "ครอบตะเข้สัน", each),
-                ("barge", lines["barge"], "ครอบข้าง",
-                 float(tile.get("verge") or each))):
-            for path in paths:
-                add(cap_pieces(path, 0.13, tcolor, name, up, piece), "cap")
-        for kind, pt, name in cap_specials(cap_lines):
-            add(cap_dome(pt, 0.15 if kind != "hip_end" else 0.13, tcolor,
-                         name, up, kind), "cap")
+        if s.get("roof") == "shed":
+            # a lean-to has no ridge: its high edge and sloping sides take
+            # the side cap (ครอบข้าง / ครอบชายบน) — an L folded over the edge
+            for path in lines["ridge"] + high_eaves(lines) + lines["barge"]:
+                add(cap_edge(path, lines["skin"], tcolor, up,
+                             float(tile.get("verge") or each)), "cap")
+        else:
+            for kind, paths, name, piece in (
+                    ("ridge", lines["ridge"], "ครอบสัน", each),
+                    ("hip", cap_lines["hip"], "ครอบตะเข้สัน", each),
+                    ("barge", lines["barge"], "ครอบข้าง",
+                     float(tile.get("verge") or each))):
+                for path in paths:
+                    add(cap_pieces(path, 0.13, tcolor, name, up, piece), "cap")
+            for kind, pt, name in cap_specials(cap_lines):
+                add(cap_dome(pt, 0.15 if kind != "hip_end" else 0.13, tcolor,
+                             name, up, kind), "cap")
+    if s.get("gutters", True) and lines["eave"]:
+        for g, kind in gutter_members(data, lines, s):
+            add(g, kind)
     if s.get("soffit", True):
         for g in soffit_members(data, lines, s):
             add(g, ((g.ext or {}).get(EXT_KEY) or {}).get("kind", "soffit"))
@@ -2918,6 +3030,213 @@ def roof_members(data) -> tuple[list, dict]:
                         [(px, py, inf["z0"]), (px, py, zt - 0.02)], ifc="IfcColumn",
                         info=[("ชนิด", "เสาเอ็น ค.ส.ล. ผนังหน้าจั่ว/ใต้หลังคา")]), "band")
     return out, count
+
+
+def _prism(mesh, quad, thick, attrs):
+    """A thin plate: the quad ``quad`` (4 QVector3D, any order round) and
+    its copy moved by ``thick`` (a QVector3D), closed round the sides."""
+    top = list(quad)
+    bot = [p + thick for p in quad]
+    from PySide6.QtGui import QVector3D
+    n = QVector3D.crossProduct(top[1] - top[0], top[2] - top[0])
+    if QVector3D.dotProduct(n, thick) > 0:
+        top = top[::-1]
+        bot = bot[::-1]
+    faces = [top, bot[::-1]]
+    for i in range(4):
+        j = (i + 1) % 4
+        faces.append([top[i], bot[i], bot[j], top[j]][::-1])
+    for f_ in faces:
+        f = mesh.add_face(f_)
+        if f is not None and attrs:
+            f.attrs.update(attrs)
+
+
+def cap_edge(path, skins, color, lift, piece=0.30):
+    """ครอบข้าง (side cap) along a lean-to's high edge or a verge: a flap
+    lying on the roof 0.15 m in from the edge, folded down 0.12 m over the
+    fascia/barge, laid in pieces of ``piece`` m."""
+    from PySide6.QtGui import QVector3D
+
+    from core.group import Group
+    from core.mesh import Mesh
+    a = QVector3D(*path[0])
+    b = QVector3D(*path[-1])
+    t = b - a
+    L = t.length()
+    if L < 0.05:
+        return None
+    tn = t.normalized()
+    w = QVector3D(-tn.y(), tn.x(), 0.0)
+    if w.length() < 1e-6:
+        return None
+    w = w.normalized()
+    mid = (a + b) * 0.5
+    zin = skin_z(mid.x() + w.x() * 0.3, mid.y() + w.y() * 0.3, skins)
+    zout = skin_z(mid.x() - w.x() * 0.3, mid.y() - w.y() * 0.3, skins)
+    if zin is None and zout is not None:
+        w = -w
+        zin = zout
+    if zin is None:
+        return None
+    slope = (zin - skin_z(mid.x(), mid.y(), skins) if skin_z(mid.x(), mid.y(), skins) is not None
+             else 0.0) / 0.3
+    up = QVector3D(0, 0, lift)
+    a2, b2 = a + up, b + up
+    fl = QVector3D(w.x() * 0.15, w.y() * 0.15, slope * 0.15)
+    out = QVector3D(-w.x() * 0.012, -w.y() * 0.012, 0.0)
+    mesh = Mesh()
+    attrs = {"color": tuple(color)}
+    n = max(1, int(math.ceil(L / max(piece, 0.05) - 1e-9)))
+    th = QVector3D(0, 0, 0.012)
+    for k in range(n):
+        p0 = a2 + t * (k / n)
+        p1 = a2 + t * ((k + 1) / n)
+        lap = 0.006 if k % 2 else 0.0
+        _prism(mesh, [p0, p1, p1 + fl, p0 + fl], th + QVector3D(0, 0, lap), attrs)
+        _prism(mesh, [p0 + out, p1 + out, p1 + out + QVector3D(0, 0, -0.13),
+                      p0 + out + QVector3D(0, 0, -0.13)],
+               QVector3D(-w.x() * 0.012, -w.y() * 0.012, 0.0), attrs)
+    _ = b2
+    g = Group(mesh, name=f"ครอบข้าง · {n} แผ่น ยาว {L:.2f} ม.")
+    g.ifc = {"class": "IfcCovering", "name": "ครอบข้าง"}
+    return _tag(g, "roof", "cap", "ครอบข้าง",
+                [("ชนิด", "ครอบข้าง (ครอบชายบน/ครอบปั้นลม) หลังคาเพิง"),
+                 ("ความยาว", f"{L:.2f} ม."), ("จำนวน", f"{n} แผ่น"),
+                 ("รายการ BOQ", "ครอบหลังคา (หลักเกณฑ์ 4.2 ข้อ 1.2 เผื่อ 3%)")])
+
+
+def gutter_runs(lines, s):
+    """[(a, b, outward (nx, ny))] — the eaves that take a gutter (2-D plan
+    ends, the eave height) with the side the water falls off."""
+    out = []
+    for path in lines["eave"]:
+        a, b = path[0], path[-1]
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        if L < 0.3:
+            continue
+        ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+        n = (-uy, ux)
+        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+        zi = skin_z(mx + n[0] * 0.3, my + n[1] * 0.3, lines["skin"])
+        zo = skin_z(mx - n[0] * 0.3, my - n[1] * 0.3, lines["skin"])
+        if zi is not None and zo is not None:
+            continue                                   # between two roofs
+        if zi is not None:
+            n = (-n[0], -n[1])                         # the roof is on the left
+        z_in = zi if zi is not None else zo
+        if z_in is None or z_in < a[2] + 0.02:
+            continue                                   # a high edge: nothing runs off it
+        out.append((a, b, n))
+    return out
+
+
+def high_eaves(lines):
+    """The eave lines the roof falls away from (a lean-to's top edge)."""
+    out = []
+    for path in lines["eave"]:
+        a, b = path[0], path[-1]
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        if L < 0.3:
+            continue
+        ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+        zs = [skin_z(mx - uy * 0.3 * k, my + ux * 0.3 * k, lines["skin"]) for k in (1, -1)]
+        zs = [z for z in zs if z is not None]
+        if zs and max(zs) < a[2] - 0.02:
+            out.append(path)
+    return out
+
+
+def gutter_members(data, lines, s):
+    """รางน้ำชายคา and ท่อลงน้ำ (งวงช้าง): a gutter hung on the fascia
+    along every eave, and a downspout from each end of a run (and every
+    ~10 m) — a swan-neck back to the wall, down the column face, and a
+    shoe onto the walkway."""
+    from core import wanic_mep as M
+    runs = gutter_runs(lines, s)
+    if not runs:
+        return []
+    gl = -floor_lift(s)
+    ov = float(s.get("overhang", 0.6))
+    E = elements(data)
+    half = float(E["lib"]["C1"]["b"]) / 2
+    rooms = E["floors"][0]["rooms"]
+    white = {"color": (0.92, 0.92, 0.90)}
+    gutters = []
+    total = 0.0
+    spouts = []
+    for a, b, n in runs:
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        total += L
+        u = ((b[0] - a[0]) / L, (b[1] - a[1]) / L)
+        g = _Boxes((a[0], a[1]), u, 0.0)
+        sg = 1.0 if (-u[1] * n[0] + u[0] * n[1]) > 0 else -1.0     # n on the left?
+        ze = a[2] - 0.02
+        d0, d1 = sorted((sg * 0.02, sg * 0.17))
+        g.box(0.0, L, d0, d1, ze - 0.15, ze - 0.14, white)              # bottom
+        e0, e1 = sorted((sg * 0.02, sg * 0.028))
+        g.box(0.0, L, e0, e1, ze - 0.15, ze - 0.02, white)              # back
+        f0, f1 = sorted((sg * 0.162, sg * 0.17))
+        g.box(0.0, L, f0, f1, ze - 0.15, ze - 0.04, white)              # lip
+        for s_ in (0.0, L - 0.006):
+            g.box(s_, s_ + 0.006, d0, d1, ze - 0.15, ze - 0.04, white)  # ends
+        gg = g.group(f"รางน้ำชายคา · ยาว {L:.2f} ม.", "roof", "eave_gutter", "รางน้ำชายคา",
+                     "IfcPipeSegment")
+        if gg is not None:
+            gg.ext[EXT_KEY]["info"] = [
+                ["ชนิด", "รางน้ำชายคาไวนิล/สังกะสี 6\" แขวนตะขอทุก 0.60 ม."],
+                ["ความยาว", f"{L:.2f} ม."], ["ลาด", "ลาดลงท่อลงน้ำ 1:200"],
+                ["รายการ BOQ", "หมวด 7 งานหลังคา"]]
+            gutters.append(gg)
+        k = max(1, int(math.ceil(L / 10.0)))
+        cand = [0.15] + [L * i / k for i in range(1, k)] + [L - 0.15]
+        for t_ in cand:
+            px, py = a[0] + u[0] * t_ + n[0] * 0.095, a[1] + u[1] * t_ + n[1] * 0.095
+            inward = [(-n[0], -n[1])]
+            if t_ < 0.2:
+                inward.append(u)
+            elif t_ > L - 0.2:
+                inward.append((-u[0], -u[1]))
+            spouts.append(((px, py, ze - 0.15), inward))
+    legs = []
+    seen = []
+    for (px, py, pz), inward in spouts:
+        if any(math.hypot(px - q[0], py - q[1]) < 0.8 for q in seen):
+            continue
+        seen.append((px, py))
+        back = max(ov - half - 0.06 + 0.095, 0.0)
+        wx, wy = px, py
+        for ix, iy in inward:
+            tx, ty = wx + ix * back, wy + iy * back
+            if room_at(rooms, tx, ty) is None:
+                wx, wy = tx, ty
+        zn = pz - 0.10
+        zw = zn - max(math.hypot(wx - px, wy - py), 0.05) * 0.8
+        legs += [((px, py, pz), (px, py, zn))]
+        if math.hypot(wx - px, wy - py) > 0.03:
+            legs += [((px, py, zn), (wx, wy, zw))]
+        else:
+            zw = zn
+        legs += [((wx, wy, zw), (wx, wy, gl + 0.20))]
+        ox, oy = wx - inward[0][0] * 0.15, wy - inward[0][1] * 0.15
+        legs += [((wx, wy, gl + 0.20), (ox, oy, gl + 0.08))]
+    out = [(g, "eave_gutter") for g in gutters]
+    g = M._pipes_group(sys_modules_B(), legs, 75.0, (0.92, 0.92, 0.90),
+                       f"ท่อลงน้ำ (งวงช้าง) PVC Ø 3\" · {len(seen)} จุด", "downspout",
+                       [("ชนิด", "ท่อลงน้ำ PVC Ø 3\" สีขาว คอห่าน (งวงช้าง) ยึดเสาด้วยแคลมป์ทุก 1.50 ม."),
+                        ("จำนวน", f"{len(seen)} จุด"),
+                        ("ปลายท่อ", "ข้องอลงทางเท้า/รางระบายน้ำ"),
+                        ("รายการ BOQ", "หมวด 7 งานหลังคา")], fittings=True)
+    if g is not None:
+        g.ext[EXT_KEY]["part"] = "roof"
+        out.append((g, "downspout"))
+    return out
+
+
+def sys_modules_B():
+    import sys as _sys
+    return _sys.modules[__name__]
 
 
 def gable_infill(data, lines=None) -> list:
@@ -2944,8 +3263,10 @@ def gable_infill(data, lines=None) -> list:
             continue
         p0, p1, L = wl["p0"], wl["p1"], wl["L"]
         ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
-        if not wl.get("exterior"):
-            # an inside wall only where two roofs meet at a step (the
+        if not wl.get("exterior") and s.get("roof") != "shed":
+            # (under a lean-to the ceiling follows the rafters, so every
+            # wall goes up to it) — else an inside wall only where two
+            # roofs meet at a step (the
             # high side of one shed over the other): close the step
             mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
             zs = [skin_z(mx - uy * d, my + ux * d, lines["skin"]) for d in (0.6, 0.3, -0.3, -0.6)]
@@ -3652,8 +3973,33 @@ def roof_skin(polys, lift=0.0):
     return g
 
 
+def floor_lift(s) -> float:
+    """How far the ground floor stands above the ground (ม.)."""
+    try:
+        return min(max(float(s.get("floor_lift", 0.60) or 0.0), 0.0), 3.0)
+    except (TypeError, ValueError):
+        return 0.60
+
+
+def lift_groups(groups, dz: float):
+    """Move generated groups up by ``dz`` (the plans keep ±0.00 = ground
+    floor; in 3D the original ground is z = 0)."""
+    if abs(dz) < 1e-9:
+        return groups
+    from PySide6.QtGui import QMatrix4x4
+
+    from core.group import transformed_mesh
+    m = QMatrix4x4()
+    m.translate(0.0, 0.0, dz)
+    for g in groups:
+        g.mesh = transformed_mesh(g.mesh, m)
+    return groups
+
+
 def build(data, parts=("structure", "roof")):
-    """All generated groups for ``parts`` and a Thai summary line."""
+    """All generated groups for ``parts`` and a Thai summary line. The
+    building is generated with its ground floor at z = 0 and the ground at
+    −floor_lift, then raised so the ground sits at z = 0 in the model."""
     groups, count = [], {}
     if "structure" in parts:
         g, c = structure_members(data)
@@ -3666,8 +4012,10 @@ def build(data, parts=("structure", "roof")):
     try:
         from core import wanic_partprice
         wanic_partprice.annotate(groups, data)
+        wanic_partprice.annotate_units(groups)
     except Exception:                                   # noqa: BLE001 -- prices are extra
         pass
+    lift_groups(groups, floor_lift(settings_of(data)))
     return groups, count
 
 
@@ -3687,6 +4035,7 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("outlet", "สวิตช์/เต้ารับ"), ("panel", "ตู้ไฟ"), ("pipe_supply", "ท่อประปา"),
            ("pipe_drain", "ท่อน้ำทิ้ง"), ("septic", "ถังบำบัด"), ("walkway", "ทางเท้า"),
            ("tiles", "กระเบื้อง"),
+           ("eave_gutter", "รางน้ำชายคา"), ("downspout", "ท่อลงน้ำ"),
            ("skin", "แผ่นหลังคา")]
 
 

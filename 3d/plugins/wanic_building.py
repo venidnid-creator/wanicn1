@@ -182,7 +182,8 @@ class PlanCanvas(QWidget):
             p.setBrush(QColor(232, 119, 46, 40) if sel else ROOM)
             p.drawRect(r)
             p.setPen(NAVY)
-            mark = B.slab_mark(lib, rm, self.panel.floor)
+            mark = B.slab_mark(lib, rm, self.panel.floor,
+                               B.floor_lift(B.settings_of(self.panel.data())) >= 0.30)
             p.drawText(r, Qt.AlignCenter,
                        f"{rm.get('name', '')}\n{rm['w']:g} × {rm['d']:g} ม."
                        f"\n{mark}")
@@ -2015,7 +2016,7 @@ class DrawingDialog(QDialog):
         self.axo = QCheckBox("รูปตัดทัศนียภาพ 3 มิติ (ตัดอาคารเห็นโครงสร้างภายใน · ใช้เวลาเพิ่มเล็กน้อย)")
         self.axo.setChecked(True)
         f.addRow(self.axo)
-        self.pic3d = QCheckBox("ภาพทัศนียภาพ 3 มิติประกอบในทุกแผ่น (วางมุมที่ว่างของแผ่น)")
+        self.pic3d = QCheckBox("ภาพทัศนียภาพ 3 มิติประกอบแผ่นอื่น ๆ (วางมุมที่ว่างของแผ่น)")
         self.pic3d.setChecked(self.with_3d)
         f.addRow(self.pic3d)
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
@@ -2112,6 +2113,10 @@ class DrawingDialog(QDialog):
             pic = self._model_picture()
             if pic:
                 info["cover_image"] = pic
+        if self.with_3d:
+            # plans, elevations and sections: the 2-D drawing on the left,
+            # its 3-D view with dimension lines on the right of the sheet
+            info["side3d"] = True
         if getattr(self, "pic3d", None) is not None and self.pic3d.isChecked():
             small = self._model_picture(1200, 672)
             if small:
@@ -2287,12 +2292,21 @@ class BuildingPanel(QWidget):
         self.fx_type = QComboBox()
         for code, spec in CAT.SANITARY.items():
             self.fx_type.addItem(f"{code} — {spec[0]}", code)
+        for code, spec in CAT.DECOR.items():
+            self.fx_type.addItem(f"{code} — {spec[0]}", code)
         fg.addWidget(self.fx_type, 1)
         bset = QPushButton("🛁 ชุดห้องน้ำ/ครัวมาตรฐาน")
         bset.setToolTip("วางสุขภัณฑ์ชุดมาตรฐานในห้องน้ำ (และซิงค์ในห้องครัว) ทุกห้องของชั้นนี้"
                         "ที่ยังไม่มี — ห้องที่เลือกอยู่จะถูกใส่ก่อน")
         bset.clicked.connect(lambda _=False: _safe(self, self.fill_standard_sets))
         fg.addWidget(bset)
+        bre = QPushButton("✨ จัดห้องน้ำใหม่ตามขนาดห้อง")
+        bre.setToolTip("จัดวางสุขภัณฑ์ในห้องน้ำทุกห้องของชั้นนี้ใหม่อัตโนมัติตามความกว้าง-ยาว: "
+                       "โซนเปียก (ฝักบัว+ฉากกระจก หรืออ่างอาบน้ำตั้งพื้นเมื่อห้องใหญ่พอ) "
+                       "ชักโครก อ่างล้างหน้า 1–2 อ่างบนเคาน์เตอร์ กระจก ราวแขวนผ้า ฟลอร์เดรน "
+                       "ต้นไม้ประดับ — แทนที่ของเดิมในห้องน้ำ")
+        bre.clicked.connect(lambda _=False: _safe(self, lambda: self.fill_standard_sets(True)))
+        fg.addWidget(bre)
         lay.addWidget(self.fx_row)
         self.tool_box.currentIndexChanged.connect(lambda _i: self._tool_changed())
         self.canvas = PlanCanvas(self)
@@ -2368,8 +2382,9 @@ class BuildingPanel(QWidget):
             "แสดงฐานราก คาน พื้น ผนังตัด ฝ้า โครงหลังคา ระดับ และเส้นบอกระยะ — PDF / DXF",
             self.export_sections, 5, 0, "#5B6B78")
         btn("🖼 ส่งออก PDF แบบ 2D + ภาพ 3D…",
-            "แบบก่อสร้างชุดเดียวกับ «ส่งออกแบบ 2D» เป็น PDF แต่ทุกแผ่นมีภาพทัศนียภาพ "
-            "3 มิติของอาคารประกอบที่มุมว่างของแผ่น", self.open_drawings_3d, 5, 1, "#2E7D5B")
+            "แบบก่อสร้างชุดเดียวกับ «ส่งออกแบบ 2D» เป็น PDF: แปลน รูปด้าน รูปตัด "
+            "แต่ละแผ่นมีแบบ 2 มิติทางซ้าย และภาพ 3 มิติ (ตัดที่ระดับ/ตัดตามแนว) "
+            "พร้อมเส้นระยะทางขวา", self.open_drawings_3d, 5, 1, "#2E7D5B")
         btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
             "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
             "(วัดจากโมเดล 3D)", self.send_rates, 4, 1, "#3B6FB6")
@@ -2426,6 +2441,7 @@ class BuildingPanel(QWidget):
                 row.addWidget(sp)
             sf.addRow(label, row)
         num("floor_h", "ความสูงชั้น (พื้นถึงพื้น)", 2.0, 10.0, 0.1)
+        num("floor_lift", "พื้นชั้น 1 สูงจากดินเดิม (ใต้ถุนเดินท่อ 0.50–0.80)", 0.0, 3.0, 0.05)
         num("grid", "ระยะกริดผัง", 0.05, 5.0, 0.05)
         self.walls = QCheckBox("สร้างผนังก่ออิฐรอบห้อง")
         self.walls.toggled.connect(lambda _v: self._save_settings())
@@ -2987,23 +3003,35 @@ class BuildingPanel(QWidget):
         self._write(d)
         return fid
 
-    def fill_standard_sets(self):
-        """Put the standard bathroom set into every bathroom (and a sink
-        into every kitchen) on this floor that has no fittings yet."""
+    def fill_standard_sets(self, relayout=False):
+        """Lay out every bathroom on this floor by its size (shower or
+        freestanding bath, WC, one or two basins, mirror, rail, drain …) and
+        put a sink into every kitchen — rooms that have no fittings yet, or
+        every bathroom again when ``relayout``."""
         d = self.data()
         f = d["floors"][self.floor]
         fx = f.setdefault("fixtures", [])
         added = 0
         for rm in f.get("rooms") or []:
             name = rm.get("name") or ""
-            kit = CAT.BATHROOM_SET if name.startswith("ห้องน้ำ") else \
-                CAT.KITCHEN_SET if name.startswith("ห้องครัว") else None
+            bath = name.startswith("ห้องน้ำ")
+            kit = True if bath else CAT.KITCHEN_SET if name.startswith("ห้องครัว") else None
             if not kit:
                 continue
             x0, y0 = float(rm["x"]), float(rm["y"])
             w, dd = float(rm["w"]), float(rm["d"])
-            if any(x0 <= it["x"] <= x0 + w and y0 <= it["y"] <= y0 + dd
-                   for it in fx):
+
+            def inside(it):
+                return x0 <= it["x"] <= x0 + w and y0 <= it["y"] <= y0 + dd
+            if any(inside(it) for it in fx):
+                if not (relayout and bath):
+                    continue
+                fx[:] = [it for it in fx if not inside(it)]
+            if bath:
+                for code, px, py, dir_ in CAT.bathroom_layout(w, dd):
+                    fx.append({"id": self._item_id(d, "x"), "type": code,
+                               "x": B._r(x0 + px), "y": B._r(y0 + py), "dir": dir_})
+                    added += 1
                 continue
             for code, fu, fv in kit:
                 fx.append({"id": self._item_id(d, "x"), "type": code,

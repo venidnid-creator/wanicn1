@@ -282,8 +282,15 @@ def _wrap(text: str, n: int) -> list[str]:
     return out or [""]
 
 
+#: while a sheet is drawn for the «2D + 3D» set its 2-D drawing keeps to
+#: the left half (the 3-D view takes the right): the area to use then
+_AREA_OVERRIDE = None
+
+
 def drawing_area():
     """The free drawing area (x0, y0, x1, y1) in mm."""
+    if _AREA_OVERRIDE is not None:
+        return _AREA_OVERRIDE
     return (MARGIN + 5, MARGIN + 5, PAPER[0] - MARGIN - TB_W - 5,
             PAPER[1] - MARGIN - 5)
 
@@ -709,8 +716,17 @@ def draw_stairs(sh, v, E, k):
         sh.text((e[0], e[1] + 1.2), "ขึ้น", 2.0, "center", "dim")
 
 
+def fixture_spec(t):
+    """(name, item, rate, w, d, z0, height) of a fitting or decoration."""
+    spec = CAT.SANITARY.get(t)
+    if spec is None and t in CAT.DECOR:
+        nm, w_, d_, z_, h_ = CAT.DECOR[t]
+        spec = (nm, "", 0, w_, d_, z_, h_)
+    return spec
+
+
 def fixture_rect(fx):
-    spec = CAT.SANITARY.get(fx.get("type"), ("", "", 0, 0.5, 0.5, 0, 0))
+    spec = fixture_spec(fx.get("type")) or ("", "", 0, 0.5, 0.5, 0, 0)
     w, d = float(spec[3]), float(spec[4])
     if int(fx.get("dir", 0)) % 2:
         w, d = d, w
@@ -730,6 +746,17 @@ def draw_fixtures(sh, v, E, k, labels=True):
             sh.circle(c, v.len(0.16), "fixture", 0.18)
         elif t in ("LV", "SK1", "SK2"):
             sh.circle(c, v.len(0.12), "fixture", 0.18)
+        elif t == "LV2":
+            al = int(fx.get("dir", 0)) % 2 == 0
+            for o_ in (-0.35, 0.35):
+                q = v(float(fx["x"]) + (o_ if al else 0), float(fx["y"]) + (0 if al else o_))
+                sh.circle(q, v.len(0.17), "fixture", 0.18)
+        elif t == "BT2":
+            al = int(fx.get("dir", 0)) % 2 == 0
+            rx, ry = (0.68, 0.30) if al else (0.30, 0.68)
+            sh.poly([v(float(fx["x"]) + rx * math.cos(a_ * math.pi / 12),
+                       float(fx["y"]) + ry * math.sin(a_ * math.pi / 12)) for a_ in range(24)],
+                    "fixture", 0.18)
         if labels:
             sh.text((c[0], c[1] - 0.9), t, 1.6, "center", "fixture")
 
@@ -1014,18 +1041,32 @@ def elevation(sh, E, L, side, box):
     ov = float(E["settings"].get("overhang") or 0)
     umin, umax = min(us) - ov - 0.5, max(us) + ov + 0.5
     ztop = n * H + 3.0
-    zmin = -0.6
+    gl = float(E.get("GL", 0.0))
+    zmin = gl - 0.6
     lm = 30.0                       # room on the left for the wall note
     bw, bh = box[2] - box[0] - 40 - lm, box[3] - box[1] - 40
     sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), PLAN_SCALES)
     sh.scale = f"1:{sc}"
     k = 1000.0 / sc
     ox = box[0] + 4 + lm + (bw - (umax - umin) * k) / 2
-    oy = box[1] + 28 + max(0.0, (bh - (ztop - zmin) * k) / 2)
+    oy = box[1] + 28 + max(0.0, (bh - (ztop - zmin) * k) / 2) * 0.25
 
     def P(u, z):
         return (ox + (u - umin) * k, oy + (z - zmin) * k)
-    sh.line(P(umin, 0), P(umax, 0), "cut", 0.7)
+    sh.line(P(umin, gl), P(umax, gl), "cut", 0.7)
+    if gl < -0.05:
+        # the raised floor: the ground beam along the face and the stumps
+        # under it down to the ground (ใต้ถุน)
+        gb_h = float(E["settings"].get("gb_h", 0.4) or 0.4)
+        half = float(E["lib"]["C1"]["b"]) / 2
+        fu = sorted({u_of(*w[p_]) for f_ in (0,) for w in _ext_walls(E, f_, side)
+                     for p_ in ("p0", "p1")})
+        if fu:
+            sh.rect(*P(fu[0] - half, -gb_h), *P(fu[-1] + half, 0.0), "wall", 0.35)
+            cols = sorted({u_of(c["x"], c["y"]) for c in E["stumps"]
+                           if fu[0] - 1e-6 <= u_of(c["x"], c["y"]) <= fu[-1] + 1e-6})
+            for uc in cols:
+                sh.rect(*P(uc - half, gl), *P(uc + half, -gb_h), "wall", 0.3)
     # walls of every floor facing this side (outline + openings)
     for f in range(n):
         for w in _ext_walls(E, f, side):
@@ -1053,7 +1094,7 @@ def elevation(sh, E, L, side, box):
     # ground, columns at the corners of the faces, glazing bars
     for i in range(int((umax - umin) / 0.6)):
         uu = umin + 0.3 + i * 0.6
-        sh.line(P(uu, 0), P(uu - 0.25, -0.25), "hatch", 0.13)
+        sh.line(P(uu, gl), P(uu - 0.25, gl - 0.25), "hatch", 0.13)
     for el in E["openings"]:
         if el["type"] != "window":
             continue
@@ -1069,6 +1110,8 @@ def elevation(sh, E, L, side, box):
                 "window", 0.1)
     # levels: floors, ceilings, the ring beam and the ridge
     marks = [(0.0, "ระดับพื้นชั้น 1")]
+    if gl < -0.05:
+        marks.append((gl, "ระดับดินเดิม"))
     for f in range(n):
         if f:
             marks.append((f * H, f"ระดับพื้นชั้น {f + 1}"))
@@ -1130,15 +1173,34 @@ def elevation(sh, E, L, side, box):
     return sc
 
 
-def a_elevations(sh, E, L, sides):
+ELEV_NAMES = {(0, -1): "รูปด้านหน้า", (1, 0): "รูปด้านขวา", (0, 1): "รูปด้านหลัง",
+              (-1, 0): "รูปด้านซ้าย"}
+
+
+def _elev_boxes(n):
+    """Elevations one above the other, each the full sheet width — so they
+    can be drawn at 1:100 (the scale the building-control rules ask for)."""
     x0, y0, x1, y1 = drawing_area()
-    mid = (x0 + x1) / 2
-    names = {(0, -1): "รูปด้านหน้า", (1, 0): "รูปด้านขวา", (0, 1): "รูปด้านหลัง",
-             (-1, 0): "รูปด้านซ้าย"}
-    for i, side in enumerate(sides):
-        box = (x0, y0, mid - 5, y1) if i == 0 else (mid + 5, y0, x1, y1)
+    if n == 1:
+        return [(x0, y0 + 4, x1, y1)]
+    mid = (y0 + y1) / 2
+    return [(x0, mid + 2, x1, y1), (x0, y0 + 4, x1, mid - 2)]
+
+
+def elevations_fit(E, L) -> bool:
+    """Do two elevations to a sheet still go at 1:100?"""
+    for side in ELEV_NAMES:
+        probe = Sheet("probe", "probe")
+        if elevation(probe, E, L, side, _elev_boxes(2)[0]) > 100:
+            return False
+    return True
+
+
+def a_elevations(sh, E, L, sides):
+    boxes = _elev_boxes(len(sides))
+    for side, box in zip(sides, boxes):
         sc = elevation(sh, E, L, side, box)
-        caption(sh, ((box[0] + box[2]) / 2, y0 + 6), names[side], f"1:{sc}")
+        caption(sh, ((box[0] + box[2]) / 2, box[1] + 2), ELEV_NAMES[side], f"1:{sc}")
 
 
 def section(sh, E, L, axis, box):
@@ -1350,7 +1412,8 @@ def section_detail(sh, E, L, cut, box):
     umin, umax = grid_u[0] - ov - 1.2, grid_u[-1] + ov + 1.2
     lab_mm = 42.0                        # room for the level words on the left
     ridge = max((p[2] for poly in (L or {}).get("skin", []) for p in poly), default=n * H + 1)
-    zmin, ztop = -1.8, ridge + 0.8
+    gl0 = float(E.get("GL", 0.0))
+    zmin, ztop = min(-1.8, gl0 - 1.6), ridge + 0.8
     bw, bh = box[2] - box[0] - 40 - lab_mm, box[3] - box[1] - 26
     sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), (50, 75, 100, 125, 150, 200))
     k = 1000.0 / sc
@@ -1366,7 +1429,7 @@ def section_detail(sh, E, L, cut, box):
             sh.fill(pts, "hatch", fill)
         sh.poly(pts, layer, w)
     # ground and earth hatch
-    gl = -0.30
+    gl = gl0 if gl0 < -0.05 else -0.30
     sh.line(P(umin, gl), P(umax, gl), "cut", 0.5)
     for i in range(int((umax - umin) / 0.6)):
         u = umin + 0.3 + i * 0.6
@@ -1607,14 +1670,25 @@ def roof_leaders(sh, E, L, P, U, C, axis, at, lx):
                         E["n"] * E["H"] + 0.05), f"อะเสเหล็ก {st('wallplate')}"))
     items.append((P(lo[0], lo[1] - 0.10), "เชิงชายไม้สังเคราะห์ 1×8\" · ฝ้าชายคา"))
     items.sort(key=lambda it: -it[0][1])
-    ytop = items[0][0][1] + 4
+    # keep the labels on the sheet, clear of the title block: a column
+    # that ends inside the drawing area, starting above the ridge
+    _x0, _y0, x1a, y1a = drawing_area()
+    width = max(len(t) for _p, t in items) * 1.9 * 0.55 + 4
+    lx = min(lx, x1a - width - 2)
+    ytop = min(max(items[0][0][1] + 4, P(hi[0], hi[1])[1] + 4 + 4.2 * (len(items) - 3)),
+               y1a - 4)
     for i, (pt, text) in enumerate(items):
         ty = ytop - i * 4.2
         sh.circle(pt, 0.35, "text", 0.18)
         sh.line(pt, (lx - 1, ty + 0.7), "text", 0.13)
         sh.line((lx - 1, ty + 0.7), (lx + 1, ty + 0.7), "text", 0.13)
         sh.text((lx + 1.5, ty), text, 1.9, "left", "text")
-    # the slope symbol: a small triangle under the right slope with its angle
+    # the slope symbol over the LEFT slope (the labels take the right)
+    left = [sg for sg in segs if (sg[1][1] - sg[0][1]) * (sg[1][0] - sg[0][0]) > 0]
+    if left:
+        (ua, za), (ub, zb) = min(left, key=lambda sg: min(sg[0][0], sg[1][0]))
+        if ua > ub:
+            (ua, za), (ub, zb) = (ub, zb), (ua, za)
     m = on(0.5, 0.45)
     run = 6.0
     k_ = abs((zb - za) / (ub - ua)) if ub != ua else 0
@@ -1742,14 +1816,16 @@ def a_bathrooms(sh, E):
         draw_fixtures(sh, v, {"fixtures": [f for f in E["fixtures"]
                                            if f["floor"] == k and
                                            _inside(f["fx"], rm)]}, k)
-        fd = v(rm["x"] + rm["w"] * 0.7, rm["y"] + rm["d"] * 0.3)
-        sh.rect(fd[0] - 1.5, fd[1] - 1.5, fd[0] + 1.5, fd[1] + 1.5, "pipe",
-                0.25)
-        sh.text((fd[0] + 2.5, fd[1] - 0.8), "FD", 2.0, "left", "pipe")
+        if not any(f["floor"] == k and _inside(f["fx"], rm) and f["fx"].get("type") == "FD"
+                   for f in E["fixtures"]):
+            fd = v(rm["x"] + rm["w"] * 0.7, rm["y"] + rm["d"] * 0.3)
+            sh.rect(fd[0] - 1.5, fd[1] - 1.5, fd[0] + 1.5, fd[1] + 1.5, "pipe",
+                    0.25)
+            sh.text((fd[0] + 2.5, fd[1] - 0.8), "FD", 2.0, "left", "pipe")
         dim_chain(sh, v, [rm["x"], rm["x"] + rm["w"]], rm["y"] - 0.35, "x")
         dim_chain(sh, v, [rm["y"], rm["y"] + rm["d"]], rm["x"] - 0.35, "y")
         f = CAT.finish_of(rm)
-        sh.text((x, y_top - rm["d"] * kk - 18),
+        sh.text((x, y_top - rm["d"] * kk - 10 - 0.35 * kk - 9),
                 f"{rm.get('name')} (ชั้น {k + 1}) 1:{sc} · ผนังกรุกระเบื้องสูง "
                 f"{f['tile_h']:.2f} ม. · พื้นต่ำกว่าห้องข้างเคียง 0.05 ม.", 2.2)
         x += rm["w"] * kk + 30
@@ -2351,10 +2427,15 @@ def build_set(data, info=None,
                                                            fcodes)))
         if L:
             add("A", "แปลนหลังคา", lambda sh, _a: a_roof(sh, E, L))
-        add("A", "รูปด้านหน้า รูปด้านขวา",
-            lambda sh, _a: a_elevations(sh, E, L, [(0, -1), (1, 0)]))
-        add("A", "รูปด้านหลัง รูปด้านซ้าย",
-            lambda sh, _a: a_elevations(sh, E, L, [(0, 1), (-1, 0)]))
+        if elevations_fit(E, L):
+            add("A", "รูปด้านหน้า รูปด้านขวา",
+                lambda sh, _a: a_elevations(sh, E, L, [(0, -1), (1, 0)]))
+            add("A", "รูปด้านหลัง รูปด้านซ้าย",
+                lambda sh, _a: a_elevations(sh, E, L, [(0, 1), (-1, 0)]))
+        else:
+            for side in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+                add("A", ELEV_NAMES[side],
+                    lambda sh, _a, side=side: a_elevations(sh, E, L, [side]))
         for k in floors:
             cuts = section_cuts(E, k)
             title = " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด"
@@ -2401,6 +2482,8 @@ def build_set(data, info=None,
             add("SN", f"แปลนระบบสุขาภิบาลชั้น {k + 1}",
                 lambda sh, _a, k=k: sn_plan(sh, E, k))
         add("SN", "แบบขยายถังบำบัด บ่อพัก ฟลอร์เดรน", lambda sh, _a: sn_details(sh, E), "1:20")
+        add("SN", "ภาพ 3 มิติ การต่อท่อน้ำดี ท่อน้ำเสีย ถังบำบัด",
+            lambda sh, _a: sn_iso(sh, data, E), "-")
     if "EE" in groups:
         add("EE", "สารบัญแบบ สัญลักษณ์ ตารางโหลด รายการประกอบแบบไฟฟ้า",
             lambda sh, all_: ee_index(sh, all_, E), "-")
@@ -2416,10 +2499,25 @@ def build_set(data, info=None,
     for i, s in enumerate(sheets, 1):
         s.number = i
     pic = info.get("plan_picture")
+    side = Side3D(data, E) if info.get("side3d") else None
+    global _AREA_OVERRIDE
     for s, fn in plan:
-        fn(s, sheets)
-        if pic:
-            inset_picture(s, pic)
+        view = side.view_for(s) if side is not None else None
+        if view is not None:
+            x0, y0, x1, y1 = drawing_area()
+            mid = (x0 + x1) / 2
+            _AREA_OVERRIDE = (x0, y0, mid - 3, y1)
+            try:
+                fn(s, sheets)
+            finally:
+                _AREA_OVERRIDE = None
+            sh_line = s.line
+            sh_line((mid, y0 + 2), (mid, y1 - 2), "text", 0.18)
+            side.draw(s, view, (mid + 3, y0, x1, y1))
+        else:
+            fn(s, sheets)
+            if pic:
+                inset_picture(s, pic)
         frame(s, info, len(sheets))
     boq = build_boq(data, info) if "BOQ" in groups else []
     front = []
@@ -2781,6 +2879,26 @@ def septic_table(sh, x, y):
                  h=2.0, row_h=4.4, head_h=5.2)
 
 
+def leaders(sh, items, x_col, side="right", gap=4.2, h=1.8):
+    """Leader notes in one tidy column at paper x ``x_col``: each label as
+    level with its point as the ones above allow (never closer than
+    ``gap``), the leaders sorted so none crosses another — a short slope
+    from the point, then a level shoulder into the label."""
+    if not items:
+        return
+    items = sorted(items, key=lambda it: -it[0][1])
+    last = None
+    sign = 1 if side == "right" else -1
+    for (px, py), text in items:
+        ty = py if last is None else min(py, last - gap)
+        last = ty
+        knee = (x_col - sign * 3.0, ty + 0.6)
+        sh.circle((px, py), 0.35, "text", 0.18)
+        sh.line((px, py), knee, "text", 0.13)
+        sh.line(knee, (x_col, ty + 0.6), "text", 0.13)
+        sh.text((x_col + sign * 0.8, ty), text, h, "left" if sign > 0 else "right")
+
+
 def septic_section(sh, ox, oy, k):
     """รูปตัดถังบำบัดน้ำเสียสำเร็จรูป ``ox, oy`` = the tank's bottom left
     (paper mm), ``k`` mm per metre."""
@@ -2822,36 +2940,30 @@ def septic_section(sh, ox, oy, k):
     sh.text((X(W * 0.72), Y(0.95)), "(ตัวกลางพลาสติก)", 1.6, "center")
     # inlet and outlet tees (outlet 5 cm lower)
     zi, zo = Hh - 0.30, Hh - 0.35
-    sh.line((X(-0.9), Y(zi) + 1.2), (X(0.12), Y(zi) + 1.2), "pipe", 0.6)
+    sh.line((X(-0.7), Y(zi) + 1.2), (X(0.12), Y(zi) + 1.2), "pipe", 0.6)
     sh.line((X(0.12), Y(zi - 0.35)), (X(0.12), Y(zi + 0.15)), "pipe", 0.6)
     sh.line((X(W - 0.12), Y(zo - 0.40)), (X(W - 0.12), Y(zo + 0.15)), "pipe", 0.6)
-    sh.line((X(W - 0.12), Y(zo) + 1.2), (X(W + 0.9), Y(zo) + 1.2), "pipe", 0.6)
+    sh.line((X(W - 0.12), Y(zo) + 1.2), (X(W + 0.6), Y(zo) + 1.2), "pipe", 0.6)
     # access cover and vent
     sh.rect(X(W / 2 - 0.25), Y(Hh), X(W / 2 + 0.25), gl + 0.05 * k, "pipe", 0.35)
     sh.rect(X(W / 2 - 0.30), gl + 0.05 * k, X(W / 2 + 0.30), gl + 0.09 * k, "struct", 0.35)
     sh.line((X(W - 0.25), Y(Hh - 0.04)), (X(W - 0.25), gl + 0.85 * k), "pipe", 0.35)
     sh.line((X(W - 0.31), gl + 0.85 * k), (X(W - 0.19), gl + 0.85 * k), "pipe", 0.35)
 
-    def lead(pt, tx, ty, text):
-        sh.line(pt, (tx, ty + 0.6), "text", 0.13)
-        sh.line((tx, ty + 0.6), (tx + (2 if tx > pt[0] else -2), ty + 0.6), "text", 0.13)
-        sh.text((tx + (2.5 if tx > pt[0] else -2.5), ty), text, 1.8,
-                "left" if tx > pt[0] else "right")
-    R = X(W + 1.1)
-    lead((X(W - 0.25), gl + 0.6 * k), R, gl + 0.70 * k,
-         "ท่อระบายอากาศ PVC Ø 2\" สูงจากดินไม่น้อยกว่า 2.00 ม. ปลายติดหมวกกันฝน")
-    lead((X(W / 2 + 0.30), gl + 0.07 * k), R, gl + 0.25 * k,
-         "ฝาเปิดถัง Ø 0.50 ม. สูงกว่าดิน 0.05–0.10 ม. (ฝาปิดสนิท)")
-    lead((X(W + 0.5), Y(zo) + 1.2), R, Y(zo) - 3, "ท่อออก PVC Ø 4\" → บ่อพัก/ท่อระบายสาธารณะ")
-    lead((X(W - 0.12), Y(zo - 0.35)), R, Y(zo - 0.35) - 5, "ท่อ T ออก (ต่ำกว่าท่อเข้า 0.05 ม.)")
-    lead((X(W * 0.8), Y(0.5)), R, Y(0.5) - 3, "ถังไฟเบอร์กลาส/PE สำเร็จรูป มอก. 2550-2554")
-    lead((X(W + 0.25), Y(-0.05)), R, Y(-0.05) - 6, "ทรายหยาบอัดแน่น 0.10 ม.")
-    lead((X(W + 0.2), Y(-0.13)), R, Y(-0.13) - 10, "คอนกรีตหยาบ (Lean) 0.05 ม.")
-    lead((X(W + 0.27), Y(0.9)), R, Y(0.9) + 2, "ถมกลับด้วยทราย อัดแน่นเป็นชั้น (ห้ามใช้หิน/เศษปูน)")
-    L_ = X(-1.0)
-    lead((X(0.12), Y(zi) + 1.2), L_, Y(zi) + 6, "ท่อเข้า PVC Ø 4\" ลาด 1:100 จากส้วม")
-    lead((X(0.12), Y(zi - 0.35)), L_, Y(zi - 0.35), "ท่อ T เข้า")
-    lead((X(0.2), Y(wl_)), L_, Y(wl_) - 6, "ระดับน้ำในถัง")
+    R = X(W + 0.75)
+    leaders(sh, [((X(W - 0.25), gl + 0.6 * k),
+                  "ท่อระบายอากาศ PVC Ø 2\" สูงจากดินไม่น้อยกว่า 2.00 ม. ปลายติดหมวกกันฝน"),
+                 ((X(W / 2 + 0.30), gl + 0.07 * k),
+                  "ฝาเปิดถัง Ø 0.50 ม. สูงกว่าดิน 0.05–0.10 ม. (ฝาปิดสนิท)"),
+                 ((X(W + 0.27), Y(1.25)), "ถมกลับด้วยทราย อัดแน่นเป็นชั้น (ห้ามใช้หิน/เศษปูน)"),
+                 ((X(W + 0.5), Y(zo) + 1.2), "ท่อออก PVC Ø 4\" → บ่อพัก/ท่อระบายสาธารณะ"),
+                 ((X(W - 0.12), Y(zo - 0.35)), "ท่อ T ออก (ต่ำกว่าท่อเข้า 0.05 ม.)"),
+                 ((X(W * 0.8), Y(0.5)), "ถังไฟเบอร์กลาส/PE สำเร็จรูป มอก. 2550-2554"),
+                 ((X(W + 0.25), Y(-0.05)), "ทรายหยาบอัดแน่น 0.10 ม."),
+                 ((X(W + 0.2), Y(-0.13)), "คอนกรีตหยาบ (Lean) 0.05 ม.")], R, "right")
+    leaders(sh, [((X(0.12), Y(zi) + 1.2), "ท่อเข้า PVC Ø 4\" ลาด 1:100 จากส้วม"),
+                 ((X(0.12), Y(zi - 0.35)), "ท่อ T เข้า"),
+                 ((X(0.2), Y(wl_)), "ระดับน้ำในถัง")], X(-0.85), "left")
     # dimensions
     _dim_v(sh, X(-0.55), Y(0), Y(Hh), f"{Hh:.2f}")
     _dim_v(sh, X(-0.55), Y(Hh), gl, f"{soil:.2f}")
@@ -3054,7 +3166,7 @@ def bath_elevation(sh, E, k, rm, side, ox, oy, sc=50):
     for f in (f for f in E["fixtures"] if f["floor"] == k and _inside(f["fx"], rm)):
         fx = f["fx"]
         t = str(fx.get("type", ""))
-        spec = CAT.SANITARY.get(t)
+        spec = fixture_spec(t)
         if not spec:
             continue
         pts = fixture_rect(fx)
@@ -3462,15 +3574,25 @@ def s_rebar_details(sh, E):
 AXO_SKIP = {"tiles", "skin", "cap", "headplate", "ceiling_frame", "soffit_fix",
             "light", "outlet", "panel", "ground_rod", "fan", "pipe_supply",
             "pipe_drain", "septic", "grease", "meter", "walkway", "drain_ring",
-            "drain_pipe", "manhole", "ac_out", "ac_bracket", "sign", "gutter"}
+            "drain_pipe", "manhole", "ac_out", "ac_bracket", "sign", "gutter",
+            "downspout", "tap", "eave_gutter", "light_out"}
 
 
-def _axo_geometry(groups):
+#: hidden inside the closed building in a whole-building view: left out of
+#: it (the roof skin is shown instead) so the view is worked out quickly
+WHOLE_SKIP = (AXO_SKIP - {"skin"}) | {
+    "rafter", "purlin", "ridge", "hip", "post", "wallplate", "tiebeam", "rbeam", "strut",
+    "brace", "valley", "soffit_frame", "ceiling", "fixture", "plaster", "skirting",
+    "cornice", "ac", "infill_col", "stair"}
+
+
+def _axo_geometry(groups, skip=None):
     import numpy as np
+    skip = AXO_SKIP if skip is None else skip
     tris, hard = [], []
     for g in groups:
         rec = (getattr(g, "ext", None) or {}).get(B.EXT_KEY) or {}
-        if rec.get("kind") in AXO_SKIP or getattr(g, "hidden", False):
+        if rec.get("kind") in skip or getattr(g, "hidden", False):
             continue
         for f in g.mesh.faces:
             for a, b, c in f.triangulate():
@@ -3549,6 +3671,344 @@ def a_axo_sheet(sh, dr, cut, k):
                 widths.get(int(kind), 0.13))
     caption(sh, ((x0 + x1) / 2, y0 + 10),
             f"รูปตัดทัศนียภาพ {cut[2]} (ตัดผ่าน{cut[3]})", "ภาพ 3 มิติ ไม่ระบุมาตราส่วน")
+
+
+#: the services drawn on the plumbing 3-D sheet, each in its colour
+ISO_KINDS = {"pipe_supply": ("iso_supply", (40, 90, 200)), "tap": ("iso_supply", (40, 90, 200)),
+             "meter": ("iso_supply", (40, 90, 200)),
+             "pipe_drain": ("iso_drain", (150, 90, 40)), "septic": ("iso_tank", (40, 110, 70)),
+             "manhole": ("iso_tank", (40, 110, 70)), "grease": ("iso_tank", (40, 110, 70)),
+             "fixture": ("iso_fix", (60, 60, 60)), "drain_pipe": ("iso_ring", (110, 110, 110)),
+             "beam": ("iso_frame", (170, 170, 170)), "stump": ("iso_frame", (170, 170, 170)),
+             "footing": ("iso_frame", (170, 170, 170)), "downspout": ("iso_drain", (150, 90, 40))}
+
+
+def sn_iso(sh, data, E):
+    """ภาพ 3 มิติ การต่อท่อ: the cold-water system from the meter (and the
+    stub left for the public main) to every fitting, the soil pipe to the
+    inspection chamber and the septic tank, the grey water to the drain
+    ring — seen obliquely from above with the ground frame faint, each
+    system in its own colour, the parts named with leaders (as the
+    plumbing isometrics of a standard set)."""
+    import numpy as np
+
+    from core import hlr
+    from core.camera import OrbitCamera
+    from PySide6.QtGui import QVector3D
+    x0, y0, x1, y1 = drawing_area()
+    groups, _c = B.build(data, ("structure",))
+    keep = []
+    for g in groups:
+        rec = (getattr(g, "ext", None) or {}).get(B.EXT_KEY) or {}
+        k = rec.get("kind")
+        if k not in ISO_KINDS:
+            continue
+        if k == "beam" and not any("คานคอดิน" in str(r[1]) for r in rec.get("info") or []
+                                   if len(r) > 1):
+            continue                                    # the ground beams only
+        keep.append((g, k))
+    if not keep:
+        sh.text(((x0 + x1) / 2, (y0 + y1) / 2), "ยังไม่มีระบบท่อ — วางสุขภัณฑ์ก่อน", 4, "center")
+        return
+    tris, hard = [], []
+    boxes = []
+    for g, k in keep:
+        pts = []
+        for f in g.mesh.faces:
+            for a, b, c in f.triangulate():
+                tris.append(((a.x(), a.y(), a.z()), (b.x(), b.y(), b.z()), (c.x(), c.y(), c.z())))
+                pts += [(a.x(), a.y(), a.z())]
+        for i_, e in enumerate(g.mesh.edges):
+            if getattr(e, "hidden", False):
+                continue
+            if getattr(e, "soft", False) and (k != "drain_pipe" or i_ % 6):
+                continue                               # a few lines along a round pipe
+            p0, p1 = e.v0.position, e.v1.position
+            hard.append(((p0.x(), p0.y(), p0.z()), (p1.x(), p1.y(), p1.z())))
+        if pts:
+            arr = np.array(pts)
+            boxes.append((arr.min(axis=0) - 0.02, arr.max(axis=0) + 0.02, k, g))
+    geo = (np.array(tris, dtype=float).reshape(-1, 3, 3), np.array(hard, dtype=float).reshape(-1, 2, 3),
+           np.empty((0, 2, 3)), np.empty((0, 2, 3)))
+    cam = OrbitCamera()
+    cam.perspective = False
+    cam.yaw, cam.pitch = math.radians(-125.0), math.radians(35.0)
+    allp = geo[0].reshape(-1, 3)
+    cam.fit_box(QVector3D(*allp.min(axis=0)), QVector3D(*allp.max(axis=0)))
+    dr = hlr.hlr_drawing(_NoCut(), cam, geometry=geo)
+    eye, right, up, _f = hlr.camera_basis(cam)
+    if dr is None or not len(dr.segs):
+        return
+    xs = np.concatenate([dr.segs[:, 0], dr.segs[:, 2]])
+    ys = np.concatenate([dr.segs[:, 1], dr.segs[:, 3]])
+    w, h = float(xs.max() - xs.min()) or 1.0, float(ys.max() - ys.min()) or 1.0
+    bw, bh = (x1 - x0) - 120, (y1 - y0) - 34
+    sc = min(bw / w, bh / h)
+    ox = x0 + 60 + (bw - w * sc) / 2 - float(xs.min()) * sc
+    oy = y0 + 24 + (bh - h * sc) / 2 - float(ys.min()) * sc
+
+    def P(x, y):
+        return (ox + x * sc, oy + y * sc)
+
+    def proj(p):
+        d_ = np.array(p, dtype=float) - eye
+        return P(float(d_ @ right), float(d_ @ up))
+    for layer, rgb in ISO_KINDS.values():
+        sh.colors[layer] = rgb
+    # which part each drawn line belongs to: the part with a vertex in the
+    # same 10 cm cell as the line's middle (pipes before the frame)
+    cell = {}
+    order = {"iso_supply": 0, "iso_drain": 0, "iso_tank": 1, "iso_fix": 1, "iso_ring": 2,
+             "iso_frame": 3}
+    for g, k in keep:
+        layer = ISO_KINDS[k][0]
+        if layer == "iso_frame":
+            continue                                   # the default anyway
+        for e in g.mesh.edges:
+            p0, p1 = e.v0.position, e.v1.position
+            L = math.dist((p0.x(), p0.y(), p0.z()), (p1.x(), p1.y(), p1.z()))
+            n_ = max(1, int(L / 0.08))
+            for t_ in range(n_ + 1):
+                f_ = t_ / n_
+                key = (int(math.floor((p0.x() + (p1.x() - p0.x()) * f_) / 0.1)),
+                       int(math.floor((p0.y() + (p1.y() - p0.y()) * f_) / 0.1)),
+                       int(math.floor((p0.z() + (p1.z() - p0.z()) * f_) / 0.1)))
+                if order[layer] < order.get(cell.get(key, "iso_frame"), 9):
+                    cell[key] = layer
+    world = getattr(dr, "world", None)
+    for i, ((a, b, c, d), kind) in enumerate(zip(dr.segs, dr.kinds)):
+        layer = "iso_frame"
+        if world is not None and len(world) > i:
+            m = (np.array(world[i][0]) + np.array(world[i][1])) / 2
+            ci = (int(math.floor(m[0] / 0.1)), int(math.floor(m[1] / 0.1)),
+                  int(math.floor(m[2] / 0.1)))
+            best = 9
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        lay = cell.get((ci[0] + dx, ci[1] + dy, ci[2] + dz))
+                        if lay is not None and order[lay] < best:
+                            best, layer = order[lay], lay
+        wdt = 0.35 if layer in ("iso_supply", "iso_drain") else 0.25 if layer != "iso_frame" \
+            else 0.13
+        sh.line(P(a, b), P(c, d), layer, wdt)
+    # the parts named, the leaders in two tidy columns
+    names = {"septic": "ST-01 ถังบำบัดน้ำเสียสำเร็จรูป (ท่อเข้า-ออก Ø 4\" ท่ออากาศ Ø 2\")",
+             "manhole": "MH บ่อพัก/บ่อตรวจ ค.ส.ล. (ฝาปิด)",
+             "grease": "GT-01 บ่อดักไขมัน (ครัว)",
+             "meter": "มาตรวัดน้ำ ½\" + ท่อวางรอเชื่อมประปา (อุดปลาย)",
+             "tap": "ก๊อกสนาม Ø ½\" สูง 0.60 ม.",
+             "pipe_supply": "ท่อน้ำดี PVC Ø ½\"–¾\" ใต้คานคอดิน (ข้อต่อทุกจุดเลี้ยว)",
+             "fixture": "สุขภัณฑ์ (จุดต่อน้ำดี/น้ำทิ้ง)",
+             "drain_pipe": "ท่อระบายน้ำ ค.ส.ล. Ø 0.30 ม. รอบอาคาร"}
+    left, right_ = [], []
+    seen = set()
+    for lo, hi, k, g in boxes:
+        nm = None
+        if k == "pipe_drain":
+            nm = "ท่อโสโครก PVC Ø 4\" ลาด 1:100 → MH → ถังบำบัด" if "โสโครก" in g.name else \
+                "ท่อน้ำทิ้ง PVC Ø 2\" ลาด 1:100 → บ่อพัก" if "น้ำทิ้ง" in g.name else \
+                "ท่อน้ำผ่านการบำบัด → ท่อระบายน้ำ"
+        else:
+            nm = names.get(k)
+        if not nm or nm in seen:
+            continue
+        seen.add(nm)
+        c3 = (lo + hi) / 2
+        pt = proj(c3)
+        (left if pt[0] < (x0 + x1) / 2 else right_).append((pt, nm))
+    leaders(sh, right_, x1 - 58, "right")
+    leaders(sh, left, x0 + 58, "left")
+    # the legend of colours
+    ly = y0 + 22
+    for i, (txt, layer) in enumerate((("ท่อน้ำดี (ประปา)", "iso_supply"),
+                                      ("ท่อน้ำเสีย/น้ำทิ้ง/ท่อลงน้ำฝน", "iso_drain"),
+                                      ("ถังบำบัด บ่อพัก บ่อตรวจ", "iso_tank"),
+                                      ("โครงสร้างใต้ถุน (คานคอดิน ตอม่อ)", "iso_frame"))):
+        sh.line((x0 + 4 + i * 70, ly), (x0 + 14 + i * 70, ly), layer, 0.6)
+        sh.text((x0 + 16 + i * 70, ly - 0.8), txt, 2.0)
+    caption(sh, ((x0 + x1) / 2, y0 + 8), "ภาพ 3 มิติ การต่อท่อน้ำดี ท่อน้ำเสีย ถังบำบัด",
+            "ไม่ระบุมาตราส่วน")
+
+
+class Side3D:
+    """The 3-D half of a «2D + 3D» sheet: for a floor plan the building cut
+    1.20 m above that floor and seen from above; for the roof plan and the
+    elevations the whole building; for a section the cut-away along it —
+    vector drawings (hidden lines removed) with the overall dimensions
+    drawn in the 3-D view too. Each view is worked out once."""
+
+    def __init__(self, data, E):
+        self.data, self.E = data, E
+        self.groups = None
+        self.cache = {}
+        s = E["settings"]
+        self.lift = B.floor_lift(s)
+        xs, ys = grids(E)
+        self.box = (min(xs), min(ys), max(xs), max(ys)) if xs and ys else (0, 0, 1, 1)
+
+    def view_for(self, sh):
+        t = sh.title or ""
+        if sh.group not in ("A", "S", "SN", "EE", "M"):
+            return None
+        import re
+        m = re.search(r"ชั้น\s*(\d+)", t)
+        k = int(m.group(1)) - 1 if m else 0
+        if t.startswith("รูปด้าน"):
+            side = (1, 0) if "ขวา" in t.split()[0] or t.startswith("รูปด้านขวา") else \
+                (0, 1) if t.startswith("รูปด้านหลัง") else (-1, 0) if t.startswith("รูปด้านซ้าย") \
+                else (0, -1)
+            return ("whole", side)
+        if t.startswith("รูปตัด"):
+            cuts = section_cuts(self.E, min(k, self.E["n"] - 1))
+            return ("cut", cuts[0]) if cuts else ("whole", (0, -1))
+        if t.startswith("แปลนหลังคา"):
+            return ("whole", (0, -1))
+        if t.startswith("แปลนฐานราก") or "ฐานราก" in t.split(" ")[0]:
+            return ("plan", -1)
+        if t.startswith("แปลน") or t.startswith("ผัง"):
+            if t.startswith("ผังบริเวณ"):
+                return None
+            return ("plan", min(max(k, 0), self.E["n"] - 1))
+        return None
+
+    def _groups(self):
+        if self.groups is None:
+            self.groups, _c = B.build(self.data, ("structure", "roof"))
+        return self.groups
+
+    def _hlr(self, key):
+        if key in self.cache:
+            return self.cache[key]
+        from PySide6.QtGui import QVector3D
+
+        from core import hlr
+        from core.camera import OrbitCamera
+        from core.section import SectionPlane
+        kind, arg = key
+        geo = _axo_geometry(self._groups(), WHOLE_SKIP if kind == "whole" else None)
+        if not len(geo[0]):
+            self.cache[key] = None
+            return None
+        plane = None
+        yaw_deg, pitch = -125.0, 30.0
+        if kind == "plan":
+            z = (0.05 if arg < 0 else arg * self.E["H"] + 1.20) + self.lift
+            plane = SectionPlane(QVector3D(0, 0, z), QVector3D(0, 0, 1), active=True)
+            pitch = 48.0
+        elif kind == "cut":
+            axis, at = arg[0], float(arg[1])
+            if axis == "x":
+                plane = SectionPlane(QVector3D(at, 0, 0), QVector3D(-1, 0, 0), active=True)
+                yaw_deg = 180.0 + 35.0
+            else:
+                plane = SectionPlane(QVector3D(0, at, 0), QVector3D(0, -1, 0), active=True)
+                yaw_deg = -90.0 - 35.0
+            pitch = 26.0
+        else:
+            side = arg
+            # look at the named face from its front-right corner
+            yaw_deg = {(0, -1): -125.0, (1, 0): -35.0, (0, 1): 55.0, (-1, 0): 145.0}.get(side, -125.0)
+
+        class _Cut:
+            show_section_cuts = True
+
+            def active_section(self):
+                return plane
+        pts = geo[0].reshape(-1, 3)
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        if plane is not None and kind == "plan":
+            hi = hi.copy()
+            hi[2] = min(hi[2], plane.point.z())
+        cam = OrbitCamera()
+        cam.perspective = False
+        cam.yaw, cam.pitch = math.radians(yaw_deg), math.radians(pitch)
+        cam.fit_box(QVector3D(*lo), QVector3D(*hi))
+        dr = hlr.hlr_drawing(_Cut() if plane is not None else None, cam, geometry=geo) \
+            if plane is not None else hlr.hlr_drawing(_NoCut(), cam, geometry=geo)
+        basis = hlr.camera_basis(cam)
+        self.cache[key] = (dr, basis, float(hi[2]))
+        return self.cache[key]
+
+    def draw(self, sh, view, box):
+        got = self._hlr(view)
+        x0, y0, x1, y1 = box
+        if got is None or got[0] is None or not len(got[0].segs):
+            return
+        dr, (eye, right, up, _fwd), ztop = got
+        import numpy as np
+        X0, Y0, X1, Y1 = self.box
+        half = float(self.E["lib"]["C1"]["b"]) / 2
+        a0, b0, a1, b1 = X0 - half, Y0 - half, X1 + half, Y1 + half
+        if view[0] == "cut":
+            # only what is left behind the cut is drawn: measure that part
+            axis, at = view[1][0], float(view[1][1])
+            if axis == "x":
+                a0 = max(a0, at)
+            else:
+                b0 = max(b0, at)
+        gz = self.lift
+        off = 1.2
+        dims = [((a0, b0 - off, gz), (a1, b0 - off, gz), f"{a1 - a0:.2f}"),
+                ((a1 + off, b0, gz), (a1 + off, b1, gz), f"{b1 - b0:.2f}")]
+        if view[0] != "plan":
+            dims.append(((a0 - off, b0 - off, 0.0), (a0 - off, b0 - off, ztop),
+                         f"{ztop:.2f}"))
+
+        def proj(p):
+            d_ = np.array(p, dtype=float) - eye
+            return float(d_ @ right), float(d_ @ up)
+        xs = list(np.concatenate([dr.segs[:, 0], dr.segs[:, 2]]))
+        ys = list(np.concatenate([dr.segs[:, 1], dr.segs[:, 3]]))
+        for a, b, _t in dims:
+            for p in (a, b):
+                q = proj(p)
+                xs.append(q[0])
+                ys.append(q[1])
+        w = (max(xs) - min(xs)) or 1.0
+        h = (max(ys) - min(ys)) or 1.0
+        bw, bh = (x1 - x0) - 12, (y1 - y0) - 30
+        sc = min(bw / w, bh / h)
+        ox = x0 + 6 + (bw - w * sc) / 2 - min(xs) * sc
+        oy = y0 + 22 + (bh - h * sc) / 2 - min(ys) * sc
+
+        def P(x, y):
+            return (ox + x * sc, oy + y * sc)
+        from core import hlr
+        for loop in dr.loops:
+            if len(loop) >= 3:
+                sh.fill([P(*q) for q in loop], "hatch", 0.18)
+        widths = {getattr(hlr, "KIND_CUT", 2): 0.35, getattr(hlr, "KIND_PROFILE", 1): 0.25}
+        for (a, b, c, d), kind in zip(dr.segs, dr.kinds):
+            sh.line(P(a, b), P(c, d), "cut" if kind == getattr(hlr, "KIND_CUT", 2) else "wall",
+                    widths.get(int(kind), 0.13))
+        # the dimensions, drawn in the 3-D view
+        for a, b, label in dims:
+            pa, pb = P(*proj(a)), P(*proj(b))
+            sh.line(pa, pb, "dim", 0.18)
+            ang = math.degrees(math.atan2(pb[1] - pa[1], pb[0] - pa[0]))
+            if ang > 90:
+                ang -= 180
+            elif ang < -90:
+                ang += 180
+            for q in (pa, pb):
+                sh.line((q[0] - 0.9, q[1] - 0.9), (q[0] + 0.9, q[1] + 0.9), "dim", 0.3)
+            m = ((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2)
+            nrm = math.radians(ang + 90)
+            sh.text((m[0] + math.cos(nrm) * 1.2, m[1] + math.sin(nrm) * 1.2), label, 2.2,
+                    "center", "dim", angle=ang)
+        names = {"plan": "ภาพ 3 มิติ ตัดที่ระดับ +1.20 ม. เหนือพื้น", "cut": "รูปตัดทัศนียภาพ",
+                 "whole": "ภาพทัศนียภาพ 3 มิติ"}
+        caption(sh, ((x0 + x1) / 2, y0 + 6),
+                names.get(view[0], "ภาพ 3 มิติ") if not (view[0] == "plan" and view[1] < 0)
+                else "ภาพ 3 มิติ ฐานราก คานคอดิน", "พร้อมเส้นระยะ (ม.)")
+
+
+class _NoCut:
+    show_section_cuts = False
+
+    def active_section(self):
+        return None
 
 
 def axo_sheets(data, group="A"):
