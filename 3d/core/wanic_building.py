@@ -61,7 +61,7 @@ DEFAULT_SETTINGS = {
     "rafter": "C 150×65×20×3.2", "purlin": "C 75×45×15×2.3",
     "post": "C 100×50×20×2.3", "skin": True, "roof_mode": "plan",
     "door_w": 0.9, "door_h": 2.0, "win_w": 1.2, "win_h": 1.1,
-    "win_sill": 0.9, "stair_w": 1.0, "riser_max": 0.18, "going": 0.25,
+    "win_sill": 0.9, "stair_w": 0.0, "riser_max": 0.18, "going": 0.25,
     "stair_t": 0.15, "fascia": True, "fascia_h": 0.20, "fascia_t": 0.025,
     "gutters": True,
     "band": 0.10, "tile": "R1", "tiles_m2": 0.0, "caps": True,
@@ -492,7 +492,8 @@ def elements(data) -> dict:
                                   "sill": sill, "type": op.get("type", "door"),
                                   "name": opening_name(op, s)})
         for stp in f["stairs"]:
-            E["stairs"].append({"floor": k, "st": stp})
+            if stair_used(stp, s, n):
+                E["stairs"].append({"floor": k, "st": stp})
         for fx in f.get("fixtures") or []:
             E["fixtures"].append({"floor": k, "fx": fx})
     return E
@@ -642,6 +643,35 @@ def snap_to_segment(x, y, segs, reach=0.4):
     return None if best is None else best[1]
 
 
+def opening_overlaps(op, openings, rooms, s, gap=0.02) -> list:
+    """The doors/windows of ``openings`` that ``op`` rides over on the same
+    wall (their frames overlapping, or closer than ``gap``): [op…]."""
+    segs = segments(rooms or [])
+    hit = snap_to_segment(float(op["x"]), float(op["y"]), segs, 0.1)
+    if hit is None:
+        return []
+    (p0, p1) = hit[2]
+    L = math.dist(p0, p1) or 1.0
+    ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+    t0 = (hit[0] - p0[0]) * ux + (hit[1] - p0[1]) * uy
+    w0 = opening_size(op, s)[0]
+    out = []
+    for o in openings or []:
+        if o is op or (op.get("id") and o.get("id") == op.get("id")):
+            continue
+        ox, oy = float(o["x"]), float(o["y"])
+        # on the same wall line (perpendicular distance), within the span
+        if abs((ox - p0[0]) * uy - (oy - p0[1]) * ux) > 0.1:
+            continue
+        t = (ox - p0[0]) * ux + (oy - p0[1]) * uy
+        if t < -0.05 or t > L + 0.05:
+            continue
+        w = opening_size(o, s)[0]
+        if abs(t - t0) < (w + w0) / 2 + gap - 1e-6:
+            out.append(o)
+    return out
+
+
 #: ระยะจากผิวเสาถึงขอบวงกบ เมื่อวางประตู/หน้าต่างชิดเสา (ม.)
 SLOT_GAP = 0.25
 
@@ -735,12 +765,27 @@ def stair_geometry(st, s):
     return n, n * float(s["going"]), H
 
 
+STAIR_W_AUTO = 1.00                    # the auto width with two storeys or more
+
+
+def stair_width(st, s) -> float:
+    """A flight's width: its own, else the default (``stair_w``); a default
+    of 0 is «auto» — 1.00 m (a building of one storey builds no stairs)."""
+    return float(st.get("w") or s.get("stair_w") or STAIR_W_AUTO)
+
+
+def stair_used(st, s, storeys) -> bool:
+    """Whether a flight is built: always with two storeys or more; on one
+    storey only when a width is set (the default 0 means none)."""
+    return storeys >= 2 or bool(st.get("w") or s.get("stair_w"))
+
+
 def stair_rect(st, s):
     """The flight's plan rectangle as 4 corners (for drawing and picking)."""
     n, L, _H = stair_geometry(st, s)
     rx, ry = _DIRS[int(st.get("dir", 1)) % 4]
     tx, ty = ry, -rx
-    w = float(st.get("w") or s["stair_w"])
+    w = stair_width(st, s)
     cx, cy = float(st["x"]), float(st["y"])
     a = (cx - rx * L / 2, cy - ry * L / 2)
     pts = []
@@ -1067,8 +1112,13 @@ def ceiling_type(s, room) -> str:
 
 
 def ceiling_z(E, k) -> float:
-    """Top of a floor's ceiling board: the underside of the beams above."""
+    """Top of a floor's ceiling board: the underside of the beams above —
+    under a lean-to (เพิงหมาแหงน) the top floor's board lies flat on the
+    top of the roof beams instead (the room is taller; the space above is
+    closed by the brick infill and the soffit along the rafters)."""
     lib, H, n = E["lib"], E["H"], E["n"]
+    if k == n - 1 and E["settings"].get("roof") == "shed":
+        return (k + 1) * H + 0.009
     key = "RB1" if k == n - 1 else "B1"
     return (k + 1) * H - float(lib[key]["h"])
 
@@ -1095,34 +1145,12 @@ def room_inner(E, rm, k):
             x1 - inset(x1, cy), y1 - inset(cx, y1))
 
 
-def sloped_ceiling(E, rm, k, lines):
-    """Under a lean-to (เพิงหมาแหงน) the top floor's ceiling follows the
-    rafters: the four corners of the board just under the rafters, or None
-    when the room is not under one roof plane."""
-    s = E["settings"]
-    if s.get("roof") != "shed" or k != E["n"] - 1 or not lines or not lines.get("skin"):
-        return None
-    x0, y0, x1, y1 = room_inner(E, rm, k)
-    cosp = math.cos(math.radians(float(s["pitch"]))) or 1.0
-    under = _dim(s["rafter"]) / cosp + 0.012
-    pts = []
-    for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
-        z = skin_z(x, y, lines["skin"])
-        if z is None:
-            return None
-        pts.append((x, y, z - under))
-    # one plane: the fourth corner on the plane of the first three
-    (a, b, c, d) = pts
-    if abs((a[2] + c[2]) - (b[2] + d[2])) > 0.02:
-        return None
-    return pts
-
-
 def ceiling_members(E, data=None):
     """Every room's ceiling: the board under the beams and its frame — the
     furring channels (โครงซอย), main runners (โครงหลัก), the wall angle
     (ฉากริมผนัง) and the hangers (ลวดแขวน/สตัด) up to the structure.
-    Under a lean-to roof the top floor's ceiling slopes with the rafters."""
+    Under a lean-to roof the top floor's board lies on the roof beams and
+    its hangers go up to the rafters."""
     s, H = E["settings"], E["H"]
     G = Grid(E)
     out = []
@@ -1140,29 +1168,6 @@ def ceiling_members(E, data=None):
         name, lab, frame, sub, main = CEILING_TYPES[ct]
         x0, y0, x1, y1 = room_inner(E, rm, k)
         if x1 - x0 < 0.3 or y1 - y0 < 0.3:
-            continue
-        slope = sloped_ceiling(E, rm, k, lines)
-        if slope is not None:
-            from PySide6.QtGui import QVector3D
-
-            from core.group import Group
-            from core.mesh import Mesh
-            mesh = Mesh()
-            q = [QVector3D(*p_) for p_ in slope]
-            _prism(mesh, q, QVector3D(0, 0, -0.009), {"color": (0.96, 0.96, 0.94)})
-            g = Group(mesh, name=f"ฝ้าลาดเอียงตามจันทัน · {rm.get('name') or 'ห้อง'}")
-            g.ifc = {"class": "IfcCovering", "name": "ฝ้าเพดาน"}
-            (a_, b_, c_, d_) = slope
-            area = math.dist(a_, b_) * math.dist(b_, c_)
-            _tag(g, "structure", "ceiling", "ฝ้าเพดาน",
-                 [("ชนิด", f"{name} — ลาดเอียงตามแนวจันทัน ยึดโครงคร่าวใต้จันทัน"),
-                  ("ห้อง", rm.get("name") or "ห้อง"), ("ชั้น", _floor_name(k)),
-                  ("ระดับฝ้า", f"+{min(p_[2] for p_ in slope) - k * H:.2f} ถึง "
-                               f"+{max(p_[2] for p_ in slope) - k * H:.2f} ม. จากพื้น"),
-                  ("พื้นที่", f"{area:.2f} ตร.ม. (ตามแนวลาด)"),
-                  ("รายการ BOQ", "หมวด 10 งานพื้น/ฝ้า")])
-            g.ext[EXT_KEY]["key"] = name
-            out.append((g, "ceiling"))
             continue
         zc = ceiling_z(E, k)
         area = (x1 - x0) * (y1 - y0)
@@ -1189,6 +1194,16 @@ def ceiling_members(E, data=None):
         z1 = zc
         top = (k + 1) * H - (0.0 if k == E["n"] - 1 else float(E["lib"]["S2"]["t"])
                              if "S2" in E["lib"] else 0.10)
+        under_rafters = lines is not None and lines.get("skin") and k == E["n"] - 1
+        rdepth = lift_of(s)
+
+        def top_at(x, y):
+            """The hanger's top: the structure above (the rafters under a lean-to)."""
+            if under_rafters:
+                zr = skin_z(x, y, lines["skin"])
+                if zr is not None:
+                    return zr - rdepth
+            return top
         xs_n = max(int(math.ceil((x1 - x0) / sub - 1e-9)), 1)
         for i in range(xs_n + 1):                    # furring channels along y
             x = min(x0 + i * sub, x1 - 0.019)
@@ -1202,19 +1217,20 @@ def ceiling_members(E, data=None):
             nh = max(int(math.ceil((x1 - x0) / main - 1e-9)), 1)
             for i in range(nh):                      # hangers
                 x = x0 + (x1 - x0) * (i + 0.5) / nh
-                if top - (z1 + 0.037) > 0.02:
+                top_h = top_at(x, y)
+                if top_h - (z1 + 0.037) > 0.02:
                     fb.box(x - 0.003, x + 0.003, y - 0.003, y + 0.003,
-                           z1 + 0.037, top, steel)
+                           z1 + 0.037, top_h, steel)
                     # the fixings: hanger clip on the main runner, a spring
                     # level adjuster (สปริงปรับระดับ), an anchor plate up top
                     fb.box(x - 0.012, x + 0.012, y - 0.022, y + 0.022,
                            z1 + 0.037, z1 + 0.052, clip)
                     za = z1 + 0.15
-                    if top - za > 0.08:
+                    if top_h - za > 0.08:
                         fb.box(x - 0.008, x + 0.008, y - 0.015, y + 0.015,
                                za, za + 0.05, clip)
                     fb.box(x - 0.025, x + 0.025, y - 0.025, y + 0.025,
-                           top - 0.006, top, clip)
+                           top_h - 0.006, top_h, clip)
         for (a0, b0, a1, b1) in ((x0, y0, x1, y0 + 0.025), (x0, y1 - 0.025, x1, y1),
                                  (x0, y0 + 0.025, x0 + 0.025, y1 - 0.025),
                                  (x1 - 0.025, y0 + 0.025, x1, y1 - 0.025)):
@@ -1335,27 +1351,38 @@ def fixture_member(fx, z, room=None):
     mirror = {"color": (0.78, 0.86, 0.92)}
     b = -d / 2                                      # the back, against the wall
     if t == "WC1":
-        bx.box(-0.18, 0.18, b, b + 0.17, 0.40, 0.76, white)          # cistern
-        bx.box(-0.19, 0.19, b - 0.005, b + 0.18, 0.76, 0.79, white)  # its lid
-        bx.frustum(0.0, b + 0.40, 0.11, 0.15, 0.13, 0.18, 0.0, 0.22, white)   # pedestal
-        bx.frustum(0.0, b + 0.40, 0.13, 0.18, 0.18, 0.25, 0.22, 0.38, white)  # bowl
-        bx.frustum(0.0, b + 0.40, 0.185, 0.255, 0.185, 0.255, 0.38, 0.41, white)  # seat
-        bx.box(-0.18, 0.18, b + 0.13, b + 0.20, 0.38, 0.43, white)   # seat hinge
-        bx.frustum(0.0, b + 0.085, 0.025, 0.025, 0.025, 0.025, 0.79, 0.80, chrome)  # button
+        # a one-piece WC: rounded cistern, skirted pan, soft-close seat and
+        # lid, a dual-flush button
+        bx.box(-0.18, 0.18, b, b + 0.17, 0.38, 0.74, white)          # cistern
+        bx.frustum(0.0, b + 0.085, 0.18, 0.085, 0.175, 0.08, 0.74, 0.77, white)
+        bx.frustum(0.0, b + 0.40, 0.15, 0.20, 0.17, 0.24, 0.0, 0.36, white)   # skirted pan
+        bx.shell(0.0, b + 0.42, 0.17, 0.23, 0.18, 0.25, 0.03, 0.25, 0.38, white,
+                 {"color": (0.90, 0.93, 0.95)})                     # the bowl
+        bx.frustum(0.0, b + 0.42, 0.185, 0.255, 0.185, 0.255, 0.38, 0.40, white)  # seat
+        bx.frustum(0.0, b + 0.42, 0.18, 0.25, 0.18, 0.25, 0.40, 0.43, white)      # lid
+        bx.box(-0.15, 0.15, b + 0.16, b + 0.20, 0.38, 0.42, white)   # hinge block
+        bx.frustum(-0.03, b + 0.085, 0.022, 0.022, 0.022, 0.022, 0.77, 0.78, chrome)
+        bx.frustum(0.03, b + 0.085, 0.022, 0.022, 0.022, 0.022, 0.77, 0.78, chrome)
     elif t == "WC2":
         bx.box(-w / 2, w / 2, b, -b, 0.0, 0.05, white)
         bx.frustum(0.0, 0.03, 0.13, 0.20, 0.13, 0.20, 0.05, 0.06, dark)
         bx.box(-0.10, -0.04, b + 0.05, b + 0.15, 0.05, 0.07, white)
         bx.box(0.04, 0.10, b + 0.05, b + 0.15, 0.05, 0.07, white)
     elif t == "LV":
-        bx.box(-w / 2 - 0.10, w / 2 + 0.10, b, b + 0.50, 0.15, 0.78, wood)   # vanity
-        bx.box(-w / 2 - 0.10, w / 2 + 0.10, b + 0.50, b + 0.51, 0.20, 0.74, {"color": COLORS["teak_dark"]})
-        bx.box(-w / 2 - 0.12, w / 2 + 0.12, b, b + 0.53, 0.78, 0.81, stone)  # counter
-        bx.frustum(0.0, b + 0.30, 0.17, 0.13, 0.21, 0.16, 0.81, 0.94, white)  # basin
-        bx.frustum(0.0, b + 0.30, 0.18, 0.14, 0.18, 0.14, 0.935, 0.94, dark)
-        bx.frustum(0.0, b + 0.08, 0.02, 0.02, 0.02, 0.02, 0.81, 1.06, chrome)  # mixer
-        bx.box(-0.012, 0.012, b + 0.08, b + 0.20, 1.03, 1.06, chrome)
-        bx.box(-0.04, -0.005, b + 0.06, b + 0.10, 1.06, 1.08, chrome)
+        # a wall-hung teak vanity with two drawers, a stone top, a vessel
+        # basin and a tall mixer
+        ww = w / 2 + 0.10
+        bx.box(-ww, ww, b, b + 0.50, 0.30, 0.78, wood)
+        dk = {"color": COLORS["teak_dark"]}
+        for z_a, z_b in ((0.33, 0.54), (0.56, 0.75)):
+            bx.box(-ww + 0.015, ww - 0.015, b + 0.50, b + 0.515, z_a, z_b, dk)    # drawer
+            bx.box(-0.10, 0.10, b + 0.515, b + 0.53, z_b - 0.04, z_b - 0.025, chrome)
+        bx.box(-ww - 0.02, ww + 0.02, b, b + 0.53, 0.78, 0.81, stone)  # counter
+        bx.shell(0.0, b + 0.30, 0.09, 0.09, 0.20, 0.17, 0.012, 0.81, 0.95, white,
+                 {"color": (0.92, 0.94, 0.96)})                        # vessel basin
+        bx.frustum(0.0, b + 0.07, 0.022, 0.022, 0.02, 0.02, 0.81, 1.16, chrome)  # mixer
+        bx.box(-0.012, 0.012, b + 0.06, b + 0.22, 1.13, 1.16, chrome)
+        bx.box(-0.045, -0.01, b + 0.04, b + 0.09, 1.16, 1.18, chrome)
     elif t == "LV2":
         # a long stone counter on a wood vanity, two vessel basins on top
         bx.box(-w / 2, w / 2, b, b + 0.52, 0.12, 0.76, wood)
@@ -1365,20 +1392,27 @@ def fixture_member(fx, z, room=None):
                    {"color": COLORS["teak_dark"]})
         bx.box(-w / 2 - 0.02, w / 2 + 0.02, b, b + 0.55, 0.76, 0.80, stone)
         for x_ in (-w / 4, w / 4):
-            bx.frustum(x_, b + 0.30, 0.10, 0.08, 0.20, 0.17, 0.80, 0.95, white)
-            bx.frustum(x_, b + 0.30, 0.19, 0.16, 0.19, 0.16, 0.947, 0.95, dark)
+            bx.shell(x_, b + 0.30, 0.10, 0.08, 0.20, 0.17, 0.012, 0.80, 0.95, white,
+                     {"color": (0.92, 0.94, 0.96)})
             bx.frustum(x_, b + 0.05, 0.016, 0.016, 0.016, 0.016, 0.80, 1.12, chrome)
             bx.box(x_ - 0.01, x_ + 0.01, b + 0.04, b + 0.20, 1.10, 1.12, chrome)
     elif t == "BT2":
-        # a freestanding oval bath: a tapered shell on the floor, a floor mixer
-        bx.frustum(0.0, 0.0, w / 2 - 0.12, d / 2 - 0.10, w / 2, d / 2, 0.0, 0.58, white)
-        bx.frustum(0.0, 0.0, w / 2 - 0.07, d / 2 - 0.07, w / 2 - 0.07, d / 2 - 0.07,
-                   0.58, 0.585, {"color": (0.80, 0.86, 0.90)})
-        bx.frustum(w / 2 + 0.12, 0.0, 0.02, 0.02, 0.02, 0.02, 0.0, 0.95, chrome)
-        bx.box(w / 2 - 0.02, w / 2 + 0.13, -0.01, 0.01, 0.92, 0.95, chrome)
+        # a freestanding oval bath: a hollow tapered shell with a rolled rim,
+        # a floor-standing mixer with its hand shower, a bath mat in front
+        bx.shell(0.0, 0.0, w / 2 - 0.12, d / 2 - 0.10, w / 2, d / 2, 0.035, 0.0, 0.58, white,
+                 {"color": (0.93, 0.95, 0.97)})
+        bx.frustum(0.0, 0.0, w / 2 - 0.30, d / 2 - 0.26, w / 2 - 0.30, d / 2 - 0.26, 0.20, 0.205,
+                   {"color": (0.80, 0.90, 0.94), "opacity": 0.55})          # water
+        bx.frustum(w / 2 + 0.14, 0.0, 0.06, 0.06, 0.06, 0.06, 0.0, 0.01, chrome)
+        bx.frustum(w / 2 + 0.14, 0.0, 0.022, 0.022, 0.018, 0.018, 0.01, 0.95, chrome)
+        bx.box(w / 2 - 0.02, w / 2 + 0.15, -0.012, 0.012, 0.92, 0.95, chrome)
+        bx.frustum(w / 2 + 0.14, 0.06, 0.022, 0.022, 0.022, 0.022, 0.62, 0.82, chrome)  # hand shower
+        bx.box(-0.40, 0.40, d / 2 + 0.08, d / 2 + 0.58, 0.0, 0.012,
+               {"color": (0.86, 0.80, 0.70)})                                # bath mat
+        bx.box(-0.13, 0.13, -d / 2 + 0.03, d / 2 - 0.03, 0.58, 0.60, wood)    # bath caddy
     elif t == "GP":
         # the glass screen: clear panel, a slim chrome frame at its edges
-        glass = {"color": (0.82, 0.92, 0.96), "opacity": 0.35}
+        glass = {"color": (0.86, 0.93, 0.94), "opacity": 0.24}
         bx.box(-w / 2, w / 2, -0.005, 0.005, 0.02, 2.00, glass)
         bx.box(-w / 2, -w / 2 + 0.02, -0.012, 0.012, 0.0, 2.00, chrome)
         bx.box(-w / 2, w / 2, -0.012, 0.012, 0.0, 0.03, chrome)
@@ -1397,6 +1431,8 @@ def fixture_member(fx, z, room=None):
         bx.box(-0.012, 0.012, b + 0.02, b + 0.30, 1.98, 2.01, chrome)  # arm
         bx.frustum(0.0, b + 0.30, 0.11, 0.11, 0.11, 0.11, 1.95, 1.97, chrome)  # rain head
         bx.box(-0.40, 0.40, b, b + 0.80, -0.002, 0.0, {"color": (0.70, 0.72, 0.74)})  # wet zone
+        bx.box(0.18, 0.40, b, b + 0.10, 1.20, 1.22, stone)               # soap shelf
+        bx.frustum(0.12, b + 0.04, 0.015, 0.015, 0.015, 0.015, 1.10, 1.30, chrome)   # hand shower
     elif t == "BT":
         bx.box(-w / 2, w / 2, b, b + 0.06, 0.0, 0.55, white)
         bx.box(-w / 2, w / 2, -b - 0.06, -b, 0.0, 0.55, white)
@@ -1418,6 +1454,12 @@ def fixture_member(fx, z, room=None):
         bx.box(-w / 2, -w / 2 + 0.03, b, b + 0.08, z0 - 0.02, z0 + 0.03, chrome)
         bx.box(w / 2 - 0.03, w / 2, b, b + 0.08, z0 - 0.02, z0 + 0.03, chrome)
         bx.box(-w / 2, w / 2, b + 0.06, b + 0.085, z0, z0 + 0.025, chrome)
+        if t == "TR":
+            # a folded towel over the rail
+            towel = {"color": (0.93, 0.90, 0.84)}
+            bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.045, b + 0.058, z0 - 0.45, z0 + 0.03, towel)
+            bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.087, b + 0.100, z0 - 0.38, z0 + 0.03, towel)
+            bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.045, b + 0.100, z0 + 0.025, z0 + 0.04, towel)
     elif t in ("TP", "SD"):
         bx.box(-w / 2, w / 2, b, b + d, z0, z0 + height, chrome)
     elif t == "FD":
@@ -1625,6 +1667,32 @@ class _Boxes:
             if attrs and f is not None:
                 f.attrs.update(attrs)
 
+    def shell(self, s, d, rs0, rd0, rs1, rd1, t, z0, z1, attrs=None, inner=None, n=28):
+        """A hollow elliptic tub/bowl: an outer wall from (rs0, rd0) at z0 to
+        (rs1, rd1) at z1, ``t`` thick, a rolled rim on top and the inside
+        floor ``t`` above z0 (painted ``inner`` if given)."""
+        if z1 - z0 < 1e-4:
+            return
+
+        def ring(rs, rd, z):
+            return [self.P(s + rs * math.cos(2 * math.pi * i / n),
+                           d + rd * math.sin(2 * math.pi * i / n), z) for i in range(n)]
+        o0, o1 = ring(rs0, rd0, z0), ring(rs1, rd1, z1)
+        i0 = ring(max(rs0 - t, 0.01), max(rd0 - t, 0.01), z0 + t)
+        i1 = ring(rs1 - t, rd1 - t, z1)
+        flip = self.u[0] * self.n[1] - self.u[1] * self.n[0] < 0
+        faces = [(o0[::-1], attrs)]
+        for k in range(n):
+            j = (k + 1) % n
+            faces.append(([o0[k], o0[j], o1[j], o1[k]], attrs))          # outside
+            faces.append(([i1[k], i1[j], i0[j], i0[k]], inner or attrs))  # inside
+            faces.append(([o1[k], o1[j], i1[j], i1[k]], attrs))          # rim
+        faces.append((i0, inner or attrs))                               # inside floor
+        for q, a in faces:
+            f = self.mesh.add_face(q[::-1] if flip else q)
+            if a and f is not None:
+                f.attrs.update(a)
+
     def group(self, name, part, kind, mark, ifc):
         from core.group import Group
         if not self.mesh.faces:
@@ -1664,7 +1732,7 @@ def opening_set(op, s, p0, u, z, a, b, sill, top, wt):
     i0, i1 = a + fw + gap, b - fw - gap
     j0, j1 = (bottom + 0.01 if door else sill + fw + gap), top - fw - gap
     n = max(int(spec["leaves"]), 0)
-    glass = _paint("glass", 0.35)
+    glass = _paint("glass", 0.24)
     # A fixed glass transom over the leaves and / or a side light, behind
     # a mullion of the frame section.
     tr = float(spec.get("transom") or 0.0)
@@ -1791,7 +1859,7 @@ def stair_member(stp, s, z):
     n, L, H = stair_geometry(stp, s)
     rx, ry = _DIRS[int(stp.get("dir", 1)) % 4]
     tx, ty = ry, -rx
-    w = float(stp.get("w") or s["stair_w"])
+    w = stair_width(stp, s)
     cx, cy = float(stp["x"]), float(stp["y"])
     ax, ay = cx - rx * L / 2, cy - ry * L / 2
     path = [(ax - tx * w / 2, ay - ty * w / 2, z),
@@ -3081,9 +3149,12 @@ def cap_edge(path, skins, color, lift, piece=0.30):
         return None
     slope = (zin - skin_z(mid.x(), mid.y(), skins) if skin_z(mid.x(), mid.y(), skins) is not None
              else 0.0) / 0.3
-    up = QVector3D(0, 0, lift)
+    # sits clearly on top of the tiles' crests: a 0.20 m flap over the
+    # roof, a rounded bead along the edge, a 0.18 m drop over the fascia
+    up = QVector3D(0, 0, lift + 0.015)
     a2, b2 = a + up, b + up
-    fl = QVector3D(w.x() * 0.15, w.y() * 0.15, slope * 0.15)
+    fw_ = 0.20
+    fl = QVector3D(w.x() * fw_, w.y() * fw_, slope * fw_)
     out = QVector3D(-w.x() * 0.012, -w.y() * 0.012, 0.0)
     mesh = Mesh()
     attrs = {"color": tuple(color)}
@@ -3094,9 +3165,13 @@ def cap_edge(path, skins, color, lift, piece=0.30):
         p1 = a2 + t * ((k + 1) / n)
         lap = 0.006 if k % 2 else 0.0
         _prism(mesh, [p0, p1, p1 + fl, p0 + fl], th + QVector3D(0, 0, lap), attrs)
-        _prism(mesh, [p0 + out, p1 + out, p1 + out + QVector3D(0, 0, -0.13),
-                      p0 + out + QVector3D(0, 0, -0.13)],
+        _prism(mesh, [p0 + out, p1 + out, p1 + out + QVector3D(0, 0, -0.18),
+                      p0 + out + QVector3D(0, 0, -0.18)],
                QVector3D(-w.x() * 0.012, -w.y() * 0.012, 0.0), attrs)
+        # the rounded bead (จมูกครอบ) along the edge
+        bead = QVector3D(0, 0, 0.035)
+        _prism(mesh, [p0 + out, p1 + out, p1 + out + bead, p0 + out + bead],
+               QVector3D(w.x() * 0.05, w.y() * 0.05, 0.0), attrs)
     _ = b2
     g = Group(mesh, name=f"ครอบข้าง · {n} แผ่น ยาว {L:.2f} ม.")
     g.ifc = {"class": "IfcCovering", "name": "ครอบข้าง"}
@@ -3263,10 +3338,8 @@ def gable_infill(data, lines=None) -> list:
             continue
         p0, p1, L = wl["p0"], wl["p1"], wl["L"]
         ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
-        if not wl.get("exterior") and s.get("roof") != "shed":
-            # (under a lean-to the ceiling follows the rafters, so every
-            # wall goes up to it) — else an inside wall only where two
-            # roofs meet at a step (the
+        if not wl.get("exterior"):
+            # an inside wall only where two roofs meet at a step (the
             # high side of one shed over the other): close the step
             mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
             zs = [skin_z(mx - uy * d, my + ux * d, lines["skin"]) for d in (0.6, 0.3, -0.3, -0.6)]
@@ -3813,6 +3886,36 @@ def soffit_area(data) -> float:
     return sum((c[2] - c[0]) * (c[3] - c[1]) for c in cells)
 
 
+class _UnderRafters(_Boxes):
+    """Boxes in plan (x, y) hung under the rafters: a box's ``z0``/``z1``
+    are measured up from ``T`` below the rafters' underside at each corner,
+    so every board and runner follows the slope (the lean-to's soffit
+    screwed to its rafters)."""
+
+    def __init__(self, zr, T):
+        super().__init__((0.0, 0.0), (1.0, 0.0), 0.0)
+        self.zr, self.T = zr, T
+
+    def box(self, s0, s1, d0, d1, z0, z1, attrs=None):
+        if s1 - s0 < 1e-4 or d1 - d0 < 1e-4 or z1 - z0 < 1e-4:
+            return
+        from PySide6.QtGui import QVector3D
+        cx, cy = (s0 + s1) / 2, (d0 + d1) / 2
+        base = {}
+        for x, y in ((s0, d0), (s1, d0), (s1, d1), (s0, d1)):
+            base[(x, y)] = self.zr(x + (cx - x) * 1e-3, y + (cy - y) * 1e-3) - self.T
+        lo = [QVector3D(x, y, base[(x, y)] + z0) for x, y in ((s0, d0), (s1, d0), (s1, d1), (s0, d1))]
+        hi = [QVector3D(x, y, base[(x, y)] + z1) for x, y in ((s0, d0), (s1, d0), (s1, d1), (s0, d1))]
+        faces = [lo[::-1], hi]
+        for i in range(4):
+            j = (i + 1) % 4
+            faces.append([lo[i], lo[j], hi[j], hi[i]])
+        for f_ in faces:
+            f = self.mesh.add_face(f_)
+            if attrs and f is not None:
+                f.attrs.update(attrs)
+
+
 def soffit_members(data, lines, s):
     """The soffit boards (ระแนงไม้เทียม 0.15 ม. เว้นร่อง) and the galvanised
     steel frame above them (โครงคร่าวเหล็กชุบสังกะสี: runners across the
@@ -3821,10 +3924,20 @@ def soffit_members(data, lines, s):
     if not cells:
         return []
     from core.wanic_catalog import COLORS  # noqa: F401  (palette parity)
-    boards = _Boxes((0.0, 0.0), (1.0, 0.0), z)
-    frame = _Boxes((0.0, 0.0), (1.0, 0.0), z)
     bt, plank, gap = 0.008, 0.15, 0.005
     fw, fh = 0.035, 0.024                     # ซีลาย C-line 35 × 24 มม.
+    rdepth = lift_of(s)
+    sloped = s.get("roof") == "shed" and bool(lines.get("skin"))
+    if sloped:
+        # a lean-to: the soffit goes up against the rafters, along the slope
+        def zr(x, y):
+            v = skin_z(x, y, lines["skin"])
+            return (v if v is not None else z + bt + 2 * fh + rdepth) - rdepth
+        boards = _UnderRafters(zr, bt + 2 * fh)
+        frame = _UnderRafters(zr, bt + 2 * fh)
+    else:
+        boards = _Boxes((0.0, 0.0), (1.0, 0.0), z)
+        frame = _Boxes((0.0, 0.0), (1.0, 0.0), z)
     sp = max(float(s.get("soffit_sp") or 0.60), 0.30)
     board_paint = {"color": (0.90, 0.88, 0.83)}
     steel_paint = {"color": (0.70, 0.72, 0.74)}
@@ -3862,9 +3975,8 @@ def soffit_members(data, lines, s):
     # (ฉากขอบ) screwed to the wall and behind the fascia
     fix = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
     zinc = {"color": (0.55, 0.57, 0.60)}
-    rdepth = lift_of(s)
     nh = 0
-    for x0, y0, x1, y1 in cells:
+    for x0, y0, x1, y1 in ([] if sloped else cells):
         along_x = (x1 - x0) >= (y1 - y0)
         runners = []
         if along_x:
@@ -3896,7 +4008,8 @@ def soffit_members(data, lines, s):
                         [("ชนิด", "สตัดเกลียว Ø 6 มม. + ตัวยึดโครงซีลาย + เพลทยึดใต้จันทัน"),
                          ("จำนวน", f"{nh} จุด"), ("ระยะ", "ไม่เกิน 1.20 ม.")]))
     info = [("ชนิด", "ฝ้าชายคาระแนงไม้เทียม เว้นร่อง 5 มม. + มุ้งกันแมลง"),
-            ("พื้นที่", f"{area:.2f} ตร.ม."), ("ระดับ", f"{z:+.2f} ม."),
+            ("พื้นที่", f"{area:.2f} ตร.ม."),
+            ("ระดับ", "ลาดตามแนวจันทัน ยึดโครงคร่าวใต้จันทันโดยตรง" if sloped else f"{z:+.2f} ม."),
             ("สูตรวัสดุ", "5.41 ฝ้าระแนงไม้เทียม (หลักเกณฑ์ 2569)"),
             ("รายการ BOQ", "ฝ้าชายคา (หลักเกณฑ์ 4.2 ข้อ 2.1)")]
     g = boards.group(f"ฝ้าชายคาระแนงไม้เทียม · {area:.2f} ตร.ม.", "roof", "soffit",
@@ -4131,7 +4244,7 @@ def takeoff_rates(data) -> list[dict]:
                   for f in floors for op in f["openings"]})
     for i, (kind, label) in enumerate(ops):
         add("งานประตู-หน้าต่าง", f"3.{i + 3}", label, label, "count", "ชุด")
-    if any(f["stairs"] for f in floors):
+    if any(stair_used(stp, s, len(floors)) for f in floors for stp in f["stairs"]):
         add("งานโครงสร้าง", "2.7", "คอนกรีตบันได", "บันได คสล.", "volume",
             "ลบ.ม.")
     names = {"ridge": "อกไก่", "hip": "ตะเฆ่สัน", "rafter": "จันทัน",

@@ -342,8 +342,10 @@ def wall_lamps(B, E):
 #: ตู้ไฟ 1.50 (ขอบล่าง), เครื่องทำน้ำอุ่น 1.50
 H_SWITCH, H_OUTLET, H_OUTLET_WET, H_PANEL, H_HEATER = 1.20, 0.30, 1.20, 1.50, 1.50
 COL = {"device": (0.97, 0.97, 0.95), "panel": (0.85, 0.86, 0.88),
-       "supply": (0.25, 0.45, 0.85), "drain": (0.55, 0.55, 0.55),
-       "soil": (0.42, 0.42, 0.40), "tank": (0.35, 0.55, 0.40),
+       # PVC as it is sold: blue for water supply (ท่อฟ้า), grey for
+       # drainage and soil (ท่อเทา), white for the downspouts
+       "supply": (0.16, 0.42, 0.82), "drain": (0.62, 0.63, 0.64),
+       "soil": (0.50, 0.51, 0.52), "downspout": (0.95, 0.95, 0.93), "tank": (0.35, 0.55, 0.40),
        "concrete": (0.78, 0.77, 0.74), "meter": (0.20, 0.30, 0.55),
        "copper": (0.80, 0.50, 0.25), "rod": (0.70, 0.45, 0.20),
        "sign": (0.95, 0.95, 0.90), "post": (0.40, 0.40, 0.42)}
@@ -448,19 +450,50 @@ def supply_routes(risers, box, half_c, d_off, z_sup, gl):
     return {"legs": legs, "meter": meter, "stub": stub}
 
 
+def _split_at_joints(legs):
+    """Split a leg wherever another leg ends on it (a tee's branch), so
+    every joint is a joint of leg ends."""
+    pts = [p_ for a, b in legs for p_ in (a, b)]
+    out = []
+    for a, b in legs:
+        L = math.dist(a, b)
+        if L < 1e-6:
+            continue
+        d = [(b[i] - a[i]) / L for i in range(3)]
+        ts = []
+        for p_ in pts:
+            t = sum((p_[i] - a[i]) * d[i] for i in range(3))
+            if 0.01 < t < L - 0.01:
+                q = [a[i] + d[i] * t for i in range(3)]
+                if math.dist(q, p_) < 2e-3:
+                    ts.append(t)
+        prev = a
+        for t in sorted(set(round(t, 4) for t in ts)):
+            q = tuple(a[i] + d[i] * t for i in range(3))
+            out.append((prev, q))
+            prev = q
+        out.append((prev, b))
+    return out
+
+
+COUPLING_EVERY = 4.0                   # a pipe comes in 4 m lengths
+
+
 def _fittings(legs, D):
-    """Elbows and tees: wherever two or more legs meet at an angle, a short
-    socket a size up on each leg (as the fittings are)."""
+    """The fittings of a run, as they are made: at every elbow/tee a hub
+    (the fitting's body) with a socket a size up on each leg, and a
+    straight coupling (ข้อต่อตรง) every 4 m along a long leg.
+    → (sockets [(a, b, D)], hubs [(centre, r)])."""
     ends = {}
     for a, b in legs:
         for p_, q_ in ((a, b), (b, a)):
-            key = (round(p_[0], 2), round(p_[1], 2), round(p_[2], 2))
+            key = (round(p_[0], 3), round(p_[1], 3), round(p_[2], 3))
             L = math.dist(p_, q_)
             if L < 1e-6:
                 continue
             ends.setdefault(key, []).append((p_, tuple((q_[i] - p_[i]) / L for i in range(3))))
-    # a leg passing straight through a joint (a tee's run) counts as two ends
-    out = []
+    socks, hubs = [], []
+    ln = max(0.045, D / 1000.0 * 1.1)
     for key, items in ends.items():
         dirs = [d for _p, d in items]
         if len(dirs) < 2:
@@ -468,20 +501,187 @@ def _fittings(legs, D):
         if len(dirs) == 2 and sum(dirs[0][i] * dirs[1][i] for i in range(3)) < -0.999:
             continue                                   # straight on: no fitting
         p_ = items[0][0]
-        ln = max(0.035, D / 1000.0 * 0.9)
+        hubs.append((p_, D / 1000.0 * 0.66))
         for d in dirs:
-            out.append((p_, tuple(p_[i] + d[i] * ln for i in range(3))))
-    return out
+            socks.append((tuple(p_[i] + d[i] * D / 1000.0 * 0.35 for i in range(3)),
+                          tuple(p_[i] + d[i] * ln for i in range(3)), D * 1.32))
+    for a, b in legs:
+        L = math.dist(a, b)
+        n = int(L / COUPLING_EVERY - 1e-6)
+        for k in range(1, n + 1):
+            t = k * COUPLING_EVERY
+            if L - t < 0.5:
+                continue
+            d = [(b[i] - a[i]) / L for i in range(3)]
+            socks.append((tuple(a[i] + d[i] * (t - ln) for i in range(3)),
+                          tuple(a[i] + d[i] * (t + ln) for i in range(3)), D * 1.28))
+    return socks, hubs
 
 
-def septic_members(B, tank, box, half_c, d_off, gl):
-    """The septic tank as it is made: a round tank with a domed top, its
-    access neck and lid at the ground, the inlet and outlet sockets
-    (outlet 5 cm lower), the vent Ø 2", an inspection chamber on the soil
-    line before it and the treated-water pipe out to the drain ring."""
+def _ball(mesh, c, r, n=8):
+    """A sphere of quads (a fitting's hub)."""
+    from PySide6.QtGui import QVector3D
+    rings = [(r * math.cos(math.pi * (i / n - 0.5)), r * math.sin(math.pi * (i / n - 0.5)))
+             for i in range(n + 1)]
+    m = 2 * n
+    for i in range(n):
+        (r0, z0), (r1, z1) = rings[i], rings[i + 1]
+        for j in range(m):
+            a0, a1 = 2 * math.pi * j / m, 2 * math.pi * (j + 1) / m
+            p = [(c[0] + r0 * math.cos(a0), c[1] + r0 * math.sin(a0), c[2] + z0),
+                 (c[0] + r0 * math.cos(a1), c[1] + r0 * math.sin(a1), c[2] + z0),
+                 (c[0] + r1 * math.cos(a1), c[1] + r1 * math.sin(a1), c[2] + z1),
+                 (c[0] + r1 * math.cos(a0), c[1] + r1 * math.sin(a0), c[2] + z1)]
+            q = [v for k, v in enumerate(p) if math.dist(v, p[k - 1]) > 1e-9]
+            if len(q) >= 3:
+                mesh.add_face([QVector3D(*v) for v in q])
+
+
+def _seg_closest(a, b, c, d):
+    """Closest points of segments ab and cd → (s, t, p, q, dist)."""
+    u = [b[i] - a[i] for i in range(3)]
+    v = [d[i] - c[i] for i in range(3)]
+    w = [a[i] - c[i] for i in range(3)]
+    A = sum(x * x for x in u)
+    B_ = sum(u[i] * v[i] for i in range(3))
+    C = sum(x * x for x in v)
+    D_ = sum(u[i] * w[i] for i in range(3))
+    E_ = sum(v[i] * w[i] for i in range(3))
+    den = A * C - B_ * B_
+    s = 0.0 if den < 1e-12 else min(max((B_ * E_ - C * D_) / den, 0.0), 1.0)
+    t = (B_ * s + E_) / C if C > 1e-12 else 0.0
+    if t < 0.0:
+        t = 0.0
+        s = min(max(-D_ / A, 0.0), 1.0) if A > 1e-12 else 0.0
+    elif t > 1.0:
+        t = 1.0
+        s = min(max((B_ - D_) / A, 0.0), 1.0) if A > 1e-12 else 0.0
+    p = [a[i] + u[i] * s for i in range(3)]
+    q = [c[i] + v[i] * t for i in range(3)]
+    return s, t, p, q, math.dist(p, q)
+
+
+def avoid_clashes(legs, D, others, clear=0.02, tries=80):
+    """Re-route the water-supply ``legs`` (Ø ``D`` mm) round every other
+    pipe [(legs, Ø mm)…] they would touch: a C-shaped jog (two elbows out,
+    two back) under/over a pipe it crosses, or to the side of one it runs
+    beside or meets standing up — the supply is under pressure, so it may
+    jog; the drains keep their fall. The jog tried first is the one whose
+    own legs touch nothing. A clash within 4 cm of a joint is the joint's
+    fitting and is left. → (legs, number of jogs)."""
+    r1 = D / 2000.0
+    obs = [(a, b, Do / 2000.0) for o_legs, Do in others for a, b in o_legs
+           if math.dist(a, b) > 1e-6]
+    legs = list(legs)
+    jogs = 0
+    skip = set()
+
+    def clash(a, b, end_gap=0.04):
+        L = math.dist(a, b)
+        if L < 1e-6:
+            return None
+        for oi, (c, d, ro) in enumerate(obs):
+            need = r1 + ro + clear
+            if any(min(a[i], b[i]) - need > max(c[i], d[i]) or
+                   max(a[i], b[i]) + need < min(c[i], d[i]) for i in range(3)):
+                continue
+            s_, t_, p, q, dist = _seg_closest(a, b, c, d)
+            if dist >= need:
+                continue
+            if end_gap / L < s_ < 1.0 - end_gap / L:
+                return oi, s_, p, q, need, dist
+            # side by side, the closest point lands on an end: look along it
+            n_ = max(2, int(L / 0.05))
+            for m in range(1, n_):
+                sm = m / n_
+                if not (end_gap / L < sm < 1.0 - end_gap / L):
+                    continue
+                pm = [a[i] + (b[i] - a[i]) * sm for i in range(3)]
+                _s2, _t2, _p2, qm, dm = _seg_closest(pm, pm, c, d)
+                if dm < need:
+                    return oi, sm, pm, qm, need, dm
+        return None
+
+    def free(pts):
+        return all(clash(p_, q_, 0.0) is None for p_, q_ in zip(pts, pts[1:])
+                   if math.dist(p_, q_) > 1e-6)
+
+    for _ in range(tries):
+        hit = None
+        for k, (a, b) in enumerate(legs):
+            if math.dist(a, b) < 0.05:
+                continue
+            h = clash(a, b)
+            if h and (k, h[0]) not in skip and (a, b, h[0]) not in skip:
+                hit = (k, h)
+                break
+        if hit is None:
+            break
+        k, (oi, s_, p, q, need, dist) = hit
+        a, b = legs[k]
+        c, d, ro = obs[oi]
+        L = math.dist(a, b)
+        du = [(b[i] - a[i]) / L for i in range(3)]
+        Lo = math.dist(c, d)
+        ev = [(d[i] - c[i]) / Lo for i in range(3)]
+        cos = abs(sum(du[i] * ev[i] for i in range(3)))
+        w = ro + r1 + clear + 0.06
+        if cos > 0.9:
+            # side by side: jog over the whole stretch they share
+            ts = sorted(sum((x[i] - a[i]) * du[i] for i in range(3)) for x in (c, d))
+            t0, t1 = ts[0] - w, ts[1] + w
+        else:
+            t0, t1 = s_ * L - w, s_ * L + w
+        t0, t1 = max(t0, 0.03), min(t1, L - 0.03)
+        if t1 - t0 < 2 * (r1 + ro):
+            skip.add((a, b, oi))
+            continue
+        # the ways out: under or to either side (never up into the beams)
+        side = [-du[1], du[0], 0.0]
+        ns = math.hypot(side[0], side[1])
+        if ns < 1e-6:                                  # a riser: sideways ⟂ the obstacle
+            side = [-ev[1], ev[0], 0.0]
+            ns = math.hypot(side[0], side[1]) or 1.0
+        side = [x / ns for x in side]
+        off = [p[i] - q[i] for i in range(3)]
+        cands = []
+        dz = off[2]
+        cands.append(([0.0, 0.0, -1.0], (need + dz) + 0.01 if dz > -need else 0.0))
+        for sg in (1.0, -1.0):
+            j = [x * sg for x in side]
+            sep = sum(off[i] * j[i] for i in range(3))
+            cands.append((j, need - sep + 0.02))
+        done = False
+        for j, amount in sorted(cands, key=lambda c_: c_[1]):
+            if amount <= 0.0 or (abs(j[2]) > 0.5 and abs(du[2]) > 0.9):
+                continue
+            amount = max(amount, 0.05)
+            p1 = tuple(a[i] + du[i] * t0 for i in range(3))
+            p4 = tuple(a[i] + du[i] * t1 for i in range(3))
+            p2 = tuple(p1[i] + j[i] * amount for i in range(3))
+            p3 = tuple(p4[i] + j[i] * amount for i in range(3))
+            if not free([p1, p2, p3, p4]):
+                continue
+            legs[k:k + 1] = [(a, p1), (p1, p2), (p2, p3), (p3, p4), (p4, b)]
+            jogs += 1
+            done = True
+            break
+        if not done:
+            skip.add((a, b, oi))
+    return legs, jogs
+
+
+TANK_R = 0.55                          # the round tank's radius
+TANK_IN = 0.75                         # inlet depth under the ground
+TANK_OUT = 0.80                        # outlet: 5 cm lower
+TANK_RING = 1.60                       # tank centre beyond the drain ring
+MH_OFF = TANK_R + 0.55                 # MH-01 centre, tank side of the ring
+
+
+def tank_axes(tank, box):
+    """(toward the building, along the building) unit vectors at the tank."""
     tx, ty = tank
     X0, Y0, X1, Y1 = box
-    # which way the building is (the inlet faces it)
     cands = [(abs(tx - X0), (1, 0)), (abs(tx - X1), (-1, 0)), (abs(ty - Y0), (0, 1)),
              (abs(ty - Y1), (0, -1))]
     to_b = min(cands)[1]
@@ -489,7 +689,63 @@ def septic_members(B, tank, box, half_c, d_off, gl):
         to_b = (0, 1) if ty < Y0 else (0, -1)
     elif Y0 - 1e-6 <= ty <= Y1 + 1e-6:
         to_b = (1, 0) if tx < X0 else (-1, 0)
-    u = (-to_b[1], to_b[0])
+    return to_b, (-to_b[1], to_b[0])
+
+
+def treated_route(tank, box, gl, holes=(), ring_d=None):
+    """The treated water out of the tank into the nearest manhole of the
+    drain ring: the outlet socket on the tank's side (90° from the inlet,
+    on the manhole's side), along to the manhole's line, one elbow and
+    straight into its wall — falling 1:100."""
+    tx, ty = tank
+    ring_d = TANK_RING if ring_d is None else ring_d
+    to_b, u = tank_axes(tank, box)
+    r = TANK_R
+    near = [h for h in holes
+            if abs((h[0] - tx) * to_b[0] + (h[1] - ty) * to_b[1] - ring_d) < 0.05]
+    sg, s_m = 1.0, r + 0.45
+    end_d = ring_d
+    if near:
+        h = min(near, key=lambda h: abs((h[0] - tx) * u[0] + (h[1] - ty) * u[1]))
+        s_h = (h[0] - tx) * u[0] + (h[1] - ty) * u[1]
+        if abs(s_h) < 2.5:
+            sg = 1.0 if s_h >= 0 else -1.0
+            s_m = max(abs(s_h), r + 0.35)
+            if abs(abs(s_h) - s_m) < 1e-6:
+                end_d = ring_d - 0.40              # the manhole's outer face
+    o0 = (tx + u[0] * r * sg, ty + u[1] * r * sg)
+    turn = (tx + u[0] * s_m * sg, ty + u[1] * s_m * sg)
+    ring = (turn[0] + to_b[0] * end_d, turn[1] + to_b[1] * end_d)
+    legs, _z = _sloped([o0, turn, ring], gl - TANK_OUT)
+    return legs
+
+
+def ring_holes(E, s):
+    """The drain ring's manholes (x, y): every corner and at most every 6 m."""
+    half = float(E["lib"]["C1"]["b"]) / 2
+    rooms = E["floors"][0]["rooms"]
+    face = [(float(r["x"]) - half, float(r["y"]) - half, float(r["x"]) + float(r["w"]) + half,
+             float(r["y"]) + float(r["d"]) + half) for r in rooms]
+    d = max(float(s.get("drain_off", 1.5) or 0.0), 0.4)
+    ring = _outline(_close_notches([(a - d, b - d, c + d, e_ + d) for a, b, c, e_ in face]))
+    holes = []
+    for a, b in ring or ():
+        L = math.dist(a, b)
+        n = max(1, math.ceil(L / 6.0 - 1e-9))
+        for k in range(n + 1):
+            p = (a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)
+            if not any(math.dist(p, q) < 1e-6 for q in holes):
+                holes.append(p)
+    return holes
+
+
+def septic_members(B, tank, box, half_c, d_off, gl, holes=()):
+    """The septic tank as it is made: a round tank with a domed top, its
+    access neck and lid at the ground, the inlet and outlet sockets
+    (outlet 5 cm lower), the vent Ø 2", an inspection chamber on the soil
+    line before it and the treated-water pipe out to the drain ring."""
+    tx, ty = tank
+    to_b, u = tank_axes(tank, box)
     bx = B._Boxes((tx, ty), u, 0.0)
     # local: s along u, d toward the building
     body = {"color": (0.30, 0.52, 0.42)}
@@ -506,10 +762,14 @@ def septic_members(B, tank, box, half_c, d_off, gl):
                    body)
     bx.frustum(0.0, 0.0, 0.25, 0.25, 0.25, 0.25, z1 + 0.30, gl + 0.05, body)   # neck
     bx.frustum(0.0, 0.0, 0.29, 0.29, 0.29, 0.29, gl + 0.05, gl + 0.09, lid)    # lid
-    for zz, side in ((gl - 0.75, 1), (gl - 0.80, -1)):  # inlet (building side) / outlet
-        bx.frustum(0.0, side * (r + 0.06), 0.065, 0.065, 0.065, 0.065, zz - 0.065, zz + 0.065, pvc)
-    bx.frustum(0.35, 0.0, 0.03, 0.03, 0.03, 0.03, z1 + 0.10, gl + 2.0, pvc)   # vent
-    bx.frustum(0.35, 0.0, 0.05, 0.05, 0.05, 0.05, gl + 2.0, gl + 2.05, pvc)
+    # the inlet/outlet sockets are drawn on the pipes (a hub at the wall)
+    # the vent: a 2" stand-pipe off the dome, its rain cap a tee with
+    # two down-turned elbows and a mesh — not a downspout
+    bx.frustum(-0.30, -0.20, 0.03, 0.03, 0.03, 0.03, z1 + 0.10, gl + 1.80, pvc)
+    bx.frustum(-0.30, -0.20, 0.04, 0.04, 0.04, 0.04, gl + 1.76, gl + 1.84, pvc)
+    bx.box(-0.43, -0.17, -0.23, -0.17, gl + 1.77, gl + 1.83, pvc)
+    for s_ in (-0.42, -0.18):
+        bx.frustum(s_, -0.20, 0.03, 0.03, 0.03, 0.03, gl + 1.68, gl + 1.80, pvc)
     out = []
     g = bx.group("ถังบำบัดน้ำเสียสำเร็จรูป (ถังกลม ไร้อากาศ)", "structure", "septic",
                  "ถังบำบัด ST-01", "IfcTank")
@@ -518,12 +778,12 @@ def septic_members(B, tank, box, half_c, d_off, gl):
             ["ชนิด", "ถังบำบัดน้ำเสียสำเร็จรูป ทรงกลม ไร้อากาศ ชนิดมีตัวกลาง (มอก. 2550-2554)"],
             ["ขนาด", "Ø 1.10 × 1.60 ม. (1,200 ลิตร / 12 คน)"],
             ["ท่อเข้า/ออก", "ท่อเข้า Ø 4\" ลึก 0.75 ม. · ท่อออก Ø 4\" ต่ำกว่า 0.05 ม."],
-            ["ท่ออากาศ", "PVC Ø 2\" สูงจากดิน 2.00 ม. ปลายติดหมวกกันฝน"],
+            ["ท่ออากาศ", "PVC Ø 2\" สูงจากดิน 1.80 ม. ปลายเป็นสามทางคว่ำ (หมวกกันฝน) บุตะแกรง"],
             ["ฝา", "Ø 0.50 ม. สูงกว่าดิน 0.05 ม."], ["จำนวน", "1 ชุด"],
             ["รายการ BOQ", "หมวด 11"]]
         out.append((g, "septic"))
-    # inspection chamber on the soil line, 0.80 m before the tank
-    mx, my = tx + to_b[0] * (r + 0.80), ty + to_b[1] * (r + 0.80)
+    # inspection chamber on the soil line, between the drain ring and the tank
+    mx, my = tx + to_b[0] * MH_OFF, ty + to_b[1] * MH_OFF
     c = 0.20
     g = _box(B, "บ่อตรวจ (บ่อพักท่อโสโครก) MH-01", "manhole",
              [(mx - c - 0.07, my - c - 0.07, gl - 1.00, mx + c + 0.07, my - c, gl + 0.05, "concrete"),
@@ -533,21 +793,16 @@ def septic_members(B, tank, box, half_c, d_off, gl):
               (mx - c, my - c, gl - 1.00, mx + c, my + c, gl - 0.92, "concrete"),
               (mx - c, my - c, gl + 0.01, mx + c, my + c, gl + 0.05, "drain")],
              [("ชนิด", "บ่อตรวจท่อโสโครก ค.ส.ล. 0.40×0.40 ม. ฝาปิดสนิท"),
-              ("ตำแหน่ง", "ก่อนเข้าถังบำบัด 0.80 ม."), ("จำนวน", "1 บ่อ"), ("รายการ BOQ", "หมวด 11")],
+              ("ตำแหน่ง", "ก่อนเข้าถังบำบัด 0.55 ม. ด้านนอกแนวท่อระบายน้ำ"), ("จำนวน", "1 บ่อ"), ("รายการ BOQ", "หมวด 11")],
              "IfcDistributionChamberElement")
     if g is not None:
         out.append((g, "manhole"))
     # treated water out to the drain ring
-    o0 = (tx - to_b[0] * (r + 0.06), ty - to_b[1] * (r + 0.06))
-    ring_pt = (tx + to_b[0] * (1.20 + 0.0), ty + to_b[1] * (1.20 + 0.0))
-    turn = (o0[0] - to_b[0] * 0.30, o0[1] - to_b[1] * 0.30)
-    side = (turn[0] + u[0] * 0.80, turn[1] + u[1] * 0.80)
-    back = (side[0] + to_b[0] * (r + 0.36 + 1.20), side[1] + to_b[1] * (r + 0.36 + 1.20))
-    legs, _z = _sloped([o0, turn, side, back], gl - 0.80)
-    _ = ring_pt
-    g = _pipes_group(B, legs, 100.0, COL["drain"], "ท่อน้ำที่ผ่านการบำบัด PVC Ø 4\" → ท่อระบายน้ำ",
+    legs = treated_route(tank, box, gl, holes)
+    g = _pipes_group(B, legs, 100.0, COL["soil"], "ท่อน้ำที่ผ่านการบำบัด PVC Ø 4\" → ท่อระบายน้ำ",
                      "pipe_drain", [("ชนิด", "ท่อ PVC Ø 4\" ลาด 1:100 จากท่อออกถังบำบัดลงท่อระบายน้ำรอบอาคาร"),
-                                    ("รายการ BOQ", "หมวด 11")], fittings=True)
+                                    ("รายการ BOQ", "หมวด 11")], fittings=True,
+                     sockets_at=[legs[0][0]] if legs else ())
     if g is not None:
         out.append((g, "pipe_drain"))
     return out
@@ -613,15 +868,15 @@ def drain_routes(E, fx_pts, tank, box, half_c, d_off):
             upper = [i for i in its if i[0]["floor"] > 0]
             cs = [ac(nrm, i[1], i[2])[1] for i in ground] + ([c_in] if upper else [])
             c0 = min(cs)
-
-            def zm(c, c0=c0, deep=deep):           # the main's height at c
-                return deep - (c - c0) * SLOPE
             # the main: from the deepest fitting out through the wall
             if system == "soil" and tank is not None:
                 ta, tc = ac(nrm, *tank)
-                c_mh = tc - (0.55 + 0.80)            # through the inspection chamber
-                pts = [(a_m, c0), (a_m, c_mh), (ta, c_mh), (ta, tc - 0.61)]
+                c_mh = tc - MH_OFF                   # through the inspection chamber
+                pts = [(a_m, c0), (a_m, c_mh), (ta, c_mh), (ta, tc - TANK_R)]
                 pts = [p_ for i, p_ in enumerate(pts) if i == 0 or math.dist(p_, pts[i - 1]) > 1e-3]
+                run_len = sum(math.dist(p_, q_) for p_, q_ in zip(pts, pts[1:]))
+                # start just high enough to fall 1:100 into the inlet socket
+                deep = gl - TANK_IN + run_len * SLOPE
                 run, _z = _sloped([xy(nrm, a_, c_) for a_, c_ in pts], deep)
                 legs += run
             else:
@@ -636,6 +891,9 @@ def drain_routes(E, fx_pts, tank, box, half_c, d_off):
                     legs.append(((p_[0], p_[1], zf), (p_[0], p_[1], zo)))
                 run, _z = _sloped([p_, xy(nrm, a_m, face_c + d_off)], zo)
                 legs += run
+
+            def zm(c, c0=c0, deep=deep):           # the main's height at c
+                return deep - (c - c0) * SLOPE
             for e, x, y, _s in ground:
                 fa, fc = ac(nrm, x, y)
                 zj = zm(fc)
@@ -673,16 +931,28 @@ def drain_routes(E, fx_pts, tank, box, half_c, d_off):
     return soil, grey
 
 
-def _pipes_group(B, legs, D, color, name, kind, info, fittings=False):
+def _pipes_group(B, legs, D, color, name, kind, info, fittings=False, sockets_at=()):
     """Pipe legs (round, ``D`` mm) as one group, with a socket (elbow/tee)
     at every joint that turns when ``fittings``."""
     from core import wanic_profiles as P
     from core.group import Group
     from core.mesh import Mesh
     mesh = Mesh()
+    legs = _split_at_joints(legs)
     parts = [(a, b, D) for a, b in legs]
+    hubs = []
     if fittings:
-        parts += [(a, b, D * 1.35) for a, b in _fittings(legs, D)]
+        socks, hubs = _fittings(legs, D)
+        parts += socks
+    # a socket where a run enters a tank/chamber wall
+    for p_ in sockets_at:
+        for a, b in legs:
+            for e_, o_ in ((a, b), (b, a)):
+                if math.dist(e_, p_) < 0.02:
+                    L = math.dist(e_, o_)
+                    t_ = min(0.10, L)
+                    q_ = tuple(e_[i] + (o_[i] - e_[i]) / L * t_ for i in range(3))
+                    parts.append((e_, q_, D * 1.32))
     for a, b, d_ in parts:
         if math.dist(a, b) < 0.01:
             continue
@@ -692,6 +962,8 @@ def _pipes_group(B, legs, D, color, name, kind, info, fittings=False):
             continue
         for f in g.mesh.faces:
             mesh.add_face([v.position for v in f.loop])
+    for c, r in hubs:
+        _ball(mesh, c, r)
     if not mesh.faces:
         return None
     g = Group(mesh, name=name)
@@ -866,16 +1138,6 @@ def install_members(data, E, rooms):
         risers.append((tx, yy, 0.60, "tap"))
     supply = supply_routes(risers, (X0, Y0, X1, Y1), half_c, d_off, z_sup, gl)
     meter = supply["meter"]
-    g = _pipes_group(B, supply["legs"], 20.0, COL["supply"],
-                     "ท่อประปา PVC Ø ½\" (เมนจากมาตร ใต้ถุน และท่อขึ้นทุกจุดใช้น้ำ)", "pipe_supply",
-                     [("ชนิด", "ท่อ PVC ชั้น 13.5 Ø ½\" (เมน Ø ¾\") พร้อมข้อต่อทุกจุดเลี้ยว"),
-                      ("แนวท่อ", f"ใต้คานคอดิน (ระดับ {z_sup:+.2f}) ไม่ฝังในคาน · ใต้ดิน ลึก 0.30 ม."
-                                 " ช่วงนอกอาคาร"),
-                      ("จุดใช้น้ำ", f"{len(risers)} จุด (สุขภัณฑ์ ห้องน้ำ ครัว ก๊อกสนาม)"),
-                      ("ความยาว", f"{sum(math.dist(a_, b_) for a_, b_ in supply['legs']):.2f} ม."),
-                      ("รายการ BOQ", "หมวด 11")], fittings=True)
-    if g is not None:
-        out.append((g, "pipe_supply"))
     tbx = B._Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
     chrome = {"color": (0.80, 0.82, 0.85)}
     for tx, ty, ny in taps:
@@ -907,17 +1169,40 @@ def install_members(data, E, rooms):
     tank = None
     if soil_points:
         sx, sy = soil_points[0]
-        far = half_c + d_off + 1.20
+        far = half_c + d_off + TANK_RING
         dists = [(sx - X0, (X0 - far, sy)), (X1 - sx, (X1 + far, sy)),
                  (sy - Y0, (sx, Y0 - far)), (Y1 - sy, (sx, Y1 + far))]
         tank = min(dists)[1]
-        for g, kind in septic_members(B, tank, (X0, Y0, X1, Y1), half_c, d_off, gl):
+        for g, kind in septic_members(B, tank, (X0, Y0, X1, Y1), half_c, d_off, gl,
+                                      ring_holes(E, s)):
             out.append((g, kind))
     soil, grey = drain_routes(E, fx_pts, tank, (X0, Y0, X1, Y1), half_c, d_off)
+    # the supply jogs (C) round every drain it would touch; drains keep their fall
+    others = [(soil, 100.0), (grey, 55.0)]
+    if tank is not None:
+        others.append((treated_route(tank, (X0, Y0, X1, Y1), gl, ring_holes(E, s)), 100.0))
+    sup_legs, jogs = avoid_clashes(supply["legs"], 20.0, others)
+    g = _pipes_group(B, sup_legs, 20.0, COL["supply"],
+                     "ท่อประปา PVC Ø ½\" (เมนจากมาตร ใต้ถุน และท่อขึ้นทุกจุดใช้น้ำ)", "pipe_supply",
+                     [("ชนิด", "ท่อ PVC ชั้น 13.5 Ø ½\" (เมน Ø ¾\") พร้อมข้อต่อทุกจุดเลี้ยว"),
+                      ("แนวท่อ", f"ใต้คานคอดิน (ระดับ {z_sup:+.2f}) ไม่ฝังในคาน · ใต้ดิน ลึก 0.30 ม."
+                                 " ช่วงนอกอาคาร"),
+                      ("จุดใช้น้ำ", f"{len(risers)} จุด (สุขภัณฑ์ ห้องน้ำ ครัว ก๊อกสนาม)"),
+                      ("ความยาว", f"{sum(math.dist(a_, b_) for a_, b_ in sup_legs):.2f} ม."),
+                      ("หลบท่ออื่น", f"{jogs} จุด (ดัดหลบรูปตัว C ด้วยข้องอ 4 ตัว)" if jogs else "ไม่มีจุดตัด"),
+                      ("สีท่อ", "ฟ้า (ท่อประปา)"),
+                      ("รายการ BOQ", "หมวด 11")], fittings=True)
+    if g is not None:
+        out.append((g, "pipe_supply"))
+    tank_ends = [b_ for a_, b_ in soil if tank is not None and
+                 abs(math.hypot(b_[0] - tank[0], b_[1] - tank[1]) - TANK_R) < 0.02]
     for legs, D, name, kind, info in (
             (soil, 100.0, "ท่อโสโครก PVC Ø 4\" ลาด 1:100 (ส้วม → บ่อตรวจ → ถังบำบัด)", "pipe_drain",
              [("ชนิด", "ท่อโสโครก PVC ชั้น 8.5 Ø 4\" ลาดเอียง 1:100 ข้อต่อทุกจุดเลี้ยว"),
-              ("แนวท่อ", "ใต้ดิน ลึก 0.75 ม. ใต้ท่อระบายน้ำรอบอาคาร ไม่ตัดกับท่ออื่น"),
+              ("แนวท่อ", "ใต้ดิน ใต้ท่อระบายน้ำรอบอาคาร ผ่านบ่อตรวจ ลาด 1:100 ลงท่อเข้าถังบำบัดพอดี"
+                         " (ลึก 0.75 ม.) ไม่ตัดกับท่ออื่น"),
+              ("ข้อต่อ", "ข้องอ 90°/สามทาง Y ทุกจุดเลี้ยว ข้อต่อตรงทุก 4 ม. ข้อต่อเข้าถัง"),
+              ("สีท่อ", "เทา (ท่อระบายน้ำ/โสโครก)"),
               ("รายการ BOQ", "หมวด 11")]),
             (grey, 55.0, "ท่อน้ำทิ้ง PVC Ø 2\" ลาด 1:100 (อ่าง ฝักบัว ฟลอร์เดรน → บ่อพัก)",
              "pipe_drain",
@@ -925,7 +1210,7 @@ def install_members(data, E, rooms):
               ("แนวท่อ", "ใต้คานคอดิน ลงบ่อพัก/ท่อระบายน้ำรอบอาคาร"),
               ("รายการ BOQ", "หมวด 11")])):
         g = _pipes_group(B, legs, D, COL["soil" if D > 80 else "drain"], name, kind, info,
-                         fittings=True)
+                         fittings=True, sockets_at=tank_ends if D > 80 else ())
         if g is not None:
             out.append((g, kind))
     # grease trap outside each kitchen
@@ -1118,7 +1403,7 @@ def outside_members(E, s):
     boxes = []
     for (hx, hy) in holes:
         t = 0.10
-        z0, z1 = gl - 0.80, gl - 0.05
+        z0, z1 = gl - 1.05, gl - 0.05               # a 0.30 m silt sump under the pipes
         boxes += [(hx - mh / 2 - t, hy - mh / 2 - t, z0, hx + mh / 2 + t, hy - mh / 2, z1, "concrete"),
                   (hx - mh / 2 - t, hy + mh / 2, z0, hx + mh / 2 + t, hy + mh / 2 + t, z1, "concrete"),
                   (hx - mh / 2 - t, hy - mh / 2, z0, hx - mh / 2, hy + mh / 2, z1, "concrete"),

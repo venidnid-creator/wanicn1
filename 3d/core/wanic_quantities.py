@@ -464,7 +464,7 @@ def compute(data) -> dict:
     vol = area = 0.0
     for e in E["stairs"]:
         nr, L, Hs = B.stair_geometry(e["st"], s)
-        w = float(e["st"].get("w") or s["stair_w"])
+        w = B.stair_width(e["st"], s)
         sec = P.section_area("stair", dict(L=L * 1000, H=Hs * 1000, n=nr,
                                            t=float(s["stair_t"]) * 1000))
         vol += sec * w
@@ -840,7 +840,7 @@ def compute(data) -> dict:
             bill.add(g, tile["name"], slope * per, "แผ่น", waste=waste,
                      mat_key=tile["name"],
                      basis=f"พื้นที่ลาดเอียง {slope:.2f} ตร.ม. × {per:.2f} แผ่น/"
-                           f"ตร.ม. (ระยะซ้อนทับเหลือ {ew:.2f}×{el:.2f} ม./แผ่น)",
+                           f"ตร.ม. ตามคู่มือผู้ผลิต (ระยะใช้งาน {ew:.2f}×{el:.2f} ม./แผ่น)",
                      ref=f"หลักเกณฑ์ 4.2 ข้อ 1.1 (เผื่อ {waste:g}%)")
             bill.add(g, f"ค่าแรงมุง{tile['name']}", slope, "ตร.ม.",
                      lab_code=la, basis="พื้นที่ตามแนวลาดเอียง",

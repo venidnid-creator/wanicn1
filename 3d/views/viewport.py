@@ -982,8 +982,8 @@ def edit_fade_color(background) -> tuple:
 
 #: The model-opacity slider draws the faces as clear glass: their colour
 #: washed this far toward a pale blue-green glass tone.
-GLASS_COLOR = (0.88, 0.96, 0.99)
-GLASS_TINT = 0.72
+GLASS_COLOR = (0.93, 0.97, 0.97)      # a soft, light glass — easy on the eye
+GLASS_TINT = 0.62
 #: Even at 100 % a face keeps this much, so the glass still reads.
 GLASS_MIN_OPACITY = 0.08
 

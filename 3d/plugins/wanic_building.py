@@ -188,9 +188,12 @@ class PlanCanvas(QWidget):
                        f"{rm.get('name', '')}\n{rm['w']:g} × {rm['d']:g} ม."
                        f"\n{mark}")
         # Stairs: the flight's outline, its treads and the way up.
+        storeys = len(B.stacked(self.panel.data())[0])
         for stp in self.panel.items("stairs"):
             pts = [self.to_screen(*q) for q in B.stair_rect(stp, st)]
             sel = stp["id"] == self.selected
+            if not B.stair_used(stp, st, storeys):
+                continue            # one storey: no flight is built, none drawn
             p.setPen(QPen(SEL if sel else NAVY, 2 if sel else 1.2))
             p.setBrush(QColor(255, 255, 255, 200))
             p.drawPolygon(QPolygonF(pts))
@@ -574,7 +577,7 @@ class ItemDialog(QDialog):
             rows = []
         elif item["id"].startswith("s"):
             self.setWindowTitle("แก้ไขบันได")
-            rows = [("w", "ความกว้างบันได", s["stair_w"])]
+            rows = [("w", "ความกว้างบันได", B.stair_width({}, s))]
         else:
             win = item.get("type") == "window"
             self.setWindowTitle("แก้ไขหน้าต่าง" if win else "แก้ไขประตู")
@@ -2284,6 +2287,11 @@ class BuildingPanel(QWidget):
         self.op_size.activated.connect(lambda _i: _safe(self, self._size_chosen))
         og.addWidget(QLabel("ขนาดมาตรฐาน"), 2, 0)
         og.addWidget(self.op_size, 2, 1, 1, 5)
+        chk = QPushButton("🔍 ตรวจประตู/หน้าต่างซ้อนกัน")
+        chk.setToolTip("ตรวจทุกชั้นว่ามีประตู/หน้าต่างวางขี่หรือซ้อนกันบนผนังเดียวกันหรือไม่ "
+                       "แล้วเสนอให้ลบอันที่วางทีหลังออก")
+        chk.clicked.connect(lambda _=False: _safe(self, self.check_overlaps))
+        og.addWidget(chk, 4, 0, 1, 6)
         lay.addWidget(self.op_row)
         # Sanitary ware.
         self.fx_row = QWidget()
@@ -2523,7 +2531,9 @@ class BuildingPanel(QWidget):
 
         ow = QGroupBox("บันได (ค่าเริ่มต้น)")
         sf = QFormLayout(ow)
-        num("stair_w", "บันได กว้าง", 0.6, 5.0)
+        num("stair_w", "บันได กว้าง", 0.0, 5.0)
+        # 0 = auto: no stairs on one storey, 1.00 m from two storeys up
+        self.fields["stair_w"].setSpecialValueText("อัตโนมัติ (1 ชั้น = 0 · 2 ชั้นขึ้นไป = 1.00 ม.)")
         num("riser_max", "ลูกตั้งสูงไม่เกิน", 0.10, 0.25, 0.01)
         num("going", "ลูกนอน", 0.20, 0.40, 0.01)
         num("stair_t", "ท้องบันไดหนา", 0.08, 0.40, 0.01)
@@ -2602,8 +2612,12 @@ class BuildingPanel(QWidget):
             per = CAT.tiles_per_m2(spec)
             extra = "" if spec["unit"] == "ตร.ม." else f" (~{per:.1f} แผ่น/ตร.ม.)"
             self.tile.addItem(f"{code} {spec['name']}{extra}", code)
-        self.tile.currentIndexChanged.connect(lambda _i: self._save_settings())
+        self.tile.currentIndexChanged.connect(lambda _i: self._tile_changed())
         rff.addRow("วัสดุมุง", self.tile)
+        self.tile_note = QLabel("")
+        self.tile_note.setWordWrap(True)
+        self.tile_note.setStyleSheet("color:#1F4E79; font-size:11px")
+        rff.addRow(self.tile_note)
         self.tile_color = QComboBox()
         for name, rgb in CAT.TILE_COLORS.items():
             self.tile_color.addItem(name, name)
@@ -2628,7 +2642,7 @@ class BuildingPanel(QWidget):
         rff.addRow(self.fascia)
         sf_keep = sf
         sf = rff
-        num("tiles_m2", "จำนวนแผ่น/ตร.ม. ตามคู่มือผู้ผลิต (0 = คิดจากระยะซ้อน)",
+        num("tiles_m2", "จำนวนแผ่น/ตร.ม. ตามคู่มือผู้ผลิต (เปลี่ยนตามวัสดุมุง)",
             0.0, 40.0, 0.1, 1, "")
         num("fascia_h", "เชิงชาย หน้ากว้าง", 0.10, 0.40, 0.025)
         num("fascia_t", "เชิงชาย หนา", 0.01, 0.06, 0.005)
@@ -2872,7 +2886,10 @@ class BuildingPanel(QWidget):
             if abs(fx["x"] - x) <= max(w / 2, 0.12) and \
                     abs(fx["y"] - y) <= max(d / 2, 0.12):
                 return fx
+        storeys = len(B.stacked(self.data())[0])
         for stp in self.items("stairs"):
+            if not B.stair_used(stp, s, storeys):
+                continue
             xs = [q[0] for q in B.stair_rect(stp, s)]
             ys = [q[1] for q in B.stair_rect(stp, s)]
             if min(xs) <= x <= max(xs) and min(ys) <= y <= max(ys):
@@ -2919,9 +2936,71 @@ class BuildingPanel(QWidget):
         elif hasattr(self, "op_swing"):
             op["swing"] = self.op_swing.currentData()      # in / out
             op["hinge"] = self.op_hinge.currentData()      # left / right
+        clash = B.opening_overlaps(op, f.get("openings"), f.get("rooms"), s)
+        if clash:
+            ans = self.ask_overlap(op, clash)
+            if ans == "cancel":
+                self.status.setText("ยกเลิกการวาง — ตำแหน่งนี้ซ้อนกับประตู/หน้าต่างเดิม")
+                return None
+            if ans == "replace":
+                ids = {o.get("id") for o in clash}
+                f["openings"] = [o for o in f.get("openings") or [] if o.get("id") not in ids]
         f.setdefault("openings", []).append(op)
         self._write(d)
+        if clash and ans == "keep":
+            self.status.setText("⚠ วางซ้อนกับ " + ", ".join(
+                B.opening_name(o, s) for o in clash) + " — คลิกขวาที่ชิ้นที่ไม่ใช้เพื่อลบออก")
         return oid
+
+    def ask_overlap(self, op, clash):
+        """Warn that a door/window rides over others on the wall: «replace»
+        (delete the old ones), «keep» (both) or «cancel». Without a window
+        on screen (tests, scripts) the new one is kept and the status warns."""
+        s = B.settings_of(self.data())
+        names = "\n".join(f"• {B.opening_name(o, s)} ({o.get('id', '')})" for o in clash)
+        if not self.isVisible():
+            return "keep"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("ประตู/หน้าต่างซ้อนกัน")
+        box.setText(f"ตำแหน่งที่เลือกซ้อน/ขี่กับช่องเปิดเดิมบนผนังเดียวกัน:\n{names}\n\n"
+                    "ต้องการลบช่องเปิดเดิมออกแล้ววางอันใหม่หรือไม่?")
+        rep = box.addButton("ลบอันเดิม แล้ววางใหม่", QMessageBox.AcceptRole)
+        keep = box.addButton("วางซ้อนไว้ก่อน", QMessageBox.ActionRole)
+        box.addButton("ยกเลิก", QMessageBox.RejectRole)
+        box.exec()
+        b = box.clickedButton()
+        return "replace" if b is rep else "keep" if b is keep else "cancel"
+
+    def check_overlaps(self):
+        """Scan every floor for doors/windows riding over each other; offer
+        to delete the later one of each pair."""
+        d = self.data()
+        s = B.settings_of(d)
+        pairs = []
+        for k, f in enumerate(d["floors"]):
+            ops = f.get("openings") or []
+            for i, op in enumerate(ops):
+                for o in B.opening_overlaps(op, ops[:i], f.get("rooms"), s):
+                    pairs.append((k, o, op))
+        if not pairs:
+            self.status.setText("✓ ไม่พบประตู/หน้าต่างซ้อนกัน")
+            return 0
+        lines = "\n".join(f"ชั้น {k + 1}: {B.opening_name(a, s)} ({a.get('id')}) ↔ "
+                          f"{B.opening_name(b, s)} ({b.get('id')})" for k, a, b in pairs)
+        ok = (not self.isVisible()) or QMessageBox.question(
+            self, "ประตู/หน้าต่างซ้อนกัน",
+            f"พบช่องเปิดซ้อนกัน {len(pairs)} คู่:\n{lines}\n\nลบอันที่วางทีหลังของแต่ละคู่ออกหรือไม่?"
+        ) == QMessageBox.Yes
+        if not ok:
+            self.status.setText(f"⚠ พบช่องเปิดซ้อนกัน {len(pairs)} คู่")
+            return len(pairs)
+        drop = {(k, b.get("id")) for k, _a, b in pairs}
+        for k, f in enumerate(d["floors"]):
+            f["openings"] = [o for o in f.get("openings") or [] if (k, o.get("id")) not in drop]
+        self._write(d)
+        self.status.setText(f"ลบช่องเปิดที่ซ้อนกันออก {len(drop)} ชิ้น")
+        return len(pairs)
 
     def _tool_changed(self):
         t = self.tool()
@@ -3054,8 +3133,12 @@ class BuildingPanel(QWidget):
              "y": round(y / (g / 2)) * (g / 2), "dir": 1})
         self._write(d)
         n, L, _H = B.stair_geometry({}, d["settings"])
-        self.status.setText(f"บันได {n} ลูกตั้ง ระยะราบ {L:.2f} ม. — ลากเพื่อย้าย "
-                            "กด R เพื่อหมุนทิศขึ้น")
+        if len(B.stacked(d)[0]) < 2 and not B.settings_of(d).get("stair_w"):
+            self.status.setText("อาคาร 1 ชั้น: ค่าเริ่มต้นความกว้างบันได = 0 จึงไม่สร้างบันไดนี้ "
+                                "(เพิ่มชั้นที่ 2 หรือกำหนดความกว้างบันได)")
+        else:
+            self.status.setText(f"บันได {n} ลูกตั้ง ระยะราบ {L:.2f} ม. — ลากเพื่อย้าย "
+                                "กด R เพื่อหมุนทิศขึ้น")
         return sid
 
     def preview_stair(self, sid, x, y):
@@ -3106,6 +3189,12 @@ class BuildingPanel(QWidget):
                 it[k] = sp.value()
             if dlg.choice is not None:
                 it[dlg.choice[0]] = dlg.choice[1].currentData()
+            if str(it.get("id", "")).startswith("o"):
+                f = self.data()["floors"][self.floor]
+                clash = B.opening_overlaps(it, lst, f.get("rooms"), B.settings_of(self.data()))
+                if clash and self.ask_overlap(it, clash) == "replace":
+                    ids = {o.get("id") for o in clash}
+                    lst[:] = [o for o in lst if o.get("id") not in ids]
         self._with_item(iid, fn)
 
     # ---- column points and the member library ---------------------------------
@@ -3270,6 +3359,18 @@ class BuildingPanel(QWidget):
         self.canvas.update()
 
     # ---- settings -----------------------------------------------------------------
+    def _tile_changed(self):
+        """A new roofing: its pieces per m² from the maker's manual into the
+        field, its laying data under the list."""
+        code = self.tile.currentData()
+        spec = CAT.ROOF_TILES.get(code)
+        if spec is None:
+            return
+        self.tile_note.setText(CAT.maker_note(spec, code))
+        if not self._loading and "tiles_m2" in self.fields:
+            self.fields["tiles_m2"].setValue(CAT.maker_per_m2(spec, code))
+        self._save_settings()
+
     def _save_settings(self):
         if self._loading:
             return
@@ -3328,6 +3429,11 @@ class BuildingPanel(QWidget):
             self.caps.setChecked(bool(s.get("caps", True)))
             self.tile.setCurrentIndex(max(self.tile.findData(
                 s.get("tile", CAT.DEFAULT_TILE)), 0))
+            code = self.tile.currentData()
+            if code in CAT.ROOF_TILES:
+                self.tile_note.setText(CAT.maker_note(CAT.ROOF_TILES[code], code))
+                if not float(s.get("tiles_m2") or 0) and "tiles_m2" in self.fields:
+                    self.fields["tiles_m2"].setValue(CAT.maker_per_m2(CAT.ROOF_TILES[code], code))
             self.tile_color.setCurrentIndex(max(self.tile_color.findData(
                 s.get("tile_color", "ตามวัสดุ")), 0))
             self.tiles_3d.setChecked(bool(s.get("tiles_3d", True)))

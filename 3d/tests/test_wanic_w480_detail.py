@@ -953,7 +953,8 @@ def test_raised_floor_pipes_under_the_beams_with_fittings():
     flat = [(a, b) for a, b in cap["s"]["legs"] if abs(a[2] - b[2]) < 1e-9]
     inside = [(a, b) for a, b in flat if a[2] > E["GL"]]
     assert inside and all(a[2] < -gb_h for a, b in inside)       # never inside a beam
-    assert M._fittings(cap["s"]["legs"], 20.0)                    # elbows and tees
+    socks, hubs = M._fittings(M._split_at_joints(cap["s"]["legs"]), 20.0)
+    assert socks and hubs                                         # elbows and tees
     # in 3D the ground is z = 0: the building stands lift above it
     groups, _c = B.build(d, ("structure",))
     slab = [g for g in groups if g.ext[B.EXT_KEY]["kind"] == "slab"]
@@ -980,9 +981,20 @@ def test_shed_ceiling_follows_rafters_side_caps_and_gutters():
     d = _data([dict(name="ห้องนอน", x=0, y=0, w=4, d=5), dict(name="ห้องนั่งเล่น", x=4, y=0, w=5, d=5)])
     d["settings"].update(roof="shed", pitch=15, skin=True)
     E = B.elements(d)
+    # inside: the ceiling lies flat on the top of the roof beams
+    assert abs(B.ceiling_z(E, 0) - (E["H"] + 0.009)) < 1e-9
     L = B.roof_lines(d)
-    sl = B.sloped_ceiling(E, E["slabs"][0]["room"], 0, L)
-    assert sl and max(p[2] for p in sl) - min(p[2] for p in sl) > 1.0
+    ceil = [g for g, k in B.ceiling_members(E, d) if k == "ceiling"]
+    zs = [v.position.z() for g in ceil for f in g.mesh.faces for v in f.loop]
+    assert ceil and max(zs) - min(zs) < 0.02
+    # no infill on the inside walls under a lean-to (only a roof step needs one)
+    assert not any(abs(w_["p0"][0] - 4) < 1e-6 and abs(w_["p1"][0] - 4) < 1e-6
+                   for w_ in B.gable_infill(d, L))
+    # outside: the soffit goes up against the rafters, along the slope
+    soff = [g for g in B.soffit_members(d, L, B.settings_of(d))
+            if g.ext[B.EXT_KEY]["kind"] == "soffit"]
+    zs = [v.position.z() for g in soff for f in g.mesh.faces for v in f.loop]
+    assert soff and max(zs) - min(zs) > 0.5
     groups, c = B.roof_members(d)
     assert c.get("cap") == 3                                     # high edge + 2 sides
     assert c.get("eave_gutter") == 1 and c.get("downspout") == 1  # the low edge only
@@ -1052,3 +1064,83 @@ def test_side_by_side_2d_and_3d_sheets():
     assert left and right
     dims = [it for it in plan.items if it[0] == "text" and it[1][0] > mid and it[5] == "dim"]
     assert len(dims) >= 2                                   # dimensions on the 3-D view
+
+
+def test_pipes_jog_round_drains_fittings_and_soil_into_the_tank_inlet():
+    from core import wanic_mep as M
+    d = _uhouse()
+    E = B.elements(d)
+    cap = {}
+    o1, o2 = M.drain_routes, M.avoid_clashes
+    M.drain_routes = lambda *a, **k: cap.setdefault("d", o1(*a, **k))
+    M.avoid_clashes = lambda *a, **k: cap.setdefault("s", o2(*a, **k))
+    try:
+        out = M.install_members(d, E, M.plan(d, E))
+    finally:
+        M.drain_routes, M.avoid_clashes = o1, o2
+    soil, grey = cap["d"]
+    sup, jogs = cap["s"]
+    # nothing touches: the supply clears every drain by the pipe radii + 1 cm
+    for legs, D in ((soil, 100.0), (grey, 55.0)):
+        need = 0.010 + D / 2000.0 + 0.01 - 1e-6
+        assert min(M._seg_closest(a, b, c, e)[4] for a, b in sup for c, e in legs) >= need
+    assert jogs >= 1                                              # a C-jog where they would cross
+    # the soil main falls 1:100 straight into the tank's inlet socket
+    tank = [g for g, k in out if k == "septic"][0]
+    low = min((p_ for a, b in soil for p_ in (a, b)), key=lambda p_: p_[2])
+    assert abs(low[2] - (E["GL"] - M.TANK_IN)) < 1e-6
+    # the fittings as they are made: a hub at every turn, sockets each side,
+    # a straight coupling every 4 m along a long leg
+    legs = M._split_at_joints(sup)
+    socks, hubs = M._fittings(legs, 20.0)
+    assert len(socks) >= 2 * len(hubs) > 0
+    socks4, _h = M._fittings([((0, 0, 0), (9.0, 0, 0))], 20.0)
+    assert len(socks4) == 2                                       # at 4 m and 8 m
+    # standard colours: blue supply, grey drains, white downspouts
+    assert M.COL["supply"][2] > 0.7 and abs(M.COL["drain"][0] - M.COL["drain"][2]) < 0.05
+    assert min(M.COL["downspout"]) > 0.9
+    assert tank is not None
+
+
+def test_overlapping_openings_stairs_on_one_storey_and_roofing_per_m2():
+    rooms = [dict(name="ห้อง", x=0, y=0, w=4, d=4)]
+    d = _data(rooms)
+    s = B.settings_of(d)
+    f = d["floors"][0]
+    f["openings"] = [{"id": "o1", "type": "door", "style": "D1", "x": 2.0, "y": 0.0, "w": 0.9, "h": 2.0},
+                     {"id": "o2", "type": "window", "style": "W1", "x": 3.2, "y": 0.0, "w": 1.0, "h": 1.1}]
+    new = {"id": "o3", "type": "window", "style": "W1", "x": 2.4, "y": 0.0, "w": 1.2, "h": 1.1}
+    hit = {o["id"] for o in B.opening_overlaps(new, f["openings"], f["rooms"], s)}
+    assert hit == {"o1", "o2"}
+    away = {"id": "o4", "type": "window", "style": "W1", "x": 0.0, "y": 2.0, "w": 1.0, "h": 1.1}
+    assert B.opening_overlaps(away, f["openings"], f["rooms"], s) == []
+    # stairs: the default width is «auto» — none on one storey, 1.00 m on two
+    assert B.DEFAULT_SETTINGS["stair_w"] == 0.0
+    f["stairs"] = [{"id": "s1", "x": 2.0, "y": 2.0, "dir": 1}]
+    assert B.elements(d)["stairs"] == []
+    assert B.stair_width({}, s) == 1.0
+    d["floors"].append({"rooms": rooms, "openings": [], "stairs": [], "fixtures": []})
+    assert len(B.elements(d)["stairs"]) == 1
+    # pieces per m² follow the roofing, as the makers' manuals give them
+    assert CAT.maker_per_m2(CAT.ROOF_TILES["R1"], "R1") == 10.0
+    assert abs(CAT.maker_per_m2(CAT.ROOF_TILES["R3"], "R3") - 2.27) < 0.01
+    assert CAT.maker_per_m2(CAT.ROOF_TILES["R7"], "R7") == 0.0
+    assert "แผ่น/ตร.ม." in CAT.maker_note(CAT.ROOF_TILES["R1"], "R1")
+
+
+def test_section_marks_off_the_names_and_bath_elevations_stay_2d():
+    from core import wanic_drawings as D
+    d = _uhouse()
+    E = B.elements(d)
+    for axis, at, _n, _t in D.section_cuts(E, 0):
+        rooms = E["floors"][0]["rooms"]
+        lo_hi = [(float(r["x"]), float(r["x"]) + float(r["w"])) if axis == "x" else
+                 (float(r["y"]), float(r["y"]) + float(r["d"])) for r in rooms]
+        # not through the middle of a room (its name) nor on a wall line
+        assert all(abs(at - (lo + hi) / 2) > 0.3 for lo, hi in lo_hi if lo < at < hi)
+        assert all(abs(at - v) > 0.3 for lo, hi in lo_hi for v in (lo, hi))
+    side = D.Side3D(d, E)
+    sh = D.Sheet("A-10", "รูปด้านภายในห้องน้ำ", "1:50", "A")
+    assert side.view_for(sh) is None
+    sh = D.Sheet("A-05", "รูปด้านหน้า", "1:100", "A")
+    assert side.view_for(sh) is not None

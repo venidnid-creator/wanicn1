@@ -937,10 +937,11 @@ def a_site(sh, E, info):
         sh.poly([v(*p) for p in pts], "wall", 0.5)
     rl = info.get("roof_rects") or []
     ov = float(E["settings"].get("overhang") or 0)
-    for r in rl:
-        sh.poly([v(r[0] - ov, r[1] - ov), v(r[2] + ov, r[1] - ov),
-                 v(r[2] + ov, r[3] + ov), v(r[0] - ov, r[3] + ov)], "roof",
-                0.18, True, True)
+    # the roof's outline once (the union of the parts — no lines through
+    # the building where two parts meet)
+    from core import wanic_mep as M
+    for a, b in M._outline([(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov) for r in rl]) or ():
+        sh.line(v(*a), v(*b), "roof", 0.18, True)
     dim_chain(sh, v, [lot[0], bx[0]], bx[1] + (bx[3] - bx[1]) / 2, "x")
     dim_chain(sh, v, [bx[2], lot[2]], bx[1] + (bx[3] - bx[1]) / 2, "x")
     dim_chain(sh, v, [lot[1], bx[1]], bx[0] + (bx[2] - bx[0]) / 2, "y")
@@ -1342,8 +1343,14 @@ def section_cuts(E, k):
     w, d = max(xs) - min(xs), max(ys) - min(ys)
     # the long section runs along the long side: cut across it
     ax1 = "x" if w >= d else "y"
-    at1 = float(first["x"]) + float(first["w"]) / 2 if ax1 == "x" else \
-        float(first["y"]) + float(first["d"]) / 2
+
+    def off_centre(lo, hi):
+        """A cut a quarter in from the room's side — clear of the room's
+        name in the middle and of the wall lines and their tags."""
+        L = hi - lo
+        return lo + max(min(0.28 * L, L / 2 - 0.6), min(0.35, L / 2))
+    at1 = off_centre(float(first["x"]), float(first["x"]) + float(first["w"])) if ax1 == "x" else \
+        off_centre(float(first["y"]), float(first["y"]) + float(first["d"]))
     ax2 = "y" if ax1 == "x" else "x"
     mid = (min(ys) + max(ys)) / 2 if ax2 == "y" else (min(xs) + max(xs)) / 2
     # through a room, not along a wall line
@@ -1352,7 +1359,9 @@ def section_cuts(E, k):
         lo, hi = (float(r["y"]), float(r["y"]) + float(r["d"])) if ax2 == "y" else \
             (float(r["x"]), float(r["x"]) + float(r["w"]))
         cand.append(((lo + hi) / 2, r))
-    at2, r2 = min(cand, key=lambda c: abs(c[0] - mid))
+    _c, r2 = min(cand, key=lambda c: abs(c[0] - mid))
+    at2 = off_centre(float(r2["y"]), float(r2["y"]) + float(r2["d"])) if ax2 == "y" else \
+        off_centre(float(r2["x"]), float(r2["x"]) + float(r2["w"]))
     a, b = THAI_CUTS[(2 * k) % 10], THAI_CUTS[(2 * k + 1) % 10]
     return [(ax1, at1, f"{a}-{a}", first.get("name") or "ห้อง"),
             (ax2, at2, f"{b}-{b}", r2.get("name") or "ห้อง")]
@@ -1726,13 +1735,24 @@ def section_marks(sh, v, E, k):
         return
     for axis, at, name, _t in section_cuts(E, k):
         tag = name.split("-")[0]
+        # the marks beyond the grid bubbles (top / left) and the grid ends
+        # (bottom / right); the dashed line only across the building — it
+        # does not run over the dimension chains and the bubbles
         if axis == "x":
-            a, b = v(at, ys[0] - 2.2), v(at, ys[-1] + 2.2)
+            a, b = v(at, ys[0] - 2.2), v(at, ys[-1] + 3.4)
+            a_in, b_in = v(at, ys[0] - 0.4), v(at, ys[-1] + 0.4)
             arrow = (1.0, 0.0)
         else:
-            a, b = v(xs[0] - 2.2, at), v(xs[-1] + 2.2, at)
+            a, b = v(xs[0] - 3.4, at), v(xs[-1] + 2.2, at)
+            a_in, b_in = v(xs[0] - 0.4, at), v(xs[-1] + 0.4, at)
             arrow = (0.0, 1.0)
-        sh.line(a, b, "grid", 0.35, True)
+        sh.line(a_in, b_in, "grid", 0.35, True)
+        for q, q_in in ((a, a_in), (b, b_in)):
+            # a short heavy stub from the mark toward the plan
+            dx, dy = q_in[0] - q[0], q_in[1] - q[1]
+            L = math.hypot(dx, dy) or 1.0
+            sh.line((q[0] + dx / L * 3.2, q[1] + dy / L * 3.2),
+                    (q[0] + dx / L * 5.0, q[1] + dy / L * 5.0), "text", 0.5)
         for q in (a, b):
             sh.line(q, (q[0] + arrow[0] * 6, q[1] + arrow[1] * 6), "text", 0.5)
             sh.poly([(q[0] + arrow[0] * 6, q[1] + arrow[1] * 6),
@@ -2506,11 +2526,30 @@ def build_set(data, info=None,
         if view is not None:
             x0, y0, x1, y1 = drawing_area()
             mid = (x0 + x1) / 2
+            n0 = len(s.items)
+            keep = dict(s.__dict__)
             _AREA_OVERRIDE = (x0, y0, mid - 3, y1)
             try:
                 fn(s, sheets)
             finally:
                 _AREA_OVERRIDE = None
+            if any(px > mid - 1.0 for px, _py in _item_points(_Items(s.items[n0:]))):
+                # the 2-D work does not fit the left half (fixed-place
+                # details, tables): draw it full width as before, with the
+                # small 3-D picture in its corner — nothing rides over it
+                s.__dict__.clear()
+                s.__dict__.update(keep)
+                s.items = s.items[:n0]
+                fn(s, sheets)
+                box = free_box(s, ((130.0, 90.0), (110.0, 75.0), (90.0, 62.0)))
+                if box is not None:
+                    s.rect(*box, "frame", 0.25)
+                    side.draw(s, view, box)
+                elif pic:
+                    inset_picture(s, pic)
+                frame(s, info, len(sheets))
+                continue
+        if view is not None:
             sh_line = s.line
             sh_line((mid, y0 + 2), (mid, y1 - 2), "text", 0.18)
             side.draw(s, view, (mid + 3, y0, x1, y1))
@@ -2530,6 +2569,13 @@ def build_set(data, info=None,
         g_contents(toc, E, info, sheets, boq)
         front = [cover, toc]
     return front + sheets + boq
+
+
+class _Items:
+    """A bare holder of drawn items (for _item_points on part of a sheet)."""
+
+    def __init__(self, items):
+        self.items = items
 
 
 def _item_points(sh):
@@ -2557,6 +2603,21 @@ def _item_points(sh):
             x0, y0, x1, y1 = it[1]
             pts += [(x0, y0), (x1, y1), (x0, y1), (x1, y0), ((x0 + x1) / 2, (y0 + y1) / 2)]
     return pts
+
+
+def free_box(sh, sizes):
+    """The first free corner box (largest first) of the drawing area that
+    nothing on the sheet is drawn in: (x0, y0, x1, y1) or None."""
+    X0, Y0, X1, Y1 = drawing_area()
+    pts = _item_points(sh)
+    for w, h in sizes:
+        for cx, cy in ((X1 - w - 2, Y1 - h - 14), (X0 + 2, Y1 - h - 2),
+                       (X1 - w - 2, Y0 + 16), (X0 + 2, Y0 + 2)):
+            box = (cx - 1.5, cy - 1.5, cx + w + 1.5, cy + h + 1.5)
+            if any(box[0] <= x <= box[2] and box[1] <= y <= box[3] for x, y in pts):
+                continue
+            return (cx, cy, cx + w, cy + h)
+    return None
 
 
 def inset_picture(sh, data: bytes, sizes=((100.0, 56.0), (80.0, 45.0), (64.0, 36.0))):
@@ -3854,6 +3915,8 @@ class Side3D:
         import re
         m = re.search(r"ชั้น\s*(\d+)", t)
         k = int(m.group(1)) - 1 if m else 0
+        if t.startswith("รูปด้านภายใน") or "ห้องน้ำ" in t:
+            return None                       # the bathroom's inside elevations: 2-D only
         if t.startswith("รูปด้าน"):
             side = (1, 0) if "ขวา" in t.split()[0] or t.startswith("รูปด้านขวา") else \
                 (0, 1) if t.startswith("รูปด้านหลัง") else (-1, 0) if t.startswith("รูปด้านซ้าย") \

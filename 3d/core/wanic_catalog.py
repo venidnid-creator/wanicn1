@@ -414,12 +414,43 @@ def roof_tile(s) -> tuple[str, dict]:
     return code, ROOF_TILES[code]
 
 
+#: pieces per m² as the makers' manuals state them (where they publish a
+#: round figure); the rest from the effective cover of one piece
+MAKER_PER_M2 = {"R1": 10.0, "R2": 10.0}
+
+
+def maker_per_m2(spec, code=None) -> float:
+    """Pieces per m² for a roofing by its maker's manual (0 for roofing
+    sold by the m²)."""
+    if spec.get("unit") == "ตร.ม.":
+        return 0.0
+    if code is None:
+        code = next((k for k, v in ROOF_TILES.items() if v is spec), None)
+    if code in MAKER_PER_M2:
+        return MAKER_PER_M2[code]
+    w, l = spec["eff"]
+    return round(1.0 / (w * l), 2)
+
+
+def maker_note(spec, code=None) -> str:
+    """One line of the maker's laying data for the roofing."""
+    w, l = spec["eff"]
+    per = maker_per_m2(spec, code)
+    if not per:
+        return f"ขายเป็น ตร.ม. · ความกว้างใช้งาน {w * 100:.0f} ซม. · ระยะแป {l * 100:.0f} ซม."
+    return (f"ตามคู่มือผู้ผลิต {per:g} แผ่น/ตร.ม. · ขนาดแผ่น {spec['size'][0] * 100:.0f}×"
+            f"{spec['size'][1] * 100:.0f} ซม. · ความกว้างใช้งาน {w * 100:.0f} ซม. · "
+            f"ระยะแป/ระยะซ้อน {l * 100:.0f} ซม.")
+
+
 def tiles_per_m2(spec, s=None) -> float:
-    """Pieces per m² of slope: the user's figure, else from the effective
-    cover of one piece."""
+    """Pieces per m² of slope: the user's figure, else the maker's."""
     own = float((s or {}).get("tiles_m2") or 0)
     if own > 0:
         return own
+    per = maker_per_m2(spec)
+    if per:
+        return per
     w, l = spec["eff"]
     return 1.0 / (w * l)
 
@@ -429,7 +460,7 @@ COLORS = {
     "wood": (0.55, 0.36, 0.20), "wood_dark": (0.40, 0.25, 0.14),
     "teak": (0.66, 0.40, 0.17), "teak_dark": (0.45, 0.25, 0.10),
     "pvc": (0.93, 0.92, 0.88), "alu": (0.78, 0.80, 0.82),
-    "glass": (0.62, 0.80, 0.90), "concrete": (0.80, 0.80, 0.78),
+    "glass": (0.80, 0.90, 0.92), "concrete": (0.80, 0.80, 0.78),   # glass: soft pale aqua
     "metal": (0.30, 0.30, 0.32), "fascia": (0.95, 0.95, 0.93),
     "sanitary": (0.97, 0.97, 0.97),
 }

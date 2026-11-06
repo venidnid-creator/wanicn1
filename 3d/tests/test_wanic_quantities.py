@@ -112,7 +112,7 @@ def test_one_room_house_quantities():
     roofing = _by(r, "กระเบื้องคอนกรีต ซีแพคโมเนีย")[0]
     assert roofing["waste"] == 5 and roofing["unit"] == "แผ่น"
     area = _by(r, "ค่าแรงมุงกระเบื้องคอนกรีต")[0]
-    assert close(roofing["net"], area["net"] / (0.30 * 0.32))
+    assert close(roofing["net"], area["net"] * 10.0)       # CPAC: 10 แผ่น/ตร.ม.
     assert area["lab"] == 76
     caps = _by(r, "ครอบตะเข้สัน —")[0]
     assert caps["waste"] == 3 and caps["unit"] == "แผ่น"
@@ -254,7 +254,7 @@ def test_window_band_and_tile_choice():
     sheet = _by(r, "กระเบื้องไฟเบอร์ซีเมนต์ลอนคู่ 0.50×1.20")[0]
     lab = _by(r, "ค่าแรงมุงกระเบื้องไฟเบอร์")[0]
     assert sheet["waste"] == 3 and lab["lab"] == 46
-    assert close(sheet["net"], lab["net"] / (0.44 * 1.00))
+    assert close(sheet["net"], lab["net"] * 2.27)        # ลอนคู่ 1.20 ม.: 2.27 แผ่น/ตร.ม.
     assert _by(r, "ครอบข้าง/ครอบปั้นลม")
     d["settings"]["tiles_m2"] = 2.5
     r = Q.compute(d)

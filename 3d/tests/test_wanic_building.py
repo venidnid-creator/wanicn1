@@ -217,7 +217,7 @@ def test_stair_flight_volume():
     n, L, H = B.stair_geometry({}, s)
     area = P.section_area("stair", dict(L=L * 1000, H=H * 1000, n=n,
                                         t=s["stair_t"] * 1000))
-    assert close(face_set_volume(list(st.mesh.faces)), area * s["stair_w"])
+    assert close(face_set_volume(list(st.mesh.faces)), area * B.stair_width({}, s))
 
 
 def test_l_shaped_plan_gets_two_roofs_meeting_in_a_valley():
