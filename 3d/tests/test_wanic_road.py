@@ -213,8 +213,9 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     assert len(scene.groups) == groups + 2
     from PySide6.QtWidgets import QDialog
 
-    from plugins.wanic_road import RoadSheetsDialog
+    from plugins.wanic_road import PavementDesignDialog, RoadSheetsDialog
     monkeypatch.setattr(RoadSheetsDialog, "exec", lambda self: QDialog.Accepted)
+    monkeypatch.setattr(PavementDesignDialog, "exec", lambda self: QDialog.Accepted)
     done = _click_all(panel, skip=("ใช้เส้นที่เลือก",))
     assert any("วิเคราะห์" in t for t in done)
     pdf = [p for p in saved if p.endswith(".pdf")]
@@ -246,6 +247,53 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     assert again.layer_rows()[1][:2] == ("ชั้นทรายรองพื้น", pytest.approx(0.07))
     assert len(again.shots) == len(panel.shots) and [c for p in again.pvis() for c in p] == pytest.approx(
         [c for p in panel.pvis() for c in p])
+
+
+def test_pavement_design_dialog_fills_the_layers_and_prints(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+    from core.scene import Scene
+    from plugins.wanic_road import PavementDesignDialog, RoadPanel
+    from tests.test_wanic_buttons import _App
+
+    QApplication.instance() or QApplication([])
+    saved = []
+
+    def save(parent=None, caption="", name="", flt="", *a, **k):
+        saved.append(str(tmp_path / os.path.basename(name)))
+        return saved[-1], ""
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(save))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    app = _App(Scene(), "wanic_road")
+    panel = RoadPanel(app)
+    dlg = PavementDesignDialog(panel)
+    # AI 1970: the manual's example traffic, the automatic layers
+    for k, v in (("idt", 11014), ("heavy_pct", 13.94), ("lanes", 4), ("gross_t", 25.5),
+                 ("growth_pct", 6.5), ("years", 15), ("cbr", 5)):
+        dlg.f[("ai", k)].setValue(v)
+    assert "Design Traffic Number" in dlg.view.toPlainText() or "DTN" in dlg.view.toPlainText()
+    dlg.apply_layers()
+    assert panel.pavement.currentData() == "drr-ac"
+    assert panel.layer_rows()[0][0] == "ผิวทางแอสฟัลต์คอนกรีต (AC)"
+    assert panel.layer_rows()[0][1] == pytest.approx(0.10)
+    dlg.save_pdf()
+    assert open(saved[-1], "rb").read(5) == b"%PDF-"
+    # Road Note 29: a village road, the DRR standard sheet
+    dlg.tabs.setCurrentIndex(1)
+    for k, v in (("adt", 300), ("width", 5.0), ("heavy_pct", 5), ("cbr", 4)):
+        dlg.f[("rn", k)].setValue(v)
+    dlg.apply_layers()
+    assert panel.pavement.currentData() == "drr-rc"
+    assert panel.layer_rows()[0][1] >= 0.15
+    dlg.apply_standard()
+    assert panel.layer_rows()[0][1] == pytest.approx(0.18)               # ทถ-2-201(1) ADT 251–500
+    dlg.save_pdf()
+    assert saved[-1].endswith("RoadNote29.pdf") and os.path.getsize(saved[-1]) > 1000
+    # the inputs go with the document
+    panel.save()
+    again = RoadPanel(app)
+    again.load()
+    assert again.pave_design["method"] == "rn29" and again.pave_design["rn"]["adt"] == 300
 
 
 def test_a_chain_of_edges_drawn_in_the_model_is_the_axis(monkeypatch):

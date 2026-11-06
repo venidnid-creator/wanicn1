@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from core import wanic_pavement as V
 from core import wanic_road as R
 from core.road import alignment as A
 from core.wanic_ui import safe as _safe
@@ -542,6 +543,11 @@ class RoadPanel(QWidget):
             b.clicked.connect(lambda _=False, fn=fn: _safe(self, fn))
             row.addWidget(b)
         v.addLayout(row)
+        calc = QPushButton("🧮 ออกแบบความหนาโครงสร้างทาง (AI 1970 / Road Note 29)…")
+        calc.setToolTip("คำนวณ DTN / ESA ความหนาแต่ละชั้น ตรวจสอบทุกชั้น เทียบแบบมาตรฐาน ทช. "
+                        "ใส่ผลลงตารางชั้นทาง และบันทึกรายการคำนวณเป็น PDF")
+        calc.clicked.connect(lambda _=False: _safe(self, self.open_pavement_design))
+        v.addWidget(calc)
         note = QLabel("<span style='color:#6b7280;font-size:11px'>ความหนาเป็นค่าเริ่มต้นตามแบบทั่วไปของ "
                       "ทช./ทล. — ตรวจกับแบบมาตรฐานที่เลือกตามปริมาณจราจรและ CBR ของโครงการ "
                       "แล้วแก้ในตารางได้ · ดินตัด-ถมคิดถึงใต้ชั้นทาง</span>")
@@ -639,6 +645,10 @@ class RoadPanel(QWidget):
         return s
 
     # ---- pavement layers -----------------------------------------------------------------
+    def open_pavement_design(self):
+        PavementDesignDialog(self).exec()
+        self.save()
+
     def layer_rows(self) -> list:
         """(name, thickness, colour) of each row, top first: the name from
         its editable list, the thickness from its spin box (typed or
@@ -757,6 +767,8 @@ class RoadPanel(QWidget):
                 "pavement": self.pavement.currentData(),
                 "grid": self.grid.currentIndex(), "place": self._place,
                 "layers": [[n, t] for n, t, _c in self.layer_rows()]}
+        if getattr(self, "pave_design", None):
+            data["pave_design"] = self.pave_design
         self._last = json.loads(json.dumps(data))
         setter = getattr(self.app, "set_document_data", None)
         if callable(setter):
@@ -793,6 +805,7 @@ class RoadPanel(QWidget):
             self.pavement.blockSignals(False)
         if "layers" in data:
             self.set_layers(data["layers"])
+        self.pave_design = data.get("pave_design")
         self.grid.blockSignals(True)
         self.grid.setCurrentIndex(int(data.get("grid", 0)))
         self.grid.blockSignals(False)
@@ -1246,6 +1259,236 @@ class RoadPanel(QWidget):
         Path(path).write_text(R.earthworks_csv(an), encoding="utf-8-sig")
         self._flash(f"บันทึก {path} แล้ว")
 
+
+
+class PavementDesignDialog(QDialog):
+    """ออกแบบความหนาโครงสร้างชั้นทาง: AI 1970 (ถนนลาดยาง) / Road Note 29
+    (ถนน คสล.) — the data, the calculation sheet beside it as it changes,
+    the layers into the panel's table, the sheet to PDF."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel = panel
+        self.setWindowTitle("ออกแบบความหนาโครงสร้างชั้นทาง — AI 1970 / Road Note 29")
+        self.resize(1180, 760)
+        saved = dict(getattr(panel, "pave_design", None) or {})
+        lay = QHBoxLayout(self)
+        left = QVBoxLayout()
+        self.tabs = QTabWidget()
+        left.addWidget(self.tabs)
+        lay.addLayout(left, 0)
+        right = QVBoxLayout()
+        from PySide6.QtWidgets import QTextBrowser
+        self.view = QTextBrowser()
+        right.addWidget(self.view, 1)
+        row = QHBoxLayout()
+        for text, fn in (("✅ ใส่ลงตารางชั้นทาง", self.apply_layers),
+                         ("📐 ใช้ตามแบบมาตรฐาน ทช.", self.apply_standard),
+                         ("🖨 บันทึกรายการคำนวณ PDF", self.save_pdf),
+                         ("ปิด", self.accept)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, fn=fn: _safe(self, fn))
+            row.addWidget(b)
+        right.addLayout(row)
+        lay.addLayout(right, 1)
+        self.f = {}
+        self.project = QLineEdit(saved.get("project", ""))
+        self.project.setPlaceholderText("ชื่อโครงการ / สายทาง")
+        left.insertWidget(0, self.project)
+        self.project.textChanged.connect(lambda _t: self.refresh())
+
+        # --- AI 1970 ---
+        w = QWidget()
+        form = QFormLayout(w)
+        ai = saved.get("ai", {})
+        for key, label, lo, hi, dec, suf, dflt in (
+                ("idt", "IDT ปริมาณจราจรปีแรก (2 ทิศทาง)", 1, 500000, 0, " คัน/วัน", 1000),
+                ("heavy_pct", "ร้อยละรถบรรทุกหนัก 6 ล้อขึ้นไป (A)", 0.1, 100, 2, " %", 10),
+                ("lanes", "จำนวนช่องจราจร", 1, 12, 0, " ช่อง", 2),
+                ("gross_t", "น้ำหนักเฉลี่ยรถบรรทุกหนัก", 1, 60, 1, " ตัน", 21),
+                ("growth_pct", "อัตราเพิ่มปริมาณจราจร (r)", 0, 20, 2, " %", 5),
+                ("years", "อายุการออกแบบ (n)", 1, 40, 0, " ปี", 15),
+                ("cbr", "CBR ดินคันทาง (เปอร์เซ็นไทล์ 80)", 0.5, 100, 1, " %", 5)):
+            form.addRow(label, self._spin(("ai", key), lo, hi, dec, suf, ai.get(key, dflt)))
+        self.ai_table = QComboBox()
+        self.ai_table.addItem("ออกแบบชั้นทางอัตโนมัติ (ผิว AC + หินคลุก + รองพื้นทาง + คัดเลือก)", "auto")
+        self.ai_table.addItem("ตรวจสอบชั้นทางตามตารางในแผง (ข้อ 3)", "table")
+        self.ai_table.setCurrentIndex(1 if ai.get("source") == "table" else 0)
+        self.ai_table.currentIndexChanged.connect(lambda _i: self.refresh())
+        form.addRow("ชั้นทาง", self.ai_table)
+        note = QLabel("<span style='color:#6b7280;font-size:11px'>คู่มือกรมทางหลวง: AI ฉบับที่ 8 (1970) · "
+                      "Substitution Ratio AC 1.0 · หินคลุก 2.0 · มวลรวม 2.7 · คัดเลือก ก 3.0 · ข 3.5</span>")
+        note.setWordWrap(True)
+        form.addRow(note)
+        self.tabs.addTab(w, "ถนนลาดยาง (AI 1970)")
+
+        # --- Road Note 29 ---
+        w = QWidget()
+        form = QFormLayout(w)
+        rn = saved.get("rn", {})
+        width = self.panel.spins["width"].value() if hasattr(self.panel, "spins") else 6.0
+        for key, label, lo, hi, dec, suf, dflt in (
+                ("adt", "ปริมาณการจราจร ADT", 1, 500000, 0, " คัน/วัน", 500),
+                ("lanes", "จำนวนช่องจราจร", 1, 12, 0, " ช่อง", 2),
+                ("width", "ความกว้างผิวจราจร", 2, 60, 2, " ม.", width or 6.0),
+                ("heavy_pct", "ร้อยละรถบรรทุกหนักทั้งหมด", 0.1, 100, 2, " %", 10),
+                ("lt_pct", "ร้อยละรถบรรทุก 6 ล้อ (ของรถหนัก)", 0, 100, 1, " %", 70),
+                ("ht_pct", "ร้อยละรถบรรทุก 10 ล้อ (ของรถหนัก)", 0, 100, 1, " %", 30),
+                ("loaded_pct", "สัดส่วนรถบรรทุกที่บรรทุกของ", 0, 100, 0, " %", 50),
+                ("growth_pct", "Growth Rate (r)", 0, 20, 2, " %", 4),
+                ("years", "อายุการออกแบบ (n)", 1, 50, 0, " ปี", 20),
+                ("cbr", "Design CBR Subgrade", 0.5, 100, 1, " %", 4),
+                ("slab_length", "ระยะรอยต่อตามขวาง (ยาวแผ่น)", 3, 30, 2, " ม.", 10),
+                ("lane_width", "ความกว้างแผ่น (ช่องจราจร)", 2, 6, 2, " ม.", 3.0),
+                ("slab_cm", "ความหนาแผ่นที่กำหนด (0 = ตามแผนภูมิ)", 0, 40, 0, " ซม.", 0),
+                ("fc", "กำลังอัดคอนกรีต fc′ (ลูกบาศก์)", 150, 500, 0, " กก./ตร.ซม.", 280)):
+            form.addRow(label, self._spin(("rn", key), lo, hi, dec, suf, rn.get(key, dflt)))
+        self.rn_steel = QComboBox()
+        self.rn_steel.addItem("ตะแกรงเหล็ก Wire mesh (fs = 2,750 กก./ตร.ซม.)", 2750.0)
+        self.rn_steel.addItem("เหล็กเส้นกลม RB (fs = 1,200 กก./ตร.ซม.)", 1200.0)
+        self.rn_steel.setCurrentIndex(1 if rn.get("fs") == 1200.0 else 0)
+        self.rn_steel.currentIndexChanged.connect(lambda _i: self.refresh())
+        form.addRow("เหล็กเสริม", self.rn_steel)
+        self.rn_kind = QComboBox()
+        self.rn_kind.addItem("คอนกรีตเสริมเหล็ก (JRCP)", True)
+        self.rn_kind.addItem("คอนกรีตไม่เสริมเหล็ก (JPCP)", False)
+        self.rn_kind.setCurrentIndex(0 if rn.get("reinforced", True) else 1)
+        self.rn_kind.currentIndexChanged.connect(lambda _i: self.refresh())
+        form.addRow("ชนิดผิว", self.rn_kind)
+        self.rn_ct = QComboBox()
+        self.rn_ct.addItem("มีรถบรรทุกวิ่งบนรองพื้นทางระหว่างก่อสร้าง (+8 ซม.)", True)
+        self.rn_ct.addItem("ไม่มี", False)
+        self.rn_ct.setCurrentIndex(0 if rn.get("construction_traffic", True) else 1)
+        self.rn_ct.currentIndexChanged.connect(lambda _i: self.refresh())
+        form.addRow("ระหว่างก่อสร้าง", self.rn_ct)
+        self.tabs.addTab(w, "ถนน คสล. (Road Note 29)")
+        self.tabs.setCurrentIndex(1 if saved.get("method") == "rn29" else 0)
+        self.tabs.currentChanged.connect(lambda _i: self.refresh())
+        self.refresh()
+
+    def _spin(self, key, lo, hi, dec, suf, value):
+        s = QDoubleSpinBox()
+        s.setRange(lo, hi)
+        s.setDecimals(dec)
+        s.setSuffix(suf)
+        s.setValue(float(value))
+        s.valueChanged.connect(lambda _v: self.refresh())
+        self.f[key] = s
+        return s
+
+    def _v(self, tab, key):
+        return float(self.f[(tab, key)].value())
+
+    # ---- the designs ---------------------------------------------------------------------
+    def ai_input(self) -> V.AIInput:
+        layers = None
+        if self.ai_table.currentData() == "table":
+            layers = [[n, t * 100.0] for n, t, _c in self.panel.layer_rows() if t > 0]
+        return V.AIInput(idt=self._v("ai", "idt"), heavy_pct=self._v("ai", "heavy_pct"),
+                         lanes=int(self._v("ai", "lanes")), gross_t=self._v("ai", "gross_t"),
+                         growth_pct=self._v("ai", "growth_pct"), years=self._v("ai", "years"),
+                         cbr=self._v("ai", "cbr"), layers=layers)
+
+    def rn_input(self) -> V.RNInput:
+        lt, ht = self._v("rn", "lt_pct"), self._v("rn", "ht_pct")
+        trucks = (V.Truck("รถบรรทุก 6 ล้อ (LT)", lt, (4.0, 11.0)),
+                  V.Truck("รถบรรทุก 10 ล้อ (HT)", ht, (5.0, 10.0, 10.0)))
+        return V.RNInput(adt=self._v("rn", "adt"), lanes=int(self._v("rn", "lanes")),
+                         width=self._v("rn", "width"), heavy_pct=self._v("rn", "heavy_pct"),
+                         trucks=trucks, loaded_pct=self._v("rn", "loaded_pct"),
+                         growth_pct=self._v("rn", "growth_pct"), years=self._v("rn", "years"),
+                         cbr=self._v("rn", "cbr"), reinforced=bool(self.rn_kind.currentData()),
+                         construction_traffic=bool(self.rn_ct.currentData()),
+                         slab_length=self._v("rn", "slab_length"),
+                         lane_width=self._v("rn", "lane_width"),
+                         fs=float(self.rn_steel.currentData()),
+                         slab_cm=self._v("rn", "slab_cm") or None, fc=self._v("rn", "fc"))
+
+    def method(self) -> str:
+        return "rn29" if self.tabs.currentIndex() == 1 else "ai"
+
+    def result(self):
+        if self.method() == "ai":
+            return V.design_ai(self.ai_input())
+        return V.design_rn29(self.rn_input())
+
+    def html(self) -> str:
+        res = self.result()
+        proj = self.project.text().strip()
+        return V.ai_report(res, proj) if self.method() == "ai" else V.rn29_report(res, proj)
+
+    def refresh(self):
+        if not hasattr(self, "rn_ct"):
+            return
+        self.view.setHtml(self.html())
+        self.remember()
+
+    def remember(self):
+        data = {"method": self.method(), "project": self.project.text(),
+                "ai": {k: float(w.value()) for (t, k), w in self.f.items() if t == "ai"},
+                "rn": {k: float(w.value()) for (t, k), w in self.f.items() if t == "rn"}}
+        data["ai"]["source"] = self.ai_table.currentData()
+        data["rn"].update({"fs": float(self.rn_steel.currentData()),
+                           "reinforced": bool(self.rn_kind.currentData()),
+                           "construction_traffic": bool(self.rn_ct.currentData())})
+        self.panel.pave_design = data
+
+    # ---- the buttons ---------------------------------------------------------------------
+    def _put(self, key: str, layers: list, note: str):
+        p = self.panel
+        i = p.pavement.findData(key)
+        if i >= 0:
+            p.pavement.blockSignals(True)
+            p.pavement.setCurrentIndex(i)
+            p.pavement.blockSignals(False)
+        p.set_layers([(n, t) for n, t in layers])
+        p.analysis = None
+        p.save()
+        p._flash(note)
+
+    def apply_layers(self):
+        res = self.result()
+        if self.method() == "ai":
+            self._put("drr-ac", V.ai_layers(res), f"ใส่ชั้นทางตาม AI 1970 (DTN {res.dtn:,.0f}) แล้ว")
+        else:
+            self._put("drr-rc", V.rn29_layers(res),
+                      f"ใส่ชั้นทาง คสล. หนา {res.slab_cm:g} ซม. ตาม Road Note 29 แล้ว")
+
+    def apply_standard(self):
+        if self.method() == "ai":
+            i = self.ai_input()
+            std = V.drr_ac_standard(i.idt, i.cbr, 10 if i.years >= 10 else 7)
+            key = "drr-ac"
+        else:
+            i = self.rn_input()
+            std = V.drr_rc_standard(i.adt, i.cbr, 1) or V.drr_rc_standard(i.adt, i.cbr, 2)
+            key = "drr-rc"
+        if not std:
+            QMessageBox.information(self, "แบบมาตรฐาน ทช.",
+                                    "ปริมาณจราจรเกินช่วงของตารางแบบมาตรฐาน ทช. — ใช้ผลการคำนวณแทน")
+            return
+        self._put(key, std["layers"], f"ใส่ชั้นทางตามแบบมาตรฐาน ทช. {std['sheet']} แล้ว")
+
+    def save_pdf(self):
+        name = "รายการคำนวณโครงสร้างทาง_" + ("AI1970" if self.method() == "ai" else "RoadNote29")
+        path, _ = QFileDialog.getSaveFileName(self, "บันทึกรายการคำนวณ", f"{name}.pdf", "PDF (*.pdf)")
+        if not path:
+            return
+        save_html_pdf(self.html(), path)
+        self.panel._flash(f"บันทึก {path} แล้ว")
+
+
+def save_html_pdf(html: str, path: str):
+    """An HTML calculation sheet to an A4 PDF."""
+    from PySide6.QtCore import QMarginsF
+    from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
+    wr = QPdfWriter(path)
+    wr.setPageSize(QPageSize(QPageSize.A4))
+    wr.setPageMargins(QMarginsF(18, 15, 15, 15), QPageLayout.Millimeter)
+    wr.setResolution(150)
+    doc = QTextDocument()
+    doc.setHtml(html)
+    doc.print_(wr)
 
 class RoadSheetsDialog(QDialog):
     """Project data for the title column and the sheet families."""
