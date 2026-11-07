@@ -406,20 +406,22 @@ WIRES = (4, 5, 6, 9)
 
 
 def pick_steel(need_cm2: float, fs: float) -> tuple:
-    """The lightest standard bar/wire @ spacing (5 cm steps, 10–40 cm) with
-    As ≥ need: (label, area cm²/m)."""
+    """The lightest standard bar/wire @ a workable spacing (15–30 cm; 10 cm
+    only when nothing else carries it) with As ≥ need: (label, cm²/m)."""
     dias = WIRES if fs >= 2000 else BARS_RB
     kind = "Wire mesh" if fs >= 2000 else "RB"
-    best = None
-    for d in dias:
-        a1 = math.pi * (d / 10.0) ** 2 / 4.0
-        for s in (30, 25, 20, 15, 10):
-            area = a1 * 100.0 / s
-            if area >= need_cm2 - 1e-9:
-                if best is None or area < best[1] - 1e-9:
+    for spacings in ((30, 25, 20, 15), (10,)):
+        best = None
+        for d in dias:
+            a1 = math.pi * (d / 10.0) ** 2 / 4.0
+            for s in spacings:
+                area = a1 * 100.0 / s
+                if area >= need_cm2 - 1e-9 and (best is None or area < best[1] - 1e-9):
                     best = (f"{kind} Ø{d} มม. @ {s / 100:.2f} ม.", area)
-                break
-    return best or (f"{kind} Ø{dias[-1]} มม. @ 0.10 ม.", math.pi * (dias[-1] / 10) ** 2 / 4 * 10)
+        if best:
+            return best
+    d = dias[-1]
+    return (f"{kind} Ø{d} มม. @ 0.10 ม.", math.pi * (d / 10) ** 2 / 4 * 10)
 
 
 #: ทถ-2-202 ตารางที่ 2: dowels by the slab (ซม.) — (Ø mm, length cm, @ cm)

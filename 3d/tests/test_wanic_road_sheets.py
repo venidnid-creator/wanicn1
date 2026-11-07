@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import re
+import pytest
 
 from core import wanic_drawings as D
 from core import wanic_road as R
@@ -142,3 +143,50 @@ def test_dxf_of_the_sheets():
     S = RS.build_road_set(an, {}, shots, ("G", "PP"))
     text = D.dxf_bytes(S).decode("cp874")
     assert "ANSI_874" in text and "แปลน" in text and text.rstrip().endswith("EOF")
+
+
+def test_standard_structure_sheets_from_the_design():
+    """SD: the typical section, the steel and joints (concrete) or the layer
+    details (asphalt) and the notes, drawn from the project's own template
+    and pavement design, with the DRR standard table's matching row marked."""
+    from core import wanic_road_detail as RD
+    an, shots = _analysis()
+    s = an.settings
+    s.layers = [("ผิวทางคอนกรีตเสริมเหล็ก", 0.18, (0, 0, 0)), ("ชั้นทรายรองพื้น", 0.05, (0, 0, 0)),
+                ("ชั้นรองพื้นทางลูกรัง", 0.20, (0, 0, 0)), ("ชั้นวัสดุคัดเลือก ก", 0.10, (0, 0, 0))]
+    pave = {"method": "rn29", "rn": {"adt": 400, "lanes": 2, "width": s.width, "heavy_pct": 5,
+                                     "cbr": 6, "years": 20, "fs": 2750.0}}
+    S = RS.build_road_set(an, {"pave": pave}, shots)
+    sd = [x for x in S if x.group == "SD"]
+    assert [x.code for x in sd] == ["SD-01", "SD-02", "SD-03"]
+    assert S[-1].code == "QS-01" and [x.number for x in S] == list(range(1, len(S) + 1))
+    t1 = " ".join(sd[0].texts())
+    for word in ("รูปตัดโครงสร้างถนนคอนกรีตเสริมเหล็ก", "หนา 0.18 ม.", "MODIFIED PROCTOR",
+                 "STANDARD PROCTOR", "SIDE SLOPE", "Road Note 29", "ทถ-2-201(1)", f"{s.width:.2f}"):
+        assert word in t1, word
+    assert any(len(it) > 4 and it[4] == RD.MARK_RGB for it in sd[0].items if it[0] == "fill")
+    t2 = " ".join(sd[1].texts())
+    for word in ("CONTRACTION JOINT", "EXPANSION JOINT", "CONSTRUCTION JOINT", "DOWEL", "TIE BAR",
+                 "TEMPERATURE STEEL", "ปริมาณเหล็กและรอยต่อ"):
+        assert word in t2, word
+    q = RD.quantities(RD.Design(s, pave, an.designed_length))
+    assert q["bays"] == pytest.approx(an.designed_length / 10.0)
+    assert q["bay"]["dowels"] > 0 and q["bay"]["ties"] == 20 and q["dowel"][0] == 19
+    t3 = " ".join(sd[2].texts())
+    assert "รายการประกอบแบบ" in t3 and "มทถ." in t3 and "สรุปรายการคำนวณ" in t3
+    for sh in sd:                                                # all on the paper
+        for it in sh.items:
+            pts = [it[1][:2], it[1][2:]] if it[0] == "line" else \
+                it[1] if it[0] in ("poly", "fill") else []
+            for x, y in pts:
+                assert -1 <= x <= D.PAPER[0] + 1 and -1 <= y <= D.PAPER[1] + 1, sh.code
+    # an asphalt road: the layer details, prime coat and ทถ-2-303
+    s.layers = [("ผิวทางแอสฟัลต์คอนกรีต (AC)", 0.05, (0, 0, 0)), ("ชั้นพื้นทางหินคลุก", 0.20, (0, 0, 0)),
+                ("ชั้นรองพื้นทางวัสดุมวลรวม", 0.20, (0, 0, 0))]
+    ai = {"ai": {"idt": 1200, "heavy_pct": 8, "cbr": 6, "years": 10}}
+    sd = RD.detail_sheets(s, ai, 500.0)
+    assert not RD.is_concrete(RD.Design(s).layers)
+    t = " ".join(x for sh in sd for x in sh.texts())
+    for word in ("ถนนลาดยาง", "PRIME COAT", "ทถ-2-303", "Asphalt Institute", "DTN"):
+        assert word in t, word
+    assert "CONTRACTION JOINT" not in t

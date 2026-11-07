@@ -17,7 +17,10 @@ sheets:
   shaded, with its areas, volumes and running totals, ground (CT) and
   design (CR) levels;
 * **VT** — ตารางปริมาณดิน: the earthworks table, station by station, and
-  the pavement layer quantities.
+  the pavement layer quantities;
+* **SD** — แบบมาตรฐานโครงสร้างทาง (:mod:`core.wanic_road_detail`): the
+  typical section, reinforcement and joints (concrete) or layer details
+  (asphalt), and the notes — like the DRR sheets ทถ-2-201/202/302/303.
 
 Sheets are :class:`core.wanic_drawings.Sheet` (A3, mm) with the same
 title column, printed by the same PDF writer and DXF writer.  Pure
@@ -1250,7 +1253,7 @@ def location_sheet(an, info, site) -> "D.Sheet":
 
 
 def build_road_set(an, info=None, shots=None,
-                   groups=("G", "PP", "ST", "VT", "QS"), site=None) -> list:
+                   groups=("G", "PP", "ST", "VT", "SD", "QS"), site=None) -> list:
     """Every sheet of the road drawing set, numbered, with its title
     column.  ``an`` is :func:`core.wanic_road.analyse`'s result; with
     ``site`` (:func:`location_sheet`) the set opens with the site map."""
@@ -1272,6 +1275,10 @@ def build_road_set(an, info=None, shots=None,
         sheets += st_sheets(an, info)
     if "VT" in groups and an.rows:
         sheets += vt_sheets(an, info)
+    if "SD" in groups:
+        # แบบมาตรฐานโครงสร้างทาง from the project's own template and pavement design
+        from core import wanic_road_detail as RD
+        sheets += RD.detail_sheets(an.settings, info.get("pave"), an.designed_length, info)
     if "QS" in groups:
         sheets.append(qs_sheet(an, info, shots))
     for i, s in enumerate(sheets, 1):

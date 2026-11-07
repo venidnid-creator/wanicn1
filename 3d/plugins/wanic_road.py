@@ -1142,7 +1142,7 @@ class RoadPanel(QWidget):
             return []
         info = dlg.info()
         zone, datum = self._zone_datum()
-        info.update(zone=zone, datum=datum,
+        info.update(zone=zone, datum=datum, pave=getattr(self, "pave_design", None),
                     crs=f"UTM {datum} โซน {zone}N · ระดับ MSL",
                     location=info.get("location") or self._place)
         from core import wanic_drawings as D
@@ -1497,6 +1497,7 @@ class RoadSheetsDialog(QDialog):
               ("PP", "PP — แปลนและรูปตัดตามยาว พร้อมแถบระดับดิน/ออกแบบ/ขุด/ถม"),
               ("ST", "ST — รูปตัดขวางทุกสถานี พร้อมพื้นที่และปริมาตร"),
               ("VT", "VT — ตารางปริมาณดินขุด-ถมทุกสถานี"),
+              ("SD", "SD — แบบมาตรฐานโครงสร้างทาง: รูปตัดชั้นทาง เหล็กเสริม/รอยต่อ รายการประกอบแบบ"),
               ("QS", "QS — สรุปปริมาณงานทั้งหมดของโครงการ (แผ่นสุดท้าย)")]
 
     def __init__(self, panel):
