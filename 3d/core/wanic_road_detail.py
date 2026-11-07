@@ -186,6 +186,10 @@ def _rn_input(d):
 # SD-01 — the typical section
 # ---------------------------------------------------------------------------
 
+def _is_ac(name: str) -> bool:
+    return any(w in name for w in ("AC", "แอสฟัลต์", "Binder", "DBST", "ลาดยาง"))
+
+
 def _surface(ds, x):
     """Finished level at offset x (m) from the centre line (crown 0)."""
     a = abs(x)
@@ -240,9 +244,11 @@ def section_sheet(ds: Design, info=None) -> D.Sheet:
 
     def P(x, z):
         return (cx + x * k, cy + z * k * ve)
-    # layers, top first
+    # layers, top first; the leader points step right to left (DRR style)
     d = 0.0
     pts_leader = []
+    step = max(5.2 / k, 0.25)
+    xr = (ds.width / 2 - 0.25) if ds.concrete else (B - 0.3)
     for i, (name, t) in enumerate(ds.layers):
         lim = ds.width / 2 if (i == 0 and ds.concrete) else None
         poly = [P(x, z) for x, z in _band(ds, d, d + t, lim)]
@@ -256,10 +262,27 @@ def section_sheet(ds: Design, info=None) -> D.Sheet:
                      P(sg * xs[2], _ext(ds, xs[2]) - t), P(sg * xs[0], _ext(ds, xs[0]) - t)]
                 sh.fill(q, "hatch", 0.70)
                 sh.poly(q, "wall", 0.25)
-        xm = ds.width * 0.30 + i * 0.12 * ds.width / 2
+        xm = xr - i * step
         pts_leader.append((P(xm, _surface(ds, xm) - d - t / 2),
                            f"{spec_of(name, ds.fc)} หนา {t:.2f} ม."))
+        if not ds.concrete and i + 1 < len(ds.layers):
+            xc = xm - step / 2
+            nxt_name = ds.layers[i + 1][0]
+            if i == 0 and not _is_ac(nxt_name):
+                pts_leader.append((P(xc, _surface(ds, xc) - d - t), "PRIME COAT ตาม มทถ. 225-2562"))
+            elif _is_ac(nxt_name):
+                pts_leader.append((P(xc, _surface(ds, xc) - d - t), "TACK COAT ตาม มทถ. 227-2562"))
         d += t
+    xm = xr - len(ds.layers) * step
+    nxt = len(ds.layers) + 1
+    if ds.concrete and ds.shoulder > 0:
+        xs = -(ds.width / 2 + ds.shoulder / 2)
+        pts_leader.append((P(xs, _ext(ds, xs) - ds.layers[0][1] / 2),
+                           "ไหล่ทาง ลูกรังบดอัดแน่น (หรือตามผู้ออกแบบกำหนด)"))
+    pts_leader.append((P(xm, _surface(ds, xm) - ds.total - fill_h * 0.5), EMBANKMENT))
+    pts_leader.append((P(xr - nxt * step, gz), GROUND))
+    pts_leader.append((P(-(B + toe) / 2, (_surface(ds, B) + gz) / 2),
+                       "ปลูกหญ้า ตามแบบ ทถ-2-601 ซึ่งผู้ออกแบบจะระบุชนิดไว้ในแบบแปลน"))
     # the embankment down to the natural ground
     sh.line(P(-toe - 1.0, gz), P(toe + 1.0, gz), "wall", 0.35)
     for x in [(-toe - 0.8) + i * (2 * toe + 1.6) / 12 for i in range(13)]:
@@ -272,10 +295,6 @@ def section_sheet(ds: Design, info=None) -> D.Sheet:
                 f"SIDE SLOPE {ds.fill_hv:g}:1", 1.8, "left" if sg > 0 else "right", "dim")
         sh.line(P(sg * B, _surface(ds, B)), P(sg * (B + 0.30 * ds.fill_hv), _surface(ds, B) - 0.30),
                 "hidden", 0.13, True)
-    pts_leader.append((P(toe * 0.55, gz + (fill_h + 0.0) * 0.45), EMBANKMENT))
-    pts_leader.append((P(toe + 0.6, gz), GROUND))
-    pts_leader.append((P(-(B + toe) / 2, (_surface(ds, B) + gz) / 2 - 0.15),
-                       "ปลูกหญ้าตามแนวลาดคันทาง ตามแบบ ทถ-2-601"))
     # the finish: centre line, crossfalls, widths
     top = P(0, _surface(ds, 0))
     sh.line((top[0], top[1] + 34), (top[0], P(0, gz)[1] - 4), "grid", 0.18, True)
@@ -301,13 +320,16 @@ def section_sheet(ds: Design, info=None) -> D.Sheet:
     D._dim_h(sh, P(-B, 0)[0], P(B, 0)[0], yd + 15, f"ความกว้างคันทาง {2 * B:.2f} ม.")
     if ds.longitudinal_joint:
         sh.text((top[0] + 1.0, top[1] - 4), "รอยต่อตามยาว (TIE BAR)", 1.6, "left", "dim")
-    D.leaders(sh, pts_leader, X0 + 228, "right", 4.6, 1.7)
-    D.caption(sh, (X0 + 110, Y1 - 118), f"รูปตัดโครงสร้าง{kind}",
+    x_text = max(p[0] for p, _t in pts_leader) + 5.0
+    yb = D.drop_leaders(sh, pts_leader, x_text, P(0, gz)[1] - 5.0, 4.0, 1.8)
+    ycap = min(yb - 4.0, Y1 - 118)
+    D.caption(sh, (X0 + 110, ycap), f"รูปตัดแสดงโครงสร้าง{kind}และคุณสมบัติวัสดุ",
               f"ราบ 1:{sc} ดิ่ง 1:{sc / ve:g} (ขยายชั้นทาง {ve:g} เท่า)")
-    _layer_column(sh, ds, X0 + 4, Y1 - 135)
-    _slope_table(sh, X0 + 62, Y1 - 135)
-    _summary_box(sh, ds, X0 + 62, Y1 - 168)
-    _standard_table(sh, ds, X0 + 188, Y1 - 135)
+    yt = min(Y1 - 135, ycap - 15)
+    _layer_column(sh, ds, X0 + 4, yt)
+    _slope_table(sh, X0 + 62, yt)
+    _summary_box(sh, ds, X0 + 62, yt - 33)
+    _standard_table(sh, ds, X0 + 188, yt)
     sh.scale = f"1:{sc}"
     return sh
 
@@ -663,6 +685,8 @@ def asphalt_sheet(ds: Design) -> D.Sheet:
         return (x + (xm - x0m) * k, y + zm * k)
     items = []
     d = 0.0
+    n = len(ds.layers)
+    stp = min(0.10, 0.70 / max(n + 1, 1))
     for i, (name, t) in enumerate(ds.layers):
         e0, e1 = _edge(ds, d), _edge(ds, d + t)
         top = [(xm, _ext(ds, xm) - d) for xm in sorted({x0m, ds.width / 2, B, e0}) if x0m <= xm <= e0]
@@ -670,22 +694,25 @@ def asphalt_sheet(ds: Design) -> D.Sheet:
         poly = [P(*p) for p in top + bot[::-1]]
         sh.fill(poly, "hatch", gray_of(name))
         sh.poly(poly, "wall", 0.25)
-        xm = x0m + span * (0.20 + 0.12 * i)
+        xm = x0m + span * (0.85 - stp * i)
         items.append((P(xm, _ext(ds, xm) - d - t / 2), f"{spec_of(name)} หนา {t * 100:g} ซม."))
         D._dim_v(sh, P(x0m, 0)[0] - 4, P(x0m, _ext(ds, x0m) - d - t)[1], P(x0m, _ext(ds, x0m) - d)[1],
                  f"{t * 100:g}")
-        if i == 0:
-            xm = x0m + span * 0.08
-            items.append((P(xm, _ext(ds, xm) - t), "PRIME COAT ตาม มทถ. 225-2562"))
-        elif "AC" in name or "แอสฟัลต์" in name or "Binder" in name:
-            xm = x0m + span * 0.12
-            items.append((P(xm, _ext(ds, xm) - d), "TACK COAT ตาม มทถ. 227-2562"))
+        if i + 1 < n:
+            xc = x0m + span * (0.85 - stp * (i + 0.5))
+            if i == 0 and not _is_ac(ds.layers[1][0]):
+                items.append((P(xc, _ext(ds, xc) - d - t), "PRIME COAT ตาม มทถ. 225-2562"))
+            elif _is_ac(ds.layers[i + 1][0]):
+                items.append((P(xc, _ext(ds, xc) - d - t), "TACK COAT ตาม มทถ. 227-2562"))
         d += t
     sh.line(P(B, _ext(ds, B)), P(toe, gz), "wall", 0.35)
     sh.line(P(x0m, gz), P(toe + 0.3, gz), "wall", 0.35)
     sh.text(P((B + toe) / 2 + 0.1, (_ext(ds, B) + gz) / 2), f"SIDE SLOPE {ds.fill_hv:g}:1", 1.8, "left", "dim")
-    items.append((P(B + (toe - B) * 0.25, gz + 0.12), EMBANKMENT))
-    D.leaders(sh, items, P(toe + 0.3, 0)[0] + 6, "right", 5.0, 1.8)
+    xe = x0m + span * (0.85 - stp * n)
+    items.append((P(xe, gz + fill_h * 0.5), EMBANKMENT))
+    items.append((P(xe - span * stp, gz), GROUND))
+    x_text = max(p[0] for p, _t in items) + 5.0
+    yb = D.drop_leaders(sh, items, x_text, P(0, gz)[1] - 5.0, 4.0, 1.8)
     yd = P(0, _ext(ds, x0m))[1] + 10
     D._dim_h(sh, P(x0m, 0)[0], P(ds.width / 2, 0)[0], yd, "ผิวจราจร (ต่อ)")
     if ds.shoulder > 0:
@@ -694,9 +721,10 @@ def asphalt_sheet(ds: Design) -> D.Sheet:
         sh.text((a[0], a[1] + 2.0), f"{ds.shoulder_slope:g}%", 2.0, "center", "dim")
     a = P(x0m + 0.3, _ext(ds, x0m + 0.3))
     sh.text((a[0], a[1] + 2.0), f"{ds.crown:g}%", 2.0, "center", "dim")
-    D.caption(sh, (X0 + 90, Y1 - 128), "แบบขยายริมขอบทางและไหล่ทาง", f"1:{sc}")
-    _standard_table(sh, ds, X0 + 188, Y1 - 140)
-    D.notes_block(sh, X0 + 4, Y1 - 145, "ข้อกำหนดผิวทางลาดยาง", [
+    ycap = min(yb - 4.0, Y1 - 128)
+    D.caption(sh, (X0 + 90, ycap), "แบบขยายริมขอบทางและไหล่ทาง", f"1:{sc}")
+    _standard_table(sh, ds, X0 + 188, ycap - 12)
+    D.notes_block(sh, X0 + 4, ycap - 17, "ข้อกำหนดผิวทางลาดยาง", [
         "1. ผิว ASPHALT CONCRETE ใช้แอสฟัลต์ซีเมนต์ A.C. 60-70 ความหนาแต่ละชั้นไม่น้อยกว่า 0.04 ม. "
         "ตาม มทถ. 230-2562",
         "2. ก่อนปูผิวลาดยางต้องทำ PRIME COAT บนพื้นทางที่แห้งและสะอาด ตาม มทถ. 225-2562 "
@@ -1213,4 +1241,102 @@ def rn29_sheet(ds: Design):
         "4. Equivalence Factor จากตาราง Equivalent factor and damaging power of different axle loads "
         "(interpolate ระหว่างค่าในตาราง)",
     ], 2.0, 70)
+    return sh
+
+
+# ---------------------------------------------------------------------------
+# การยกโค้งและขยายผิวจราจรทางโค้ง (ทถ-2-104) from the road's own curves
+# ---------------------------------------------------------------------------
+
+SE_NOTES = [
+    "1. ยกโค้งโดยวิธีหมุนผิวจราจรรอบศูนย์กลางถนน (ทถ-2-104 ข้อ 7) ช่วงปรับการยก Ts = Lt + Lr "
+    "อยู่บนทางตรง 2/3 และในโค้ง 1/3 (ข้อกำหนด 0.50–0.80 Ts)",
+    "2. ความลาดขอบผิวจราจรเทียบศูนย์กลางไม่ชันกว่า 1 : S ตามตาราง (S = 75 + 1.5V)",
+    "3. อัตรายกโค้ง e ตามวิธีกระจายค่าของ AASHTO (Method 5) ไม่เกิน e max ; "
+    "รัศมีต่ำสุด Rmin = V² / 127 (e max + f max)",
+    "4. ลาดไหล่ทางด้านนอกโค้งปรับให้ค่า ROLL OVER ไม่เกิน 0.07 ม./ม. (ข้อ 4) ; "
+    "ไหล่ทางด้านในลาดเท่ากับผิวจราจรเมื่อ SE มากกว่าลาดไหล่ทางปกติ",
+    "5. ขยายผิวจราจรด้านในโค้ง W = n (R - sqrt(R² - L²)) + V / (10 sqrt(R)) ; L = 6.10 ม. ; "
+    "W น้อยกว่า 0.60 ม. ไม่ต้องขยาย",
+    "6. โค้งที่ไม่ยกโค้ง (NC) เริ่มขยายที่ PC และ PT ขยายเต็มที่ระยะ L/3 (ข้อ 10) ; "
+    "โค้งที่ยกโค้ง ขยายตามช่วงปรับการยก",
+    "7. ค่า SE และ W ของแต่ละโค้ง แสดงในตารางนี้ แผ่นรูปตัดขวาง (ST) และรูปตัดตามยาว",
+]
+
+
+def se_sheet(an) -> D.Sheet:
+    """ตาราง/แผนภาพการยกโค้งและขยายผิวจราจร ของทุกโค้งของโครงการ."""
+    from core import wanic_road as R
+    from core.road import alignment as A
+    st = an.settings
+    plan = an.se_plan
+    sh = D.Sheet("SD-SE", "การยกโค้งและขยายผิวจราจรทางโค้ง", "-", "SD")
+    fs = A.format_station
+    sh.text((X0 + 2, Y1 - 4), f"ตารางการยกโค้งและขยายผิวจราจร (ความเร็วออกแบบ {st.speed:g} กม./ชม. · "
+            f"e max {st.emax:g}% · ผิวจราจร {st.width:g} ม. · หลังเต่า {st.crown:g}%)", 3.0, "left", "text", True)
+    cols = [("โค้ง", 10, "center"), ("R (ม.)", 15, "right"), ("e (%)", 12, "right"), ("W (ม.)", 12, "right"),
+            ("Lt", 11, "right"), ("Lr", 11, "right"), ("Ts", 11, "right"), ("NC", 22, "center"),
+            ("ผิวนอก 0%", 22, "center"), ("PC", 22, "center"), ("FULL SE", 22, "center"),
+            ("สิ้น FULL SE", 22, "center"), ("PT", 22, "center"), ("ผิวนอก 0%", 22, "center"),
+            ("NC", 22, "center"), ("หมายเหตุ", 46, "left")]
+    rows = []
+    for c in plan:
+        se = c.e > 0
+        rows.append([str(c.number), f"{c.radius:,.0f}", f"{c.e:.1f}" if se else "NC",
+                     f"{c.widening:.2f}" if c.widening else "-", f"{c.runout:.1f}" if se else "-",
+                     f"{c.runoff:.1f}" if se else "-", f"{c.transition:.1f}" if se else "-",
+                     fs(c.s_nc, 2) if se else "-", fs(c.s_lc, 2) if se else "-", fs(c.s_pc, 2),
+                     fs(c.s_fse, 2) if se else "-", fs(c.s_fse_end, 2) if se else "-", fs(c.s_pt, 2),
+                     fs(c.s_lc_end, 2) if se else "-", fs(c.s_nc_end, 2) if se else "-",
+                     ("เลี้ยวขวา" if c.right else "เลี้ยวซ้าย") + (" (!) R < Rmin" if c.notes and
+                                                                 c.radius < c.rmin else "")])
+    yy = D.table(sh, X0 + 2, Y1 - 7, cols, rows[:14] or [["-"] * 16], 1.7, 4.4, 5.5)
+    # the superelevation diagram of the first superelevated curve
+    c = next((c for c in plan if c.e > 0), None)
+    if c is not None:
+        x0, x1 = X0 + 10, X0 + 200
+        ky = 3.0                                      # mm per % of crossfall
+        y0 = yy - 25 - c.e * ky
+        s0, s1 = c.s_nc - 10, c.s_pc + (c.s_pt - c.s_pc) / 2
+
+        def X(s):
+            return x0 + (s - s0) / (s1 - s0) * (x1 - x0)
+        sh.line((x0, y0), (x1, y0), "dim", 0.3)
+        sh.text((x0 - 1, y0 - 0.6), "CL", 1.8, "right", "dim")
+        pts_o, pts_i = [], []
+        n = 120
+        for i in range(n + 1):
+            s = s0 + (s1 - s0) * i / n
+            se = R.se_at(plan, s, st) or (st.crown, st.crown, 0, 0, 0, 0)
+            outer, inner = (se[0], se[1]) if c.right else (se[1], se[0])
+            pts_o.append((X(s), y0 - outer * ky))       # edge level relative to the axis
+            pts_i.append((X(s), y0 - inner * ky))
+        sh.poly(pts_o, "roof", 0.45, False)
+        sh.poly(pts_i, "wall", 0.45, False)
+        for s, lab in ((c.s_nc, "NC"), (c.s_lc, "ผิวนอก 0%"), (c.s_pc, "PC"), (c.s_fse, "FULL SE")):
+            sh.line((X(s), y0 - c.e * ky - 3), (X(s), y0 + c.e * ky + 3), "hidden", 0.13, True)
+            sh.text((X(s), y0 + c.e * ky + 4), f"{lab} {A.format_station(s, 2)}", 1.6, "center", "dim")
+        sh.text((x1 + 1, pts_o[-1][1]), f"ขอบนอกโค้ง +{c.e:g}%", 1.7, "left", "roof")
+        sh.text((x1 + 1, pts_i[-1][1] - 2), f"ขอบในโค้ง -{c.e:g}%", 1.7, "left", "wall")
+        D._dim_h(sh, X(c.s_nc), X(c.s_lc), y0 - c.e * ky - 6, f"Lt {c.runout:.1f}")
+        D._dim_h(sh, X(c.s_lc), X(c.s_fse), y0 - c.e * ky - 6, f"Lr {c.runoff:.1f}")
+        sh.text(((x0 + x1) / 2, y0 - c.e * ky - 14),
+                f"ผังการยกระดับผิวจราจรบนทางโค้ง {c.number} (ระดับขอบผิวเทียบศูนย์กลาง, ไม่ตามมาตราส่วน)",
+                2.4, "center", "text", True)
+    # the relative gradient table
+    tx = X0 + 238
+    ty = yy - 12
+    sh.text((tx, ty), "ความลาดตามแนวของขอบผิวจราจร (ทถ-2-104)", 2.3, "left", "text", True)
+    rg = [[f"{v}", f"1 : {s}"] for v, s in R.REL_GRADIENT[:-1]] + [["80 หรือมากกว่า", "1 : 200"]]
+    mark = None
+    for i, (v, _s) in enumerate(R.REL_GRADIENT):
+        if st.speed >= v:
+            mark = i
+    W = 50
+    if mark is not None:
+        yr = ty - 2.5 - 5.5 - mark * 4.2
+        sh.fill([(tx, yr - 4.2), (tx + W, yr - 4.2), (tx + W, yr), (tx, yr)], "hatch", 0.9, MARK_RGB)
+    D.table(sh, tx, ty - 2.5, [("ความเร็ว (กม./ชม.)", 28, "center"), ("1 : S min", 22, "center")], rg,
+            1.7, 4.2, 5.5)
+    D.notes_block(sh, X0 + 2, Y0 + 52, "รายการประกอบแบบ", SE_NOTES, 1.9, 150)
     return sh

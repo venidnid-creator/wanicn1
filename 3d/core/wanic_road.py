@@ -70,9 +70,51 @@ def _digits(v: float) -> int:
     return len(str(int(abs(v)))) if abs(v) >= 1 else 1
 
 
+_HEAD = {"P": ("P", "PT", "POINT", "NAME", "NO", "ID", "จุด", "ชื่อ"),
+         "N": ("N", "NORTH", "NORTHING", "Y", "เหนือ"),
+         "E": ("E", "EAST", "EASTING", "X", "ตะวันออก"),
+         "Z": ("Z", "H", "ELEV", "ELEVATION", "RL", "ระดับ"),
+         "D": ("D", "CODE", "DESC", "DESCRIPTION", "รหัส")}
+#: UTM eastings stay inside 160,000–840,000 m; a bigger number is a northing
+E_MAX = 840000.0
+
+
+def header_order(cells: list[str]):
+    """The order a header row names (``P,N,E,Z,D``, ``Point,Easting,…``),
+    None when it is not a header of one of :data:`ORDERS`."""
+    out = ""
+    for c in cells:
+        t = c.strip().strip('"').upper()
+        key = next((k for k, names in _HEAD.items() if t in names), None)
+        if key is None or key in out:
+            return None
+        out += key
+    if out in ORDERS:
+        return out
+    return out + "D" if out + "D" in ORDERS else None
+
+
+def _which_first(a: float, b: float) -> str:
+    """"EN" when ``a`` is the easting and ``b`` the northing, else "NE":
+    the longer number is the northing; at equal length (southern Thailand,
+    N under 1,000,000) a number over 840,000 can only be the northing, and
+    otherwise the larger one is."""
+    if _digits(b) != _digits(a):
+        return "EN" if _digits(b) > _digits(a) else "NE"
+    if (b > E_MAX) != (a > E_MAX):
+        return "EN" if b > E_MAX else "NE"
+    return "EN" if b > a else "NE"
+
+
 def sniff_order(rows: list[list[str]]) -> str:
-    """The column order of the first data row: a name first or not, and
-    E before N when the second coordinate is the longer number."""
+    """The column order: a header row's when it names the columns, else
+    from the first data row — a name first or not, and which coordinate
+    is the northing (:func:`_which_first`)."""
+    for cells in rows[:3]:
+        if all(_num(c) is None for c in cells[:3]):
+            h = header_order(cells)
+            if h:
+                return h
     for cells in rows:
         nums = [_num(c) for c in cells]
         if len(cells) >= 4 and all(v is not None for v in nums[1:4]):
@@ -80,9 +122,9 @@ def sniff_order(rows: list[list[str]]) -> str:
             name_first = nums[0] is None or ("." not in cells[0] and abs(nums[0]) < 100000) \
                 or (len(cells) >= 5 and nums[3] is not None)
             if name_first:
-                return "PENZD" if _digits(nums[2]) > _digits(nums[1]) else "PNEZD"
+                return "PENZD" if _which_first(nums[1], nums[2]) == "EN" else "PNEZD"
         if len(cells) >= 3 and all(v is not None for v in nums[:3]):
-            return "ENZD" if _digits(nums[1]) > _digits(nums[0]) else "NEZD"
+            return "ENZD" if _which_first(nums[0], nums[1]) == "EN" else "NEZD"
     return "PNEZD"
 
 
@@ -553,6 +595,8 @@ class Settings:
     max_edge: float = 0.0           # 0: keep every triangle of the TIN
     pavement: str = "drr-ac"
     layers: Optional[list] = None   # [(name, thickness, colour)], None: the preset's
+    speed: float = 60.0             # design speed, km/h (superelevation, widening)
+    emax: float = 8.0               # maximum superelevation, %; 0: no superelevation
 
     def pavement_layers(self) -> list:
         layers = self.layers if self.layers is not None else pavement_layers(self.pavement)
@@ -572,6 +616,166 @@ class Settings:
                           self.shoulder, self.shoulder_slope)
 
 
+# -- 3b. superelevation and widening on the curves (ทถ-2-104) ----------------------------
+
+#: ทถ-2-104: the edge's rise over the axis no steeper than 1 : S
+REL_GRADIENT = ((30, 120), (35, 128), (40, 135), (45, 143), (50, 150), (60, 165), (70, 180), (80, 200))
+#: AASHTO side friction f max by design speed (km/h)
+SIDE_FRICTION = ((30, 0.17), (40, 0.17), (50, 0.16), (60, 0.15), (70, 0.14), (80, 0.14), (90, 0.13),
+                 (100, 0.12), (120, 0.09))
+WHEELBASE = 6.1                       # the design truck's wheelbase for the widening, m
+ROLLOVER = 7.0                        # ทถ-2-104 ข้อ 4: lane to shoulder no more than 0.07
+RUNOFF_ON_TANGENT = 2.0 / 3.0         # ทถ-2-104: (0.50–0.80) Ts before the PC
+
+
+def _interp(table, v):
+    if v <= table[0][0]:
+        return table[0][1]
+    for (a, fa), (b, fb) in zip(table, table[1:]):
+        if v <= b:
+            return fa + (fb - fa) * (v - a) / (b - a)
+    return table[-1][1]
+
+
+def relative_gradient(speed: float) -> float:
+    """S of 1 : S (ทถ-2-104 table; 80 km/h and over 1 : 200)."""
+    return 200.0 if speed >= 80 else _interp(REL_GRADIENT, speed)
+
+
+@dataclass
+class CurveSE:
+    number: int
+    radius: float
+    right: bool                     # turning right: the inside is the right
+    e: float                        # full superelevation, % (0: normal crown kept)
+    widening: float                 # on the inside, m
+    runout: float                   # tangent runout Lt, m
+    runoff: float                   # superelevation runoff Lr, m
+    s_nc: float                     # normal crown ends
+    s_lc: float                     # the outer lane level (0 %)
+    s_fse: float                    # full superelevation begins
+    s_fse_end: float
+    s_lc_end: float
+    s_nc_end: float
+    s_pc: float
+    s_pt: float
+    rmin: float
+    notes: list = field(default_factory=list)
+
+    @property
+    def transition(self) -> float:
+        return self.runout + self.runoff
+
+
+def superelevation_plan(curves, settings: Settings) -> list:
+    """e, the widening and the transition stations of every circular
+    curve: e by AASHTO's distribution (method 5) to ``emax``, the runoff
+    at 1 : S of ทถ-2-104 with 2/3 of it on the tangent, the widening
+    W = n (R − √(R² − L²)) + V / (10 √R) (dropped under 0.60 m)."""
+    out = []
+    V = float(settings.speed)
+    emax = float(settings.emax) / 100.0
+    crown = float(settings.crown)
+    if V <= 0:
+        return out
+    f = _interp(SIDE_FRICTION, V)
+    S = relative_gradient(V)
+    lanes = 2 if settings.width > 4.5 else 1
+    half = settings.width / 2.0
+    for c in curves:
+        R = float(getattr(c, "radius", 0.0) or 0.0)
+        if R <= 0:
+            continue
+        notes = []
+        rmin = V * V / (127.0 * (emax + f)) if emax > 0 else V * V / (127.0 * f)
+        if emax > 0:
+            x = min(rmin / R, 1.0)
+            e = emax * (2 * x - x * x) * 100.0
+            if R < rmin:
+                notes.append(f"R {R:,.0f} ม. น้อยกว่ารัศมีต่ำสุด {rmin:,.0f} ม. ที่ {V:g} กม./ชม. "
+                             "— ลดความเร็วออกแบบหรือเพิ่มรัศมี")
+            e = 0.0 if e < 0.75 * crown else max(math.ceil(e * 2.0 - 1e-9) / 2.0, crown)
+        else:
+            e = 0.0
+        w = lanes * (R - math.sqrt(max(R * R - WHEELBASE ** 2, 0.0))) + V / (10.0 * math.sqrt(R))
+        w = math.ceil(w * 10.0 - 1e-9) / 10.0
+        if w < 0.6:
+            w = 0.0
+        Lt = half * crown / 100.0 * S if e > 0 else 0.0
+        Lr = half * e / 100.0 * S
+        p = RUNOFF_ON_TANGENT
+        pc, pt = float(c.s_pc), float(c.s_pt)
+        L = pt - pc
+        a, b = pc - p * Lr, pc + (1 - p) * Lr
+        a2, b2 = pt + p * Lr, pt - (1 - p) * Lr
+        if e > 0 and b2 - b < L / 3.0 - 1e-6:
+            notes.append(f"ช่วง FULL SUPERELEVATION {max(b2 - b, 0):.1f} ม. สั้นกว่า L/3 = {L / 3:.1f} ม.")
+        if b > b2:                                    # a short curve: full SE at its middle
+            b = b2 = (pc + pt) / 2.0
+        out.append(CurveSE(int(c.number), R, float(c.delta) > 0, e, w, Lt, Lr,
+                           a - Lt, a, b, b2, a2, a2 + Lt, pc, pt, rmin, notes))
+    return out
+
+
+def _ramp(s, a, b):
+    if b - a <= 1e-9:
+        return 1.0 if s >= b else 0.0
+    return min(max((s - a) / (b - a), 0.0), 1.0)
+
+
+def se_at(plan: list, s: float, settings: Settings):
+    """The template's ``se`` tuple at station ``s`` (None on the tangent)."""
+    crown, sh = float(settings.crown), float(settings.shoulder_slope)
+    for c in plan:
+        if not (c.s_nc - 1e-6 <= s <= c.s_nc_end + 1e-6):
+            continue
+        if c.e <= 0 and c.widening <= 0:
+            return None
+        # the outer lane: crown -> 0 (runout) -> -e (runoff); + is down outward
+        if c.e > 0:
+            if s <= c.s_fse_end:
+                k1, k2 = _ramp(s, c.s_nc, c.s_lc), _ramp(s, c.s_lc, c.s_fse)
+            else:
+                k1, k2 = 1.0 - _ramp(s, c.s_lc_end, c.s_nc_end), 1.0 - _ramp(s, c.s_fse_end, c.s_lc_end)
+            outer = crown * (1.0 - k1) - c.e * k2
+            inner = max(crown, -outer)
+            wk = k2
+        else:
+            outer = inner = crown
+            L = c.s_pt - c.s_pc
+            wk = min(_ramp(s, c.s_pc, c.s_pc + L / 3.0), 1.0 - _ramp(s, c.s_pt - L / 3.0, c.s_pt))
+        sh_in = max(sh, inner)
+        sh_out = min(sh, ROLLOVER + outer)            # rollover: sh_out - outer <= 7 %
+        w = c.widening * wk
+        if c.right:                                   # inside on the right
+            return (outer, inner, sh_out, sh_in, 0.0, w)
+        return (inner, outer, sh_in, sh_out, w, 0.0)
+    return None
+
+
+def template_at(settings: Settings, plan: list, s: float) -> P.Template:
+    t = settings.template()
+    se = se_at(plan, s, settings) if plan else None
+    if se is not None:
+        t.se = se
+    return t
+
+
+def key_stations(plan: list) -> list:
+    """[(station, label)] of the superelevation's key points."""
+    out = []
+    for c in plan:
+        tag = f"โค้ง {c.number}"
+        if c.e > 0:
+            out += [(c.s_nc, f"{tag} NC เริ่มยกโค้ง"), (c.s_lc, f"{tag} ผิวด้านนอกระดับ 0%"),
+                    (c.s_pc, f"{tag} PC"), (c.s_fse, f"{tag} FULL SE {c.e:g}%"),
+                    (c.s_fse_end, f"{tag} สิ้นสุด FULL SE"), (c.s_pt, f"{tag} PT"),
+                    (c.s_lc_end, f"{tag} ผิวด้านนอกระดับ 0%"), (c.s_nc_end, f"{tag} NC")]
+        else:
+            out += [(c.s_pc, f"{tag} PC"), (c.s_pt, f"{tag} PT")]
+    return out
+
+
 @dataclass
 class Section:
     s: float
@@ -582,6 +786,8 @@ class Section:
     cut: float = 0.0
     fill: float = 0.0
     formation: Optional[list] = None   # the subgrade under the pavement, out to daylight
+    label: str = ""                 # a curve's key point (PC, FULL SE …)
+    se: Optional[tuple] = None      # the superelevation there
 
 
 @dataclass
@@ -598,6 +804,7 @@ class Analysis:
     origin: tuple = (0.0, 0.0, 0.0)
     warnings: list = field(default_factory=list)
     hcurves: list = field(default_factory=list)
+    se_plan: list = field(default_factory=list)     # CurveSE, superelevation/widening
 
     @property
     def designed_length(self) -> float:
@@ -669,12 +876,11 @@ def layer_polygons(design: list, template: P.Template, layers: list) -> list:
     return out
 
 
-def _earthworks(tin, axis, grade, settings: Settings) -> list:
+def _earthworks(tin, axis, grade, settings: Settings, plan=None) -> list:
     """Cut and fill per station measured to the subgrade (under the
     pavement), volumes between stations prismoidal (the middle section
     measured) or by end areas -- :func:`core.road.profile.earthworks` with
     the formation in place of the finished surface."""
-    template = settings.template()
     total = settings.structure
 
     def section_areas(st):
@@ -682,6 +888,7 @@ def _earthworks(tin, axis, grade, settings: Settings) -> list:
         ground = P.cross_section(tin, st, settings.half_width, settings.sample)
         if zd is None or len(ground) < 2:
             return None
+        template = template_at(settings, plan or [], st.s)
         return P.areas(ground, formation(P.design_section(ground, zd, template), template, total))
 
     rows = []
@@ -778,31 +985,47 @@ def analyse(shots: list[Shot], axis: list, pvis: list, settings: Settings,
     else:
         warnings.append("ยังไม่มีเส้นระดับออกแบบ (ต้องมี PVI อย่างน้อย 2 จุด) "
                         "— แสดงเฉพาะระดับดินเดิม")
-    template = settings.template()
+    hcurves = list(hcurves) if hcurves is not None else A.horizontal_curves(axis)
+    plan = superelevation_plan(hcurves, settings) if float(getattr(settings, "speed", 0) or 0) > 0 else []
+    for c in plan:
+        warnings += [f"โค้ง {c.number}: {n}" for n in c.notes]
     prof = P.ground_profile(tin, axis, settings.step)
-    sections = []
+    length = A.polyline_length(axis)
+    keys = {round(s_, 3): (s_, lab) for s_, lab in key_stations(plan) if 0.0 < s_ < length}
+    marks = []
     for st in A.stations(axis, settings.step):
         regular = abs(st.s / settings.step - round(st.s / settings.step)) < 1e-6
-        if not regular and st.s > 1e-6 and abs(st.s - A.polyline_length(axis)) > 1e-6:
+        if not regular and st.s > 1e-6 and abs(st.s - length) > 1e-6:
             continue
+        marks.append((st.s, st, ""))
+    for s_, lab in keys.values():
+        hit = next((i for i, m in enumerate(marks) if abs(m[0] - s_) < 0.05), None)
+        if hit is not None:
+            marks[hit] = (marks[hit][0], marks[hit][1], lab)
+        else:
+            marks.append((s_, A.point_at(axis, s_), lab))
+    marks.sort(key=lambda m: m[0])
+    sections = []
+    for s_, st, lab in marks:
         ground = P.cross_section(tin, st, settings.half_width, settings.sample)
         if len(ground) < 2:
-            warnings.append(f"สถานี {A.format_station(st.s, 3)} อยู่นอกพื้นผิว — ข้าม")
+            warnings.append(f"สถานี {A.format_station(s_, 3)} อยู่นอกพื้นผิว — ข้าม")
             continue
-        zd = P.grade_at(grade, st.s) if grade else None
+        template = template_at(settings, plan, s_)
+        zd = P.grade_at(grade, s_) if grade else None
         design = P.design_section(ground, zd, template) if zd is not None else None
         form = formation(design, template, settings.structure) if design else None
         cut, fill = P.areas(ground, form) if design else (0.0, 0.0)
-        sections.append(Section(st.s, ground, design, P._z_on(ground, 0.0), zd, cut, fill, form))
-    rows = _earthworks(tin, axis, grade, settings) if grade else []
-    hcurves = list(hcurves) if hcurves is not None else A.horizontal_curves(axis)
+        sections.append(Section(s_, ground, design, P._z_on(ground, 0.0), zd, cut, fill, form,
+                                lab, template.se))
+    rows = _earthworks(tin, axis, grade, settings, plan) if grade else []
     xs = [p[0] for p in tin.points]
     ys = [p[1] for p in tin.points]
     zs = [p[2] for p in tin.points]
     origin = (math.floor(min(xs) / 100.0) * 100.0, math.floor(min(ys) / 100.0) * 100.0,
               math.floor(min(zs)))
     return Analysis(axis, tin, pvis, grade, curves, prof, sections, rows, settings, origin,
-                    warnings, hcurves)
+                    warnings, hcurves, plan)
 
 
 # -- 5. the outputs -------------------------------------------------------------------------
@@ -854,6 +1077,7 @@ def corridor_mesh(an: Analysis, step: float = 5.0) -> list:
         if len(ground) < 2:
             rings.append(None)
             continue
+        template = template_at(an.settings, an.se_plan, s)
         design = _fixed(P.design_section(ground, zd, template), template)
         ring = []
         for o, z in design:
@@ -887,6 +1111,12 @@ def earthworks_csv(an: Analysis) -> str:
             "" if r.z_design is None else f"{r.z_design:.3f}", f"{r.cut_area:.3f}",
             f"{r.fill_area:.3f}", f"{r.cut_volume:.3f}", f"{r.fill_volume:.3f}",
             f"{r.cut_total:.3f}", f"{r.fill_total:.3f}", f"{r.mass:.3f}"]))
+    out.append(f"รวม,,,,,{sum(r.cut_volume for r in an.rows):.3f},{sum(r.fill_volume for r in an.rows):.3f},"
+               f"{an.cut_total:.3f},{an.fill_total:.3f},{an.cut_total - an.fill_total:.3f}")
+    out.append("")
+    out.append("สรุป,ปริมาณ,หน่วย")
+    for item, q, unit in earthworks_summary(an)[:3]:
+        out.append(f"{item},{q:.3f},{unit}")
     return "\n".join(out) + "\n"
 
 
@@ -917,7 +1147,6 @@ def dxf_document(an: Analysis, hscale: float = 1.0, vscale: float = 10.0,
     msp = doc.modelspace()
     layers = {"WANIC-แนวทาง": 7, "WANIC-สถานี": 1, "WANIC-โค้งราบ": 4, "WANIC-ดินเดิม": 3,
               "WANIC-ออกแบบ": 1, "WANIC-คันทาง": 6, "WANIC-กริด": 8, "WANIC-ข้อความ": 7}
-    template = an.settings.template()
     pave = an.settings.pavement_layers()
     for k, (name, _t, colour) in enumerate(pave):
         layers[f"WANIC-ชั้นทาง-{k + 1}"] = _aci(colour)
@@ -1063,7 +1292,8 @@ def dxf_document(an: Analysis, hscale: float = 1.0, vscale: float = 10.0,
             poly([sp(o, z) for o, z in sec.design], "WANIC-ออกแบบ")
             if sec.formation and pave:
                 poly([sp(o, z) for o, z in sec.formation], "WANIC-คันทาง")
-                for j, (_name, outline, _c) in enumerate(layer_polygons(sec.design, template, pave)):
+                tpl = template_at(an.settings, an.se_plan, sec.s)
+                for j, (_name, outline, _c) in enumerate(layer_polygons(sec.design, tpl, pave)):
                     poly([sp(o, z) for o, z in outline], f"WANIC-ชั้นทาง-{j + 1}", closed=True)
             # left edge ends at its point, right edge starts at its, the
             # axis above both: three numbers 6 m apart never run together
@@ -1351,3 +1581,145 @@ def reverse_geocode(lat: float, lon: float, timeout: float = 15.0) -> dict:
         "Accept-Language": "th"})
     with urllib.request.urlopen(req, timeout=timeout) as reply:
         return parse_place(_json.loads(reply.read().decode("utf-8")))
+
+
+# -- 6. the 3D model's coordinates and its satellite ground ---------------------------------
+
+def model_marks(an: Analysis, shots=None, every: float = 100.0) -> list:
+    """[((x, y, z) local, text)]: the N E Z of the benchmarks and PI/POT
+    stakes, the curves' PC/PT and the axis every ``every`` metres (on the
+    design level where there is one) — the labels of the 3D model."""
+    ox, oy, oz = an.origin
+    out = []
+
+    def mark(e, n, z, head):
+        out.append(((e - ox, n - oy, z - oz), f"{head}  N {n:,.3f}  E {e:,.3f}  Z {z:,.3f}"))
+    from core import wanic_road_sheets as RS
+    seen = set()
+    for s in RS.bench_marks(shots) + [s for s in (shots or []) if pi_code(s.code or "")]:
+        if id(s) in seen:
+            continue
+        seen.add(id(s))
+        mark(s.e, s.n, s.z, s.name)
+
+    def on_axis(s, head):
+        st = A.point_at(an.axis, s)
+        z = P.grade_at(an.grade, s) if an.grade else None
+        if z is None:
+            z = an.tin.z_at(st.x, st.y)
+        if z is not None:
+            mark(st.x, st.y, z, head)
+    L = an.length
+    s = 0.0
+    while s <= L + 1e-6:
+        on_axis(s, f"STA {A.format_station(s, 3)}")
+        s += every
+    if abs(L - (s - every)) > 1.0:
+        on_axis(L, f"STA {A.format_station(L, 3)} (ปลายทาง)")
+    for c in an.hcurves:
+        if c.radius > 0:
+            on_axis(c.s_pc, f"PC-{c.number} {A.format_station(c.s_pc, 3)}")
+            on_axis(c.s_pt, f"PT-{c.number} {A.format_station(c.s_pt, 3)}")
+    return out
+
+
+def map_margin(an: Analysis) -> float:
+    """The satellite ground around the road: 50–100 m a side."""
+    return max(50.0, min(100.0, 0.06 * an.length))
+
+
+def map_window(an: Analysis, margin: float = None) -> tuple:
+    """(xmin, ymin, xmax, ymax) local: the survey and the axis, ``margin``
+    metres more each way."""
+    ox, oy, _oz = an.origin
+    m = map_margin(an) if margin is None else margin
+    xs = [p[0] for p in an.tin.points] + [p[0] for p in an.axis]
+    ys = [p[1] for p in an.tin.points] + [p[1] for p in an.axis]
+    return (min(xs) - ox - m, min(ys) - oy - m, max(xs) - ox + m, max(ys) - oy + m)
+
+
+def fit_uv(samples: list) -> tuple:
+    """Least squares (a, b, c, d, e, f) of u = a x + b y + c, v = d x + e y + f
+    from [((x, y), (u, v))]."""
+    import numpy as np
+    A_ = np.array([[x, y, 1.0] for (x, y), _uv in samples])
+    U = np.array([uv[0] for _xy, uv in samples])
+    V = np.array([uv[1] for _xy, uv in samples])
+    a, b, c = np.linalg.lstsq(A_, U, rcond=None)[0]
+    d, e, f = np.linalg.lstsq(A_, V, rcond=None)[0]
+    return float(a), float(b), float(c), float(d), float(e), float(f)
+
+
+def uv_to_local(fit: tuple, u: float, v: float) -> tuple:
+    a, b, c, d, e, f = fit
+    det = a * e - b * d
+    return ((e * (u - c) - b * (v - f)) / det, (-d * (u - c) + a * (v - f)) / det)
+
+
+def map_fit(an: Analysis, view, zone: int = 47, datum: str = "WGS84") -> tuple:
+    """The local (x, y) → image (u, v) of a satellite window (v up, 0 at the
+    image's bottom, as the renderer uploads pictures), fitted on a 5 × 5
+    grid over the map window."""
+    from core import wanic_sitemap as M
+    ox, oy, _oz = an.origin
+    x0, y0, x1, y1 = map_window(an)
+    samples = []
+    for i in range(5):
+        for j in range(5):
+            x, y = x0 + (x1 - x0) * i / 4, y0 + (y1 - y0) * j / 4
+            lat, lon = utm_to_wgs84(x + ox, y + oy, zone, datum)
+            px, py = M.world_px(lat, lon, view.z)
+            samples.append(((x, y), ((px - view.x0) / view.w_px, 1.0 - (py - view.y0) / view.h_px)))
+    return fit_uv(samples)
+
+
+# -- 7. the earthworks to Excel -------------------------------------------------------------
+
+def earthworks_summary(an: Analysis) -> list:
+    """[(item, quantity, unit)] — the totals the panel, the PDF and Excel show."""
+    cut, fill = an.cut_total, an.fill_total
+    rows = [("ปริมาตรดินขุด (ดินตัด) รวม", cut, "ลบ.ม."),
+            ("ปริมาตรดินถม รวม", fill, "ลบ.ม.")]
+    if cut >= fill:
+        rows.append(("ดินขุดเหลือ ต้องขนทิ้ง (ขุด - ถม)", cut - fill, "ลบ.ม."))
+    else:
+        rows.append(("ดินถมที่ต้องนำมาจากแหล่งอื่น (ถม - ขุด)", fill - cut, "ลบ.ม."))
+    rows.append(("ความยาวที่ออกแบบระดับ", an.designed_length, "ม."))
+    for name, t, w, vol, area in an.layer_quantities():
+        rows.append((f"{name} หนา {t:.3f} ม. กว้าง {w:.2f} ม.", vol, "ลบ.ม."))
+    return rows
+
+
+def earthworks_xlsx(an: Analysis, info=None) -> bytes:
+    """A workbook: «สรุปปริมาณดิน» (the totals) and «ตารางปริมาณดิน» (every
+    station) — the same numbers as the panel and the VT/QS sheets."""
+    from core import wanic_takeoff as T
+    info = dict(info or {})
+    s1 = T._Sheet("สรุปปริมาณดิน", landscape=False)
+    s1.widths = [8, 58, 18, 10]
+    s1.add(["", "สรุปปริมาณงานดินขุด-ถม"], 2)
+    if info.get("project"):
+        s1.add(["", f"โครงการ: {info['project']}"], 0)
+    s1.add(["", f"วิธีคำนวณ: {'Prismoidal' if an.settings.method == 'prismoidal' else 'Average end area'} "
+                f"· รูปตัดทุก {an.settings.step:g} ม."], 0)
+    s1.add(["ลำดับ", "รายการ", "ปริมาณ", "หน่วย"], 3)
+    for i, (item, q, unit) in enumerate(earthworks_summary(an), 1):
+        bold = i <= 3
+        s1.add([i, item, round(q, 3), unit], styles=[8, 6 if bold else 4, 7 if bold else 5, 8])
+    s1.add([])
+    s1.add(["", "ลงชื่อ ................................ ผู้คำนวณ"], 10)
+    s1.add(["", "(นายเวนิช ธัมมะวงษ์) วิศวกรสำรวจ"], 10)
+    s2 = T._Sheet("ตารางปริมาณดิน")
+    s2.widths = [14, 13, 13, 13, 13, 14, 14, 15, 15, 15]
+    s2.add(["สถานี", "ระดับดินเดิม", "ระดับออกแบบ", "พท.ดินตัด ม²", "พท.ดินถม ม²", "ดินตัด ม³",
+            "ดินถม ม³", "ดินตัดสะสม", "ดินถมสะสม", "สุทธิสะสม"], 3)
+    for r in an.rows:
+        s2.add([A.format_station(r.s, 3), None if r.z_ground is None else round(r.z_ground, 3),
+                None if r.z_design is None else round(r.z_design, 3), round(r.cut_area, 3),
+                round(r.fill_area, 3), round(r.cut_volume, 3), round(r.fill_volume, 3),
+                round(r.cut_total, 3), round(r.fill_total, 3), round(r.mass, 3)],
+               styles=[8] + [5] * 9)
+    s2.add(["รวม", None, None, None, None, round(sum(r.cut_volume for r in an.rows), 3),
+            round(sum(r.fill_volume for r in an.rows), 3), round(an.cut_total, 3),
+            round(an.fill_total, 3), round(an.cut_total - an.fill_total, 3)], styles=[6] + [7] * 9)
+    return T._xlsx([s1, s2])

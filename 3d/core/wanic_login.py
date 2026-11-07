@@ -77,10 +77,27 @@ def sign_out():
     os.environ.pop(ENV, None)
 
 
+def use_arabic_digits():
+    """Numbers in Arabic digits (0-9) everywhere — spin boxes, tables,
+    dates — even on a Windows set to Thai native digits (๐-๙): the
+    program's own locale is Thai with Latin digits."""
+    try:
+        from PySide6.QtCore import QLocale
+        loc = QLocale(QLocale.Thai, QLocale.Thailand)
+        if loc.zeroDigit() != "0":
+            loc = QLocale(QLocale.English, QLocale.UnitedStates)
+        loc.setNumberOptions(loc.numberOptions() | QLocale.OmitGroupSeparator)
+        QLocale.setDefault(loc)
+        return loc
+    except Exception:                               # noqa: BLE001 -- never stop the program
+        return None
+
+
 def require(parent=None) -> bool:
     """Ask for the account unless this session is already signed in.
     True when the program may go on (the session is then handed to the
     programs this one starts)."""
+    use_arabic_digits()
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return True
     if signed_in():

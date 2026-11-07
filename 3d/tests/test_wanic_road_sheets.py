@@ -165,7 +165,7 @@ def test_standard_structure_sheets_from_the_design():
     assert any(it[2] == "roof" for it in sd[3].items if it[0] == "line")      # the red reading
     assert S[-1].code == "QS-01" and [x.number for x in S] == list(range(1, len(S) + 1))
     t1 = " ".join(sd[0].texts())
-    for word in ("รูปตัดโครงสร้างถนนคอนกรีตเสริมเหล็ก", "หนา 0.18 ม.", "MODIFIED PROCTOR",
+    for word in ("รูปตัดแสดงโครงสร้างถนนคอนกรีตเสริมเหล็ก", "หนา 0.18 ม.", "MODIFIED PROCTOR",
                  "STANDARD PROCTOR", "SIDE SLOPE", "Road Note 29", "ทถ-2-201(1)", f"{s.width:.2f}"):
         assert word in t1, word
     assert any(len(it) > 4 and it[4] == RD.MARK_RGB for it in sd[0].items if it[0] == "fill")

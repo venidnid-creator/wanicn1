@@ -339,7 +339,34 @@ def design_data(an, info):
         ("ปริมาณดินถมรวม", f"{an.fill_total:,.2f} ลบ.ม."),
         ("ระบบพิกัด", info.get("crs") or "UTM WGS84 โซน 47N · ระดับ MSL"),
         ("ช่วงตัดขวาง", f"ทุก {st.step:g} ม."),
-    ]
+    ] + _speed_rows(an) + _pave_rows(info.get("pave"))
+
+
+def _speed_rows(an):
+    st = an.settings
+    if not float(getattr(st, "speed", 0) or 0):
+        return []
+    n_se = sum(1 for c in getattr(an, "se_plan", []) if c.e > 0)
+    return [("ความเร็วออกแบบ / e max", f"{st.speed:g} กม./ชม. / {st.emax:g}% · ยกโค้ง {n_se} โค้ง "
+             "(ทถ-2-104)")]
+
+
+def _pave_rows(pave):
+    """The pavement design's inputs (AI 1970 / Road Note 29) for the design data table."""
+    pave = dict(pave or {})
+    if pave.get("method") == "rn29" or (pave.get("rn") and not pave.get("ai")):
+        r = pave.get("rn") or {}
+        return [("ออกแบบความหนา", "Road Note 29 (ถนน คสล.)"),
+                ("ปริมาณจราจร", f"ADT {float(r.get('adt', 0)):,.0f} คัน/วัน · รถหนัก {float(r.get('heavy_pct', 0)):g}% "
+                 f"· r {float(r.get('growth_pct', 0)):g}% · {float(r.get('years', 0)):g} ปี · "
+                 f"CBR {float(r.get('cbr', 0)):g}%")]
+    if pave.get("ai"):
+        a = pave["ai"]
+        return [("ออกแบบความหนา", "Asphalt Institute 1970 (ถนนลาดยาง)"),
+                ("ปริมาณจราจร", f"IDT {float(a.get('idt', 0)):,.0f} คัน/วัน · รถหนัก {float(a.get('heavy_pct', 0)):g}% "
+                 f"· r {float(a.get('growth_pct', 0)):g}% · {float(a.get('years', 0)):g} ปี · "
+                 f"CBR {float(a.get('cbr', 0)):g}%")]
+    return []
 
 
 def g_sheets(an, info, chunks, shots):
@@ -754,21 +781,48 @@ def _rows_by_s(an):
     return {round(r.s, 3): r for r in an.rows}
 
 
+def section_span(an) -> float:
+    """Half the width drawn: the design out to daylight and 2 m more (the
+    whole surveyed width only where there is no design)."""
+    d = [abs(o) for sec in an.sections for o, _z in (sec.design or [])]
+    if d:
+        return math.ceil(max(d) + 2.0)
+    return max((abs(o) for sec in an.sections for o, _z in (sec.ground or [])), default=15.0)
+
+
+def _zr(an, span):
+    return max(((max(z for o, z in (sec.ground + (sec.design or [])) if abs(o) <= span) -
+                 min(z for o, z in (sec.ground + (sec.design or [])) if abs(o) <= span))
+                for sec in an.sections if sec.ground), default=5.0)
+
+
 def section_scale(an, cell_w, cell_h):
-    span = max((abs(o) for sec in an.sections for o, _z in (sec.ground or [])), default=15.0)
-    zr = max(((max(z for _o, z in (sec.ground + (sec.design or []))) -
-               min(z for _o, z in (sec.ground + (sec.design or []))))
-              for sec in an.sections if sec.ground), default=5.0)
+    span = section_span(an)
+    zr = _zr(an, span)
     for sc in (100, 200, 250, 500, 1000):
         if 2 * span * 1000 / sc <= cell_w and (zr + 2) * 1000 / sc <= cell_h:
             return sc, span
     return 1000, span
 
 
-def draw_section(sh, sec, row, box, sc, span):
+def st_layout(an):
+    """(cols, rows, scale, span): the largest scale the sections fit —
+    1:100 as the DRR sheets draw them when the road allows."""
+    span = section_span(an)
+    zr = _zr(an, span)
+    for cols, rows_, sc in ((3, 3, 100), (2, 3, 100), (3, 3, 200), (2, 3, 200), (3, 3, 250),
+                            (2, 3, 250), (4, 3, 500), (4, 3, 1000)):
+        cw, ch = (X1 - X0) / cols, (Y1 - Y0) / rows_
+        if 2 * span * 1000 / sc <= cw - 14 and (zr + 2) * 1000 / sc <= ch - 30:
+            return cols, rows_, sc, span
+    return 4, 3, 1000, span
+
+
+def draw_section(sh, sec, row, box, sc, span, an=None):
     x0, y0, x1, y1 = box
     k = 1000.0 / sc
-    pts = sec.ground + (sec.design or [])
+    ground = [(o, z) for o, z in sec.ground if abs(o) <= span + 1e-9] or sec.ground
+    pts = ground + (sec.design or [])
     zs = [z for _o, z in pts]
     zmin, zmax = min(zs), max(zs)
     zc = (zmin + zmax) / 2
@@ -796,13 +850,13 @@ def draw_section(sh, sec, row, box, sc, span):
         o += 2.0 if span <= 16 else 5.0
     # cut / fill shading between ground and design
     if sec.design:
-        lo = max(sec.ground[0][0], sec.design[0][0])
-        hi = min(sec.ground[-1][0], sec.design[-1][0])
+        lo = max(ground[0][0], sec.design[0][0])
+        hi = min(ground[-1][0], sec.design[-1][0])
         n = max(2, int((hi - lo) / 0.25))
         prev = None
         for i in range(n + 1):
             o = lo + (hi - lo) * i / n
-            g = _z_on(sec.ground, o)
+            g = _z_on(ground, o)
             d = _z_on(sec.design, o)
             if prev and g is not None and d is not None and prev[1] is not None and \
                     prev[2] is not None:
@@ -812,13 +866,17 @@ def draw_section(sh, sec, row, box, sc, span):
                     sh.fill([P_(po, pg), P_(o, g), P_(o, d), P_(po, pd)], "hatch",
                             0.82 if cut else 0.62, CUT_RGB if cut else FILL_RGB)
             prev = (o, g, d)
+        if an is not None:
+            _section_layers(sh, an, sec, P_)
         sh.poly([P_(*p) for p in sec.design], "roof", 0.45, False)
-    sh.poly([P_(*p) for p in sec.ground], "grid", 0.3, False)
+    sh.poly([P_(*p) for p in ground], "grid", 0.3, False)
     sh.line(P_(0, zc - (y1 - y0) / 2 / k), P_(0, zc + (y1 - y0) / 2 / k), "dim", 0.13, True)
     top = P_(0, zc + (y1 - y0) / 2 / k)
-    sh.text((top[0], y1 - 3), "CL", 1.6, "center", "dim")
+    sh.text((top[0] + 1.0, y1 - 7), "CL", 1.6, "left", "dim")
     # info
     sh.text(((x0 + x1) / 2, y1 + 2.0), f"STA {sta(sec.s)}", 2.6, "center", "text", True)
+    if getattr(sec, "label", ""):
+        sh.text((x0 + 1.5, y1 - 3.5), sec.label, 1.8, "left", "roof", True)
     lines = [f"CT {sec.z_ground:,.3f}" if sec.z_ground is not None else "CT -",
              f"CR {sec.z_design:,.3f}" if sec.z_design is not None else "CR -"]
     sh.text((x0 + 1, y0 - 5.5), "   ".join(lines), 1.8, "left", "text", True)
@@ -833,6 +891,36 @@ def draw_section(sh, sec, row, box, sc, span):
         sh.text((x1 - 1, y), b, 1.6, "right")
 
 
+def _section_layers(sh, an, sec, P_):
+    """The pavement layers in the section (shaded), the finished levels
+    at the axis, the lane edges and the shoulder edges, and each side's
+    crossfall — superelevated and widened on the curves (ทถ-2-104)."""
+    from core import wanic_road as R
+    from core import wanic_road_detail as RD
+    tpl = R.template_at(an.settings, an.se_plan, sec.s)
+    pave = an.settings.pavement_layers()
+    try:
+        polys = R.layer_polygons(sec.design, tpl, pave)
+    except (ValueError, IndexError):
+        polys = []
+    for name, outline, _c in polys:
+        pts = [P_(*p) for p in outline]
+        sh.fill(pts, "hatch", RD.gray_of(name))
+        sh.poly(pts, "wall", 0.1)
+    top = tpl.top(sec.z_design or 0.0)
+    for o, z in top:
+        q = P_(o, z)
+        sh.text((q[0] + 0.5, q[1] + 1.2), f"{z:,.3f}", 1.1, "left", "dim", angle=90)
+    se = tpl.se or (tpl.crown, tpl.crown, tpl.shoulder_slope, tpl.shoulder_slope, 0.0, 0.0)
+    hl, hr = tpl.width / 2 + se[4], tpl.width / 2 + se[5]
+    for sg, slope, half in ((-1, se[0], hl), (1, se[1], hr)):
+        q = P_(sg * half / 2, (sec.z_design or 0.0) - slope / 100.0 * half / 2)
+        sh.text((q[0], q[1] - 2.6), f"{slope:.1f}%", 1.2, "center", "dim")
+    if tpl.se is not None and (se[4] or se[5]):
+        sh.text(P_(0, (sec.z_design or 0.0) - an.settings.structure - 0.4),
+                f"ขยายผิว {max(se[4], se[5]):.2f} ม.", 1.2, "center", "roof")
+
+
 def _z_on(line, o):
     for (a, za), (b, zb) in zip(line, line[1:]):
         if a - 1e-9 <= o <= b + 1e-9:
@@ -843,11 +931,10 @@ def _z_on(line, o):
 
 
 def st_sheets(an, info):
-    cols, rows_ = 4, 3
+    cols, rows_, sc, span = st_layout(an)
     cw = (X1 - X0) / cols
     ch = (Y1 - Y0) / rows_
     plot_w, plot_h = cw - 14, ch - 30
-    sc, span = section_scale(an, plot_w, plot_h)
     by = _rows_by_s(an)
     secs = [s for s in an.sections if s.ground]
     out = []
@@ -860,9 +947,10 @@ def st_sheets(an, info):
             bx0 = X0 + c * cw + 8
             by1 = Y1 - r * ch - 6
             box = (bx0, by1 - plot_h, bx0 + plot_w, by1)
-            draw_section(sh, sec, by.get(round(sec.s, 3)), box, sc, span)
+            draw_section(sh, sec, by.get(round(sec.s, 3)), box, sc, span, an)
         sh.text((X0, Y0 - 4.5 + 1), f"มาตราส่วน 1:{sc} (ราบ = ดิ่ง) · พื้นที่ ตร.ม. · ปริมาตร ลบ.ม. · "
-                "CT ระดับดินเดิม · CR ระดับออกแบบ · สีแดง = ขุด  สีเขียว = ถม", 1.8, "left", "title")
+                "CT ระดับดินเดิม · CR ระดับออกแบบ · สีแดง = ขุด  สีเขียว = ถม · % = ลาดขวางผิว (+ ลาดลงออกนอก) · "
+                "ช่วงโค้งยกโค้งและขยายผิวตาม ทถ-2-104", 1.8, "left", "title")
         out.append(sh)
     return out
 
@@ -893,11 +981,15 @@ def vt_sheets(an, info):
     tot = [("รวม", "", "", "", "", f"{sum(r.cut_volume for r in an.rows):,.2f}",
             f"{sum(r.fill_volume for r in an.rows):,.2f}", f"{an.cut_total:,.2f}",
             f"{an.fill_total:,.2f}", f"{an.cut_total - an.fill_total:,.2f}")]
-    if y - 8 < Y0 + 2:                                   # no room for the total: a new sheet
+    if y - 18 < Y0 + 6:                                  # no room for the total: a new sheet
         last = D.Sheet(f"VT-{len(out) + 1:02d}", "ตารางปริมาณงานดินขุด-ถม", "-", "VT")
         out.append(last)
         y = Y1 - 4
-    D.table(last, X0, y, VT_COLS, tot, 2.0, 6.0, 0.0)
+    yt = D.table(last, X0, y, VT_COLS, tot, 2.0, 6.0, 0.0)
+    from core import wanic_road as R
+    summ = R.earthworks_summary(an)[:3]
+    last.text((X0, yt - 6), "สรุปปริมาณดิน: " + " · ".join(f"{a} {q:,.2f} {u}" for a, q, u in summ),
+              2.6, "left", "roof", True)
     last.text((X0, Y0 + 3), "ปริมาณงานโครงสร้างทางและสรุปปริมาณงานทั้งหมด ดูแผ่น QS "
               "(แผ่นสุดท้าย)", 2.2)
     return out
@@ -1278,7 +1370,12 @@ def build_road_set(an, info=None, shots=None,
     if "SD" in groups:
         # แบบมาตรฐานโครงสร้างทาง from the project's own template and pavement design
         from core import wanic_road_detail as RD
-        sheets += RD.detail_sheets(an.settings, info.get("pave"), an.designed_length, info)
+        sd = RD.detail_sheets(an.settings, info.get("pave"), an.designed_length, info)
+        if getattr(an, "se_plan", None):
+            se = RD.se_sheet(an)
+            se.code = f"SD-{len(sd) + 1:02d}"
+            sd.append(se)
+        sheets += sd
     if "DR" in groups or "TS" in groups:
         # งานระบายน้ำ (ทถ-5) and ป้าย/เครื่องหมายจราจร (ทถ-3) from the road itself
         from core import wanic_road_furniture as RF

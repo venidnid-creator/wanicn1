@@ -2960,6 +2960,30 @@ def leaders(sh, items, x_col, side="right", gap=4.2, h=1.8):
         sh.text((x_col + sign * 0.8, ty), text, h, "left" if sign > 0 else "right")
 
 
+def drop_leaders(sh, items, x_text, y_top, row=4.2, h=1.8, x_max=None, arrow=1.2):
+    """Leaders the DRR way (แบบมาตรฐาน ทช.): from an arrow on each point a
+    plumb line down to its own row under the drawing, then level into the
+    note — the right-most point on the top row, the next one row lower and
+    further left, so no line ever crosses another; the notes in one column
+    at ``x_text`` (right of every point), wrapped before ``x_max``.
+    Returns the y under the last note."""
+    if not items:
+        return y_top
+    x_max = x_max if x_max is not None else drawing_area()[2] - 2
+    n = max(12, int((x_max - x_text - 1.5) / (h * 0.62)))
+    y = y_top
+    for (px, py), text in sorted(items, key=lambda it: -it[0][0]):
+        lines = _wrap(text, n) or [""]
+        sh.fill([(px, py), (px - arrow * 0.35, py - arrow), (px + arrow * 0.35, py - arrow)],
+                "hatch", 0.0)
+        sh.line((px, py), (px, y + 0.6), "text", 0.15)
+        sh.line((px, y + 0.6), (x_text, y + 0.6), "text", 0.15)
+        for j, ln in enumerate(lines):
+            sh.text((x_text + 1.0, y - j * h * 1.45), ln, h)
+        y -= row + (len(lines) - 1) * h * 1.45
+    return y
+
+
 def septic_section(sh, ox, oy, k):
     """รูปตัดถังบำบัดน้ำเสียสำเร็จรูป ``ox, oy`` = the tank's bottom left
     (paper mm), ``k`` mm per metre."""

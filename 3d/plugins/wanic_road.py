@@ -291,8 +291,8 @@ class SectionsView(QWidget):
         if sec.design:
             layers = an.settings.pavement_layers()
             if layers and sec.formation:
-                for _name, outline, colour in R.layer_polygons(sec.design, an.settings.template(),
-                                                               layers):
+                tpl = R.template_at(an.settings, an.se_plan, sec.s)
+                for _name, outline, colour in R.layer_polygons(sec.design, tpl, layers):
                     poly = QPainterPath(xy(*outline[0]))
                     for o, z in outline[1:]:
                         poly.lineTo(xy(o, z))
@@ -329,6 +329,16 @@ class SectionsView(QWidget):
         p.setPen(CYAN)
         p.drawText(QRectF(cell.left(), cell.bottom() - 42, cell.width() - 80, 16), Qt.AlignCenter,
                    f"STA.  {A.format_station(sec.s, 3)}")
+        se = getattr(sec, "se", None)
+        if getattr(sec, "label", "") or se:
+            p.setPen(QColor("#ff6b6b"))
+            text = sec.label or ""
+            if se:
+                text += (" · " if text else "") + f"ลาดขวาง ซ้าย {se[0]:+.1f}% ขวา {se[1]:+.1f}%"
+                if se[4] or se[5]:
+                    text += f" · ขยายผิว {max(se[4], se[5]):.2f} ม."
+            p.drawText(QRectF(cell.left() + 40, cell.top() + 4, cell.width() - 150, 16),
+                       Qt.AlignLeft | Qt.AlignVCenter, text)
         if sec.z_ground is not None:
             p.setPen(TEXT)
             p.drawText(QRectF(cell.left(), cell.bottom() - 26, cell.width() - 80, 16), Qt.AlignCenter,
@@ -362,7 +372,15 @@ class ResultsDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.tabs.addTab(self.profile, "รูปตัดตามยาว")
         self.tabs.addTab(scroll, "รูปตัดขวาง")
-        self.tabs.addTab(self.table, "ปริมาณดิน")
+        earth = QWidget()
+        ev = QVBoxLayout(earth)
+        ev.setContentsMargins(0, 0, 0, 0)
+        ev.addWidget(self.table, 1)
+        self.earth_sum = QLabel()
+        self.earth_sum.setTextFormat(Qt.RichText)
+        self.earth_sum.setStyleSheet("QLabel{background:#0F2A44;color:white;border-radius:6px;padding:6px 10px;}")
+        ev.addWidget(self.earth_sum)
+        self.tabs.addTab(earth, "ปริมาณดิน")
         self.curves = QTableWidget(0, 14)
         self.curves.setHorizontalHeaderLabels(
             ["PI", "สถานี PI", "E (PI)", "N (PI)", "Δ", "ทิศ", "R (ม.)", "T (ม.)", "L (ม.)",
@@ -380,7 +398,8 @@ class ResultsDialog(QDialog):
         row = QHBoxLayout()
         for text, fn in (("🏔 สร้างโมเดล 3 มิติ", panel.build_model),
                          ("💾 ส่งออก DXF (ผัง รูปตัดตามยาว รูปตัดขวาง)", panel.export_dxf),
-                         ("💾 ส่งออกตารางปริมาณดิน (CSV)", panel.export_csv)):
+                         ("💾 ส่งออกตารางปริมาณดิน (CSV)", panel.export_csv),
+                         ("📊 ส่งออกปริมาณดิน Excel (สรุป + ตาราง)", panel.export_xlsx)):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
             row.addWidget(b)
@@ -389,7 +408,24 @@ class ResultsDialog(QDialog):
     def show_analysis(self, an):
         self.profile.show_analysis(an)
         self.sections.show_analysis(an)
-        self.table.setRowCount(len(an.rows))
+        self.table.setRowCount(len(an.rows) + (1 if an.rows else 0))
+        if an.rows:
+            last = len(an.rows)
+            tot = ["รวม", "", "", "", "", f"{sum(r.cut_volume for r in an.rows):,.3f}",
+                   f"{sum(r.fill_volume for r in an.rows):,.3f}", f"{an.cut_total:,.3f}",
+                   f"{an.fill_total:,.3f}", f"{an.cut_total - an.fill_total:+,.3f}"]
+            bold = QFont()
+            bold.setBold(True)
+            for c, v in enumerate(tot):
+                it = QTableWidgetItem(v)
+                it.setFont(bold)
+                if c:
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(last, c, it)
+            parts = [f"{item}: <b>{q:,.3f}</b> {unit}" for item, q, unit in R.earthworks_summary(an)[:3]]
+            self.earth_sum.setText("สรุปปริมาณดิน — " + " · ".join(parts))
+        else:
+            self.earth_sum.setText("ยังไม่มีปริมาณดิน (ใส่ PVI อย่างน้อย 2 จุด แล้ววิเคราะห์)")
         right = Qt.AlignRight | Qt.AlignVCenter
         for r, row in enumerate(an.rows):
             vals = [A.format_station(row.s, 3),
@@ -507,6 +543,8 @@ class RoadPanel(QWidget):
                 ("shoulder_slope", "ความลาดไหล่ทาง", -10, 20, 2, " %"),
                 ("cut_hv", "ลาดดินตัด (ราบ:ดิ่ง)", 0.1, 10, 2, " : 1"),
                 ("fill_hv", "ลาดดินถม (ราบ:ดิ่ง)", 0.1, 10, 2, " : 1"),
+                ("speed", "ความเร็วออกแบบ (ยกโค้ง/ขยายผิวทางโค้ง)", 0, 120, 0, " กม./ชม."),
+                ("emax", "อัตรายกโค้งสูงสุด e max (0 = ไม่ยกโค้ง)", 0, 12, 1, " %"),
                 ("max_edge", "ตัดสามเหลี่ยมที่ด้านยาวเกิน (0 = ไม่ตัด)", 0, 1000, 1, " ม.")):
             s = QDoubleSpinBox()
             s.setRange(lo, hi)
@@ -617,6 +655,9 @@ class RoadPanel(QWidget):
         row.addWidget(b)
         b = QPushButton("💾 CSV ปริมาณดิน")
         b.clicked.connect(lambda: _safe(self, self.export_csv))
+        row.addWidget(b)
+        b = QPushButton("📊 Excel ปริมาณดิน")
+        b.clicked.connect(lambda: _safe(self, self.export_xlsx))
         row.addWidget(b)
         lay.addLayout(row)
         b = QPushButton("📐 แบบงานทาง A3 (แปลน-รูปตัดตามยาว · รูปตัดขวาง · ตาราง) PDF/DXF…")
@@ -1095,24 +1136,52 @@ class RoadPanel(QWidget):
         from core.history import CompoundCommand, InsertGroupCommand
         from core.mesh import Mesh
 
-        def group(tris, name, color):
+        def group(tris, name, color, attrs=None):
             mesh = Mesh()
             if tris:
                 pos = np.asarray([c for t in tris for c in t], dtype=np.float64)
                 n = len(tris)
-                mesh.add_faces_bulk(pos, np.full(n, 3, dtype=np.int64), np.ones(n, dtype=np.int64))
+                mesh.add_faces_bulk(pos, np.full(n, 3, dtype=np.int64), np.ones(n, dtype=np.int64),
+                                    [attrs] * n if attrs else None)
             g = Group(mesh, name=name)
             g.material = {"color": color}
             g.ext = {KEY: {"origin": list(an.origin)}}
             return g
         self.origin = an.origin
-        groups = [group(R.terrain_mesh(an), "ภูมิประเทศ (TIN)", (0.55, 0.68, 0.42))]
+        sat = self._model_map(an)                       # satellite ground (None offline)
+        tex = None
+        if sat is not None:
+            a, b, c, d, e, f = sat["fit"]
+            tex = {"texture": {"path": sat["path"], "sw": 1.0, "sh": 1.0,
+                               "uvw": [a, b, 0.0, c, d, e, 0.0, f]}}
+        groups = [group(R.terrain_mesh(an), "ภูมิประเทศ (TIN)", (0.55, 0.68, 0.42), tex)]
         road = R.corridor_mesh(an)
         if road:
             concrete = R.pavement_kind(an.settings.pavement) == "concrete"
             groups.append(group(road, "ถนนคอนกรีต" if concrete else "ถนนลาดยาง",
                                 (0.80, 0.80, 0.77) if concrete else (0.20, 0.20, 0.22)))
-        self.app.viewport.history.execute(CompoundCommand([InsertGroupCommand(g) for g in groups]))
+        cmds = [InsertGroupCommand(g) for g in groups]
+        if sat is not None:
+            from PySide6.QtGui import QVector3D
+
+            from core.history import AddImagePlaneCommand
+            from core.image_plane import ImagePlane
+            fit = sat["fit"]
+            zb = min(p[2] for p in an.tin.points) - an.origin[2] - 0.10
+            o = QVector3D(*R.uv_to_local(fit, 0.0, 0.0), zb)
+            pu = QVector3D(*R.uv_to_local(fit, 1.0, 0.0), zb)
+            pv = QVector3D(*R.uv_to_local(fit, 0.0, 1.0), zb)
+            u, v = pu - o, pv - o
+            cmds.append(AddImagePlaneCommand(ImagePlane(
+                sat["path"], o, u, v, aspect=v.length() / max(u.length(), 1e-9),
+                name="ภาพถ่ายดาวเทียมรอบโครงการ", locked=True)))
+        from core.history import AddTextLabelCommand
+        from core.textlabel import TextLabel
+        from PySide6.QtGui import QVector3D as _V
+        marks = R.model_marks(an, self.shots)
+        for (x, y, z), text in marks:
+            cmds.append(AddTextLabelCommand(TextLabel(_V(x, y, z), _V(0.0, 0.0, 4.0), text)))
+        self.app.viewport.history.execute(CompoundCommand(cmds))
         n = getattr(self.app.viewport, "notify_scene_changed", None)
         if callable(n):
             n()
@@ -1120,7 +1189,57 @@ class RoadPanel(QWidget):
         self.save()
         self._flash(f"สร้างโมเดลแล้ว: พื้นผิว {len(an.tin.triangles):,} สามเหลี่ยม"
                     + (f" · ถนน {len(road):,} สามเหลี่ยม" if road else "")
+                    + f" · พิกัด N E Z {len(marks)} จุด"
+                    + (f" · ภาพดาวเทียมรอบโครงการข้างละ {R.map_margin(an):.0f} ม." if sat else
+                       " · ไม่มีภาพดาวเทียม (ออฟไลน์)")
                     + f" · จุดอ้างอิง E {an.origin[0]:,.0f} N {an.origin[1]:,.0f}")
+
+    def _model_map(self, an):
+        """The satellite picture around the road for the 3D model: the
+        window (survey + 50–100 m a side) downloaded in the background,
+        stitched, kept in the texture cache, with its fit local → image.
+        None offline, when skipped, or on any failure."""
+        if os.environ.get("WANIC_OFFLINE"):
+            return None
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+
+        from core import wanic_sitemap as M
+        from core.texture import cache_image
+        try:
+            zone, datum = self._zone_datum()
+            x0, y0, x1, y1 = R.map_window(an)
+            ox, oy, _oz = an.origin
+            ll = [R.utm_to_wgs84(x + ox, y + oy, zone, datum) for x, y in
+                  ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+            aspect = (x1 - x0) / max(y1 - y0, 1e-6)        # the longer side at most 4096 px
+            view = M.fit_view(ll, x1 - x0, y1 - y0, max_px=4096 * min(1.0, aspect), margin=0.0)
+        except Exception:                               # noqa: BLE001 -- no map, the model still
+            return None
+        box = {"tiles": None, "done": 0, "total": len(view.tiles())}
+
+        def work():
+            try:
+                box["tiles"] = M.fetch_tiles(view, progress=lambda i, n: box.update(done=i))
+            except Exception:                           # noqa: BLE001
+                box["tiles"] = {}
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        dlg = QProgressDialog("กำลังดาวน์โหลดภาพถ่ายดาวเทียมรอบโครงการ…", "ข้าม", 0, box["total"], self)
+        dlg.setWindowTitle(TITLE)
+        dlg.setMinimumDuration(400)
+        while thread.is_alive():
+            QApplication.processEvents()
+            dlg.setValue(min(box["done"], max(box["total"] - 1, 0)))
+            if dlg.wasCanceled():
+                dlg.close()
+                return None
+            thread.join(0.05)
+        dlg.close()
+        data = stitch(view, box["tiles"] or {})
+        if not data:
+            return None
+        path = cache_image(data, "wanic-road-satellite.jpg", "wanic-road")
+        return {"path": str(path), "fit": R.map_fit(an, view, zone, datum)}
 
     def export_dxf(self):
         an = self._ensure()
@@ -1260,6 +1379,24 @@ class RoadPanel(QWidget):
             return
         Path(path).write_text(R.earthworks_csv(an), encoding="utf-8-sig")
         self._flash(f"บันทึก {path} แล้ว")
+
+    def export_xlsx(self):
+        """ปริมาณดิน to Excel: the totals sheet and the station table."""
+        an = self._ensure()
+        if an is None:
+            return None
+        if not an.rows:
+            QMessageBox.information(self, TITLE, "ยังไม่มีปริมาณดิน (ใส่ PVI อย่างน้อย 2 จุด)")
+            return None
+        path, _ = QFileDialog.getSaveFileName(self, "ส่งออกปริมาณดิน Excel", "ปริมาณดิน.xlsx",
+                                              "Excel (*.xlsx)")
+        if not path:
+            return None
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        Path(path).write_bytes(R.earthworks_xlsx(an, {"project": getattr(self, "_project", "")}))
+        self._flash(f"บันทึก {path} แล้ว")
+        return path
 
 
 
@@ -1426,8 +1563,32 @@ class PavementDesignDialog(QDialog):
     def html(self) -> str:
         res = self.result()
         proj = self.project.text().strip()
-        return V.ai_report(res, proj) if self.method() == "ai" else \
-            V.rn29_report(res, proj, images=True)
+        road = self.road_data()
+        return V.ai_report(res, proj, road=road) if self.method() == "ai" else \
+            V.rn29_report(res, proj, images=True, road=road)
+
+    def road_data(self) -> list:
+        """The road's own data for the calculation sheet (and its PDF)."""
+        p = self.panel
+        out = []
+        try:
+            sp = {k: float(w.value()) for k, w in p.spins.items()}
+            an = getattr(p, "analysis", None)
+            if an is not None:
+                out.append(("ความยาวทางที่ออกแบบ", f"{an.designed_length:,.2f} ม."))
+            if getattr(p, "_place", ""):
+                out.append(("สถานที่", p._place))
+            out += [("ความกว้างผิวจราจร", f"{sp['width']:.2f} ม."),
+                    ("ไหล่ทาง", f"ข้างละ {sp['shoulder']:.2f} ม. ลาด {sp['shoulder_slope']:.1f}%"),
+                    ("ความลาดขวางผิวจราจร", f"{sp['crown']:.2f}%"),
+                    ("ลาดดินตัด / ลาดดินถม", f"{sp['cut_hv']:g} : 1 / {sp['fill_hv']:g} : 1")]
+            if sp.get("speed"):
+                out.append(("ความเร็วออกแบบ / e max", f"{sp['speed']:g} กม./ชม. / {sp.get('emax', 0):g}%"))
+            out.append(("ชั้นทาง (ตารางในแผง)", ", ".join(
+                f"{n} {t * 100:g} ซม." for n, t, _c in p.layer_rows()) or "-"))
+        except Exception:                               # noqa: BLE001 -- the sheet still prints
+            pass
+        return out
 
     def document(self, width_px=1400):
         """The calculation sheet as a QTextDocument, with the Road Note 29

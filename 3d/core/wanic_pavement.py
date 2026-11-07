@@ -625,9 +625,14 @@ def _ok(b: bool) -> str:
 SIGNER = ("นายเวนิช ธัมมะวงษ์", "วิศวกรสำรวจ")
 
 
-def _head(title: str, project: str) -> str:
-    return (f"<h2 style='margin:0'>{title}</h2>"
-            f"<p style='margin:2px 0 10px 0'>โครงการ: {project or '……………………………………………'}</p>")
+def _head(title: str, project: str, road=None) -> str:
+    out = (f"<h2 style='margin:0'>{title}</h2>"
+           f"<p style='margin:2px 0 10px 0'>โครงการ: {project or '……………………………………………'}</p>")
+    rows = [(k, v) for k, v in (road or []) if v not in (None, "")]
+    if rows:
+        out += ("<h3>ข้อมูลการออกแบบถนน</h3><table class='t'>"
+                + "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows) + "</table>")
+    return out
 
 
 def _sign(signer=SIGNER) -> str:
@@ -639,12 +644,14 @@ def _sign(signer=SIGNER) -> str:
 
 _CSS = ("<style>body{font-family:'Tahoma','Leelawadee UI',sans-serif;font-size:10pt}"
         "table.t{border-collapse:collapse}table.t td,table.t th{border:1px solid #555;"
-        "padding:2px 6px}th{background:#e5e7eb}h3{margin:12px 0 4px 0}</style>")
+        "padding:2px 6px}th{background:#e5e7eb;color:#111}h3{margin:12px 0 4px 0}</style>")
 
 
-def ai_report(res: AIResult, project: str = "", signer=SIGNER) -> str:
+def ai_report(res: AIResult, project: str = "", signer=SIGNER, road=None) -> str:
+    """``road``: [(item, value)] of the road itself (place, length, widths,
+    slopes, speed) printed as «ข้อมูลการออกแบบถนน» at the top."""
     i = res.inp
-    h = [_CSS, _head("รายการคำนวณโครงสร้างถนนลาดยาง โดยวิธี Asphalt Institute (1970)", project)]
+    h = [_CSS, _head("รายการคำนวณโครงสร้างถนนลาดยาง โดยวิธี Asphalt Institute (1970)", project, road)]
     h.append("<h3>1. ข้อมูลการออกแบบ</h3><table class='t'>")
     for k, v in (("(1) Initial Daily Traffic (IDT)", f"{_f(i.idt, 0)} คัน/วัน"),
                  ("(2) ร้อยละรถบรรทุกหนัก (A)", f"{_f(i.heavy_pct)} %"),
@@ -690,12 +697,13 @@ def ai_report(res: AIResult, project: str = "", signer=SIGNER) -> str:
     return "".join(h)
 
 
-def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = False) -> str:
+def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = False,
+                road=None) -> str:
     """The calculation sheet; ``images`` puts in the truck figures and the
     Fig. 3.16 chart with its red reading lines (resources ``rn29trucks``
     and ``rn29chart`` that the caller adds to its document)."""
     i = res.inp
-    h = [_CSS, _head("รายการคำนวณโครงสร้างถนน คสล. โดยวิธี Road Note 29", project)]
+    h = [_CSS, _head("รายการคำนวณโครงสร้างถนน คสล. โดยวิธี Road Note 29", project, road)]
     h.append("<h3>1. ข้อมูลการออกแบบ</h3><table class='t'>")
     rows = [("ความกว้างผิวจราจร", f"{_f(i.width)} ม. ({i.lanes} ช่องจราจร)"),
             ("ปริมาณการจราจร (ADT)", f"{_f(i.adt, 0)} คัน/วัน"),

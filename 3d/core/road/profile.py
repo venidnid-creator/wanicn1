@@ -214,10 +214,24 @@ class Template:
     crown: float = 0.0            # cross slope of the platform, percent, down from the axis
     shoulder: float = 0.0         # shoulder width each side
     shoulder_slope: float = 4.0   # shoulder cross slope, percent, down and outwards
+    #: on a curve: (lane slope left, right, shoulder slope left, right — all
+    #: percent, + down and outwards; widening left, right in metres), the
+    #: platform rotated about the axis (ทถ-2-104); None on the tangent
+    se: Optional[tuple] = None
 
     def top(self, z_design: float) -> list[Point]:
         """The finished surface across the axis, edge to edge: shoulder,
         platform edge, the axis (when crowned), and back out."""
+        if self.se is not None:
+            sl, sr, shl, shr, wl, wr = self.se
+            hl, hr = self.width / 2.0 + wl, self.width / 2.0 + wr
+            zl, zr = z_design - sl / 100.0 * hl, z_design - sr / 100.0 * hr
+            left = [(-hl, zl)]
+            right = [(hr, zr)]
+            if self.shoulder > 0:
+                left.insert(0, (-hl - self.shoulder, zl - shl / 100.0 * self.shoulder))
+                right.append((hr + self.shoulder, zr - shr / 100.0 * self.shoulder))
+            return left + [(0.0, z_design)] + right
         half = self.width / 2.0
         z_edge = z_design - self.crown / 100.0 * half
         right = [(half, z_edge)]
