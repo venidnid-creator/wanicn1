@@ -471,6 +471,10 @@ def main() -> int:
     from views.tooltips import WrappingToolTips
     tooltips = WrappingToolTips(app)
     app.installEventFilter(tooltips)
+    # เข้าสู่ระบบ (WANICNSURVEY): the program opens only for a signed-in account
+    from core import wanic_login
+    if not wanic_login.require():
+        return 0
     # The Rust engine: if the last start with it on never
     # drew its first frame, this one goes back to the normal engine (and
     # says so below); --python-engine does it for one run.

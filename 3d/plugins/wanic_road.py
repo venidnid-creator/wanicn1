@@ -1334,12 +1334,13 @@ class PavementDesignDialog(QDialog):
                 ("heavy_pct", "ร้อยละรถบรรทุกหนักทั้งหมด", 0.1, 100, 2, " %", 10),
                 ("lt_pct", "ร้อยละรถบรรทุก 6 ล้อ (ของรถหนัก)", 0, 100, 1, " %", 70),
                 ("ht_pct", "ร้อยละรถบรรทุก 10 ล้อ (ของรถหนัก)", 0, 100, 1, " %", 30),
-                ("loaded_pct", "สัดส่วนรถบรรทุกที่บรรทุกของ", 0, 100, 0, " %", 50),
+                ("loaded_pct", "สัดส่วนรถบรรทุกที่บรรทุกของ (: รถเปล่า)", 0, 100, 0, " %", 100),
                 ("growth_pct", "Growth Rate (r)", 0, 20, 2, " %", 4),
                 ("years", "อายุการออกแบบ (n)", 1, 50, 0, " ปี", 20),
                 ("cbr", "Design CBR Subgrade", 0.5, 100, 1, " %", 4),
                 ("slab_length", "ระยะรอยต่อตามขวาง (ยาวแผ่น)", 3, 30, 2, " ม.", 10),
                 ("lane_width", "ความกว้างแผ่น (ช่องจราจร)", 2, 6, 2, " ม.", 3.0),
+                ("chart_mm", "ความหนาที่อ่านจากกราฟเอง (0 = โปรแกรมอ่านให้)", 0, 400, 1, " มม.", 0),
                 ("slab_cm", "ความหนาแผ่นที่กำหนด (0 = ตามแผนภูมิ)", 0, 40, 0, " ซม.", 0),
                 ("fc", "กำลังอัดคอนกรีต fc′ (ลูกบาศก์)", 150, 500, 0, " กก./ตร.ซม.", 280)):
             form.addRow(label, self._spin(("rn", key), lo, hi, dec, suf, rn.get(key, dflt)))
@@ -1355,6 +1356,12 @@ class PavementDesignDialog(QDialog):
         self.rn_kind.setCurrentIndex(0 if rn.get("reinforced", True) else 1)
         self.rn_kind.currentIndexChanged.connect(lambda _i: self.refresh())
         form.addRow("ชนิดผิว", self.rn_kind)
+        self.rn_sub = QComboBox()
+        self.rn_sub.addItem("รองพื้นทางลูกรัง + ทรายหยาบรองพื้นคอนกรีต 5 ซม.", "laterite")
+        self.rn_sub.addItem("รองพื้นทางหินคลุก (ไม่ต้องใช้ทรายรองพื้น)", "crushed")
+        self.rn_sub.setCurrentIndex(1 if rn.get("subbase_kind") == "crushed" else 0)
+        self.rn_sub.currentIndexChanged.connect(lambda _i: self.refresh())
+        form.addRow("ชั้นรองพื้นทาง", self.rn_sub)
         self.rn_ct = QComboBox()
         self.rn_ct.addItem("มีรถบรรทุกวิ่งบนรองพื้นทางระหว่างก่อสร้าง (+8 ซม.)", True)
         self.rn_ct.addItem("ไม่มี", False)
@@ -1402,7 +1409,9 @@ class PavementDesignDialog(QDialog):
                          slab_length=self._v("rn", "slab_length"),
                          lane_width=self._v("rn", "lane_width"),
                          fs=float(self.rn_steel.currentData()),
-                         slab_cm=self._v("rn", "slab_cm") or None, fc=self._v("rn", "fc"))
+                         slab_cm=self._v("rn", "slab_cm") or None, fc=self._v("rn", "fc"),
+                         chart_mm=self._v("rn", "chart_mm") or None,
+                         subbase_kind=str(self.rn_sub.currentData()))
 
     def method(self) -> str:
         return "rn29" if self.tabs.currentIndex() == 1 else "ai"
@@ -1415,12 +1424,26 @@ class PavementDesignDialog(QDialog):
     def html(self) -> str:
         res = self.result()
         proj = self.project.text().strip()
-        return V.ai_report(res, proj) if self.method() == "ai" else V.rn29_report(res, proj)
+        return V.ai_report(res, proj) if self.method() == "ai" else \
+            V.rn29_report(res, proj, images=True)
+
+    def document(self, width_px=1400):
+        """The calculation sheet as a QTextDocument, with the Road Note 29
+        chart (red reading lines) and the trucks as pictures in it."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QTextDocument
+        doc = QTextDocument()
+        if self.method() == "rn29":
+            r = self.result()
+            for name, img in rn29_pictures(r).items():
+                doc.addResource(QTextDocument.ImageResource, QUrl(name), img)
+        doc.setHtml(self.html())
+        return doc
 
     def refresh(self):
-        if not hasattr(self, "rn_ct"):
+        if not hasattr(self, "rn_sub"):
             return
-        self.view.setHtml(self.html())
+        self.view.setDocument(self.document())
         self.remember()
 
     def remember(self):
@@ -1428,7 +1451,8 @@ class PavementDesignDialog(QDialog):
                 "ai": {k: float(w.value()) for (t, k), w in self.f.items() if t == "ai"},
                 "rn": {k: float(w.value()) for (t, k), w in self.f.items() if t == "rn"}}
         data["ai"]["source"] = self.ai_table.currentData()
-        data["rn"].update({"fs": float(self.rn_steel.currentData()),
+        data["rn"].update({"subbase_kind": str(self.rn_sub.currentData()),
+                           "fs": float(self.rn_steel.currentData()),
                            "reinforced": bool(self.rn_kind.currentData()),
                            "construction_traffic": bool(self.rn_ct.currentData())})
         self.panel.pave_design = data
@@ -1474,20 +1498,66 @@ class PavementDesignDialog(QDialog):
         path, _ = QFileDialog.getSaveFileName(self, "บันทึกรายการคำนวณ", f"{name}.pdf", "PDF (*.pdf)")
         if not path:
             return
-        save_html_pdf(self.html(), path)
+        save_html_pdf(self.document(), path)
         self.panel._flash(f"บันทึก {path} แล้ว")
 
 
-def save_html_pdf(html: str, path: str):
-    """An HTML calculation sheet to an A4 PDF."""
+def rn29_pictures(res, px_per_mm: float = 6.0) -> dict:
+    """{"rn29chart": QImage, "rn29trucks": QImage}: รูปที่ 3.16 with the
+    reading in red, and the trucks with their axle loads — drawn by the
+    same code as the SD-04 sheet."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QFont, QImage
+
+    from core import wanic_drawings as D
+    from core import wanic_road_detail as RD
+    from core import wanic_road_sheets as RS
+    from plugins.wanic_building import paint_sheet
+    i = res.inp
+    out = {}
+    for name, (w, h), build in (
+            ("rn29chart", (200.0, 150.0),
+             lambda sh: RD.rn29_chart(sh, (0, 0, 200, 150), res.esa / 1e6, float(i.chart_mm or 0.0),
+                                      res.slab_cm, i.cbr, i.reinforced)),
+            ("rn29trucks", (130.0, 62.0),
+             lambda sh: RD.trucks_block(sh, 8.0, 21.0, 52.0, i.trucks, 14.0))):
+        sh = D.Sheet("img", name)
+        sh.colors = dict(RS.COLORS)
+        build(sh)
+        img = QImage(int(w * px_per_mm), int(h * px_per_mm), QImage.Format_RGB32)
+        img.fill(0xFFFFFF)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        fonts = {}
+
+        def font(hh, bold, fonts=fonts):
+            key = (round(hh, 2), bold)
+            if key not in fonts:
+                f = QFont("Tahoma")
+                f.setPixelSize(max(1, int(round(hh * px_per_mm * 1.3))))
+                f.setBold(bool(bold))
+                fonts[key] = f
+            return fonts[key]
+        try:
+            paint_sheet(p, sh, lambda x, y, h=h: QPointF(x * px_per_mm, (h - y) * px_per_mm),
+                        px_per_mm, font)
+        finally:
+            p.end()
+        out[name] = img
+    return out
+
+
+def save_html_pdf(doc, path: str):
+    """A calculation sheet (HTML text or a QTextDocument) to an A4 PDF."""
     from PySide6.QtCore import QMarginsF
     from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
     wr = QPdfWriter(path)
     wr.setPageSize(QPageSize(QPageSize.A4))
     wr.setPageMargins(QMarginsF(18, 15, 15, 15), QPageLayout.Millimeter)
     wr.setResolution(150)
-    doc = QTextDocument()
-    doc.setHtml(html)
+    if isinstance(doc, str):
+        html, doc = doc, QTextDocument()
+        doc.setHtml(html)
     doc.print_(wr)
 
 class RoadSheetsDialog(QDialog):

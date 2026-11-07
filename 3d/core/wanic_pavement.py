@@ -281,13 +281,14 @@ def lane_factor(lanes: int, width: float) -> float:
 
 
 #: Fig. 3.16 (Road Note 29): slab thickness (mm) on a normal subgrade
-#: (CBR 2–15 %) against the cumulative standard axles (millions) —
-#: read from the chart.
-RN29_REINFORCED = ((0.01, 123), (0.02, 124), (0.04, 128), (0.1, 133), (0.2, 140),
-                   (0.4, 151), (1.0, 169), (2.0, 184), (4.0, 200), (10.0, 225),
-                   (20.0, 245), (40.0, 268), (100.0, 297))
-RN29_UNREINFORCED = ((0.01, 148), (0.04, 150), (0.1, 153), (0.2, 156), (0.4, 160),
-                     (1.0, 168), (1.5, 176))
+#: (CBR 2–15 %) against the cumulative standard axles (millions) — read
+#: from the chart and checked against the DRR workshop's own readings
+#: (3.05 × 10⁶ → 199 mm, 27.6 × 10⁶ → 250 mm).
+RN29_REINFORCED = ((0.01, 123), (0.02, 124), (0.04, 127), (0.1, 132), (0.2, 140),
+                   (0.4, 152), (1.0, 171), (2.0, 190), (3.0, 198.5), (4.0, 205),
+                   (10.0, 226), (20.0, 243), (27.6, 250), (40.0, 262), (100.0, 297))
+RN29_UNREINFORCED = ((0.01, 148), (0.04, 150), (0.1, 153), (0.2, 157), (0.4, 163),
+                     (0.7, 169), (1.0, 172))
 #: Fig. 3.17: crack-control steel, standard long mesh (kg/m²)
 RN29_STEEL = ((0.01, 1.80), (0.1, 2.0), (0.2, 2.10), (0.4, 2.28), (1.0, 2.55),
               (1.5, 2.61), (2.0, 2.80), (4.0, 3.10), (7.5, 3.41), (10.0, 3.60),
@@ -348,7 +349,7 @@ class RNInput:
     heavy_pct: float = 10.0
     trucks: tuple = (Truck("รถบรรทุก 6 ล้อ (LT)", 70.0, (4.0, 11.0)),
                      Truck("รถบรรทุก 10 ล้อ (HT)", 30.0, (5.0, 10.0, 10.0)))
-    loaded_pct: float = 50.0         # trucks loaded : empty
+    loaded_pct: float = 100.0        # trucks loaded : empty (100 = every one loaded)
     growth_pct: float = 4.0
     years: float = 20.0
     cbr: float = 4.0
@@ -361,6 +362,11 @@ class RNInput:
     slab_cm: Optional[float] = None  # chosen thickness (None: from the chart)
     subbase_cm: Optional[float] = None
     fc: float = 280.0                # กก./ตร.ซม. (ลูกบาศก์)
+    chart_mm: Optional[float] = None  # the chart read by hand (None: from the curve)
+    subbase_kind: str = "laterite"   # laterite → sand cushion 5 cm under the slab; crushed → none
+
+
+SUBBASE_KINDS = {"laterite": "ชั้นรองพื้นทางลูกรัง", "crushed": "ชั้นรองพื้นทางหินคลุก"}
 
 
 @dataclass
@@ -458,6 +464,10 @@ def design_rn29(inp: RNInput) -> RNResult:
         esa += e
     msa = esa / 1e6
     mm = rn29_slab_mm(msa, inp.cbr, inp.reinforced)
+    if inp.chart_mm:
+        # read off the chart by the designer (as the DRR sheet asks), with
+        # the same ±25 mm for a very stable / weak subgrade
+        mm = float(inp.chart_mm) - (25 if inp.cbr >= 15 else 0) + (25 if inp.cbr <= 2 else 0)
     chart_cm = _roundup(mm / 10.0, 1.0)
     slab = inp.slab_cm if inp.slab_cm else max(15.0, chart_cm)
     if inp.slab_cm and inp.slab_cm * 10 < mm - 0.5:
@@ -680,7 +690,10 @@ def ai_report(res: AIResult, project: str = "", signer=SIGNER) -> str:
     return "".join(h)
 
 
-def rn29_report(res: RNResult, project: str = "", signer=SIGNER) -> str:
+def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = False) -> str:
+    """The calculation sheet; ``images`` puts in the truck figures and the
+    Fig. 3.16 chart with its red reading lines (resources ``rn29trucks``
+    and ``rn29chart`` that the caller adds to its document)."""
     i = res.inp
     h = [_CSS, _head("รายการคำนวณโครงสร้างถนน คสล. โดยวิธี Road Note 29", project)]
     h.append("<h3>1. ข้อมูลการออกแบบ</h3><table class='t'>")
@@ -699,7 +712,10 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER) -> str:
              f"[(1+r)<sup>n</sup> − 1] / r × 365 × ADHV ; [(1+r)<sup>n</sup> − 1]/r = {_f(res.growth_sum, 3)}<br>")
     for name, c in res.cumulative:
         h.append(f"{name} = <b>{_f(c, 0)}</b> คัน<br>")
-    h.append("<h3>2.3 Equivalence Factor (เพลามาตรฐาน 18,000 ปอนด์)</h3><table class='t'>"
+    h.append("<h3>2.3 Equivalence Factor (เพลามาตรฐาน 18,000 ปอนด์)</h3>")
+    if images:
+        h.append("<p><img src='rn29trucks' width='640'></p>")
+    h.append("<table class='t'>"
              "<tr><th>ชนิด</th><th>น้ำหนักเพลา (ตัน)</th><th>EF แต่ละเพลา</th><th>VEF</th></tr>")
     for (name, efs, v), tr in zip(res.vef, i.trucks):
         h.append(f"<tr><td>{name}</td><td>{' + '.join(f'{a:g}' for a in tr.axles)}</td>"
@@ -713,8 +729,11 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER) -> str:
     h.append(f"<tr><td colspan='3'><b>รวม</b></td><td align='right'><b>{_f(res.esa, 0)}</b> "
              f"({_f(res.esa / 1e6, 3)} × 10<sup>6</sup>)</td></tr></table>")
     kind = "คอนกรีตเสริมเหล็ก" if i.reinforced else "คอนกรีตไม่เสริมเหล็ก"
-    h.append("<h3>2.5 ความหนาแผ่นคอนกรีต (รูปที่ 3.16)</h3>"
-             f"{kind} ดินคันทาง CBR {_f(i.cbr, 1)}% → จากแผนภูมิ {_f(res.slab_chart_mm, 0)} มม.<br>"
+    h.append("<h3>2.5 ความหนาแผ่นคอนกรีต (รูปที่ 3.16)</h3>")
+    if images:
+        h.append("<p><img src='rn29chart' width='640'></p>")
+    h.append(f"{kind} ดินคันทาง CBR {_f(i.cbr, 1)}% → จากแผนภูมิ {_f(res.slab_chart_mm, 0)} มม."
+             + (" (อ่านจากกราฟโดยผู้ออกแบบ)" if i.chart_mm else "") + "<br>"
              f"กำหนดความหนาผิวคอนกรีต = <b>{_f(res.slab_cm, 0)} ซม.</b> "
              f"(fc′ ≥ {_f(i.fc, 0)} กก./ตร.ซม. ลูกบาศก์) "
              f"{_ok(res.slab_cm * 10 >= res.slab_chart_mm - 0.5)}")
@@ -722,7 +741,10 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER) -> str:
              f"ดินคันทางประเภท <b>{res.soil}</b>"
              + (" + รถบรรทุกวิ่งบนรองพื้นทางระหว่างก่อสร้าง 8 ซม." if i.construction_traffic else "")
              + f" → ต้องการ {_f(res.subbase_need, 0)} ซม. ; กำหนด <b>{_f(res.subbase_cm, 0)} ซม.</b> "
-             f"{_ok(res.subbase_cm >= res.subbase_need - 1e-6)}")
+             f"{_ok(res.subbase_cm >= res.subbase_need - 1e-6)}<br>"
+             + ("รองพื้นทางลูกรัง: ใช้ทรายหยาบรองพื้นคอนกรีตหนาประมาณ 5–10 ซม."
+                if i.subbase_kind != "crushed" else
+                "รองพื้นทางหินคลุก: ไม่จำเป็นต้องใช้ทรายหยาบรองพื้นคอนกรีต"))
     h.append("<h3>2.7 เหล็กเสริมกันร้าว As = W·L·f / 2fs</h3>"
              f"W = 2,400 × {_f(res.slab_cm / 100)} = {_f(2400 * res.slab_cm / 100, 0)} กก./ตร.ม. ; "
              f"f = {_f(i.friction, 1)} ; fs = {_f(i.fs, 0)} กก./ตร.ซม.<br>"
@@ -753,8 +775,12 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER) -> str:
 def rn29_layers(res: RNResult) -> list:
     """The concrete road's layer table (name, thickness m), top first."""
     out = [("ผิวทางคอนกรีตเสริมเหล็ก" if res.inp.reinforced else "ผิวทางคอนกรีตไม่เสริมเหล็ก",
-            res.slab_cm / 100.0), ("ชั้นทรายรองพื้น", 0.05),
-           ("ชั้นรองพื้นทางลูกรัง", res.subbase_cm / 100.0)]
+            res.slab_cm / 100.0)]
+    if res.inp.subbase_kind != "crushed":
+        # on laterite a coarse-sand cushion (5–10 cm) under the slab; on
+        # crushed rock none is needed (the DRR sheet, 2.6)
+        out.append(("ชั้นทรายรองพื้น", 0.05))
+    out.append((SUBBASE_KINDS.get(res.inp.subbase_kind, "ชั้นรองพื้นทางลูกรัง"), res.subbase_cm / 100.0))
     return out
 
 

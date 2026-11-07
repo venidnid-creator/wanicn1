@@ -289,6 +289,9 @@ def test_pavement_design_dialog_fills_the_layers_and_prints(tmp_path, monkeypatc
     assert panel.layer_rows()[0][1] == pytest.approx(0.18)               # ทถ-2-201(1) ADT 251–500
     dlg.save_pdf()
     assert saved[-1].endswith("RoadNote29.pdf") and os.path.getsize(saved[-1]) > 1000
+    from plugins.wanic_road import rn29_pictures
+    pics = rn29_pictures(dlg.result())
+    assert set(pics) == {"rn29chart", "rn29trucks"} and not pics["rn29chart"].isNull()
     # the inputs go with the document
     panel.save()
     again = RoadPanel(app)

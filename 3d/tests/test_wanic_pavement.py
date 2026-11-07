@@ -71,7 +71,9 @@ def test_rn29_design_and_chart():
     assert r.slab_cm >= 15 and r.ok
     # the chart rises with the traffic; CBR ≥ 15 takes 25 mm off, ≤ 2 adds 25
     assert V.rn29_slab_mm(1.0, 5) < V.rn29_slab_mm(10.0, 5) < V.rn29_slab_mm(50.0, 5)
-    assert close(V.rn29_slab_mm(4.0, 5), 200, 0.02)
+    # the chart as the DRR workshop reads it: 3.05 × 10⁶ → 199 mm, 27.6 × 10⁶ → 250 mm
+    assert abs(V.rn29_slab_mm(3.052, 5) - 199) <= 1.0
+    assert abs(V.rn29_slab_mm(27.64, 5) - 250) <= 1.0
     assert close(V.rn29_slab_mm(4.0, 20), V.rn29_slab_mm(4.0, 5) - 25, 1e-6)
     assert V.rn29_slab_mm(0.1, 5, reinforced=False) > V.rn29_slab_mm(0.1, 5)
     assert close(V.rn29_steel_kg(7.5), 3.41, 0.01)
@@ -94,3 +96,25 @@ def test_drr_standard_tables():
     t = V.temperature_steel(18, 3.5)
     assert t["long"] == "RB9 @ 0.23 ม." and t["trans"] == "RB6 @ 0.15 ม."
     assert not math.isnan(V.ta_minimum(500))
+
+
+def test_rn29_the_workshop_example_from_the_video():
+    # EP5.1 workshop: 2 lanes 5 m, ADT 1,000, HV 15 %, r 5 %, 20 years, CBR 5 %,
+    # 6-wheel 65 % / 10-wheel 28 %, loaded : empty = 95 : 5
+    r = V.design_rn29(V.RNInput(adt=1000, lanes=2, width=5.0, heavy_pct=15, growth_pct=5, years=20,
+                                cbr=5, loaded_pct=95,
+                                trucks=(V.Truck("LT", 65, (4, 11)), V.Truck("HT", 28, (5, 10, 10)))))
+    assert r.lane_factor == 0.5
+    assert [round(n, 2) for _x, n in r.per_day] == [48.75, 21.0]
+    assert [round(c) for _x, c in r.cumulative] == [588367, 253451]
+    assert round(r.esa) == 3052017
+    assert r.slab_cm == 20 and r.subbase_need == 16 and r.subbase_cm == 20
+    # the designer's own reading of the chart is taken (with the CBR rule)
+    hand = V.design_rn29(V.RNInput(adt=1000, lanes=2, width=5.0, heavy_pct=15, growth_pct=5, years=20,
+                                   cbr=1.5, chart_mm=199.0))
+    assert hand.slab_chart_mm == 224.0
+    # crushed-rock sub-base: no sand cushion under the slab
+    names = [n for n, _t in V.rn29_layers(V.design_rn29(V.RNInput(subbase_kind="crushed")))]
+    assert "ชั้นทรายรองพื้น" not in names and names[-1] == "ชั้นรองพื้นทางหินคลุก"
+    assert "ชั้นทรายรองพื้น" in [n for n, _t in V.rn29_layers(r)]
+    assert "rn29chart" in V.rn29_report(r, images=True) and "rn29chart" not in V.rn29_report(r)

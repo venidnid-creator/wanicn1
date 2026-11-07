@@ -1877,9 +1877,8 @@ class BoqDialog(QDialog):
 def render_pdf(sheets, path: str) -> int:
     """Print the drawing set (:mod:`core.wanic_drawings`) to a PDF, one A3
     landscape page per sheet. Returns the page count."""
-    from PySide6.QtCore import QMarginsF, QPointF, QRectF
-    from PySide6.QtGui import (QBrush, QPageLayout, QPageSize, QPdfWriter,
-                               QPolygonF)
+    from PySide6.QtCore import QMarginsF, QPointF
+    from PySide6.QtGui import (QPageLayout, QPageSize, QPdfWriter)
     from core import wanic_drawings as D
     W, H = D.PAPER
     wr = QPdfWriter(path)
@@ -1910,69 +1909,77 @@ def render_pdf(sheets, path: str) -> int:
         for i, sh in enumerate(sheets):
             if i:
                 wr.newPage()
-            for it in sh.items:
-                if it[0] == "image":
-                    x0, y0, x1, y1 = it[1]
-                    img = QImage.fromData(it[3])
-                    if not img.isNull():
-                        painter.drawImage(QRectF(P(x0, y1), P(x1, y0)), img)
-            for it in sh.items:
-                kind = it[0]
-                if kind == "fill":
-                    g = int(255 * it[3])
-                    rgb = it[4] if len(it) > 4 else (g, g, g)
-                    painter.setPen(Qt.NoPen)
-                    painter.setBrush(QBrush(QColor(*rgb)))
-                    painter.drawPolygon(QPolygonF([P(*p) for p in it[1]]))
-            painter.setBrush(Qt.NoBrush)
-            for it in sh.items:
-                kind = it[0]
-                colors = getattr(sh, "colors", None) or {}
-                if kind in ("line", "poly"):
-                    dash = it[4] if kind == "line" else it[5]
-                    pen = QPen(QColor(*colors.get(it[2], (0, 0, 0))),
-                               max(0.13, it[3]) * k)
-                    pen.setStyle(Qt.DashLine if dash else Qt.SolidLine)
-                    pen.setCapStyle(Qt.FlatCap)
-                    painter.setPen(pen)
-                    if kind == "line":
-                        x0, y0, x1, y1 = it[1]
-                        painter.drawLine(P(x0, y0), P(x1, y1))
-                    else:
-                        pts = QPolygonF([P(*p) for p in it[1]])
-                        if it[4]:
-                            painter.drawPolygon(pts)
-                        else:
-                            painter.drawPolyline(pts)
-                elif kind == "circle":
-                    cx, cy, r = it[1]
-                    painter.setPen(QPen(QColor(*colors.get(it[2], (0, 0, 0))),
-                                        max(0.13, it[3]) * k))
-                    painter.drawEllipse(P(cx, cy), r * k, r * k)
-                elif kind == "arc":
-                    cx, cy, r, a0, a1 = it[1]
-                    painter.setPen(QPen(QColor(0, 0, 0), max(0.13, it[3]) * k))
-                    c = P(cx, cy)
-                    painter.drawArc(QRectF(c.x() - r * k, c.y() - r * k,
-                                           2 * r * k, 2 * r * k),
-                                    int(a0 * 16), int((a1 - a0) * 16))
-                elif kind == "text":
-                    (x, y), t, h, al, _layer, bold, ang = it[1:]
-                    f = font(h, bold)
-                    painter.setFont(f)
-                    painter.setPen(QColor(*colors.get(_layer, (0, 0, 0))))
-                    w = painter.fontMetrics().horizontalAdvance(t)
-                    dx = 0 if al == "left" else -w / 2 if al == "center" else -w
-                    p = P(x, y)
-                    painter.save()
-                    painter.translate(p)
-                    if ang:
-                        painter.rotate(-ang)
-                    painter.drawText(QPointF(dx, 0), t)
-                    painter.restore()
+            paint_sheet(painter, sh, P, k, font)
     finally:
         painter.end()
     return len(sheets)
+
+
+def paint_sheet(painter, sh, P, k, font):
+    """Paint a sheet's items: ``P(x, y)`` paper mm → device point, ``k``
+    device units per mm, ``font(h, bold)`` a QFont for a text height."""
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QBrush, QPolygonF
+    for it in sh.items:
+        if it[0] == "image":
+            x0, y0, x1, y1 = it[1]
+            img = QImage.fromData(it[3])
+            if not img.isNull():
+                painter.drawImage(QRectF(P(x0, y1), P(x1, y0)), img)
+    for it in sh.items:
+        kind = it[0]
+        if kind == "fill":
+            g = int(255 * it[3])
+            rgb = it[4] if len(it) > 4 else (g, g, g)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(*rgb)))
+            painter.drawPolygon(QPolygonF([P(*p) for p in it[1]]))
+    painter.setBrush(Qt.NoBrush)
+    for it in sh.items:
+        kind = it[0]
+        colors = getattr(sh, "colors", None) or {}
+        if kind in ("line", "poly"):
+            dash = it[4] if kind == "line" else it[5]
+            pen = QPen(QColor(*colors.get(it[2], (0, 0, 0))),
+                       max(0.13, it[3]) * k)
+            pen.setStyle(Qt.DashLine if dash else Qt.SolidLine)
+            pen.setCapStyle(Qt.FlatCap)
+            painter.setPen(pen)
+            if kind == "line":
+                x0, y0, x1, y1 = it[1]
+                painter.drawLine(P(x0, y0), P(x1, y1))
+            else:
+                pts = QPolygonF([P(*p) for p in it[1]])
+                if it[4]:
+                    painter.drawPolygon(pts)
+                else:
+                    painter.drawPolyline(pts)
+        elif kind == "circle":
+            cx, cy, r = it[1]
+            painter.setPen(QPen(QColor(*colors.get(it[2], (0, 0, 0))),
+                                max(0.13, it[3]) * k))
+            painter.drawEllipse(P(cx, cy), r * k, r * k)
+        elif kind == "arc":
+            cx, cy, r, a0, a1 = it[1]
+            painter.setPen(QPen(QColor(0, 0, 0), max(0.13, it[3]) * k))
+            c = P(cx, cy)
+            painter.drawArc(QRectF(c.x() - r * k, c.y() - r * k,
+                                   2 * r * k, 2 * r * k),
+                            int(a0 * 16), int((a1 - a0) * 16))
+        elif kind == "text":
+            (x, y), t, h, al, _layer, bold, ang = it[1:]
+            f = font(h, bold)
+            painter.setFont(f)
+            painter.setPen(QColor(*colors.get(_layer, (0, 0, 0))))
+            w = painter.fontMetrics().horizontalAdvance(t)
+            dx = 0 if al == "left" else -w / 2 if al == "center" else -w
+            p = P(x, y)
+            painter.save()
+            painter.translate(p)
+            if ang:
+                painter.rotate(-ang)
+            painter.drawText(QPointF(dx, 0), t)
+            painter.restore()
 
 
 class DrawingDialog(QDialog):

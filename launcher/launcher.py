@@ -500,6 +500,9 @@ def main() -> int:
     font.setFamilies(["Leelawadee UI", "Segoe UI", "Noto Sans Thai", "Tahoma"])
     font.setPointSize(10)
     app.setFont(font)
+    import wanic_login
+    if not wanic_login.require():
+        return 0
     files = [Path(a) for a in sys.argv[1:] if not a.startswith("-")]
     if files:
         which = program_for(files[0])

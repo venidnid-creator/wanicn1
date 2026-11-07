@@ -28,6 +28,8 @@ Pure Python (no Qt); sheets are :class:`core.wanic_drawings.Sheet`.
 from __future__ import annotations
 
 
+import math
+
 from core import wanic_drawings as D
 from core import wanic_pavement as V
 
@@ -169,13 +171,15 @@ def _rn_input(d):
               V.Truck("รถบรรทุก 10 ล้อ (HT)", float(d.get("ht_pct", 30)), (5.0, 10.0, 10.0)))
     return V.RNInput(adt=float(d.get("adt", 500)), lanes=int(d.get("lanes", 2)),
                      width=float(d.get("width", 6)), heavy_pct=float(d.get("heavy_pct", 10)),
-                     trucks=trucks, loaded_pct=float(d.get("loaded_pct", 50)),
+                     trucks=trucks, loaded_pct=float(d.get("loaded_pct", 100)),
                      growth_pct=float(d.get("growth_pct", 4)), years=float(d.get("years", 20)),
                      cbr=float(d.get("cbr", 4)), reinforced=bool(d.get("reinforced", True)),
                      construction_traffic=bool(d.get("construction_traffic", True)),
                      slab_length=float(d.get("slab_length", 10)),
                      lane_width=float(d.get("lane_width", 3)), fs=float(d.get("fs", 2750)),
-                     slab_cm=float(d.get("slab_cm") or 0) or None, fc=float(d.get("fc", 280)))
+                     slab_cm=float(d.get("slab_cm") or 0) or None, fc=float(d.get("fc", 280)),
+                     chart_mm=float(d.get("chart_mm") or 0) or None,
+                     subbase_kind=str(d.get("subbase_kind") or "laterite"))
 
 
 # ---------------------------------------------------------------------------
@@ -835,4 +839,190 @@ def detail_sheets(settings, pave=None, length=0.0, info=None) -> list:
     out = [section_sheet(ds, info)]
     out.append(joints_sheet(ds) if ds.concrete else asphalt_sheet(ds))
     out.append(notes_sheet(ds))
+    if ds.method == "rn29" and ds.res is not None:
+        out.append(rn29_sheet(ds))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Road Note 29 — the design chart with its reading, and the trucks
+# ---------------------------------------------------------------------------
+
+#: The trucks of the DRR sheet with the gross weights the law allows today
+#: (ประกาศกรมทางหลวง เรื่อง น้ำหนักรถบรรทุก: 6 ล้อ 2 เพลา ≤ 15 ตัน,
+#: 10 ล้อ 3 เพลา ≤ 25 ตัน).
+TRUCK_LEGAL = {"6": ("รถบรรทุก 6 ล้อ 2 เพลา", 15.0), "10": ("รถบรรทุก 10 ล้อ 3 เพลา", 25.0)}
+RED = (210, 30, 30)
+TRUCK_RGB = {"cab": (40, 70, 120), "body": (150, 150, 150), "wheel": (25, 25, 25),
+             "tag": (40, 120, 220)}
+
+
+def _lx(v):
+    return math.log10(max(min(v, 100.0), 0.01))
+
+
+def rn29_chart(sh, box, msa: float, chart_mm: float, slab_cm: float = 0.0,
+               cbr: float = 5.0, reinforced: bool = True):
+    """รูปที่ 3.16 drawn to scale in ``box`` (paper mm) with the reading in
+    red: a vertical line at the project's ESA, a horizontal one at the
+    thickness read off the curve, their crossing marked; the slab used
+    dashed when it is thicker."""
+    x0, y0, x1, y1 = box
+    L, B, R, T = x0 + 13, y0 + 13, x1 - 9, y1 - 3
+
+    def X(v):
+        return L + (_lx(v) + 2.0) / 4.0 * (R - L)
+
+    def Y(mm):
+        return B + max(min(mm, 300.0), 0.0) / 300.0 * (T - B)
+    for d in range(-2, 2):                                   # log grid
+        for m in range(1, 10):
+            v = m * 10.0 ** d
+            sh.line((X(v), B), (X(v), T), "hidden", 0.25 if m == 1 else 0.10)
+    sh.line((X(100), B), (X(100), T), "hidden", 0.25)
+    for mm in range(0, 301, 10):
+        sh.line((L, Y(mm)), (R, Y(mm)), "hidden", 0.25 if mm % 50 == 0 else 0.10)
+    sh.rect(L, B, R, T, "wall", 0.35)
+    for mm in range(0, 301, 50):
+        sh.text((L - 1.5, Y(mm) - 0.8), f"{mm}", 2.0, "right")
+        sh.text((R + 1.5, Y(mm) - 0.8), f"{mm}", 2.0, "left")
+    for v, t in ((0.01, "0.01"), (0.02, "0.02"), (0.04, "0.04"), (0.1, "0.10"), (0.2, "0.20"),
+                 (0.4, "0.40"), (1.0, "1.0"), (2.0, "2.0"), (4.0, "4.0"), (10.0, "10"),
+                 (20.0, "20"), (40.0, "40"), (100.0, "100")):
+        sh.text((X(v), B - 4.2), t, 2.0, "center")
+    sh.text(((L + R) / 2, B - 9.5), "Cumulative number of standard axles (× 10^6)", 2.4, "center",
+            "text", True)
+    sh.text((L - 9.5, (B + T) / 2), "Slab thickness (mm)", 2.4, "center", "text", True, angle=90)
+    # the curves
+    pts = []
+    for i in range(0, 161):
+        v = 10 ** (-2 + 4 * i / 160)
+        pts.append((X(v), Y(V._log_interp(V.RN29_REINFORCED, v))))
+    sh.poly(pts, "wall", 0.5, False)
+    un = [(X(v), Y(t)) for v, t in V.RN29_UNREINFORCED]
+    sh.poly(un, "wall", 0.4, False)
+    sh.line((X(0.01), Y(175)), (X(1.4), Y(175)), "wall", 0.3, True)
+    sh.text((X(0.012), Y(176) + 1.0), "Alternative design for unreinforced concrete (heavy construction "
+            "traffic)", 1.6)
+    sh.text((X(0.012), Y(149) + 1.0), "Unreinforced concrete", 1.7)
+    sh.text((X(0.012), Y(118)), "Reinforced concrete", 1.7)
+    sh.text((X(12.0), Y(182)), "Normal subgrades (CBR 2–15 %)", 1.7)
+    sh.text((X(0.012), Y(285)), "CBR 15% ขึ้นไป ลดความหนา 25 มม. · CBR 2% หรือน้อยกว่า เพิ่ม 25 มม.", 1.7)
+    # the reading
+    if msa > 0:
+        on_curve = V.rn29_slab_mm(msa, 5.0, reinforced) if chart_mm <= 0 else chart_mm
+        xv, yv = X(msa), Y(on_curve)
+        sh.line((xv, B), (xv, T), "roof", 0.45)
+        sh.line((L, yv), (R, yv), "roof", 0.45)
+        sh.circle((xv, yv), 1.2, "roof", 0.4)
+        sh.text((xv + 1.2, B + 2.0), f"ESA = {msa:,.3f} × 10^6", 2.0, "left", "roof", True)
+        sh.text((L + 1.5, yv + 1.2), f"{on_curve:.0f} มม.", 2.2, "left", "roof", True)
+        adj = (-25 if cbr >= 15 else 25 if cbr <= 2 else 0)
+        if adj:
+            sh.text((L + 1.5, yv - 3.4), f"ปรับตาม CBR {adj:+d} มม. = {on_curve + adj:.0f} มม.", 1.8, "left",
+                    "roof")
+        if slab_cm and slab_cm * 10 > on_curve + adj + 0.5:
+            ys = Y(slab_cm * 10)
+            sh.line((L, ys), (R, ys), "dim", 0.35, True)
+            sh.text((R - 1.5, ys + 1.0), f"ใช้ผิวคอนกรีตหนา {slab_cm:g} ซม.", 2.0, "right", "dim", True)
+
+
+def truck_figure(sh, x, y, w, axles, efs, title, gross, n_wheels):
+    """A truck seen from the side (facing left) at paper ``x, y`` (the
+    ground, left end) ``w`` mm long: the load on every axle with its
+    equivalence factor, single / tandem tags, and the legal gross weight."""
+    h = w * 0.42
+    r = w * 0.065
+    n = len(axles)
+    pos = [0.17] + ([0.78] if n == 2 else [0.70, 0.84])
+    # body
+    cab = [(x + 0.02 * w, y + 2 * r), (x + 0.27 * w, y + 2 * r), (x + 0.27 * w, y + 0.78 * h),
+           (x + 0.12 * w, y + 0.78 * h), (x + 0.04 * w, y + 0.52 * h), (x + 0.02 * w, y + 0.50 * h)]
+    sh.fill(cab, "hatch", 0.3, TRUCK_RGB["cab"])
+    sh.poly(cab, "wall", 0.25)
+    win = [(x + 0.13 * w, y + 0.52 * h), (x + 0.24 * w, y + 0.52 * h), (x + 0.24 * w, y + 0.72 * h),
+           (x + 0.14 * w, y + 0.72 * h), (x + 0.07 * w, y + 0.52 * h)]
+    sh.fill(win, "hatch", 0.9, (205, 225, 240))
+    bx = [(x + 0.30 * w, y + 2 * r), (x + 0.98 * w, y + 2 * r), (x + 0.98 * w, y + h), (x + 0.30 * w, y + h)]
+    sh.fill(bx, "hatch", 0.6, TRUCK_RGB["body"])
+    sh.poly(bx, "wall", 0.25)
+    sh.line((x + 0.02 * w, y + 1.6 * r), (x + 0.98 * w, y + 1.6 * r), "wall", 0.6)
+    tags = []
+    for i, (p, t) in enumerate(zip(pos, axles)):
+        cx = x + p * w
+        sh.fill([(cx + r * math.cos(a / 12 * 2 * math.pi), y + r + r * math.sin(a / 12 * 2 * math.pi))
+                 for a in range(12)], "hatch", 0.1, TRUCK_RGB["wheel"])
+        sh.circle((cx, y + r), r * 0.45, "hidden", 0.2)
+        sh.line((cx, y - 1.0), (cx, y - 6.0), "roof", 0.35)                 # the load on the axle
+        sh.poly([(cx, y - 0.6), (cx - 0.9, y - 2.4), (cx + 0.9, y - 2.4)], "roof", 0.3)
+    # the loads: one per single axle, one for the tandem
+    if n == 2:
+        marks = [(pos[0], f"{axles[0]:g} ตัน", f"EF {efs[0]:.4f}"),
+                 (pos[1], f"{axles[1]:g} ตัน", f"EF {efs[1]:.4f}")]
+    else:
+        marks = [(pos[0], f"{axles[0]:g} ตัน", f"EF {efs[0]:.4f}"),
+                 ((pos[1] + pos[2]) / 2, f"{axles[1]:g} + {axles[2]:g} ตัน",
+                  f"EF {efs[1]:.4f} × 2")]
+    for p, a, b in marks:
+        sh.text((x + p * w, y - 9.0), a, 2.2, "center", "roof", True)
+        sh.text((x + p * w, y - 12.2), b, 1.8, "center", "dim")
+    sh.line((x - 2, y), (x + w + 2, y), "wall", 0.35)
+    # single / tandem tags
+    groups = [("เพลาเดี่ยว", pos[0])]
+    groups.append(("เพลาเดี่ยว", pos[1]) if n == 2 else ("เพลาคู่", (pos[1] + pos[2]) / 2))
+    for i, (label, p) in enumerate(groups):
+        tx = x + (p - 0.10 if i == 0 else p + 0.04) * w
+        ty = y + h + 6.0
+        tw = 15.0
+        sh.fill([(tx - tw / 2, ty - 1.4), (tx + tw / 2, ty - 1.4), (tx + tw / 2, ty + 3.4), (tx - tw / 2, ty + 3.4)],
+                "hatch", 0.5, TRUCK_RGB["tag"])
+        sh.text((tx, ty), label, 2.4, "center", "title", True)
+        tags.append(((tx, ty - 1.4), (x + p * w, y + 2 * r)))
+    for a, b in tags:
+        sh.line(a, b, "dim", 0.25)
+    sh.text((x + w / 2, y + h + 17.0), title, 2.6, "center", "text", True)
+    sh.text((x + w / 2, y + h + 12.8), f"น้ำหนักรวมไม่เกิน {gross:g} ตัน (ตามกฎหมาย)", 2.0, "center")
+    sh.text((x + w / 2, y - 17.0), "EF = " + " + ".join(f"{e:.4f}" for e in efs)
+            + f" = {sum(efs):.4f}", 2.0, "center")
+    _ = n_wheels
+
+
+def trucks_block(sh, x, y, w_each, trucks, gap=18.0):
+    """The trucks of the design side by side (``trucks``: V.Truck list)."""
+    for i, tr in enumerate(trucks):
+        n = len(tr.axles)
+        title, gross = TRUCK_LEGAL["6" if n == 2 else "10"]
+        efs = [V.equivalence_factor(a) for a in tr.axles]
+        truck_figure(sh, x + i * (w_each + gap), y, w_each, tr.axles, efs, title,
+                     sum(tr.axles) if abs(sum(tr.axles) - gross) > 0.01 else gross, 6 if n == 2 else 10)
+
+
+def rn29_sheet(ds: Design):
+    """SD-04 กราฟออกแบบความหนาผิวคอนกรีต Road Note 29 — the chart read in
+    red, the trucks with their axle loads, the ESA table."""
+    r = ds.res
+    sh = D.Sheet("SD-04", "กราฟออกแบบความหนาผิวคอนกรีต (Road Note 29)", "-", "SD")
+    i = r.inp
+    rn29_chart(sh, (X0 + 2, Y1 - 150, X0 + 210, Y1 - 4), r.esa / 1e6,
+               float(i.chart_mm or 0.0), r.slab_cm, i.cbr, i.reinforced)
+    sh.text((X0 + 106, Y1 - 160), "รูปที่ 3.16 แผนภูมิกำหนดความหนาผิวทางคอนกรีต ตามวิธี Road Note 29", 2.8,
+            "center", "text", True)
+    sh.text((X0 + 106, Y1 - 165), f"เส้นสีแดง: ESA สะสม {r.esa:,.0f} ({r.esa / 1e6:.3f} × 10^6) => "
+            f"ความหนาจากแผนภูมิ {r.slab_chart_mm:.0f} มม. => ใช้ผิวคอนกรีต {r.slab_cm:g} ซม.", 2.2, "center")
+    trucks_block(sh, X0 + 224, Y1 - 52, 44.0, i.trucks, 14.0)
+    sh.text((X0 + 222, Y1 - 6), "น้ำหนักลงเพลารถบรรทุก (2.3)", 2.8, "left", "text", True)
+    cols = [("ชนิด", 34, "left"), ("จำนวนสะสม (คัน)", 26, "right"), ("VEF × สัดส่วน", 22, "right"),
+            ("ESA", 26, "right")]
+    rows = [[n, f"{c:,.0f}", f"{v:.3f}", f"{e:,.0f}"] for n, c, v, e in r.esa_rows]
+    rows.append(["รวม", "", "", f"{r.esa:,.0f}"])
+    sh.text((X0 + 222, Y1 - 100), "Cumulative Equivalent Standard Axles (2.4)", 2.8, "left", "text", True)
+    D.table(sh, X0 + 222, Y1 - 103, cols, rows, 2.0, 5.5, 6.5)
+    D.notes_block(sh, X0 + 222, Y1 - 140, "หมายเหตุ", [
+        f"1. ปัจจัยช่องจราจร {r.lane_factor:g} · Growth {i.growth_pct:g}% · อายุออกแบบ {i.years:g} ปี",
+        f"2. สัดส่วนรถบรรทุกที่บรรทุกของ : รถเปล่า = {i.loaded_pct:g} : {100 - i.loaded_pct:g}",
+        "3. น้ำหนักลงเพลาตามรายการคำนวณของกรมทางหลวงชนบท (6 ล้อ 4 + 11 ตัน · 10 ล้อ 5 + 10 + 10 ตัน) "
+        "น้ำหนักรวมไม่เกินที่กฎหมายกำหนด",
+        "4. Equivalence Factor จากตาราง Equivalent factor and damaging power of different axle loads "
+        "(interpolate ระหว่างค่าในตาราง)",
+    ], 2.0, 70)
+    return sh

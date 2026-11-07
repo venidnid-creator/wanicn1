@@ -288,6 +288,10 @@ def main() -> int:
         app.setWindowIcon(QIcon(str(icon_path)))
     _apply_dark_theme(app)
     _init_language()
+    # เข้าสู่ระบบ (WANICNSURVEY): the program opens only for a signed-in account
+    from core import wanic_login
+    if not wanic_login.require():
+        return 0
 
     # A drawing double-clicked while IngeCAD runs opens as a tab of the
     # running window: this one hands it over and quits.

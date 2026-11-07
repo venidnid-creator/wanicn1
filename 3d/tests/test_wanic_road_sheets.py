@@ -158,7 +158,11 @@ def test_standard_structure_sheets_from_the_design():
                                      "cbr": 6, "years": 20, "fs": 2750.0}}
     S = RS.build_road_set(an, {"pave": pave}, shots)
     sd = [x for x in S if x.group == "SD"]
-    assert [x.code for x in sd] == ["SD-01", "SD-02", "SD-03"]
+    assert [x.code for x in sd] == ["SD-01", "SD-02", "SD-03", "SD-04"]
+    t4 = " ".join(sd[3].texts())
+    for word in ("รูปที่ 3.16", "ESA", "เพลาเดี่ยว", "เพลาคู่", "15 ตัน", "25 ตัน", "Cumulative"):
+        assert word in t4, word
+    assert any(it[2] == "roof" for it in sd[3].items if it[0] == "line")      # the red reading
     assert S[-1].code == "QS-01" and [x.number for x in S] == list(range(1, len(S) + 1))
     t1 = " ".join(sd[0].texts())
     for word in ("รูปตัดโครงสร้างถนนคอนกรีตเสริมเหล็ก", "หนา 0.18 ม.", "MODIFIED PROCTOR",
