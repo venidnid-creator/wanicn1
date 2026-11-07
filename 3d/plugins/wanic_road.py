@@ -1141,6 +1141,8 @@ class RoadPanel(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return []
         info = dlg.info()
+        if info.get("drain", {}).get("u_both"):             # both sides, the whole road
+            info["drain"]["u_length"] = 2.0 * an.designed_length
         zone, datum = self._zone_datum()
         info.update(zone=zone, datum=datum, pave=getattr(self, "pave_design", None),
                     crs=f"UTM {datum} โซน {zone}N · ระดับ MSL",
@@ -1161,8 +1163,8 @@ class RoadPanel(QWidget):
         saved = []
         if info.get("pdf", True):
             from plugins.wanic_building import render_pdf
-            render_pdf(sheets, stem + ".pdf")
-            saved.append(stem + ".pdf")
+            render_pdf(sheets, stem + ".pdf", info.get("paper", "A3"))
+            saved.append(stem + ".pdf" + (" (A4 ย่อทั้งแผ่น)" if info.get("paper") == "A4" else ""))
         if info.get("dxf", True):
             Path(stem + "_แผ่นแบบ.dxf").write_bytes(D.dxf_bytes(sheets))
             saved.append(stem + "_แผ่นแบบ.dxf")
@@ -1567,7 +1569,10 @@ class RoadSheetsDialog(QDialog):
               ("PP", "PP — แปลนและรูปตัดตามยาว พร้อมแถบระดับดิน/ออกแบบ/ขุด/ถม"),
               ("ST", "ST — รูปตัดขวางทุกสถานี พร้อมพื้นที่และปริมาตร"),
               ("VT", "VT — ตารางปริมาณดินขุด-ถมทุกสถานี"),
-              ("SD", "SD — แบบมาตรฐานโครงสร้างทาง: รูปตัดชั้นทาง เหล็กเสริม/รอยต่อ รายการประกอบแบบ"),
+              ("SD", "SD — แบบมาตรฐานโครงสร้างทาง: รูปตัดชั้นทาง เหล็กเสริม/รอยต่อ รายการประกอบแบบ "
+                     "รูปตัดดินตัด-ดินถม บัญชีปริมาณงาน"),
+              ("DR", "DR — งานระบายน้ำ (ทถ-5): ท่อลอด คสล. ตำแหน่ง/ขนาด/ความยาว กำแพงปากท่อ รางระบายน้ำ"),
+              ("TS", "TS — ป้ายและเครื่องหมายจราจร (ทถ-3): แผนผังป้าย หลัก กม. หลักนำโค้ง GUARD RAIL เส้นจราจร"),
               ("QS", "QS — สรุปปริมาณงานทั้งหมดของโครงการ (แผ่นสุดท้าย)")]
 
     def __init__(self, panel):
@@ -1597,6 +1602,28 @@ class RoadSheetsDialog(QDialog):
             c.setChecked(True)
             self.checks[g] = c
             f.addRow(c)
+        self.pipe = QComboBox()
+        for d in (0.40, 0.60, 0.80, 1.00, 1.20, 1.50):
+            self.pipe.addItem(f"ท่อลอด คสล. Ø {d:.2f} ม.", d)
+        self.pipe.setCurrentIndex(1)
+        self.pipe.setToolTip("DR: ขนาดท่อลอดที่จุดต่ำของพื้นดินตามแนวทาง (Ø 0.60 ม. ขนาดเล็กสุดที่ทำความสะอาดได้)")
+        self.udrain = QComboBox()
+        self.udrain.addItem("ไม่มีรางระบายน้ำ คสล.", "")
+        for t in ("ก-30", "ข-30", "ค-30", "ง-30", "ก-50", "ข-50", "ค-50", "ง-50"):
+            self.udrain.addItem(f"รางระบายน้ำ คสล. ย่านชุมชน แบบ {t} (ทถ-5-301) สองข้างทาง", t)
+        row0 = QHBoxLayout()
+        row0.addWidget(self.pipe)
+        row0.addWidget(self.udrain, 1)
+        f.addRow("งานระบายน้ำ (DR)", row0)
+        self.speed = QComboBox()
+        for v in (40, 50, 60, 70, 80, 90):
+            self.speed.addItem(f"ความเร็วออกแบบ {v} กม./ชม.", v)
+        self.speed.setCurrentIndex(2)
+        self.urban = QCheckBox("ในเขตชุมชน (เส้นประ 1-3 ม.)")
+        row1 = QHBoxLayout()
+        row1.addWidget(self.speed)
+        row1.addWidget(self.urban, 1)
+        f.addRow("ป้าย/เครื่องหมาย (TS)", row1)
         self.site = QComboBox()
         for key, th in (("tiles", "แผนที่ตั้งโครงการ: ภาพถ่ายดาวเทียมดาวน์โหลดอัตโนมัติ (ต่ออินเทอร์เน็ต)"),
                         ("file", "แผนที่ตั้งโครงการ: ภาพที่บันทึกจาก Google Earth Pro…"),
@@ -1617,11 +1644,16 @@ class RoadSheetsDialog(QDialog):
         self.site_file.setEnabled(False)
         self.site.currentIndexChanged.connect(
             lambda _i: self.site_file.setEnabled(self.site.currentData() == "file"))
-        self.pdf = QCheckBox("PDF (พิมพ์ A3)")
+        self.pdf = QCheckBox("PDF")
         self.pdf.setChecked(True)
+        self.paper = QComboBox()
+        self.paper.addItem("PDF ขนาด A3 (แบบเต็มมาตราส่วน)", "A3")
+        self.paper.addItem("PDF ขนาด A4 (ย่อทั้งแผ่นให้เห็นครบ — มาตราส่วน × 0.707)", "A4")
+        self.paper.setToolTip("พิมพ์บนกระดาษ A4: ทั้งแผ่นแบบย่อลงพอดีหน้า ไม่มีส่วนใดถูกตัด "
+                              "(มาตราส่วนที่เขียนในแบบคือของ A3)")
         self.dxf = QCheckBox("DXF ชุดแผ่นแบบ (ทุกแผ่นเรียงกัน)")
         self.dxf.setChecked(True)
-        f.addRow(self.pdf)
+        f.addRow(self.pdf, self.paper)
         f.addRow(self.dxf)
         row = QHBoxLayout()
         ok = QPushButton("📐 ส่งออก")
@@ -1647,6 +1679,10 @@ class RoadSheetsDialog(QDialog):
         i["h_scale"] = self.hscale.currentData()
         i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
         i["pdf"] = self.pdf.isChecked()
+        i["paper"] = self.paper.currentData() or "A3"
+        ut = self.udrain.currentData() or ""
+        i["drain"] = {"pipe_d": self.pipe.currentData(), "u_type": ut or None, "u_both": bool(ut)}
+        i["signs"] = {"speed": self.speed.currentData(), "urban": self.urban.isChecked()}
         i["dxf"] = self.dxf.isChecked()
         return i
 

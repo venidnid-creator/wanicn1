@@ -714,7 +714,7 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = 
         h.append(f"{name} = <b>{_f(c, 0)}</b> คัน<br>")
     h.append("<h3>2.3 Equivalence Factor (เพลามาตรฐาน 18,000 ปอนด์)</h3>")
     if images:
-        h.append("<p><img src='rn29trucks' width='640'></p>")
+        h.append("<p><img src='rn29trucks' width='440'></p>")
     h.append("<table class='t'>"
              "<tr><th>ชนิด</th><th>น้ำหนักเพลา (ตัน)</th><th>EF แต่ละเพลา</th><th>VEF</th></tr>")
     for (name, efs, v), tr in zip(res.vef, i.trucks):
@@ -731,8 +731,11 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = 
     kind = "คอนกรีตเสริมเหล็ก" if i.reinforced else "คอนกรีตไม่เสริมเหล็ก"
     h.append("<h3>2.5 ความหนาแผ่นคอนกรีต (รูปที่ 3.16)</h3>")
     if images:
-        h.append("<p><img src='rn29chart' width='640'></p>")
-    h.append(f"{kind} ดินคันทาง CBR {_f(i.cbr, 1)}% → จากแผนภูมิ {_f(res.slab_chart_mm, 0)} มม."
+        h.append("<p><img src='rn29chart' width='520'></p>")
+    raw = rn29_slab_mm(res.esa / 1e6, 5.0, i.reinforced)
+    h.append(f"ค่าที่โปรแกรมอ่านได้จากกราฟ (ค่าจริง) ที่ ESA {_f(res.esa / 1e6, 3)} × 10<sup>6</sup> = "
+             f"<b>{_f(raw, 1)} มม. ({_f(raw / 10, 2)} ซม.)</b><br>")
+    h.append(f"{kind} ดินคันทาง CBR {_f(i.cbr, 1)}% → จากแผนภูมิ {_f(res.slab_chart_mm, 1)} มม."
              + (" (อ่านจากกราฟโดยผู้ออกแบบ)" if i.chart_mm else "") + "<br>"
              f"กำหนดความหนาผิวคอนกรีต = <b>{_f(res.slab_cm, 0)} ซม.</b> "
              f"(fc′ ≥ {_f(i.fc, 0)} กก./ตร.ซม. ลูกบาศก์) "

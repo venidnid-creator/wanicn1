@@ -841,7 +841,178 @@ def detail_sheets(settings, pave=None, length=0.0, info=None) -> list:
     out.append(notes_sheet(ds))
     if ds.method == "rn29" and ds.res is not None:
         out.append(rn29_sheet(ds))
+    cf = cutfill_sheet(ds)
+    cf.code = f"SD-{len(out) + 1:02d}"
+    out.append(cf)
     return out
+
+
+# ---------------------------------------------------------------------------
+# รูปตัดตามขวางแสดงดินตัดและดินถม (ทถ-2-201(1)) and the bill of quantities
+# ---------------------------------------------------------------------------
+
+#: The allowances of the bill (the CM+RDD way of the DRR price sheets):
+#: sand and laterite are bought loose and compacted, concrete and steel
+#: lose some on site.
+ALLOW = {"sand": 0.15, "laterite": 0.30, "concrete": 0.05, "steel": 0.05, "plastic": 0.10}
+WIRE_PER_KG = 0.02          # ลวดผูกเหล็ก 20 กก. ต่อเหล็ก 1 ตัน
+SEAL_L_PER_M = 0.20         # ยาแนวร่อง 1 × 2 ซม. = 0.20 ลิตร/ม.
+
+
+def _layer_t(ds, *words):
+    for n, t in ds.layers[1:]:
+        if any(w in n for w in words):
+            return t
+    return 0.0
+
+
+def boq(ds) -> list:
+    """[(item, unit, per bay, whole road)] — the road's bill of quantities.
+    Concrete: per slab bay (slab length × road width) like the DRR / CM
+    price sheets: grading, sand cushion, concrete, steel, dowels, ties, tie
+    wire, plastic sheet, side forms, joint sealant, the sub-base; asphalt:
+    per layer. ``whole road`` is None when the length is not known."""
+    rows = []
+    if ds.concrete:
+        q = quantities(ds)
+        b, n = q["bay"], q["bays"]
+        L, w, t = ds.slab_length, ds.width, ds.slab_cm / 100.0
+        sand = _layer_t(ds, "ทราย")
+        sub = _layer_t(ds, "รองพื้นทาง")
+        steel = b["steel_kg"] * (1 + ALLOW["steel"])
+        rows += [("งานปรับเกลี่ยและบดอัดพื้นที่", "ตร.ม.", L * w),
+                 (f"ทรายหยาบรองพื้น หนา {sand * 100:g} ซม. (เผื่อยุบตัว {ALLOW['sand']:.0%})", "ลบ.ม.",
+                  L * w * sand * (1 + ALLOW["sand"])) if sand else None,
+                 (f"รองพื้นทางลูกรัง/วัสดุ หนา {sub * 100:g} ซม. (เผื่อบดอัด {ALLOW['laterite']:.0%})",
+                  "ลบ.ม.", L * w * sub * (1 + ALLOW["laterite"])) if sub else None,
+                 ("แผ่นพลาสติกรองใต้แผ่นคอนกรีต (ซ้อนทับ 10%)", "ตร.ม.", L * w * (1 + ALLOW["plastic"])),
+                 ("ไม้แบบข้าง 2 × L × t", "ตร.ม.", 2 * L * t),
+                 (f"คอนกรีต fc' {ds.fc:,.0f} กก./ตร.ซม. หนา {t * 100:g} ซม. (เผื่อ {ALLOW['concrete']:.0%})",
+                  "ลบ.ม.", L * w * t * (1 + ALLOW["concrete"])),
+                 (f"เหล็กเสริม {q['long'][0]} / {q['trans'][0]} (เผื่อ {ALLOW['steel']:.0%})", "กก.", steel),
+                 (f"เหล็กเดือย Dowel RB{q['dowel'][0]} ยาว {q['dowel'][1]:.2f} ม.", "ท่อน", b["dowels"]),
+                 ("เหล็กเดือย Dowel (น้ำหนัก)", "กก.", b["dowel_kg"]),
+                 ("เหล็กยึด Tie bar DB12 ยาว 0.50 ม. @0.50", "ท่อน", b["ties"]) if b["ties"] else None,
+                 ("ลวดผูกเหล็ก (20 กก./ตัน)", "กก.", (steel + b["dowel_kg"] + b["tie_kg"]) * WIRE_PER_KG),
+                 ("ยาแนวรอยต่อ (ร่อง 1 × 2 ซม.)", "ลิตร", b["sealant"] * SEAL_L_PER_M)]
+        return [(a, u, v, v * n if n else None) for a, u, v in (r for r in rows if r)]
+    # asphalt: per 1 m of road and for the whole length
+    B = ds.width + 2 * ds.shoulder
+    for name, t in ds.layers:
+        if any(w in name for w in ("AC", "แอสฟัลต์", "DBST", "ลาดยาง")):
+            rows.append((f"{name} หนา {t * 100:g} ซม.", "ตร.ม.", ds.width))
+        else:
+            rows.append((f"{name} หนา {t * 100:g} ซม. (เผื่อบดอัด {ALLOW['laterite']:.0%})", "ลบ.ม.",
+                         B * t * (1 + ALLOW["laterite"])))
+    rows.insert(1, ("PRIME COAT", "ตร.ม.", ds.width))
+    return [(a, u, v, v * ds.length if ds.length else None) for a, u, v in rows]
+
+
+CUTFILL_NOTES = [
+    "1. คุณสมบัติของวัสดุ นอกจากที่ระบุในแบบให้เป็นไปตามมาตรฐานงานทางหลวงท้องถิ่น มทถ. 101–246 "
+    "เฉพาะส่วนที่เกี่ยวข้อง",
+    "2. จำนวนขั้นบันไดมากน้อยขึ้นอยู่กับความสูงของคันทางเดิม (รูปตัดการก่อสร้างลาดคันทางบนถนนเดิม)",
+    "3. เขตทางขึ้นอยู่กับสภาพพื้นที่ — ระยะในรูปเป็นระยะต่ำสุดที่ต้องการของรูปตัดนี้",
+    "4. ร่องน้ำข้างทางในเขตดินตัด ลึกจากระดับก่อสร้างไม่น้อยกว่า 1.25 ม. ท้องร่องกว้าง 0.00–1.00 ม. "
+    "ตามปริมาณน้ำ และลาดท้องร่องตามแนวทางไม่น้อยกว่า 0.5% ลงสู่ทางน้ำหรือท่อลอด",
+    "5. ความสูงตัดหรือถมเกิน 3.00 ม. ให้ใช้ลาดตามรูปตัดมาตรฐาน ทางที่ถมสูง หรือตัดลึกมาก (ทถ-2-501)",
+    "6. ถ้าไม่ได้กำหนดเป็นอย่างอื่นในแบบรูปตัดตามขวาง ค่า BACK SLOPE และ SIDE SLOPE ใช้ตามตาราง (SD-01)",
+    "7. วัสดุทรายหยาบต้องเป็นวัสดุ NON PLASTIC ขนาดใหญ่สุดไม่เกิน 3/8\" ผ่านตะแกรงเบอร์ 200 ไม่เกินร้อยละ 10",
+]
+
+
+def cutfill_sheet(ds: Design) -> D.Sheet:
+    """รูปตัดตามขวางแสดงดินตัดและดินถม (as ทถ-2-201(1)): the left half on
+    fill down to the ground at the SIDE SLOPE, the right half in cut with
+    the side ditch (>= 1.25 m under the finish, bottom 0.00–1.00 m) and the
+    BACK SLOPE up to the ground; the right-of-way lines; the bill of
+    quantities and the notes."""
+    sh = D.Sheet("SD-05", "รูปตัดตามขวางแสดงดินตัดและดินถม และบัญชีปริมาณงาน", "ตามระบุ", "SD")
+    B = ds.width / 2 + ds.shoulder
+    zB = _surface(ds, B)
+
+    def g(x):                                     # the natural ground, rising to the right
+        return -0.9 - 0.10 * B + 0.22 * x
+    # fill side: from the shoulder edge down at SIDE SLOPE to the ground
+    xf = -B
+    while _surface(ds, B) - (-xf - B) / ds.fill_hv > g(xf) and xf > -B - 30:
+        xf -= 0.05
+    zf = g(xf)
+    # cut side: side slope to the ditch, bottom 0.60 drawn, back slope up
+    dz = 1.25
+    xd0 = B + dz * ds.fill_hv
+    zd = zB - dz
+    xd1 = xd0 + 0.60
+    xb = xd1
+    while zd + (xb - xd1) / ds.cut_hv < g(xb) and xb < xd1 + 40:
+        xb += 0.05
+    zb = g(xb)
+    row = (xf - 1.5, xb + 1.5)
+    span = row[1] - row[0] + 2
+    sc = D.fit_scale((span, 6.0), (300.0, 80.0), (25, 30, 40, 50, 60, 75, 100, 125, 150, 200))
+    k = 1000.0 / sc
+    cx = X0 + 10 + (-row[0] + 1) * k
+    cy = Y1 - 72
+
+    def P(x, z):
+        return (cx + x * k, cy + z * k)
+    # ground (dashed beyond the works) and the earthworks
+    sh.line(P(row[0] - 1, g(row[0] - 1)), P(row[1] + 1, g(row[1] + 1)), "hidden", 0.3, True)
+    fill = [P(xf, zf), P(-B, zB), P(-ds.width / 2, _surface(ds, ds.width / 2)), P(0, _surface(ds, 0))]
+    sh.fill(fill + [P(0, g(0)) if g(0) < _surface(ds, 0) else P(0, _surface(ds, 0))], "hatch", 0.90)
+    t = ds.total
+    top = [P(x, _surface(ds, x)) for x in (-B, -ds.width / 2, 0.0, ds.width / 2, B)]
+    bot = [P(x, _surface(ds, x) - t) for x in (B, ds.width / 2, 0.0, -ds.width / 2, -B)]
+    sh.fill(top + bot, "hatch", 0.55)
+    sh.poly(top + bot, "wall", 0.35)
+    sh.poly([P(xf, zf), P(-B, zB)], "wall", 0.45, False)
+    sh.poly([P(B, zB), P(xd0, zd), P(xd1, zd), P(xb, zb)], "wall", 0.45, False)
+    sh.text(P((xf - B) / 2 - 0.4, (zf + zB) / 2), f"SIDE SLOPE {ds.fill_hv:g}:1", 1.9, "right", "dim")
+    sh.text(P((B + xd0) / 2 + 0.3, (zB + zd) / 2 + 0.2), f"SIDE SLOPE {ds.fill_hv:g}:1", 1.9, "left", "dim")
+    sh.text(P((xd1 + xb) / 2 + 0.5, (zd + zb) / 2), f"BACK SLOPE {ds.cut_hv:g}:1", 1.9, "left", "dim")
+    sh.line(P(B + 0.2, zB), P(xd1 + 0.3, zB), "dim", 0.13, True)
+    D._dim_v(sh, P(xd1, 0)[0] + 1.0, P(0, zd)[1], P(0, zB)[1], "1.25 (MIN)")
+    D._dim_h(sh, P(xd0, 0)[0], P(xd1, 0)[0], P(0, zd)[1] - 4, "0.00-1.00")
+    sh.text((P(xd0, 0)[0], P(0, zd)[1] - 9), "ท้องร่องกว้าง 0.00–1.00 ม.", 1.8)
+    xm = (xf - B) / 2
+    sh.text(P(xm, (g(xm) + zB - (-xm - B) / ds.fill_hv) / 2 - 0.1), "ดินถม", 2.4, "center", "text", True)
+    xc = xd1 + 1.2
+    sh.text(P(xc + 0.3, (zd + 1.2 / ds.cut_hv + g(xc)) / 2), "ดินตัด", 2.4, "center", "text", True)
+    # the centre line, widths, crossfalls, the right of way
+    yt = P(0, 0)[1]
+    sh.line((P(0, 0)[0], yt + 26), (P(0, 0)[0], P(0, g(0))[1] - 6), "grid", 0.18, True)
+    sh.text((P(0, 0)[0], yt + 27), "CL", 2.8, "center", "grid")
+    sh.text((P(0, 0)[0] + 1.5, yt + 2.0), "ระดับก่อสร้าง", 1.8, "left", "dim")
+    xs = [-B, -ds.width / 2, 0.0, ds.width / 2, B]
+    names = ["ไหล่ทาง", "ครึ่งผิวจราจร", "ครึ่งผิวจราจร", "ไหล่ทาง"]
+    for (a, b), nm in zip(zip(xs, xs[1:]), names):
+        if b - a < 1e-6:
+            continue
+        D._dim_h(sh, P(a, 0)[0], P(b, 0)[0], yt + 9, f"{b - a:.2f}")
+        sh.text(((P(a, 0)[0] + P(b, 0)[0]) / 2, yt + 13), nm, 1.8, "center", "dim")
+    for sg in (-1, 1):
+        a = P(sg * ds.width * 0.25, _surface(ds, ds.width * 0.25))
+        sh.text((a[0], a[1] + 2.0), f"{ds.crown:.1f}%", 1.9, "center", "dim")
+    for x in row:
+        sh.line(P(x, g(x) - 0.3), (P(x, 0)[0], yt + 22), "hidden", 0.25, True)
+        sh.text((P(x, 0)[0], yt + 23.5), "เขตทาง", 2.0, "center", "text", True)
+    D._dim_h(sh, P(row[0], 0)[0], P(row[1], 0)[0], yt + 19, "ขึ้นอยู่กับสภาพพื้นที่")
+    D.caption(sh, (X0 + 160, Y1 - 112), "รูปตัดตามขวางแสดงดินตัดและดินถม", f"1:{sc} (ทถ-2-201(1))")
+    # the bill of quantities
+    rows = boq(ds)
+    per = "ต่อแผ่น" if ds.concrete else "ต่อ 1 ม."
+    head = (f"บัญชีปริมาณงาน — แผ่นพื้น {ds.slab_length:g} × {ds.width:g} ม." if ds.concrete
+            else "บัญชีปริมาณงานถนนลาดยาง")
+    sh.text((X0 + 4, Y1 - 128), head, 2.8, "left", "text", True)
+    cols = [("รายการ", 112, "left"), ("หน่วย", 14, "center"), (per, 22, "right"),
+            (f"ทั้งสาย {ds.length:,.0f} ม." if ds.length else "ทั้งสาย", 30, "right")]
+    tab = [[a, u, f"{v:,.2f}", f"{w:,.2f}" if w is not None else "-"] for a, u, v, w in rows]
+    yy = D.table(sh, X0 + 4, Y1 - 131, cols, tab, 1.9, 4.6, 5.5)
+    sh.text((X0 + 4, yy - 3.5), "ปริมาณสุทธิรวมค่าเผื่อตามที่ระบุ · ใช้ประกอบ ปร.4 / ปร.5 "
+            "(ค่าดำเนินการและภาษี Factor F ตามตารางกรมบัญชีกลาง)", 1.7)
+    D.notes_block(sh, X0 + 192, Y1 - 128, "หมายเหตุ", CUTFILL_NOTES, 2.0, 66)
+    sh.scale = f"1:{sc}"
+    return sh
 
 
 # ---------------------------------------------------------------------------
@@ -868,7 +1039,7 @@ def rn29_chart(sh, box, msa: float, chart_mm: float, slab_cm: float = 0.0,
     thickness read off the curve, their crossing marked; the slab used
     dashed when it is thicker."""
     x0, y0, x1, y1 = box
-    L, B, R, T = x0 + 13, y0 + 13, x1 - 9, y1 - 3
+    L, B, R, T = x0 + 13, y0 + 18, x1 - 9, y1 - 3
 
     def X(v):
         return L + (_lx(v) + 2.0) / 4.0 * (R - L)
@@ -916,8 +1087,13 @@ def rn29_chart(sh, box, msa: float, chart_mm: float, slab_cm: float = 0.0,
         sh.line((L, yv), (R, yv), "roof", 0.45)
         sh.circle((xv, yv), 1.2, "roof", 0.4)
         sh.text((xv + 1.2, B + 2.0), f"ESA = {msa:,.3f} × 10^6", 2.0, "left", "roof", True)
-        sh.text((L + 1.5, yv + 1.2), f"{on_curve:.0f} มม.", 2.2, "left", "roof", True)
+        sh.text((L + 1.5, yv + 1.2), f"{on_curve:.1f} มม.", 2.2, "left", "roof", True)
         adj = (-25 if cbr >= 15 else 25 if cbr <= 2 else 0)
+        # the value the program reads off the curve, unrounded, one line
+        # under the chart (the designer compares it with his own reading)
+        raw = V.rn29_slab_mm(msa, 5.0, reinforced)
+        sh.text(((L + R) / 2, y0 + 1.5), reading_text(msa, raw, chart_mm, adj), 2.3, "center",
+                "roof", True)
         if adj:
             sh.text((L + 1.5, yv - 3.4), f"ปรับตาม CBR {adj:+d} มม. = {on_curve + adj:.0f} มม.", 1.8, "left",
                     "roof")
@@ -925,6 +1101,18 @@ def rn29_chart(sh, box, msa: float, chart_mm: float, slab_cm: float = 0.0,
             ys = Y(slab_cm * 10)
             sh.line((L, ys), (R, ys), "dim", 0.35, True)
             sh.text((R - 1.5, ys + 1.0), f"ใช้ผิวคอนกรีตหนา {slab_cm:g} ซม.", 2.0, "right", "dim", True)
+
+
+def reading_text(msa: float, raw_mm: float, chart_mm: float = 0.0, adj: int = 0) -> str:
+    """«ค่าที่โปรแกรมอ่านได้จากกราฟ …» — the curve's value at the ESA to
+    0.1 mm (and in cm to 0.01), as the sheet and the calculation print it."""
+    t = (f"ค่าที่โปรแกรมอ่านได้จากกราฟ ที่ ESA {msa:,.3f} × 10^6 = {raw_mm:.1f} มม. "
+         f"({raw_mm / 10:.2f} ซม.)")
+    if adj:
+        t += f" ; ปรับตาม CBR {adj:+d} มม. = {raw_mm + adj:.1f} มม."
+    if chart_mm:
+        t += f" ; ผู้ออกแบบอ่านได้ {chart_mm:g} มม."
+    return t
 
 
 def truck_figure(sh, x, y, w, axles, efs, title, gross, n_wheels):

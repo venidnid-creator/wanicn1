@@ -129,8 +129,8 @@ def text(info, offline: bool = False, version: str = "") -> str:
     if not info:
         return "⬇ ยอดดาวน์โหลด — (ออฟไลน์)"
     if version and _newer(info.get("tag", ""), version):
-        return (f"⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง (v{version}) — ให้ดาวน์โหลดเวอร์ชันใหม่ "
-                f"<b>{info['tag']}</b> (คลิก) · ⬇ ดาวน์โหลดสะสม <b>{int(info['total']):,}</b> ครั้ง")
+        return (f"⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง (v{version}) — มีรุ่นใหม่ <b>{info['tag']}</b> "
+                "ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่")
     tag = info.get("tag") or ""
     line = (f"⬇ ดาวน์โหลดสะสม <b>{int(info['total']):,}</b> ครั้ง · "
             f"รุ่นล่าสุด {tag} <b>{int(info['latest']):,}</b> ครั้ง")
@@ -141,10 +141,10 @@ def text(info, offline: bool = False, version: str = "") -> str:
 
 def tooltip(info) -> str:
     if not info:
-        return "ต่ออินเทอร์เน็ตเพื่อดูยอดดาวน์โหลดจาก GitHub — คลิกเพื่อเปิดหน้าดาวน์โหลด"
+        return "ต่ออินเทอร์เน็ตเพื่อดูยอดดาวน์โหลดจาก GitHub"
     return (f"ยอดดาวน์โหลดตัวติดตั้งจาก GitHub ทุกรุ่น ({int(info.get('releases', 0))} รุ่น) "
             f"รวม {int(info['total']):,} ครั้ง\nรุ่นล่าสุด {info.get('tag', '')}: "
             f"{int(info['latest']):,} ครั้ง\nผู้ใช้งานสะสม (เครื่องที่เคยเปิดโปรแกรม) "
             f"{int(info.get('users', 0)):,} คน · เปิดใช้งาน {int(info.get('opens', 0)):,} ครั้ง\n"
             f"ข้อมูล ณ {info.get('at', '')} · อัปเดตทุกครั้งที่เปิดโปรแกรมและทุก 10 นาที\n"
-            "คลิกเพื่อเปิดหน้าดาวน์โหลด")
+            "รุ่นใหม่: ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่")

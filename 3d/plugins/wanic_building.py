@@ -1874,21 +1874,24 @@ class BoqDialog(QDialog):
             fh.write(Q.csv_text(self.result))
 
 
-def render_pdf(sheets, path: str) -> int:
+def render_pdf(sheets, path: str, paper: str = "A3") -> int:
     """Print the drawing set (:mod:`core.wanic_drawings`) to a PDF, one A3
-    landscape page per sheet. Returns the page count."""
+    landscape page per sheet; ``paper="A4"``: the same sheet shrunk whole
+    onto A4 landscape (×0.707, A4 is A3 halved) so all of it shows on an
+    office printer. Returns the page count."""
     from PySide6.QtCore import QMarginsF, QPointF
     from PySide6.QtGui import (QPageLayout, QPageSize, QPdfWriter)
     from core import wanic_drawings as D
     W, H = D.PAPER
     wr = QPdfWriter(path)
     wr.setResolution(300)
-    wr.setPageSize(QPageSize(QPageSize.A3))
+    a4 = str(paper).upper() == "A4"
+    wr.setPageSize(QPageSize(QPageSize.A4 if a4 else QPageSize.A3))
     wr.setPageOrientation(QPageLayout.Landscape)
     wr.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Millimeter)
     wr.setTitle("แบบก่อสร้าง — WANICNSURVEY")
     wr.setCreator("WANICNSURVEY · นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ")
-    k = wr.resolution() / 25.4
+    k = wr.resolution() / 25.4 * (a4_factor() if a4 else 1.0)
     painter = QPainter(wr)
     painter.setRenderHint(QPainter.Antialiasing, True)
 
@@ -1910,9 +1913,18 @@ def render_pdf(sheets, path: str) -> int:
             if i:
                 wr.newPage()
             paint_sheet(painter, sh, P, k, font)
+            if a4:                                  # say so: the printed scale is A3's
+                painter.setFont(font(1.9, False))
+                painter.setPen(QColor(90, 90, 90))
+                painter.drawText(P(16.0, 9.0), "พิมพ์ A4 ย่อจาก A3 — มาตราส่วนในแบบ × 0.707")
     finally:
         painter.end()
     return len(sheets)
+
+
+def a4_factor() -> float:
+    """A3 → A4 landscape: 297/420 (the sheet keeps its proportions)."""
+    return 297.0 / 420.0
 
 
 def paint_sheet(painter, sh, P, k, font):
@@ -3699,11 +3711,11 @@ def _downloads_corner(win) -> None:
     """The download count in the top-right corner of the main window
     (beside the menus): every release's installer downloads from GitHub,
     and the latest release's. Read off the UI thread; the last answer is
-    kept so the corner still shows it offline. Click: the releases page."""
+    kept so the corner still shows it offline. A newer release is only
+    announced (ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่) — no download from here."""
     import threading
 
-    from PySide6.QtCore import QSettings, QUrl
-    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtCore import QSettings
     if win is None or getattr(win, "_wanic_downloads", None) is not None:
         return
     bar = win.menuBar() if hasattr(win, "menuBar") else None
@@ -3714,7 +3726,6 @@ def _downloads_corner(win) -> None:
     lab.setTextFormat(Qt.RichText)
     lab.setStyleSheet("QLabel#wanicDownloads{background:#0F2A44;color:#FFFFFF;"
                       "border-radius:9px;padding:2px 10px;margin:2px 6px;}")
-    lab.setCursor(Qt.PointingHandCursor)
     st = QSettings("WANICNSURVEY", "downloads")
     cached = None
     try:
@@ -3724,7 +3735,6 @@ def _downloads_corner(win) -> None:
         cached = None
     lab.setText(WD.text(cached, offline=bool(cached)))
     lab.setToolTip(WD.tooltip(cached))
-    lab.mousePressEvent = lambda _e: QDesktopServices.openUrl(QUrl(WD.PAGE))
     bar.setCornerWidget(lab, Qt.TopRightCorner)
     lab.show()
     win._wanic_downloads = lab

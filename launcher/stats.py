@@ -183,26 +183,30 @@ def newer(tag: str, version: str) -> bool:
 
 
 def latest_line(d: dict, version: str = "") -> str:
-    """The link to the newest release: its version and day; «มีรุ่นใหม่»
-    when it is newer than the one installed."""
+    """The newest release: its version and day; «มีรุ่นใหม่» when it is
+    newer than the one installed — a notice only, no download link: a new
+    version comes from the developer («ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่»)."""
     if not d or not d.get("tag"):
         return ""
     day = thai_day(d.get("published", ""))
-    url = d.get("url") or f"https://github.com/{REPO}/releases/latest"
     new = newer(d["tag"], version)
     label = (f"🆕 มีรุ่นใหม่ {d['tag']}" if new else f"ปรับปรุงล่าสุด {d['tag']}") + \
         (f" ({day})" if day else "")
-    tail = " — คลิกเพื่อดาวน์โหลด" if new else " — หน้าดาวน์โหลด"
     color = "#C0392B" if new else "#1F7A8C"
-    line = f"<a href='{url}' style='color:{color}'><b>{label}</b>{tail}</a>"
+    line = f"<span style='color:{color}'><b>{label}</b>{CONTACT_TAIL if new else ''}</span>"
     if version and version != "dev":
         line += f"<br>รุ่นที่ใช้อยู่: v{str(version).lstrip('v')}"
         if new:
-            line += (f"<br><a href='{url}' style='color:#C0392B'><b>⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง "
-                     f"(v{str(version).lstrip('v')}) — ให้ดาวน์โหลดเวอร์ชันใหม่ {d['tag']}</b></a>")
+            line += (f"<br><span style='color:#C0392B'><b>⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง "
+                     f"(v{str(version).lstrip('v')}) — มีรุ่นใหม่ {d['tag']} "
+                     f"กรุณาติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่</b></span>")
         else:
             line += " <span style='color:#2E7D32'>✓ เป็นรุ่นล่าสุดแล้ว</span>"
     return line
+
+
+#: The new version is not downloaded from the program: the developer gives it.
+CONTACT_TAIL = " — ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่"
 
 
 def text(info: dict, cached: dict | None = None, version: str = "") -> str:

@@ -479,3 +479,20 @@ def test_drawing_set_prints_one_a3_page_per_sheet(tmp_path):
     assert data[:5] == b"%PDF-"
     assert data.count(b"/Type /Page\n") + data.count(b"/Type /Page ") + \
         data.count(b"/Type/Page") >= len(sheets) or len(data) > 50000
+
+
+def test_drawing_set_fits_whole_on_a4(tmp_path):
+    """PDF on A4: each A3 sheet shrunk whole onto A4 landscape (nothing cut)."""
+    import re
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core import wanic_drawings as D
+    from plugins.wanic_building import a4_factor, render_pdf
+    d = B.default_data()
+    d["floors"][0]["rooms"] = _grid2x2()
+    sheets = D.build_set(d, {"project": "ทดสอบ"})[:2]
+    path = tmp_path / "a4.pdf"
+    assert render_pdf(sheets, str(path), "A4") == 2
+    boxes = re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)", path.read_bytes())
+    assert boxes and all(abs(float(w) - 842) < 2 and abs(float(h) - 595) < 2 for w, h in boxes)
+    assert abs(a4_factor() * D.PAPER[0] - 297.0) < 1e-9

@@ -825,6 +825,7 @@ def test_outdated_version_warning_in_the_corner():
     info = {"total": 1005, "latest": 40, "tag": "v2026.11.04.5", "releases": 30, "users": 23}
     old = WD.text(info, version="2026.11.04.4")
     assert "คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง" in old and "v2026.11.04.5" in old
+    assert "ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่" in old and "ให้ดาวน์โหลด" not in old
     assert "ยังไม่ปรับปรุง" not in WD.text(info, version="2026.11.04.5")
 
 
