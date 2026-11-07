@@ -193,7 +193,9 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     panel.results.profile.resize(1000, 500)
     panel.results.profile.grab()                                   # paints without error
     panel.results.sections.grab()
-    assert panel.results.table.rowCount() == len(an.rows)
+    assert panel.results.table.rowCount() == len(an.rows) + 1                # + the totals row
+    assert panel.results.table.item(len(an.rows), 0).text() == "รวม"
+    assert "สรุปปริมาณดิน" in panel.results.earth_sum.text()
     for tab in range(panel.results.tabs.count()):                  # every tab paints
         panel.results.tabs.setCurrentIndex(tab)
         panel.results.grab()
