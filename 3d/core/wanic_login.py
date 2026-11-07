@@ -33,7 +33,8 @@ _ORG, _APP = "WANICNSURVEY", "Login"
 
 
 def _digest(user: str, password: str) -> str:
-    text = f"{user.strip().lower()}\n{password}".encode("utf-8")
+    # a space typed or pasted before / after either one is not counted
+    text = f"{user.strip().lower()}\n{password.strip()}".encode("utf-8")
     return hashlib.pbkdf2_hmac("sha256", text, _SALT, _ROUNDS).hex()
 
 
@@ -110,6 +111,9 @@ def require(parent=None) -> bool:
     form.addRow("ผู้ใช้", user)
     form.addRow("รหัสผ่าน", pw)
     lay.addLayout(form)
+    show = QCheckBox("แสดงรหัสผ่าน")
+    show.toggled.connect(lambda on: pw.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
+    lay.addWidget(show)
     keep = QCheckBox("จดจำการเข้าสู่ระบบบนเครื่องนี้")
     lay.addWidget(keep)
     msg = QLabel("")
@@ -131,8 +135,8 @@ def require(parent=None) -> bool:
             return
         tries["n"] += 1
         pw.clear()
-        msg.setText("ผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" + (" — โปรแกรมยังไม่เปิดให้ใช้งานทั่วไป"
-                                                       if tries["n"] >= 2 else ""))
+        msg.setText("ผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (ตรวจตัวพิมพ์ใหญ่-เล็ก และแป้นพิมพ์ภาษาอังกฤษ)"
+                    + (" — โปรแกรมยังไม่เปิดให้ใช้งานทั่วไป" if tries["n"] >= 2 else ""))
     ok.clicked.connect(attempt)
     pw.returnPressed.connect(attempt)
     no.clicked.connect(dlg.reject)
