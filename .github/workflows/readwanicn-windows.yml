@@ -8,6 +8,10 @@ name: readwanicn-windows
 on:
   push:
     tags: ["readwanicn-v*"]
+    # the working branch: a change to the program builds the installer (as an
+    # artifact only -- the Release is published from a tag or by hand)
+    branches: ["claude/youthful-pascal-ctgtr0"]
+    paths: ["readwanicn2027/**", "installer/readwanicn2027.iss", ".github/workflows/readwanicn-windows.yml"]
   workflow_dispatch:
     inputs:
       version:
@@ -49,6 +53,7 @@ jobs:
         run: |
           V="${{ inputs.version }}"
           if [ "${{ github.ref_type }}" = "tag" ]; then V="${GITHUB_REF_NAME#readwanicn-v}"; fi
+          if [ -z "$V" ]; then V="$(python -c "import re; print(re.search(r'VERSION = \"([^\"]+)\"', open('readwanicn/__init__.py', encoding='utf-8').read()).group(1))")"; fi
           sed -i "s/^VERSION = .*/VERSION = \"$V\"/" readwanicn/__init__.py
           if [ -n "$LICENSE_KEY" ]; then
             python -c "import os, pathlib; pathlib.Path('readwanicn/_license_key.py').write_text('KEY = %r\n' % os.environ['LICENSE_KEY'], encoding='utf-8')"
