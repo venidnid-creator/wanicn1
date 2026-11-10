@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
-from . import APP_NAME, DEVELOPER, VERSION, auth, measure, pdfops, themes, update
+from . import APP_NAME, DEVELOPER, VERSION, auth, license, measure, pdfops, themes, update
 from .canvas import TOOLS, PdfCanvas
 from .model3d import ModelView, load_model
 
@@ -207,6 +207,169 @@ class CompressDialog(QDialog):
 
     def level(self) -> str:
         return self.group.checkedButton().property("level")
+
+
+# -- the developer: photo, contact, support ------------------------------------------
+
+BANK = "ธนาคารกรุงศรีอยุธยา สาขาโลตัส ถลาง ภูเก็ต"
+ACCOUNT_NAME = "นายเวนิช ธัมมะวงษ์"
+ACCOUNT_NO = "666-1-32472-1"
+NAVY, ORANGE, BRASS = "#0F2A44", "#C46420", "#C9A14A"
+
+
+def script_font(px: int) -> QFont:
+    """Charm, a Thai calligraphic face (SIL OFL), for the contact number."""
+    from PySide6.QtGui import QFontDatabase
+    fid = QFontDatabase.addApplicationFont(asset("Charm-Bold.ttf"))
+    families = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+    f = QFont(families[0]) if families else QFont()
+    f.setPixelSize(px)
+    return f
+
+
+def contact_row() -> QWidget:
+    w = QWidget()
+    w.setStyleSheet("background: white;")
+    row = QHBoxLayout(w)
+    row.setContentsMargins(0, 0, 0, 0)
+    qr = QLabel()
+    qpix = QPixmap(asset("contact-qr.png"))
+    if not qpix.isNull():
+        qm = qpix.scaled(110, 110, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        qr.setPixmap(qm)
+        qr.setFixedSize(qm.size())
+    qr.setToolTip("สแกนด้วยมือถือเพื่อเพิ่มเพื่อนทาง LINE กับผู้พัฒนา")
+    row.addWidget(qr)
+    text = QLabel(f"ติดต่อผู้พัฒนาระบบ<br><span style='font-size:21px'>{license.CONTACT_PHONE}</span>"
+                  "<br><span style='font-size:13px;color:#06C755'>สแกนเพิ่มเพื่อน LINE</span>")
+    text.setAlignment(Qt.AlignCenter)
+    text.setWordWrap(True)
+    text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    text.setFont(script_font(16))
+    text.setStyleSheet(f"color:{NAVY}; background: white;")
+    row.addWidget(text, 1)
+    return w
+
+
+def support_panel() -> QFrame:
+    """The developer's poster, the LINE QR and number, free use and the
+    account to support him -- the same as the WANICNSURVEY start page."""
+    box = QFrame()
+    box.setObjectName("Support")
+    box.setStyleSheet("QFrame#Support { background: white; border: 1px solid #D9D4C7; border-radius: 8px; }"
+                      "QFrame#Support QLabel { background: white; }")
+    col = QVBoxLayout(box)
+    col.setContentsMargins(12, 12, 12, 12)
+    col.setSpacing(6)
+    photo = QLabel()
+    pix = QPixmap(asset("developer.jpg"))
+    if not pix.isNull():
+        pm = pix.scaledToWidth(262, Qt.SmoothTransformation)
+        photo.setPixmap(pm)
+        photo.setFixedSize(pm.size())
+    col.addWidget(photo, 0, Qt.AlignHCenter)
+    col.addWidget(contact_row())
+    free = QLabel("โปรแกรมใช้ได้ฟรี ไม่มีค่าลิขสิทธิ์")
+    free.setAlignment(Qt.AlignCenter)
+    free.setStyleSheet(f"font-size:14px; font-weight:700; color:{ORANGE};")
+    col.addWidget(free)
+    info = QLabel(f"<div style='color:{NAVY}; font-size:12px'>สนใจสนับสนุนผู้พัฒนา สามารถทำได้ที่<br>"
+                  f"<b>{BANK}</b><br>ชื่อบัญชี <b>{ACCOUNT_NAME}</b><br>"
+                  f"เลขที่บัญชี <b style='font-size:15px'>{ACCOUNT_NO}</b><br>บัญชีออมทรัพย์</div>")
+    info.setAlignment(Qt.AlignCenter)
+    info.setWordWrap(True)
+    info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    col.addWidget(info)
+    copy = QPushButton("คัดลอกเลขที่บัญชี")
+    copy.setCursor(Qt.PointingHandCursor)
+    copy.setStyleSheet(f"QPushButton {{ background:{BRASS}; color:white; border:none; border-radius:6px;"
+                       " padding:6px 12px; } QPushButton:hover { background:#B08A36; }")
+
+    def _copy():
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(ACCOUNT_NO.replace("-", ""))
+        copy.setText("คัดลอกแล้ว ✓")
+    copy.clicked.connect(_copy)
+    col.addWidget(copy)
+    thanks = QLabel("ขอบคุณที่ใช้งานและสนับสนุนครับ")
+    thanks.setAlignment(Qt.AlignCenter)
+    thanks.setStyleSheet("font-size:11px; color:#55657A;")
+    col.addWidget(thanks)
+    return box
+
+
+class ExpiredDialog(QDialog):
+    """A year is up: contact the developer for a renewal code, type it in."""
+
+    def __init__(self, lic: "license.License", parent=None, warning: bool = False):
+        super().__init__(parent)
+        self.lic = lic
+        self.setWindowTitle(f"{APP_NAME} — " + ("ใกล้หมดอายุการใช้งาน" if warning else "หมดอายุการใช้งาน"))
+        self.setWindowIcon(QIcon(asset("logo.ico")))
+        self.setFixedWidth(460)
+        self.setStyleSheet("QDialog, QLabel { background: white; color: #0F2A44; }"
+                           "QLineEdit { background:white; color:#0F2A44; border:1px solid #C9CED6; border-radius:5px;"
+                           " padding:5px; font-size:13pt; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 20, 24, 18)
+        logo = QLabel()
+        logo.setPixmap(logo_pixmap(72))
+        logo.setAlignment(Qt.AlignCenter)
+        lay.addWidget(logo)
+        if warning:
+            head = f"อายุการใช้งานจะหมดในอีก {lic.days_left} วัน (วันที่ {lic.until:%d/%m/%Y})"
+        else:
+            head = "หมดอายุการใช้งาน"
+        title = QLabel(head)
+        title.setAlignment(Qt.AlignCenter)
+        title.setWordWrap(True)
+        title.setStyleSheet(f"font-size:17pt; font-weight:bold; color:{'#B45309' if warning else '#DC2626'};")
+        lay.addWidget(title)
+        msg = QLabel("โปรแกรมนี้ใช้งานได้ครั้งละ 1 ปี กรุณาติดต่อผู้พัฒนาเพื่อขอรหัสผ่านต่ออายุการใช้งาน "
+                     "โดยแจ้งรหัสเครื่องด้านล่าง")
+        msg.setWordWrap(True)
+        msg.setAlignment(Qt.AlignCenter)
+        lay.addWidget(msg)
+        idl = QLabel(f"รหัสเครื่อง: <b style='font-size:15pt'>{lic.install_id}</b> · ครั้งที่ต่ออายุ "
+                     f"<b>{int(lic.data['n']) + 1}</b>")
+        idl.setAlignment(Qt.AlignCenter)
+        idl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(idl)
+        lay.addWidget(contact_row())
+        lay.addWidget(QLabel("รหัสผ่านต่ออายุ (จากผู้พัฒนา):"))
+        self.code = QLineEdit()
+        self.code.setPlaceholderText("XXXX-XXXX-XXXX")
+        lay.addWidget(self.code)
+        self.error = QLabel("")
+        self.error.setStyleSheet("color:#DC2626;")
+        lay.addWidget(self.error)
+        row = QHBoxLayout()
+        ok = QPushButton("ยืนยันรหัสผ่าน")
+        ok.setStyleSheet("background:#C9A14A; color:white; border:none; border-radius:6px; padding:7px 14px;")
+        ok.clicked.connect(self.try_code)
+        row.addWidget(ok)
+        later = QPushButton("ใช้งานต่อ" if warning else "ปิดโปรแกรม")
+        later.clicked.connect(self.reject)
+        row.addWidget(later)
+        lay.addLayout(row)
+        self.code.returnPressed.connect(self.try_code)
+
+    def try_code(self):
+        if self.lic.renew(self.code.text()):
+            QMessageBox.information(self, APP_NAME, f"ต่ออายุแล้ว ใช้งานได้ถึงวันที่ {self.lic.until:%d/%m/%Y}")
+            self.accept()
+        else:
+            self.error.setText("รหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบกับผู้พัฒนา")
+
+
+def check_license(parent=None, lic: "license.License | None" = None) -> bool:
+    """False when the year is up and no renewal code was given."""
+    lic = lic or license.License()
+    if lic.expired:
+        return ExpiredDialog(lic, parent).exec() == QDialog.Accepted
+    if lic.days_left <= license.WARN_DAYS:
+        ExpiredDialog(lic, parent, warning=True).exec()
+    return True
 
 
 # -- the main window ----------------------------------------------------------------
@@ -479,6 +642,11 @@ class MainWindow(QMainWindow):
     def _right_panel(self):
         w = QFrame()
         w.setObjectName("RightSide")
+        outer = QScrollArea()
+        outer.setWidgetResizable(True)
+        outer.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.setMinimumWidth(320)
+        outer.setWidget(w)
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 6, 8, 6)
         h = QLabel("สเกลแบบ")
@@ -530,9 +698,11 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setMinimumHeight(190)
         lay.addWidget(self.table, 1)
+        lay.addWidget(support_panel())
         self._show_scale()
-        return w
+        return outer
 
     # -- helpers
     def _safe(self, fn):

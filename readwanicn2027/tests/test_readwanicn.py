@@ -112,3 +112,45 @@ def test_the_window_opens_measures_and_switches_themes(sample, tmp_path):
     assert w.zoom_label.text() == "200%"
     w.model.rotate(30)
     w.grab()
+
+
+def test_a_year_of_use_then_a_renewal_code(tmp_path):
+    import datetime as dt
+
+    from readwanicn import license
+    path = tmp_path / "license.json"
+    start = dt.date(2027, 1, 10)
+    lic = license.License(path, start)
+    assert not lic.expired and lic.days_left == 365
+    later = license.License(path, start + dt.timedelta(days=366))
+    assert later.expired and later.install_id == lic.install_id
+    assert not later.renew("0000-0000-0000")
+    code = license.renewal_code(later.install_id, 1)
+    assert later.renew(code.lower().replace("-", " "))
+    assert not later.expired and later.until == start + dt.timedelta(days=366 + 365)
+    again = license.License(path, start + dt.timedelta(days=400))
+    assert not again.renew(code)                            # a code opens one year only
+    assert again.renew(license.renewal_code(again.install_id, 2))
+    other = license.License(tmp_path / "other.json", start)
+    assert license.renewal_code(other.install_id, 1) != code or other.install_id == lic.install_id
+
+
+def test_the_expired_dialog_takes_the_code(tmp_path):
+    import datetime as dt
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from readwanicn import license
+    from readwanicn.ui import ExpiredDialog, support_panel
+    QApplication.instance() or QApplication([])
+    lic = license.License(tmp_path / "l.json", dt.date(2027, 1, 1))
+    lic.today = dt.date(2028, 2, 1)
+    d = ExpiredDialog(lic)
+    d.code.setText("bad")
+    d.try_code()
+    assert "ไม่ถูกต้อง" in d.error.text()
+    QMessageBox.information = staticmethod(lambda *a, **k: None)
+    d.code.setText(license.renewal_code(lic.install_id, 1))
+    d.try_code()
+    assert not lic.expired
+    support_panel().grab()

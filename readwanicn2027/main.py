@@ -9,7 +9,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QDialog
 
 from readwanicn import APP_NAME, themes
-from readwanicn.ui import LoginDialog, MainWindow, WelcomeScreen, asset
+from readwanicn.ui import LoginDialog, MainWindow, WelcomeScreen, asset, check_license
 
 
 def main() -> int:
@@ -20,6 +20,8 @@ def main() -> int:
     WelcomeScreen().show_for(2200)
     login = LoginDialog()
     if login.exec() != QDialog.Accepted:
+        return 0
+    if not check_license():                 # a year of use is up and not renewed
         return 0
     window = MainWindow(login.user)
     window.show()
