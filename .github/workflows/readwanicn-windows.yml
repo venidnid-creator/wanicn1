@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# ReadWanicn2027 for Windows: tests, the PyInstaller folder, a Thai installer,
+# and (when asked, and only with the licence key set) a GitHub Release tagged
+# readwanicn-v<version> -- the tag the program reads for new versions and
+# the download count.
+name: readwanicn-windows
+
+on:
+  push:
+    tags: ["readwanicn-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (e.g. 2027.1.0)"
+        required: true
+        default: "2027.1.0"
+      release:
+        description: "Publish a GitHub Release with the installer"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.11.2 pymupdf openpyxl python-docx pytest pyinstaller
+
+      - name: Version and licence key
+        id: prep
+        shell: bash
+        env:
+          LICENSE_KEY: ${{ secrets.READWANICN_LICENSE_KEY }}
+        working-directory: readwanicn2027
+        run: |
+          V="${{ inputs.version }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then V="${GITHUB_REF_NAME#readwanicn-v}"; fi
+          sed -i "s/^VERSION = .*/VERSION = \"$V\"/" readwanicn/__init__.py
+          if [ -n "$LICENSE_KEY" ]; then
+            python -c "import os, pathlib; pathlib.Path('readwanicn/_license_key.py').write_text('KEY = %r\n' % os.environ['LICENSE_KEY'], encoding='utf-8')"
+            echo "key=set" >> "$GITHUB_OUTPUT"
+            echo "Licence key: set from READWANICN_LICENSE_KEY"
+          else
+            printf 'KEY = "readwanicn-development-key"\n' > readwanicn/_license_key.py
+            echo "key=missing" >> "$GITHUB_OUTPUT"
+            echo "::warning::READWANICN_LICENSE_KEY is not set: this build renews with the public development key, and no Release is published"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Tests
+        shell: bash
+        working-directory: readwanicn2027
+        env:
+          QT_QPA_PLATFORM: offscreen
+          READWANICN_OFFLINE: "1"
+        run: python -m pytest -q
+
+      - name: PyInstaller
+        shell: bash
+        working-directory: readwanicn2027
+        run: |
+          pyinstaller --noconfirm --distpath ../dist readwanicn.spec
+          rm -f readwanicn/_license_key.py
+          ls ../dist/ReadWanicn2027 | head
+
+      - name: Smoke test (the program starts and imports everything)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python - <<'PY'
+          import subprocess, sys, time
+          p = subprocess.Popen(["dist/ReadWanicn2027/ReadWanicn2027.exe"])
+          time.sleep(12)
+          code = p.poll()
+          p.kill()
+          sys.exit(0 if code is None else 1)
+          PY
+
+      - name: Inno Setup 6.5+ (Thai)
+        shell: pwsh
+        run: choco upgrade innosetup -y --no-progress
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = (Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue |
+                   Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending)[0].FullName
+          & $iscc "/DMyAppVersion=${{ steps.prep.outputs.version }}" installer\readwanicn2027.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist\readwanicn2027-setup-*.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: readwanicn2027-setup-${{ steps.prep.outputs.version }}
+          path: dist/readwanicn2027-setup-*.exe
+          if-no-files-found: error
+
+      - name: Publish the GitHub Release
+        if: (github.ref_type == 'tag' || inputs.release) && steps.prep.outputs.key == 'set'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: readwanicn-v${{ steps.prep.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: ReadWanicn2027 ${{ steps.prep.outputs.version }}
+          body: |
+            ## ReadWanicn2027 ${{ steps.prep.outputs.version }}
+            โปรแกรม PDF สำหรับใช้งานภายในองค์กร — ดาวน์โหลด readwanicn2027-setup-….exe ด้านล่างแล้วดับเบิลคลิกเพื่อติดตั้ง (Windows 10/11 64 บิต)
+            - ถ้า Windows ขึ้นว่า "Windows protected your PC" ให้กด More info ▸ Run anyway
+          files: dist/readwanicn2027-setup-*.exe
