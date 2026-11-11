@@ -521,7 +521,35 @@ def steel_presets() -> list[tuple[str, str, dict]]:
     for key in ("lc", "c", "box", "h", "i", "l", "pipe"):
         for label, p in P.FAMILIES[key]["presets"]:
             out.append((label, key, dict(p)))
+    # the timber sections (โครงหลังคาไม้)
+    for label, p in P.FAMILIES["rect"]["presets"]:
+        if label.startswith("ไม้"):
+            out.append((label, "rect", dict(p)))
     return out
+
+
+#: โครงหลังคาไม้: the members of a timber roof (ไม้เนื้อแข็ง), as the
+#: standard drawings size them
+TIMBER_FRAME = {"ridge": 'ไม้ 2"×8" (50×200)', "hip": 'ไม้ 2"×8" (50×200)',
+                "rafter": 'ไม้ 2"×6" (50×150)', "purlin": 'ไม้ 1½"×3" (38×75)',
+                "post": 'ไม้ 2"×6" (50×150)', "wallplate": 'ไม้ 2"×6" (50×150)',
+                "tiebeam": 'ไม้ 2"×6" (50×150)', "strut": 'ไม้ 2"×4" (50×100)'}
+STEEL_FRAME = {"ridge": "C 150×65×20×3.2", "hip": "C 150×65×20×3.2",
+               "rafter": "C 150×65×20×3.2", "purlin": "C 75×45×15×2.3",
+               "post": "C 100×50×20×2.3", "wallplate": "C 150×65×20×3.2",
+               "tiebeam": "C 150×65×20×3.2", "strut": "C 100×50×20×2.3"}
+
+
+def is_timber(label: str) -> bool:
+    return str(label).startswith("ไม้")
+
+
+def frame_word(label: str) -> str:
+    return "โครงหลังคาไม้" if is_timber(label) else "โครงหลังคาเหล็ก"
+
+
+def frame_boq(label: str, steel: str = "โครงหลังคาเหล็ก + ทาสีกันสนิม") -> str:
+    return "โครงหลังคาไม้ + ทาน้ำยากันปลวก" if is_timber(label) else steel
 
 
 def steel_lookup(label: str):
@@ -867,7 +895,10 @@ def _floor_name(k) -> str:
 
 #: the roof forms (แบบหลังคา) most built in Thailand
 ROOF_TYPES = {"hip": "ปั้นหยา", "gable": "จั่ว",
-              "manila": "มะนิลา (ปั้นหยาผสมจั่ว)", "shed": "เพิงหมาแหงน (ลาดเดียว)"}
+              "manila": "มะนิลา (ปั้นหยาผสมจั่ว)", "shed": "เพิงหมาแหงน (ลาดเดียว)",
+              "thai": "ทรงไทย (จั่วชัน + ปีกนก)", "double": "จั่วซ้อน (จั่วหน้าลดระดับ)"}
+#: ทรงไทย: the main gable at least this steep, the skirts (ปีกนก) this gentle
+THAI_PITCH, SKIRT_PITCH = 45.0, 20.0
 
 #: the truss forms (แบบโครงถัก) the roof frame can be made as
 TRUSS_TYPES = {"kingpost": "ดั้งกลาง + ตุ๊กตา + ค้ำยัน (King Post)",
@@ -2115,11 +2146,21 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         # cut through each other, and the posts are held both ways.
         db = _dim(s.get("tiebeam", s["ridge"]))
         dr = _dim(s["ridge"])
-        px = {round(rx0, 4), round(rx1, 4)}
+        # The trusses stand on the walls: at a GABLE end the ridge runs out
+        # over the overhang, but its last truss is the one on the gable
+        # wall (as in the DPT standard sections) — a king post, tie and
+        # struts out at the barge board stood in the air, outside the
+        # building, and made the gable look lopsided. A hipped end keeps
+        # its post at the hip apex.
+        e0 = rx0 if h0 else x0 + ov
+        e1 = rx1 if h1 else x1 - ov
+        if e1 < e0:
+            e0 = e1 = (rx0 + rx1) / 2
+        px = {round(e0, 4), round(e1, 4)}
         for st in stations:
-            if rx0 + 0.3 < st < rx1 - 0.3:
+            if e0 + 0.3 < st < e1 - 0.3:
                 px.add(st)
-        beam = rx1 - rx0 > 0.3
+        beam = e1 - e0 > 0.3
         # A concrete beam under the ridge line (a column line along the
         # middle of the plan): the คานรับดั้ง lies ON it, level with the
         # ties, and runs wall to wall; the ties butt on its sides. With no
@@ -2235,7 +2276,7 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
             out["rbeam"].append([P3(x0 + ov + pw, yc, zb), P3(x1 - ov - pw, yc, zb)])
             out["rbeam_on_beam"] = True
         elif beam:
-            out["rbeam"].append([P3(rx0, yc, zb), P3(rx1, yc, zb)])
+            out["rbeam"].append([P3(e0, yc, zb), P3(e1, yc, zb)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
     # Eave lines (เชิงชาย) and, on a gable end, the rakes (ปั้นลม).
@@ -2326,6 +2367,71 @@ def _roof_shed(rect, z0, s, cols=(), lift=0.0, purlin_step=0.0):
     return out
 
 
+def _front_gable_rect(rect, s):
+    """จั่วซ้อน: the front gable's plan — over the middle 60 % of the
+    first gable end, reaching out past the main roof's overhang."""
+    ov = float(s["overhang"])
+    x0, y0, x1, y1 = rect
+    swap = (y1 - y0) > (x1 - x0)
+    if swap:
+        x0, y0, x1, y1 = y0, x0, y1, x1
+    W = y1 - y0
+    if W < 3.0 or x1 - x0 < 3.0:
+        return None
+    w = W * 0.6
+    yc = (y0 + y1) / 2
+    # long the same way as the main ridge, so its own ridge runs that way too
+    r = (x0 - ov - 0.45, yc - w / 2, max(x0 + 0.8, x0 - ov - 0.45 + w + 0.3), yc + w / 2)
+    return (r[1], r[0], r[3], r[2]) if swap else r
+
+
+def _roof_skirt(rect, z0, s, side, cols=(), lift=0.0):
+    """ทรงไทย: a ปีกนก (skirt) along one long side, from just under the
+    main roof's eave at the wall out to its own eave, at SKIRT_PITCH."""
+    ov = float(s["overhang"])
+    tan = math.tan(math.radians(SKIRT_PITCH))
+    x0, y0, x1, y1 = rect
+    swap = (y1 - y0) > (x1 - x0)
+    if swap:
+        x0, y0, x1, y1 = y0, x0, y1, x1
+
+    def P3(x, y, z):
+        return (y, x, z) if swap else (x, y, z)
+    wall = y0 if side == 0 else y1
+    sg = -1 if side == 0 else 1                    # outward
+    reach = ov + 0.35                              # past the main eave
+    ztop = z0 + lift - 0.08                        # tucked under it
+    xa, xb = x0 - ov, x1 + ov
+
+    def at(d):                                     # d out from the wall
+        return wall + sg * d, ztop - d * tan
+    out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
+           "skin": [], "eave": [], "barge": [], "tie": [], "rbeam": [],
+           "strut": [], "brace": []}
+    _axis, xs, _st = _rafter_stations((x0, y0, x1, y1) if not swap else (y0, x0, y1, x1),
+                                      dict(s, roof="gable"), cols)
+    yi, zi = at(-0.05)
+    yo, zo = at(reach)
+    for x in xs:
+        out["rafter"].append([P3(x, yi, zi), P3(x, yo, zo)])
+    _sp, psp = roof_spacing(s)
+    n_ = max(int(math.ceil(reach / max(psp, 0.2) - 1e-9)), 1)
+    for i in range(n_ + 1):
+        yy, zz = at(0.05 + (reach - 0.10) * i / n_)
+        out["purlin"].append({"closed": False, "path": [P3(xa, yy, zz), P3(xb, yy, zz)]})
+    e = [P3(xa, yi, zi), P3(xb, yi, zi), P3(xb, yo, zo), P3(xa, yo, zo)]
+    out["eave"] = [[e[3], e[2]]]
+    out["barge"] = [[e[0], e[3]], [e[1], e[2]]]
+    out["skin"] = [e if side == 1 else [e[1], e[0], e[3], e[2]]]
+    lo, hi_ = sorted((yi, yo))
+    box = (xa, lo, xb, hi_)
+    out["box"] = (box[1], box[0], box[3], box[2]) if swap else box
+    out["tie"] = [[] for _ in xs]
+    out["strut"] = [[] for _ in xs]
+    out["brace"] = [[] for _ in xs]
+    return out
+
+
 def roof_lines(data):
     """The roof frame as lines: {"ridge": [...], "hip": [...], "rafter":
     [...], "purlin": [{"path", "closed"}…], "post": [...], "skin":
@@ -2381,10 +2487,33 @@ def roof_lines(data):
         grid[ax_] += xs_
     if s.get("roof") == "shed":
         parts = [_roof_shed(rect, z0, s, cols, lift, pstep) for rect in rects]
+    elif s.get("roof") == "thai":
+        # ทรงไทย: a steep gable over the walls (a short overhang) and a
+        # gentler ปีกนก on both long sides, tucked under its eave
+        sm = dict(s, roof="gable", pitch=max(float(s["pitch"]), THAI_PITCH),
+                  overhang=min(ov, 0.40))
+        parts = [_roof_rect(rect, z0, sm, (), cols, lift, 0.0, grid) for rect in rects]
+        for rect in rects:
+            for side in (0, 1):
+                parts.append(_roof_skirt(rect, z0, s, side, cols, lift))
+        rects = rects + [r for r in rects for _side in (0, 1)]
+    elif s.get("roof") == "double":
+        # จั่วซ้อน: the main gable, and in front of its first gable end a
+        # second, narrower and lower gable whose ridge runs the same way
+        parts, extra = [], []
+        for i, rect in enumerate(rects):
+            parts.append(_roof_rect(rect, z0, dict(s, roof="gable"), boxes[:i], cols, lift,
+                                    pstep, grid))
+            fr = _front_gable_rect(rect, s)
+            if fr is not None:
+                drop = 0.35 * math.tan(math.radians(float(s["pitch"]))) + 0.30
+                parts.append(_roof_rect(fr, z0 - drop, dict(s, roof="gable"), [], (), lift, 0.0))
+                extra.append(fr)
+        rects = rects + extra
     else:
         parts = [_roof_rect(rect, z0, s, boxes[:i], cols, lift, pstep, grid)
                  for i, rect in enumerate(rects)]
-    roofs = [RC.Roof((r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
+    roofs = [RC.Roof(part.get("box") or (r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov),
                      part["skin"]) for r, part in zip(rects, parts)]
     many = len(rects) > 1
     kept = {}
@@ -2911,12 +3040,12 @@ def roof_members(data) -> tuple[list, dict]:
                             ifc="IfcMember", key=f"{names[kind]} {sizes[kind]}",
                             name=f"{names[kind]} {sizes[kind]}"
                                  f"{' (วางคู่)' if dbl else ''} · ยาว {L:.2f} ม.",
-                            info=[("ชนิด", f"{names[kind]} (โครงหลังคาเหล็ก)"),
+                            info=[("ชนิด", f"{names[kind]} ({frame_word(sizes[kind])})"),
                                   ("หน้าตัด", sizes[kind] + (" วางคู่ (2 ตัวประกบ)"
                                                             if dbl else " วางเดี่ยว")),
                                   ("ความยาว", f"{L:.2f} ม."),
                                   ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
-                                  ("รายการ BOQ", "โครงหลังคาเหล็ก + ทาสีกันสนิม")])
+                                  ("รายการ BOQ", frame_boq(sizes[kind]))])
                 if kind in ("rafter", "hip", "valley", "ridge"):
                     g = cut_member(g, path, _end_planes(
                         path, creases, widths if kind == "rafter" else no_width))
@@ -2947,10 +3076,10 @@ def roof_members(data) -> tuple[list, dict]:
                 g2 = _member("roof", kind, label, fam, params, path, anchor="tc",
                              offset=(-bw_ / 2, 0.0), mirror=True, ifc="IfcMember",
                              key=f"{label} {s[key]}", name=f"{label} {s[key]} (วางคู่) · ยาว {L:.2f} ม.",
-                             info=[("ชนิด", f"{label} (โครงหลังคาเหล็ก)"),
+                             info=[("ชนิด", f"{label} ({frame_word(s[key])})"),
                                    ("หน้าตัด", f"{s[key]} วางคู่ (2 ตัวประกบ)"),
                                    ("ความยาว", f"{L:.2f} ม."),
-                                   ("รายการ BOQ", "หมวด 5 งานโครงสร้างเหล็ก")])
+                                   ("รายการ BOQ", frame_boq(s[key], "หมวด 5 งานโครงสร้างเหล็ก"))])
                 if g2 is not None:
                     add(cut_member(g2, path, mitre_planes(path, lines.get("plate") or [])), kind)
             g = _member("roof", kind, label, fam, params, path,
@@ -2960,11 +3089,11 @@ def roof_members(data) -> tuple[list, dict]:
                         if kind == "wallplate" and s.get("dbl_wallplate") else (0.0, 0.0),
                         ifc="IfcMember", key=f"{label} {s[key]}",
                         name=f"{label} {s[key]} · ยาว {L:.2f} ม.",
-                        info=[("ชนิด", f"{label} (โครงหลังคาเหล็ก)"),
+                        info=[("ชนิด", f"{label} ({frame_word(s[key])})"),
                               ("หน้าที่", why), ("หน้าตัด", s[key]),
                               ("ความยาว", f"{L:.2f} ม."),
                               ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
-                              ("รายการ BOQ", "หมวด 5 งานโครงสร้างเหล็ก")])
+                              ("รายการ BOQ", frame_boq(s[key], "หมวด 5 งานโครงสร้างเหล็ก"))])
             if g is not None and kind == "strut":
                 head_to_rafter(g, path, lines["skin"], lift_of(s) / math.cos(
                     math.radians(float(s["pitch"]))))
@@ -2992,10 +3121,10 @@ def roof_members(data) -> tuple[list, dict]:
                     anchor="bc", ifc="IfcMember", closed=pl["closed"],
                     key=f"แป {s['purlin']}",
                     name=f"แป {s['purlin']} · ยาว {L:.2f} ม.",
-                    info=[("ชนิด", "แป (โครงหลังคาเหล็ก)"),
+                    info=[("ชนิด", f"แป ({frame_word(s['purlin'])})"),
                           ("หน้าตัด", s["purlin"]), ("ความยาว", f"{L:.2f} ม."),
                           ("น้ำหนัก", f"{L * kgm:.2f} กก."),
-                          ("รายการ BOQ", "โครงหลังคาเหล็ก + ทาสีกันสนิม")])
+                          ("รายการ BOQ", frame_boq(s["purlin"]))])
         if not pl["closed"] and len(pl["path"]) == 2:
             g = cut_member(g, pl["path"], _end_planes(pl["path"], creases))
         add(g, "purlin")
@@ -4262,8 +4391,12 @@ def takeoff_rates(data) -> list[dict]:
         if label in seen:
             continue
         seen.add(label)
-        add("งานหลังคา", f"4.{i + 1}", f"โครงหลังคาเหล็ก {label}", label,
-            "steel_kg", "กก.")
+        if is_timber(sizes[kind]):
+            add("งานหลังคา", f"4.{i + 1}", f"โครงหลังคาไม้ {label}", label,
+                "volume", "ลบ.ม.")
+        else:
+            add("งานหลังคา", f"4.{i + 1}", f"โครงหลังคาเหล็ก {label}", label,
+                "steel_kg", "กก.")
     if s.get("skin"):
         add("งานหลังคา", "4.9", "มุงหลังคา (พื้นที่ตามแนวลาด)", "หลังคา",
             "top_area", "ตร.ม.")

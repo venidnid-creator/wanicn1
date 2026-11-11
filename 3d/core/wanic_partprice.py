@@ -180,6 +180,8 @@ def unit_rates(data) -> dict:
         Q.recipe_price("2.2", prices)[0]
     r = {"concrete": (conc_mat, labour.get(conc_lab, 0.0), "ลบ.ม.", conc_lab,
                       "คอนกรีต (ไม่รวมไม้แบบ เหล็กเสริม)")}
+    r["timber"] = (prices.get("ไม้เนื้อแข็ง (โครงหลังคา)", 0.0), 0.0, "ลบ.ฟ.", "",
+                   "ไม้โครงหลังคา (ไม่รวมน้ำยากันปลวก)")
     steel = prices.get("เหล็กรูปพรรณ (ทั่วไป)", 0.0)
     r["steel"] = (steel, labour.get("1.11.1", 0.0), "กก.", "1.11.1",
                   "เหล็กรูปพรรณ (ไม่รวมสีกันสนิม)")
@@ -217,9 +219,11 @@ def _qty(g, kind, info) -> tuple:
     v = _vol(g)
     if kind in CONCRETE_KINDS:
         return "concrete", v
-    if kind in STEEL_KINDS:
-        return "steel", v * STEEL_KG_M3
     rows = dict(info)
+    if kind in STEEL_KINDS:
+        if "ไม้" in str(rows.get("ขนาด", "")) or "ไม้" in str(rows.get("หน้าตัด", "")):
+            return "timber", v * 35.3147                 # ลบ.ฟ. of timber
+        return "steel", v * STEEL_KG_M3
     if kind == "wall":
         t = B.wall_spec({**B.DEFAULT_SETTINGS}, True)["t"]
         try:

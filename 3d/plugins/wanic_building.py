@@ -2565,6 +2565,15 @@ class BuildingPanel(QWidget):
             self.roof.addItem(v, k)
         self.roof.currentIndexChanged.connect(lambda _i: self._save_settings())
         rff.addRow("แบบหลังคา", self.roof)
+        fm = QWidget()
+        fml = QHBoxLayout(fm)
+        fml.setContentsMargins(0, 0, 0, 0)
+        for text, preset in (("โครงเหล็กรูปพรรณ", B.STEEL_FRAME), ("โครงไม้", B.TIMBER_FRAME)):
+            b = QPushButton(text)
+            b.setToolTip("ตั้งขนาดชิ้นส่วนโครงหลังคาทั้งชุดตามแบบมาตรฐาน — แก้รายชิ้นได้ด้านล่าง")
+            b.clicked.connect(lambda _=False, pr=preset: self._frame_preset(pr))
+            fml.addWidget(b)
+        rff.addRow("วัสดุโครงหลังคา", fm)
         self.roof_mode = QComboBox()
         self.roof_mode.addItem("ตามรูปผัง (ตัว L / T มีราง)", "plan")
         self.roof_mode.addItem("คลุมกรอบสี่เหลี่ยมทั้งหลัง", "bbox")
@@ -3466,6 +3475,20 @@ class BuildingPanel(QWidget):
         finally:
             self._loading = False
         self.canvas.update()
+
+    def _frame_preset(self, preset):
+        """โครงเหล็ก / โครงไม้: every roof member's section at once."""
+        self._loading = True
+        try:
+            for k, label in preset.items():
+                c = self.steel.get(k)
+                if c is not None:
+                    i = c.findText(label)
+                    if i >= 0:
+                        c.setCurrentIndex(i)
+        finally:
+            self._loading = False
+        self._save_settings()
 
     def schedule(self):
         if not self._loading and self.canvas._drag is None:
