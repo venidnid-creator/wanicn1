@@ -22,12 +22,15 @@ def sample(tmp_path):
 
 def test_the_first_account_signs_in_and_nothing_else_does(tmp_path):
     users = tmp_path / "users.json"
-    assert auth.check("Wanicn", "Thommawogn", users)
-    assert not auth.check("Wanicn", "thommawogn", users)
-    assert not auth.check("wanicn2", "Thommawogn", users)
+    assert auth.check("Wanicn", "Thammawong", users)
+    assert not auth.check("Wanicn", "Thommawogn", users)               # the old password
+    assert not auth.check("wanicn2", "Thammawong", users)
+    token = auth.remember_token("Wanicn", users)
+    assert auth.check_token("Wanicn", token, users) and not auth.check_token("Wanicn", "x", users)
     auth.set_password("Wanicn", "ใหม่1234", users)
-    assert auth.check("Wanicn", "ใหม่1234", users) and not auth.check("Wanicn", "Thommawogn", users)
-    assert "Thommawogn" not in users.read_text()
+    assert auth.check("Wanicn", "ใหม่1234", users) and not auth.check("Wanicn", "Thammawong", users)
+    assert not auth.check_token("Wanicn", token, users)                  # a new password forgets
+    assert "ใหม่1234" not in users.read_text()
 
 
 def test_combine_and_compress_at_three_levels(sample, tmp_path):
@@ -78,14 +81,19 @@ def test_lengths_areas_counts_at_1_100_and_calibrated(tmp_path):
 
 
 def test_new_version_and_download_count():
+    exe = lambda n, v: {"name": f"readwanicn2027-setup-{v}.exe", "download_count": n}
     releases = [
-        {"tag_name": "readwanicn-v2027.1.0", "html_url": "u1", "assets": [{"download_count": 12}]},
-        {"tag_name": "readwanicn-v2027.2.0", "html_url": "u2", "assets": [{"download_count": 5},
-                                                                          {"download_count": 1}]},
-        {"tag_name": "v2026.10.31", "assets": [{"download_count": 999}]},     # the CAD's own
+        {"tag_name": "readwanicn-v2027.1.0", "html_url": "u1", "assets": [
+            exe(12, "2027.1.0"), {"name": update.INSTALL_FILE, "download_count": 7},
+            {"name": update.OPEN_FILE, "download_count": 40}]},
+        {"tag_name": "readwanicn-v2027.2.0", "html_url": "u2", "published_at": "2027-03-05T02:00:00Z",
+         "assets": [exe(5, "2027.2.0"), exe(1, "2027.2.0"), {"name": update.OPEN_FILE, "download_count": 3}]},
+        {"tag_name": "v2026.10.31", "assets": [{"name": "x.exe", "download_count": 999}]},   # the CAD's own
     ]
     info = update.parse(releases, "2027.1.0")
     assert info.downloads == 18 and info.latest == "2027.2.0" and info.newer and info.url == "u2"
+    assert info.latest_downloads == 6 and info.users == 7 and info.opens == 43
+    assert info.published_th == "5 มี.ค. 2570"
     assert not update.parse(releases, "2027.2.0").newer
 
 
@@ -97,7 +105,7 @@ def test_the_window_opens_measures_and_switches_themes(sample, tmp_path):
     QApplication.instance() or QApplication([])
     login = LoginDialog(users_path=tmp_path / "u.json")
     login.name.setText("Wanicn")
-    login.password.setText("Thommawogn")
+    login.password.setText("Thammawong")
     login.try_login()
     assert login.user == "Wanicn"
     w = MainWindow("Wanicn")
@@ -154,3 +162,30 @@ def test_the_expired_dialog_takes_the_code(tmp_path):
     d.try_code()
     assert not lic.expired
     support_panel().grab()
+
+
+def test_remember_password_signs_in_without_typing(tmp_path):
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+
+    from readwanicn.ui import LoginDialog
+    QApplication.instance() or QApplication([])
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.IniFormat)
+    users = tmp_path / "u.json"
+    first = LoginDialog(users_path=users, settings=settings, fetch=False)
+    first.name.setText("Wanicn")
+    first.password.setText("Thammawong")
+    first.remember.setChecked(True)
+    first.try_login()
+    assert first.user == "Wanicn"
+    settings.sync()
+    assert "Thammawong" not in open(tmp_path / "s.ini", encoding="utf-8").read()
+    again = LoginDialog(users_path=users, settings=settings, fetch=False)
+    assert again.name.text() == "Wanicn" and again.remember.isChecked()
+    again.try_login()
+    assert again.user == "Wanicn"
+    # unticked: the next time asks for the password
+    again.remember.setChecked(False)
+    again.try_login()
+    third = LoginDialog(users_path=users, settings=settings, fetch=False)
+    assert third.password.text() == "" and not third.remember.isChecked()

@@ -115,6 +115,13 @@ jobs:
           path: dist/readwanicn2027-setup-*.exe
           if-no-files-found: error
 
+      - name: Usage files (computers ever / openings, counted by GitHub)
+        if: (github.ref_type == 'tag' || inputs.release) && steps.prep.outputs.key == 'set'
+        shell: bash
+        run: |
+          printf 'ReadWanicn2027 usage counter: first opening on a computer.\n' > dist/readwanicn-usage-install.txt
+          printf 'ReadWanicn2027 usage counter: the program was opened.\n' > dist/readwanicn-usage-open.txt
+
       - name: Publish the GitHub Release
         if: (github.ref_type == 'tag' || inputs.release) && steps.prep.outputs.key == 'set'
         uses: softprops/action-gh-release@v2
@@ -126,4 +133,7 @@ jobs:
             ## ReadWanicn2027 ${{ steps.prep.outputs.version }}
             โปรแกรม PDF สำหรับใช้งานภายในองค์กร — ดาวน์โหลด readwanicn2027-setup-….exe ด้านล่างแล้วดับเบิลคลิกเพื่อติดตั้ง (Windows 10/11 64 บิต)
             - ถ้า Windows ขึ้นว่า "Windows protected your PC" ให้กด More info ▸ Run anyway
-          files: dist/readwanicn2027-setup-*.exe
+          files: |
+            dist/readwanicn2027-setup-*.exe
+            dist/readwanicn-usage-install.txt
+            dist/readwanicn-usage-open.txt

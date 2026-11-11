@@ -75,17 +75,20 @@ class WelcomeScreen(QDialog):
 
 
 class LoginDialog(QDialog):
-    def __init__(self, parent=None, users_path=None):
+    PLACEHOLDER = "\u2022" * 10          # the remembered password, never the real one
+
+    def __init__(self, parent=None, users_path=None, settings=None, fetch=True):
         super().__init__(parent)
         self.users_path = users_path
+        self.settings = settings or QSettings("WANICNSURVEY", APP_NAME)
         self.user = ""
         self.setWindowTitle(f"{APP_NAME} — เข้าสู่ระบบ")
         self.setWindowIcon(QIcon(asset("logo.ico")))
-        self.setFixedWidth(400)
+        self.setFixedWidth(420)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 22, 28, 22)
+        lay.setContentsMargins(28, 20, 28, 18)
         logo = QLabel()
-        logo.setPixmap(logo_pixmap(96))
+        logo.setPixmap(logo_pixmap(90))
         logo.setAlignment(Qt.AlignCenter)
         lay.addWidget(logo)
         t = QLabel(APP_NAME)
@@ -95,7 +98,7 @@ class LoginDialog(QDialog):
         s = QLabel("เข้าสู่ระบบเพื่อใช้งานภายในองค์กร")
         s.setAlignment(Qt.AlignCenter)
         lay.addWidget(s)
-        lay.addSpacing(8)
+        lay.addSpacing(6)
         lay.addWidget(QLabel("ชื่อผู้ใช้"))
         self.name = QLineEdit()
         self.name.setPlaceholderText("ชื่อผู้ใช้")
@@ -105,6 +108,16 @@ class LoginDialog(QDialog):
         self.password.setEchoMode(QLineEdit.Password)
         self.password.setPlaceholderText("รหัสผ่าน")
         lay.addWidget(self.password)
+        from PySide6.QtWidgets import QCheckBox
+        row = QHBoxLayout()
+        self.remember = QCheckBox("จำรหัสผ่าน")
+        row.addWidget(self.remember)
+        self.show_pw = QCheckBox("แสดงรหัสผ่าน")
+        self.show_pw.toggled.connect(lambda on: self.password.setEchoMode(
+            QLineEdit.Normal if on and self.password.text() != self.PLACEHOLDER else QLineEdit.Password))
+        row.addWidget(self.show_pw)
+        row.addStretch(1)
+        lay.addLayout(row)
         self.error = QLabel("")
         self.error.setStyleSheet("color:#DC2626;")
         lay.addWidget(self.error)
@@ -114,18 +127,122 @@ class LoginDialog(QDialog):
         ok.clicked.connect(self.try_login)
         lay.addWidget(ok)
         self.password.returnPressed.connect(self.try_login)
+        self.password.textEdited.connect(lambda _t: setattr(self, "_token_in_field", False))
         self.tries = 0
+        self._token_in_field = False
+        self.stats = StatsBox(self.settings)
+        lay.addSpacing(6)
+        lay.addWidget(self.stats)
+        self._restore()
+        if fetch:
+            QTimer.singleShot(200, self.stats.refresh)
+
+    def _restore(self):
+        user = str(self.settings.value("login/user", "") or "")
+        token = str(self.settings.value("login/token", "") or "")
+        if user:
+            self.name.setText(user)
+        if user and auth.check_token(user, token, self.users_path):
+            self.remember.setChecked(True)
+            self.password.setText(self.PLACEHOLDER)
+            self._token_in_field = True
 
     def try_login(self):
-        if auth.check(self.name.text(), self.password.text(), self.users_path):
-            self.user = self.name.text().strip()
+        name = self.name.text().strip()
+        ok = (self._token_in_field and self.password.text() == self.PLACEHOLDER and
+              auth.check_token(name, str(self.settings.value("login/token", "")), self.users_path))
+        ok = ok or auth.check(name, self.password.text(), self.users_path)
+        if ok:
+            self.user = name
+            self.settings.setValue("login/user", name)
+            self.settings.setValue("login/token", auth.remember_token(name, self.users_path)
+                                   if self.remember.isChecked() else "")
             self.accept()
             return
         self.tries += 1
         self.password.clear()
+        self._token_in_field = False
         self.error.setText("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" + (" (ลองครั้งที่ %d/5)" % self.tries))
         if self.tries >= 5:
             self.reject()
+
+
+class StatsBox(QFrame):
+    """«สถิติผู้ใช้โปรแกรม»: the latest version and its date, the version in
+    use, downloads in all and of the latest, computers that ever opened the
+    program and the openings -- counted by GitHub on the program's releases."""
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+        self.setObjectName("Stats")
+        self.setStyleSheet("QFrame#Stats { border: 1px solid #3A5876; border-radius: 10px; }"
+                           "QFrame#Stats QLabel { background: transparent; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(2)
+        head = QLabel("📊 <b>สถิติผู้ใช้โปรแกรม</b>")
+        lay.addWidget(head)
+        self.body = QLabel("กำลังอ่านข้อมูล…")
+        self.body.setWordWrap(True)
+        self.body.setTextFormat(Qt.RichText)
+        lay.addWidget(self.body)
+        self.link = QLabel("<a href='#' style='color:#5AA9FF'>↻ อัปเดตตัวเลข</a>")
+        self.link.setAlignment(Qt.AlignRight)
+        self.link.linkActivated.connect(lambda _h: self.refresh())
+        lay.addWidget(self.link)
+        cached = self.settings.value("stats/cache", "")
+        if cached:
+            try:
+                self.show_info(update.ReleaseInfo(**json.loads(cached)), cached=True)
+            except Exception:
+                pass
+
+    def refresh(self):
+        if os.environ.get("READWANICN_OFFLINE"):
+            self.body.setText(self.body.text() if self.settings.value("stats/cache") else
+                              "ยังไม่มีข้อมูล (ออฟไลน์)")
+            return
+        result = {}
+
+        def work():
+            try:
+                result["info"] = update.fetch()
+                update.ping(self.settings, result["info"])
+            except Exception as e:
+                result["error"] = e
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+
+        def poll():
+            if th.is_alive():
+                QTimer.singleShot(300, poll)
+                return
+            if "info" in result:
+                self.settings.setValue("stats/cache", json.dumps(result["info"].__dict__))
+                self.show_info(result["info"])
+            elif not self.settings.value("stats/cache"):
+                self.body.setText("ยังไม่มีข้อมูล (ออฟไลน์)")
+        QTimer.singleShot(300, poll)
+
+    def show_info(self, info, cached=False):
+        lines = []
+        if info.latest:
+            day = f" ({info.published_th})" if getattr(info, "published_th", "") else ""
+            lines.append(f"<span style='color:#E7A93B'>ปรับปรุงล่าสุด v{info.latest}{day}</span>")
+            state = "✓ เป็นรุ่นล่าสุดแล้ว" if not info.newer else "⬇ มีรุ่นใหม่ให้ดาวน์โหลด"
+            lines.append(f"<span style='color:#5AA9FF'>รุ่นที่ใช้อยู่: v{VERSION} {state}</span>")
+        else:
+            lines.append(f"รุ่นที่ใช้อยู่: v{VERSION}")
+        lines.append(f"ดาวน์โหลดสะสม <b>{info.downloads:,}</b> ครั้ง")
+        if info.latest:
+            lines.append(f"รุ่นล่าสุด v{info.latest}: {info.latest_downloads:,} ครั้ง")
+        lines.append(f"ผู้ใช้งานสะสม <b>{info.users:,}</b> คน (เครื่องที่เคยเปิดใช้)")
+        lines.append(f"เปิดใช้งานสะสม {info.opens:,} ครั้ง")
+        if info.fetched:
+            lines.append(f"<span style='color:#8FA8C2'>ข้อมูล ณ {info.fetched}"
+                         f"{' (ล่าสุดที่อ่านได้)' if cached else ''}</span>")
+        self.body.setText("<br>".join(lines))
 
 
 # -- dialogs ------------------------------------------------------------------------
@@ -510,9 +627,9 @@ class MainWindow(QMainWindow):
                 ("หมุนหน้า", "⟳", "หมุนหน้า 90°", self.rotate_page),
                 ("ลบไฟล์", "🗑", "ปิดไฟล์ออกจากรายการ หรือลบไฟล์ทิ้ง", self.delete_file),
                 None,
-                ("ส่งออก Excel", "📊", "ข้อความและตารางในเอกสารเป็น Excel", lambda: self.export("xlsx")),
-                ("ส่งออก CSV", "🧾", "ข้อความและตารางในเอกสารเป็น CSV", lambda: self.export("csv")),
-                ("ส่งออก Word", "📄", "ข้อความและตารางในเอกสารเป็น Word", lambda: self.export("docx"))]
+                ("ส่งออกตารางคำนวณ", "📊", "ข้อความและตารางในเอกสารเป็นไฟล์ตารางคำนวณ (.xlsx)", lambda: self.export("xlsx")),
+                ("ส่งออกตารางข้อมูล", "🧾", "ข้อความและตารางในเอกสารเป็นไฟล์ข้อมูลคั่นด้วยจุลภาค (.csv)", lambda: self.export("csv")),
+                ("ส่งออกเอกสาร", "📄", "ข้อความและตารางในเอกสารเป็นไฟล์เอกสาร (.docx)", lambda: self.export("docx"))]
         buttons = []
         for item in spec:
             if item is None:
@@ -534,7 +651,7 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self.set_tool(k))
             self.tool_buttons[key] = b
             buttons.append(b)
-        rep = _button("รายงาน Excel", "📈", "รายงานงานวัดเป็น Excel (หรือ CSV)")
+        rep = _button("รายงานงานวัด", "📈", "รายงานงานวัดเป็นไฟล์ตารางคำนวณ (.xlsx) หรือ .csv")
         rep.clicked.connect(lambda: self._safe(self.report))
         buttons += [rep, None]
         for text, icon, fn in (("ย่อ", "➖", lambda: self.zoom_by(1 / 1.25)),):
@@ -548,7 +665,7 @@ class MainWindow(QMainWindow):
         buttons.append(self.zoom_label)
         for text, icon, tip, fn in (("ขยาย", "➕", "ขยาย", lambda: self.zoom_by(1.25)),
                                     ("พอดีจอ", "⛶", "ย่อ/ขยายให้พอดีหน้าจอ", self.fit),
-                                    ("โมเดล 3D", "🧊", "ดูและหมุนโมเดล 3 มิติ", self.show_3d)):
+                                    ("โมเดล 3 มิติ", "🧊", "ดูและหมุนโมเดล 3 มิติ", self.show_3d)):
             b = _button(text, icon, tip)
             b.clicked.connect(fn)
             buttons.append(b)
@@ -636,7 +753,7 @@ class MainWindow(QMainWindow):
         l3.addWidget(self.model, 1)
         self.spin = QTimer(self)
         self.spin.timeout.connect(lambda: self.model.rotate(1.5))
-        self.tabs.addTab(w3, "โมเดล 3D")
+        self.tabs.addTab(w3, "โมเดล 3 มิติ")
         return self.tabs
 
     def _right_panel(self):
@@ -922,7 +1039,7 @@ class MainWindow(QMainWindow):
         f = self._need()
         if not f:
             return
-        flt = {"xlsx": "Excel (*.xlsx)", "csv": "CSV (*.csv)", "docx": "Word (*.docx)"}[kind]
+        flt = {"xlsx": "ตารางคำนวณ (*.xlsx)", "csv": "ตารางข้อมูล (*.csv)", "docx": "เอกสาร (*.docx)"}[kind]
         path = self._save_path("ส่งออก", f"{Path(f.path).stem}.{kind}", flt)
         if not path:
             return
@@ -1044,7 +1161,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "รายงาน", "ยังไม่มีรายการวัด")
             return
         path, flt = QFileDialog.getSaveFileName(self, "รายงานงานวัด", str(Path(self._dir()) / "รายงานงานวัด.xlsx"),
-                                                "Excel (*.xlsx);;CSV (*.csv)")
+                                                "ตารางคำนวณ (*.xlsx);;ตารางข้อมูล (*.csv)")
         if not path:
             return
         if path.lower().endswith(".csv"):
