@@ -23,7 +23,7 @@ from core import wanic_rc as R
 TITLE = "ออกแบบโครงสร้าง คสล."
 STEPS = [("grid", "1  กริด / เส้นแกน"), ("footing", "2  ฐานราก + เข็ม"), ("stump", "3  ตอม่อ"),
          ("ground", "4  คานคอดิน"), ("slab", "5  พื้น คสล."), ("upper", "6  เสา + คาน"),
-         ("roof", "7  โครงหลังคา"), ("rebar", "8  เหล็กเสริม/BOQ")]
+         ("roof", "7  โครงหลังคา"), ("rebar", "8  เหล็กเสริม/BOQ"), ("calc", "9  คำนวณโครงสร้าง")]
 #: which library marks each step edits, and which parts of the model it selects
 STEP_MARKS = {"footing": ("footing",), "stump": ("stump",), "ground": ("beam:ground",),
               "slab": ("slab",), "upper": ("column", "beam:upper")}
@@ -72,6 +72,11 @@ class RCPanel(QWidget):
         self.checks.setReadOnly(True)
         self.checks.setMinimumHeight(120)
         col.addWidget(self.checks, 1)
+        from core.wanic_calc_view import DiagramWidget
+        self.diagram = DiagramWidget()
+        self.diagram.setMinimumHeight(300)
+        col.addWidget(self.diagram, 2)
+        self._calc = None
         row = QHBoxLayout()
         self.fix = QPushButton("ปรับเหล็กให้ผ่านขั้นต่ำ")
         self.fix.setToolTip("เพิ่มจำนวนเหล็ก / ลดระยะเรียง / เพิ่มขนาดเหล็ก ให้เบอร์ที่เลือกผ่านการตรวจ "
@@ -88,6 +93,13 @@ class RCPanel(QWidget):
         self.export_btn = QPushButton("รายงานโครงสร้าง (.xlsx)")
         self.export_btn.clicked.connect(self.export)
         row.addWidget(self.export_btn)
+        self.basis_btn = QPushButton("ค่าที่ใช้ออกแบบ…")
+        self.basis_btn.setToolTip("วิธีออกแบบ SDM/WSD · fc′ · fy · น้ำหนักบรรทุกจร · ดิน · เสาเข็ม")
+        self.basis_btn.clicked.connect(self.edit_basis)
+        row.addWidget(self.basis_btn)
+        self.pdf_btn = QPushButton("รายการคำนวณ (.pdf)")
+        self.pdf_btn.clicked.connect(self.export_pdf)
+        row.addWidget(self.pdf_btn)
         row.addStretch(1)
         col.addLayout(row)
         self.roof_row = QWidget()
@@ -171,6 +183,12 @@ class RCPanel(QWidget):
         self.title.setText(label)
         self.roof_row.setVisible(self.step == "roof")
         self.fix.setVisible(self.step in STEP_MARKS)
+        calc = self.step == "calc"
+        self.diagram.setVisible(calc)
+        self.checks.setVisible(not calc)
+        self.basis_btn.setVisible(calc)
+        self.pdf_btn.setVisible(calc)
+        self.select_btn.setVisible(not calc and self.step != "rebar")
         self._loading = True
         try:
             if self.step == "grid":
@@ -179,6 +197,8 @@ class RCPanel(QWidget):
                 self._roof(E)
             elif self.step == "rebar":
                 self._rebar(E)
+            elif self.step == "calc":
+                self._calc_step()
             else:
                 self._members(E)
         finally:
@@ -282,7 +302,43 @@ class RCPanel(QWidget):
                           f"ทาบเหล็ก 40d (DB) / 48d (RB) · "
                           + (f"⚠ เบอร์ที่ยังไม่ผ่านการตรวจ: {', '.join(bad)}" if bad else "✓ ทุกเบอร์ผ่านการตรวจ"))
 
+    def _calc_step(self):
+        from core import wanic_calc as C
+        try:
+            self._calc = C.analyse(self.data())
+        except Exception as e:                       # noqa: BLE001 - shown, never a crash
+            self._calc = None
+            self._fill(["ข้อผิดพลาด"], [(f"คำนวณไม่ได้: {e}",)])
+            return
+        names = {"roof": "หลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก/เข็ม"}
+        ms = self._calc["members"]
+        rows = [(names[m.group], m.name, m.demand, m.capacity, f"{m.ratio:.2f}",
+                 "✓ ผ่าน" if m.ok else "✗ ไม่ผ่าน") for m in ms]
+        self._fill(["กลุ่ม", "ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล"], rows)
+        for r, m in enumerate(ms):
+            for c in (4, 5):
+                self.table.item(r, c).setForeground(QColor("#15803D") if m.ok else QColor("#B91C1C"))
+        self.table.setProperty("marks", [])
+        b_ = self._calc["basis"]
+        bad = sum(1 for m in ms if not m.ok)
+        self.note.setText(
+            f"{b_['method']} · fc′ {b_['fc']:g} · LL พื้น {b_['ll_floor']:g} / หลังคา {b_['ll_roof']:g} กก./ตร.ม. · "
+            f"ดิน {b_['soil']:g} ตัน/ตร.ม. · เข็ม {b_['pile_cap']:g} ตัน/ต้น — "
+            + (f"✗ ไม่ผ่าน {bad} รายการ: แก้ขนาด/เหล็กในขั้น 2–6 แล้วคำนวณใหม่" if bad else "✓ ผ่านทุกรายการ")
+            + "\nเครื่องมือช่วยคำนวณ — ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจและลงนามก่อนก่อสร้าง")
+        first = next((i for i, m in enumerate(ms) if m.diagram is not None), -1)
+        if first >= 0:
+            self.table.setCurrentCell(first, 1)
+
     def _show_checks(self):
+        if self.step == "calc":
+            r = self.table.currentRow()
+            ms = (self._calc or {}).get("members") or []
+            if 0 <= r < len(ms) and ms[r].diagram is not None:
+                self.diagram.show_result(ms[r].diagram, ms[r].name)
+            else:
+                self.diagram.show_result(None)
+            return
         marks = self.table.property("marks") or []
         r = self.table.currentRow()
         if not marks:
@@ -390,6 +446,63 @@ class RCPanel(QWidget):
         self.app.viewport.update()
         self.status.setText(f"เลือก {len(out)} ชิ้นในโมเดล" if out else
                             "ยังไม่มีชิ้นส่วนนี้ในโมเดล — กด «สร้าง/อัปเดตโครงสร้างในโมเดล» ก่อน")
+
+    def edit_basis(self):
+        from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout
+        from core import wanic_calc as C
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        b_ = C.basis(d)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("ค่าที่ใช้ออกแบบ")
+        form = QFormLayout(dlg)
+        meth = QComboBox()
+        meth.addItem("กำลัง (SDM) วสท. 011008", "SDM")
+        meth.addItem("หน่วยแรงใช้งาน (WSD)", "WSD")
+        meth.setCurrentIndex(0 if b_["method"] == "SDM" else 1)
+        form.addRow("วิธีออกแบบคอนกรีต", meth)
+        spins = {}
+        for key, th, lo, hi in (("fc", "fc′ คอนกรีต (กก./ตร.ซม.)", 150, 500),
+                                ("ll_floor", "น้ำหนักบรรทุกจรพื้น (กก./ตร.ม.)", 0, 1000),
+                                ("ll_roof", "น้ำหนักบรรทุกจรหลังคา (กก./ตร.ม.)", 0, 200),
+                                ("finish", "วัสดุปูพื้น + ฝ้า (กก./ตร.ม.)", 0, 300),
+                                ("wall_kg_m2", "ผนัง (กก./ตร.ม.)", 0, 500),
+                                ("soil", "ดินรับน้ำหนักปลอดภัย (ตัน/ตร.ม.)", 1, 100),
+                                ("pile_cap", "เสาเข็มรับน้ำหนักปลอดภัย (ตัน/ต้น)", 1, 200),
+                                ("fy_steel", "Fy เหล็กรูปพรรณ (กก./ตร.ซม.)", 1000, 5000)):
+            sp_ = QDoubleSpinBox()
+            sp_.setRange(lo, hi)
+            sp_.setDecimals(1)
+            sp_.setValue(float(b_[key]))
+            spins[key] = sp_
+            form.addRow(th, sp_)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        box.button(QDialogButtonBox.Ok).setText("ตกลง")
+        box.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
+        box.accepted.connect(dlg.accept)
+        box.rejected.connect(dlg.reject)
+        form.addRow(box)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        calc = dict(d.get("calc") or {})
+        calc["method"] = meth.currentData()
+        for k, sp_ in spins.items():
+            calc[k] = sp_.value()
+        d["calc"] = calc
+        bp._write(d)
+        self.refresh()
+
+    def export_pdf(self):
+        from core import wanic_calc as C
+        from core.wanic_calc_view import report_pdf
+        path, _ = QFileDialog.getSaveFileName(self, "รายการคำนวณโครงสร้าง", "รายการคำนวณโครงสร้าง.pdf",
+                                              "PDF (*.pdf)")
+        if not path:
+            return
+        report_pdf(C.analyse(self.data()), self.data(), path)
+        self.status.setText(f"บันทึกรายการคำนวณแล้ว: {path}")
 
     def export(self):
         path, _ = QFileDialog.getSaveFileName(self, "รายงานโครงสร้าง คสล.", "โครงสร้าง คสล.xlsx",
