@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 from .measure import Measurement
+from .snap import KINDS as SNAP_KINDS, Snapper
 
 #: Screen pixels per PDF point at 100 % (a PDF point is 1/72 inch, a screen 96 dpi).
 PX_PER_PT = 96.0 / 72.0
@@ -50,9 +51,45 @@ class PdfCanvas(QWidget):
         #: For the edit tool: pt -> (x0, y0, x1, y1) of the text or picture under it, or None.
         self.probe = None
         self._hover = None
+        #: ยึดจุด: snap the measuring clicks to the drawing's lines (F3 turns it off and on, Shift = free).
+        self.snap_on = True
+        self.snap_hit = None
+        self._snapper = None
+        self._snap_key = None
+        self.snapChanged = None             # callback(bool) for the button
 
     # -- document
+    def invalidate_snap(self):
+        self._snapper = None
+        self._snap_key = None
+
+    def snapper(self):
+        if self.doc is None:
+            return None
+        key = (id(self.doc), self.page_no, self.doc[self.page_no].rotation)
+        if key != self._snap_key:
+            from PySide6.QtWidgets import QApplication
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                self._snapper = Snapper(self.doc[self.page_no])
+            finally:
+                QApplication.restoreOverrideCursor()
+            self._snap_key = key
+        return self._snapper
+
+    def _snap(self, pt, modifiers):
+        """The clicked/hovered point after snapping, and remember what it snapped to."""
+        self.snap_hit = None
+        if not self.snap_on or self.tool not in ("scale", "length", "area", "count") \
+                or modifiers & Qt.ShiftModifier or self.doc is None:
+            return pt
+        sn = self.snapper()
+        hit = sn.find(pt, 12.0 / (PX_PER_PT * self.zoom)) if sn else None
+        self.snap_hit = hit
+        return hit.pt if hit else pt
+
     def set_document(self, doc, page_no: int = 0):
+        self.invalidate_snap()
         self.doc = doc
         self.page_no = page_no
         self.points = []
@@ -102,7 +139,7 @@ class PdfCanvas(QWidget):
             return
         if e.button() != Qt.LeftButton:
             return
-        pt = self.to_pt(e.position())
+        pt = self._snap(self.to_pt(e.position()), e.modifiers())
         if self.tool == "edit":
             self.editAt.emit(*pt)
             return
@@ -126,7 +163,11 @@ class PdfCanvas(QWidget):
             self._drag = e.globalPosition()
             self.panBy.emit(-d.x(), -d.y())
             return
-        self.cursor_pt = self.to_pt(e.position())
+        before = self.snap_hit
+        self.cursor_pt = self._snap(self.to_pt(e.position()), e.modifiers())
+        if (before is None) != (self.snap_hit is None) or (self.snap_hit and before and
+                                                           self.snap_hit.pt != before.pt):
+            self.update()
         if self.tool == "edit" and self.probe is not None:
             hover = self.probe(self.cursor_pt)
             if hover != self._hover:
@@ -149,7 +190,13 @@ class PdfCanvas(QWidget):
             e.ignore()
 
     def keyPressEvent(self, e):
-        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+        if e.key() == Qt.Key_F3:
+            self.snap_on = not self.snap_on
+            self.snap_hit = None
+            if self.snapChanged:
+                self.snapChanged(self.snap_on)
+            self.update()
+        elif e.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.finish()
         elif e.key() == Qt.Key_Escape:
             self.points = []
@@ -193,6 +240,39 @@ class PdfCanvas(QWidget):
             if self.cursor_pt is not None and self.tool != "count":
                 pts.append(self.cursor_pt)
             self._draw(p, self.tool, pts, "", "", live=True)
+        if self.snap_hit is not None:
+            self._draw_snap(p, self.snap_hit)
+
+    def _draw_snap(self, p, hit):
+        c = self.to_px(hit.pt)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor("#00C2FF"), 2))
+        r = 6
+        if hit.kind == "end":
+            p.drawRect(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r))
+        elif hit.kind == "mid":
+            p.drawPolygon(QPolygonF([QPointF(c.x(), c.y() - r), QPointF(c.x() + r, c.y() + r),
+                                     QPointF(c.x() - r, c.y() + r)]))
+        elif hit.kind == "int":
+            p.drawLine(QPointF(c.x() - r, c.y() - r), QPointF(c.x() + r, c.y() + r))
+            p.drawLine(QPointF(c.x() - r, c.y() + r), QPointF(c.x() + r, c.y() - r))
+        elif hit.kind == "cen":
+            p.drawEllipse(c, r, r)
+            p.drawLine(QPointF(c.x() - 2, c.y()), QPointF(c.x() + 2, c.y()))
+        else:
+            p.drawPolygon(QPolygonF([QPointF(c.x(), c.y() - r), QPointF(c.x() + r, c.y()),
+                                     QPointF(c.x(), c.y() + r), QPointF(c.x() - r, c.y())]))
+        label = SNAP_KINDS[hit.kind]
+        f = QFont(self.font())
+        f.setPointSizeF(8.5)
+        p.setFont(f)
+        w = p.fontMetrics().horizontalAdvance(label) + 8
+        box = QRectF(c.x() + 10, c.y() + 8, w, 16)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 120, 170, 210))
+        p.drawRoundedRect(box, 3, 3)
+        p.setPen(QColor("white"))
+        p.drawText(box, Qt.AlignCenter, label)
 
     def _draw(self, p, kind, pts, label, name, live=False):
         color = COLORS.get(kind, QColor("#F59E0B"))

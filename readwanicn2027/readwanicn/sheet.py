@@ -436,7 +436,9 @@ class SheetEditor(QWidget):
         for text, tip, fn in (("📄 ใหม่", "ตารางเปล่า", self.new),
                               ("📂 เปิด", "เปิดตารางคำนวณ (.xlsx) หรือตารางข้อมูล (.csv)", self.open),
                               ("💾 บันทึก", "บันทึกเป็นตารางคำนวณ (.xlsx)", self.save),
-                              ("💾 บันทึกเป็น…", "บันทึกเป็นไฟล์ใหม่ (.xlsx หรือ .csv)", lambda: self.save(True))):
+                              ("💾 บันทึกเป็น…", "บันทึกเป็นไฟล์ใหม่ (.xlsx หรือ .csv)", lambda: self.save(True)),
+                              ("🖨 พิมพ์", "พิมพ์ตารางไปที่เครื่องพิมพ์ (Ctrl+P) ดูตัวอย่างก่อนพิมพ์ได้",
+                               self.print_sheet)):
             row.addWidget(self._tool(text, tip, fn))
         row.addSpacing(12)
         self.reg = QComboBox()
@@ -660,6 +662,52 @@ class SheetEditor(QWidget):
         self.refresh()
         self.reg.setCurrentIndex(0)
         self.record(f"ตารางคำนวณ: {title}")
+
+    # -- printing
+    def to_html(self) -> str:
+        """The used part of the sheet as an HTML table in the Thai font, for printing."""
+        import html as H
+        if not self.book.raw:
+            return "<p></p>"
+        rows = max(r for r, _ in self.book.raw) + 1
+        cols = max(c for _, c in self.book.raw) + 1
+        spans = {(r, c): (h, w) for r, c, h, w in getattr(self, "spans", [])}
+        hidden = {(r + i, c + j) for (r, c), (h, w) in spans.items() for i in range(h) for j in range(w)} - set(spans)
+        out = [f'<table border="1" cellspacing="0" cellpadding="3" style="border-collapse:collapse;'
+               f'font-family:\'{self.family}\'; font-size:14pt;">']
+        for r in range(rows):
+            out.append("<tr>")
+            for c in range(cols):
+                if (r, c) in hidden:
+                    continue
+                st = self.styles.get((r, c), {})
+                text = H.escape(self.book.display(r, c, self.decimals))
+                try:
+                    num = isinstance(self.book.value(r, c), float)
+                except FormulaError:
+                    num = False
+                align = st.get("align") or ("right" if num else "left")
+                if st.get("bold"):
+                    text = f"<b>{text}</b>"
+                if st.get("italic"):
+                    text = f"<i>{text}</i>"
+                h, w = spans.get((r, c), (1, 1))
+                out.append(f'<td align="{align}" rowspan="{h}" colspan="{w}">{text or "&nbsp;"}</td>')
+            out.append("</tr>")
+        out.append("</table>")
+        return "".join(out)
+
+    def print_sheet(self):
+        from PySide6.QtGui import QTextDocument
+        from . import printing
+        cols = max((c for _, c in self.book.raw), default=0) + 1
+
+        def make():
+            d = QTextDocument()
+            d.setHtml(self.to_html())
+            return d
+        if printing.print_text_document(self, make, "ตาราง", (15, 15, 15, 15), landscape=cols > 6):
+            self.record("พิมพ์ตารางคำนวณ")
 
     # -- files
     def load_book(self, book: Book):

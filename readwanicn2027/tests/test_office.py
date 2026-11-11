@@ -135,3 +135,77 @@ def test_main_window_has_the_new_tabs(app, tmp_path, monkeypatch):
     assert tabs == ["เอกสาร PDF", "โมเดล 3 มิติ", "สร้างเอกสาร", "ตารางคำนวณ"]
     assert "edit" in w.tool_buttons
     assert any(f == "เข้าสู่ระบบ" for *_, f in w.usage.events())
+
+
+def test_snap_finds_corners_middles_crossings_and_centres():
+    from readwanicn import snap
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.draw_rect(pymupdf.Rect(100, 100, 300, 200))
+    page.draw_line((100, 150), (300, 150))
+    page.draw_line((200, 80), (200, 220))
+    page.draw_circle((400, 400), 30)
+    page.insert_text((120, 130), "Text is not snapped", fontsize=11)
+    s = snap.Snapper(page)
+    assert s.find((103, 98), 8).kind == "end" and s.find((103, 98), 8).pt == (100, 100)
+    hit = s.find((198, 148), 8)
+    assert hit.kind == "int" and hit.pt == pytest.approx((200, 150))
+    assert s.find((250, 103), 8).pt == pytest.approx((250, 100))     # a point on the line
+    assert s.find((401, 402), 8).kind == "cen"
+    assert s.find((500, 500), 8) is None
+    page.set_rotation(90)                                            # displayed coordinates follow /Rotate
+    s = snap.Snapper(page)
+    corner = pymupdf.Point(100, 100) * page.rotation_matrix
+    assert s.find((corner.x + 2, corner.y - 2), 8).pt == pytest.approx((corner.x, corner.y))
+
+
+def test_dxf_comes_in_at_a_scale_that_measures_in_metres(tmp_path):
+    import ezdxf
+    from readwanicn import cadimport, measure, snap
+    d = ezdxf.new(units=6)                                  # metres
+    m = d.modelspace()
+    m.add_lwpolyline([(0, 0), (12, 0), (12, 6), (0, 6)], close=True)
+    m.add_text("อาคาร ผู้ใหญ่", height=0.3).set_placement((1, 1))
+    d.saveas(tmp_path / "plan.dxf")
+    r = cadimport.import_file(tmp_path / "plan.dxf")
+    assert r.units == "เมตร" and not r.guessed
+    page = pymupdf.open(r.pdf)[0]
+    s = snap.Snapper(page)
+    scale = measure.Scale.ratio(r.ratio)
+    xs = sorted({round(x, 1) for x, _ in s.ends})
+    ys = sorted({round(y, 1) for _, y in s.ends})
+    # the frame of the drawing: the outer corners are 12 m x 6 m apart
+    inner_x = [x for x in xs if 0 < x < page.rect.width]
+    inner_y = [y for y in ys if 0 < y < page.rect.height]
+    assert (max(inner_x) - min(inner_x)) * scale.m_per_pt == pytest.approx(12, abs=0.0005)
+    assert (max(inner_y) - min(inner_y)) * scale.m_per_pt == pytest.approx(6, abs=0.0005)
+    with pytest.raises(cadimport.CadError):
+        (tmp_path / "x.dwg").write_bytes(b"AC1032")
+        if cadimport.oda_converter() is None:
+            cadimport.import_file(tmp_path / "x.dwg")
+        else:
+            raise cadimport.CadError("dwg")
+    from PySide6.QtGui import QImage
+    img = QImage(10, 10, QImage.Format_RGB888)
+    img.fill(0xFFFFFF)
+    img.save(str(tmp_path / "scan.png"))
+    assert pymupdf.open(cadimport.import_file(tmp_path / "scan.png")).page_count == 1
+
+
+def test_printing_paints_pages_and_tables(app, tmp_path):
+    from PySide6.QtPrintSupport import QPrinter
+    from readwanicn import printing
+    from readwanicn.sheet import SheetEditor
+    doc = pymupdf.open()
+    for _ in range(3):
+        doc.new_page().insert_text((72, 72), "page", fontsize=20)
+    pr = QPrinter()
+    pr.setOutputFormat(QPrinter.PdfFormat)
+    pr.setOutputFileName(str(tmp_path / "out.pdf"))
+    printing.paint_pdf(pr, doc)
+    assert pymupdf.open(tmp_path / "out.pdf").page_count == 3
+    sh = SheetEditor("Laksaman")
+    sh.book.set(0, 0, "จุด")
+    sh.book.set(1, 1, "=2*3")
+    html = sh.to_html()
+    assert "จุด" in html and ">6<" in html

@@ -247,11 +247,7 @@ def to_pdf(qdoc: QTextDocument, path) -> None:
                          QMarginsF(MARGINS_CM[0] * 10, MARGINS_CM[1] * 10, MARGINS_CM[2] * 10,
                                    MARGINS_CM[3] * 10), QPageLayout.Millimeter)
     writer.setPageLayout(layout)
-    copy = qdoc.clone()
-    for name in _image_names(qdoc):                  # clone() does not carry added resources
-        img = _qimage(qdoc, name)
-        if img is not None:
-            copy.addResource(QTextDocument.ImageResource, QUrl(name), img)
+    copy = clone_with_images(qdoc)
     fmt = copy.rootFrame().frameFormat()
     fmt.setMargin(0)
     copy.rootFrame().setFrameFormat(fmt)
@@ -259,6 +255,15 @@ def to_pdf(qdoc: QTextDocument, path) -> None:
     copy.documentLayout().setPaintDevice(writer)
     copy.setPageSize(QSizeF(writer.pageLayout().paintRectPixels(writer.resolution()).size()))
     copy.print_(writer)
+
+
+def clone_with_images(qdoc: QTextDocument) -> QTextDocument:
+    copy = qdoc.clone()
+    for name in _image_names(qdoc):                  # clone() does not carry added resources
+        img = _qimage(qdoc, name)
+        if img is not None:
+            copy.addResource(QTextDocument.ImageResource, QUrl(name), img)
+    return copy
 
 
 def _image_names(qdoc):
@@ -349,7 +354,8 @@ class DocEditor(QWidget):
                               ("📂 เปิด", "เปิดไฟล์เอกสาร (.docx) หรือหน้าเว็บ (.html)", self.open),
                               ("💾 บันทึก", "บันทึกเป็นไฟล์เอกสาร (.docx)", self.save),
                               ("💾 บันทึกเป็น…", "บันทึกเป็นไฟล์ใหม่", lambda: self.save(as_new=True)),
-                              ("🖨 บันทึกเป็น PDF", "บันทึกเป็น PDF ขนาด A4 ตามระยะขอบหนังสือราชการ", self.save_pdf),
+                              ("📑 บันทึกเป็น PDF", "บันทึกเป็น PDF ขนาด A4 ตามระยะขอบหนังสือราชการ", self.save_pdf),
+                              ("🖨 พิมพ์", "พิมพ์ไปที่เครื่องพิมพ์ (Ctrl+P) ดูตัวอย่างก่อนพิมพ์ได้", self.print_doc),
                               ("↶ เลิกทำ", "เลิกทำ (Ctrl+Z)", lambda: self.page.undo()),
                               ("↷ ทำซ้ำ", "ทำซ้ำ (Ctrl+Y)", lambda: self.page.redo())):
             row1.addWidget(self._tool(text, tip, fn))
@@ -657,6 +663,13 @@ class DocEditor(QWidget):
         self.path = path
         self.record("บันทึกเอกสาร (.docx)")
         return path
+
+    def print_doc(self):
+        from . import printing
+        doc = self.page.document()
+        if printing.print_text_document(self, lambda: clone_with_images(doc), "เอกสาร",
+                                        tuple(x * 10 for x in MARGINS_CM)):
+            self.record("พิมพ์เอกสาร")
 
     def save_pdf(self, name: str = ""):
         path, _ = QFileDialog.getSaveFileName(self, "บันทึกเป็น PDF", name or "หนังสือ.pdf", "PDF (*.pdf)")

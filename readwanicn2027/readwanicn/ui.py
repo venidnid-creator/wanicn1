@@ -15,11 +15,11 @@ from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QSplitter,
+    QApplication, QMainWindow, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
-from . import APP_NAME, DEVELOPER, VERSION, auth, license, measure, pdfedit, pdfops, themes, update, usage
+from . import APP_NAME, DEVELOPER, VERSION, auth, cadimport, license, measure, pdfedit, pdfops, themes, update, usage
 from .canvas import TOOLS, PdfCanvas
 from .model3d import ModelView, load_model
 from .dialogs import TextDialog, UsageDialog
@@ -556,6 +556,8 @@ class MainWindow(QMainWindow):
         self.apply_theme(self.settings.value("theme", themes.DEFAULT))
         self.status.showMessage(f"ยินดีต้อนรับ คุณ {user} · {TOOLS['pan']}")
         QTimer.singleShot(400, self.check_updates)
+        from PySide6.QtGui import QKeySequence, QShortcut
+        QShortcut(QKeySequence.Print, self, activated=lambda: self._safe(self.print_current))
 
     # -- building
     def _top_bar(self):
@@ -623,7 +625,10 @@ class MainWindow(QMainWindow):
         return row
 
     def _file_row(self):
-        spec = [("เปิดไฟล์", "📂", "เปิดไฟล์ PDF (หลายไฟล์ได้) หรืองานวัด .json", self.open_files),
+        spec = [("เปิดไฟล์", "📂", "เปิดไฟล์ PDF, ไฟล์เขียนแบบ (.dxf .dwg .svg) รูปภาพแบบ หรืองานวัด .json", self.open_files),
+                ("นำเข้าแบบ", "📐", "นำเข้าไฟล์เขียนแบบ .dxf / .dwg / .svg หรือรูปภาพแบบ แล้ววัดได้ทันทีตามสเกล",
+                 self.import_cad),
+                ("พิมพ์", "🖨", "พิมพ์เอกสารไปที่เครื่องพิมพ์ (Ctrl+P)", self.print_current),
                 ("บันทึก", "💾", "บันทึกไฟล์ PDF ที่แก้ไข (ลบ/หมุนหน้า)", self.save_file),
                 ("บันทึกเป็น", "🗂", "บันทึก PDF เป็นไฟล์ใหม่", self.save_as),
                 ("บันทึกงานวัด", "📝", "บันทึกรายการวัดทั้งหมดเป็นไฟล์ .json", self.save_measurements),
@@ -658,6 +663,11 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self.set_tool(k))
             self.tool_buttons[key] = b
             buttons.append(b)
+        self.snap_btn = _button("ยึดจุด", "🧲", "ยึดจุดปลาย จุดกึ่งกลาง จุดตัด จุดศูนย์กลาง และบนเส้นของแบบ\n"
+                                "เปิด/ปิด: F3 · กด Shift ค้างไว้ = คลิกอิสระชั่วคราว", checkable=True)
+        self.snap_btn.setChecked(True)
+        self.snap_btn.clicked.connect(self.toggle_snap)
+        buttons.append(self.snap_btn)
         rep = _button("รายงานงานวัด", "📈", "รายงานงานวัดเป็นไฟล์ตารางคำนวณ (.xlsx) หรือ .csv")
         rep.clicked.connect(lambda: self._safe(self.report, "รายงานงานวัด"))
         buttons += [rep, None]
@@ -742,6 +752,8 @@ class MainWindow(QMainWindow):
         self.canvas.panBy.connect(self._pan)
         self.canvas.editAt.connect(lambda x, y: self._safe(lambda: self.edit_at((x, y))))
         self.canvas.probe = self.probe
+        self.canvas.snapChanged = lambda on: (self.snap_btn.setChecked(on),
+                                              self.status.showMessage("ยึดจุด: เปิด" if on else "ยึดจุด: ปิด", 3000))
         self.scroll.setWidget(self.canvas)
         self.pdf_stack.addWidget(self.scroll)
         self.tabs.addTab(self.pdf_stack, "เอกสาร PDF")
@@ -884,11 +896,17 @@ class MainWindow(QMainWindow):
     # -- files
     def open_files(self, paths=None):
         if not paths:
-            paths, _ = QFileDialog.getOpenFileNames(self, "เปิดไฟล์", self._dir(),
-                                                    "PDF หรืองานวัด (*.pdf *.json);;PDF (*.pdf)")
+            paths, _ = QFileDialog.getOpenFileNames(
+                self, "เปิดไฟล์", self._dir(),
+                "ไฟล์ที่เปิดได้ (*.pdf *.json *.dxf *.dwg *.svg *.xps *.png *.jpg *.jpeg *.tif *.tiff);;"
+                "PDF (*.pdf);;ไฟล์เขียนแบบ (*.dxf *.dwg);;ภาพเวกเตอร์ (*.svg *.xps);;"
+                "รูปภาพแบบ (*.png *.jpg *.jpeg *.tif *.tiff *.bmp);;งานวัด (*.json)")
         for p in paths or []:
             if p.lower().endswith(".json"):
                 self.load_measurements(p)
+                continue
+            if p.lower().endswith(cadimport.ALL_EXT):
+                self.import_cad([p])
                 continue
             doc = pymupdf.open(p)
             f = OpenFile(p, doc)
@@ -1043,6 +1061,7 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "ลบหน้า", f"ลบหน้า {', '.join(str(r + 1) for r in rows)}?") != QMessageBox.Yes:
             return
         pdfops.delete_pages(f.doc, rows)
+        self.canvas.invalidate_snap()
         f.measurements[:] = [m for m in f.measurements if m.page not in rows]
         for m in f.measurements:
             m.page -= sum(1 for r in rows if r < m.page)
@@ -1227,6 +1246,75 @@ class MainWindow(QMainWindow):
                     measure.Scale(m["m_per_pt"], m["scale"]), m.get("name", ""), f.name))
         self.select_file(self.file_list.currentRow())
 
+    # -- snapping, drawings from CAD, printing
+    def toggle_snap(self):
+        self.canvas.snap_on = self.snap_btn.isChecked()
+        self.canvas.snap_hit = None
+        self.canvas.update()
+        self.status.showMessage("ยึดจุด: เปิด" if self.canvas.snap_on else "ยึดจุด: ปิด", 3000)
+
+    def import_cad(self, paths=None):
+        if not paths:
+            paths, _ = QFileDialog.getOpenFileNames(
+                self, "นำเข้าไฟล์เขียนแบบ", self._dir(),
+                "ไฟล์เขียนแบบ (*.dxf *.dwg *.svg *.xps *.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
+        for p in paths or []:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                result = cadimport.import_file(p)
+            except cadimport.CadError as e:
+                QApplication.restoreOverrideCursor()
+                if str(e) == "dwg":
+                    self._need_oda(p)
+                else:
+                    QMessageBox.warning(self, "นำเข้าแบบ", f"{Path(p).name}\n{e}")
+                continue
+            finally:
+                if QApplication.overrideCursor():
+                    QApplication.restoreOverrideCursor()
+            self.usage.record("นำเข้าไฟล์เขียนแบบ " + Path(p).suffix.lower())
+            if isinstance(result, cadimport.Imported):
+                self.open_files([result.pdf])
+                self.scale = measure.Scale.ratio(result.ratio)
+                self._show_scale()
+                note = (f"นำเข้า {Path(p).name} เป็นแบบมาตราส่วน 1:{result.ratio} "
+                        f"(1 หน่วยในแบบ = 1 {result.units}{' — เดาจากขนาดแบบ' if result.guessed else ''}) "
+                        f"ตั้งสเกลให้แล้ว วัดได้ทันที")
+                self.status.showMessage(note, 12000)
+                if result.guessed:
+                    QMessageBox.information(self, "นำเข้าแบบ", note + "\n\nไฟล์ไม่ได้ระบุหน่วย หากระยะที่วัดไม่ตรง "
+                                            "ให้ใช้ «ตั้งสเกล» คลิก 2 จุดบนระยะที่รู้ค่า")
+            else:
+                self.open_files([result])
+                self.status.showMessage(f"นำเข้า {Path(p).name} แล้ว · ใช้ «ตั้งสเกล» ก่อนวัด", 10000)
+
+    def _need_oda(self, path):
+        box = QMessageBox(self)
+        box.setWindowTitle("เปิดไฟล์ .dwg")
+        box.setText("การเปิดไฟล์ .dwg ต้องมีโปรแกรมแปลงไฟล์ฟรี «ODA File Converter» ในเครื่องก่อน\n\n"
+                    "1. ดาวน์โหลดและติดตั้ง ODA File Converter สำหรับ Windows (ฟรี)\n"
+                    "2. กลับมาเปิดไฟล์ .dwg นี้อีกครั้ง โปรแกรมจะแปลงให้เอง\n\n"
+                    "หรือใช้โปรแกรมเขียนแบบที่มีอยู่ บันทึกเป็น .dxf แล้วนำเข้าได้เลย")
+        go = box.addButton("เปิดหน้าดาวน์โหลด", QMessageBox.AcceptRole)
+        box.addButton("ปิด", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is go:
+            QDesktopServices.openUrl(QUrl("https://www.opendesign.com/guestfiles/oda_file_converter"))
+
+    def print_current(self):
+        """Ctrl+P: whatever the open tab shows."""
+        w = self.tabs.currentWidget()
+        if w is self.doc_editor:
+            return self.doc_editor.print_doc()
+        if w is self.sheet:
+            return self.sheet.print_sheet()
+        f = self._need()
+        if not f:
+            return
+        from . import printing
+        printing.print_pdf(self, f.doc, f.page, f.name)
+        self.usage.record("พิมพ์เอกสาร PDF")
+
     # -- editing text and pictures
     def probe(self, pt):
         f = self.current
@@ -1243,6 +1331,7 @@ class MainWindow(QMainWindow):
     def _edited(self, what):
         f = self.current
         f.dirty = True
+        self.canvas.invalidate_snap()
         self.canvas.render()
         self.fill_pages()
         self._title()
@@ -1347,7 +1436,7 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, e):
         paths = [u.toLocalFile() for u in e.mimeData().urls()
-                 if u.toLocalFile().lower().endswith((".pdf", ".json", ".stl", ".obj"))]
+                 if u.toLocalFile().lower().endswith((".pdf", ".json", ".stl", ".obj") + cadimport.ALL_EXT)]
         models = [p for p in paths if p.lower().endswith((".stl", ".obj"))]
         if models:
             self.model.set_triangles(load_model(models[-1]), Path(models[-1]).name)
