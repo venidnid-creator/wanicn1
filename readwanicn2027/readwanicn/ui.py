@@ -19,9 +19,10 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
-from . import APP_NAME, DEVELOPER, VERSION, auth, license, measure, pdfops, themes, update
+from . import APP_NAME, DEVELOPER, VERSION, auth, license, measure, pdfedit, pdfops, themes, update, usage
 from .canvas import TOOLS, PdfCanvas
 from .model3d import ModelView, load_model
+from .dialogs import TextDialog, UsageDialog
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
@@ -522,6 +523,8 @@ class MainWindow(QMainWindow):
         self.current: OpenFile | None = None
         self.scale = measure.Scale.ratio(100)
         self.settings = QSettings("WANICNSURVEY", APP_NAME)
+        self.usage = usage.Usage(user=user)
+        self.usage.record("เข้าสู่ระบบ")
         self.setWindowTitle(f"{APP_NAME} — {VERSION}")
         self.setWindowIcon(QIcon(asset("logo.ico")))
         self.resize(1360, 860)
@@ -585,6 +588,10 @@ class MainWindow(QMainWindow):
         self.update_btn.hide()
         self.update_btn.clicked.connect(self.open_update)
         lay.addWidget(self.update_btn)
+        ub = QPushButton("📊 สถิติการใช้งาน")
+        ub.setToolTip("สถิติการใช้งานทุกเมนู รายวัน รายสัปดาห์ รายเดือน รายปี และออกรายงาน")
+        ub.clicked.connect(lambda: self._safe(lambda: UsageDialog(self, self.usage).exec()))
+        lay.addWidget(ub)
         for text, fn in (("▤ แผงไฟล์", lambda: self.left.setVisible(not self.left.isVisible())),
                          ("▥ แผงวัด", lambda: self.right.setVisible(not self.right.isVisible()))):
             b = QPushButton(text)
@@ -637,7 +644,7 @@ class MainWindow(QMainWindow):
                 continue
             text, icon, tip, fn = item
             b = _button(text, icon, tip)
-            b.clicked.connect(lambda _=False, f=fn: self._safe(f))
+            b.clicked.connect(lambda _=False, f=fn, t=text: self._safe(f, t))
             buttons.append(b)
         return self._row(buttons)
 
@@ -646,13 +653,13 @@ class MainWindow(QMainWindow):
         buttons = []
         for key, text, icon in (("pan", "เลื่อน", "✋"), ("scale", "ตั้งสเกล", "📏"),
                                 ("length", "วัดความยาว", "↔"), ("area", "คิดพื้นที่", "⬠"),
-                                ("count", "นับจำนวน", "✔")):
+                                ("count", "นับจำนวน", "✔"), ("edit", "แก้ไขข้อความและรูปภาพ", "✎")):
             b = _button(text, icon, TOOLS[key], checkable=True)
             b.clicked.connect(lambda _=False, k=key: self.set_tool(k))
             self.tool_buttons[key] = b
             buttons.append(b)
         rep = _button("รายงานงานวัด", "📈", "รายงานงานวัดเป็นไฟล์ตารางคำนวณ (.xlsx) หรือ .csv")
-        rep.clicked.connect(lambda: self._safe(self.report))
+        rep.clicked.connect(lambda: self._safe(self.report, "รายงานงานวัด"))
         buttons += [rep, None]
         for text, icon, fn in (("ย่อ", "➖", lambda: self.zoom_by(1 / 1.25)),):
             b = _button(text, icon, "ย่อ")
@@ -733,6 +740,8 @@ class MainWindow(QMainWindow):
         self.canvas.calibrate.connect(self.calibrate)
         self.canvas.zoomRequested.connect(self.zoom_by)
         self.canvas.panBy.connect(self._pan)
+        self.canvas.editAt.connect(lambda x, y: self._safe(lambda: self.edit_at((x, y))))
+        self.canvas.probe = self.probe
         self.scroll.setWidget(self.canvas)
         self.pdf_stack.addWidget(self.scroll)
         self.tabs.addTab(self.pdf_stack, "เอกสาร PDF")
@@ -754,6 +763,13 @@ class MainWindow(QMainWindow):
         self.spin = QTimer(self)
         self.spin.timeout.connect(lambda: self.model.rotate(1.5))
         self.tabs.addTab(w3, "โมเดล 3 มิติ")
+        from .docedit import DocEditor
+        from .sheet import SheetEditor
+        self.doc_editor = DocEditor(asset, self.usage.record)
+        self.tabs.addTab(self.doc_editor, "สร้างเอกสาร")
+        self.sheet = SheetEditor(self.doc_editor.family, self.usage.record)
+        self.tabs.addTab(self.sheet, "ตารางคำนวณ")
+        self.tabs.currentChanged.connect(self._tab_changed)
         return self.tabs
 
     def _right_panel(self):
@@ -821,8 +837,17 @@ class MainWindow(QMainWindow):
         self._show_scale()
         return outer
 
+    def _tab_changed(self, i):
+        """The office tabs want the width: the file and measuring panels and the PDF tool rows go away there."""
+        self.usage.record(f"เปิดแท็บ {self.tabs.tabText(i)}")
+        office = self.tabs.widget(i) in (getattr(self, "doc_editor", None), getattr(self, "sheet", None))
+        for w in (self.left, self.right, self.tool_rows):
+            w.setVisible(not office)
+
     # -- helpers
-    def _safe(self, fn):
+    def _safe(self, fn, name: str = ""):
+        if name:
+            self.usage.record(name)
         try:
             fn()
         except Exception as e:                   # shown, never swallowed
@@ -1090,6 +1115,9 @@ class MainWindow(QMainWindow):
 
     # -- measuring
     def set_tool(self, key):
+        if key != getattr(self.canvas, "tool", None) and hasattr(self, "usage") and key != "pan":
+            self.usage.record({"scale": "ตั้งสเกล", "length": "วัดความยาว", "area": "คิดพื้นที่",
+                               "count": "นับจำนวน", "edit": "แก้ไขข้อความและรูปภาพ"}.get(key, key))
         for k, b in self.tool_buttons.items():
             b.setChecked(k == key)
         self.canvas.set_tool(key)
@@ -1198,6 +1226,82 @@ class MainWindow(QMainWindow):
                     m["kind"], m["page"], [tuple(p) for p in m["points"]],
                     measure.Scale(m["m_per_pt"], m["scale"]), m.get("name", ""), f.name))
         self.select_file(self.file_list.currentRow())
+
+    # -- editing text and pictures
+    def probe(self, pt):
+        f = self.current
+        if not f:
+            return None
+        page = f.doc[f.page]
+        span = pdfedit.line_at(page, pt)
+        rect = span.rect if span else (pdfedit.image_at(page, pt) or (None, None))[1]
+        if rect is None:
+            return None
+        r = pdfedit.to_display(page, rect)
+        return (r.x0, r.y0, r.x1, r.y1)
+
+    def _edited(self, what):
+        f = self.current
+        f.dirty = True
+        self.canvas.render()
+        self.fill_pages()
+        self._title()
+        self.usage.record(what)
+        self.status.showMessage(f"{what} แล้ว · กด «บันทึก» เพื่อเก็บลงไฟล์", 6000)
+
+    def edit_at(self, pt):
+        f = self._need()
+        if not f:
+            return
+        page = f.doc[f.page]
+        fonts = pdfedit.font_dir_of(asset)
+        family = self.doc_editor.family
+        span = pdfedit.line_at(page, pt)
+        if span:
+            dlg = TextDialog(self, "แก้ไขข้อความ", span.text, span.size, span.color, span.bold, family, True)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            if dlg.deleted:
+                pdfedit.replace_line(page, span, "", fonts)
+                return self._edited("ลบข้อความใน PDF")
+            if dlg.text() == span.text and abs(dlg.size.value() - span.size) < 0.05 and dlg.rgb == span.color \
+                    and dlg.bold.isChecked() == span.bold:
+                return
+            pdfedit.replace_line(page, span, dlg.text(), fonts, dlg.size.value(), dlg.rgb, dlg.bold.isChecked())
+            return self._edited("แก้ไขข้อความใน PDF")
+        hit = pdfedit.image_at(page, pt)
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+        if hit:
+            xref, _ = hit
+            rep_ = menu.addAction("🖼 เปลี่ยนรูปภาพนี้…")
+            del_ = menu.addAction("🗑 ลบรูปภาพนี้")
+            act = menu.exec(QCursor.pos())
+            if act is rep_:
+                path, _ = QFileDialog.getOpenFileName(self, "เลือกรูปใหม่", self._dir(), "รูปภาพ (*.png *.jpg *.jpeg)")
+                if path:
+                    pdfedit.replace_image(page, xref, path)
+                    self._edited("เปลี่ยนรูปภาพใน PDF")
+            elif act is del_:
+                pdfedit.delete_image(page, xref)
+                self._edited("ลบรูปภาพใน PDF")
+            return
+        add_t = menu.addAction("✎ เพิ่มข้อความที่นี่…")
+        add_i = menu.addAction("🖼 เพิ่มรูปภาพที่นี่…")
+        act = menu.exec(QCursor.pos())
+        if act is add_t:
+            dlg = TextDialog(self, "เพิ่มข้อความ", "", 16.0, 0, False, family)
+            if dlg.exec() == QDialog.Accepted and dlg.text().strip():
+                pdfedit.add_text(page, pt, dlg.text(), fonts, dlg.size.value(), dlg.rgb, dlg.bold.isChecked())
+                self._edited("เพิ่มข้อความใน PDF")
+        elif act is add_i:
+            path, _ = QFileDialog.getOpenFileName(self, "เลือกรูปภาพ", self._dir(), "รูปภาพ (*.png *.jpg *.jpeg)")
+            if path:
+                w, ok = QInputDialog.getDouble(self, "เพิ่มรูปภาพ", "ความกว้างของรูป (มม.):", 50, 5, 1000, 1)
+                if ok:
+                    pdfedit.insert_image(page, pt, path, w * 72 / 25.4)
+                    self._edited("เพิ่มรูปภาพใน PDF")
 
     # -- updates and download count
     def check_updates(self):

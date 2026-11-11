@@ -19,6 +19,8 @@ TOOLS = {
     "length": "วัดความยาว: คลิกทีละจุด · ดับเบิลคลิกหรือ Enter = จบเส้น · Esc = ยกเลิก",
     "area": "คิดพื้นที่: คลิกรอบรูป · ดับเบิลคลิกหรือ Enter = ปิดรูป · Esc = ยกเลิก",
     "count": "นับจำนวน: คลิกทุกจุดที่ต้องการนับ · Enter = จบชุด · Esc = ยกเลิก",
+    "edit": "แก้ไขข้อความและรูปภาพ: คลิกที่ข้อความเพื่อแก้ · คลิกที่รูปเพื่อเปลี่ยน/ลบ · "
+            "คลิกที่ว่างเพื่อเพิ่มข้อความหรือรูป",
 }
 COLORS = {"length": QColor("#F59E0B"), "area": QColor("#22C55E"), "count": QColor("#EF4444"),
           "scale": QColor("#38BDF8")}
@@ -29,6 +31,7 @@ class PdfCanvas(QWidget):
     calibrate = Signal(float)             # distance in PDF points between the 2 clicks
     zoomRequested = Signal(float)         # factor
     panBy = Signal(float, float)
+    editAt = Signal(float, float)         # a click of the edit tool (PDF points, displayed page)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +47,9 @@ class PdfCanvas(QWidget):
         self.measurements: list = []      # Measurement of this file
         self._image = None
         self._drag = None
+        #: For the edit tool: pt -> (x0, y0, x1, y1) of the text or picture under it, or None.
+        self.probe = None
+        self._hover = None
 
     # -- document
     def set_document(self, doc, page_no: int = 0):
@@ -82,6 +88,7 @@ class PdfCanvas(QWidget):
     def set_tool(self, tool: str):
         self.tool = tool
         self.points = []
+        self._hover = None
         self.setCursor(Qt.OpenHandCursor if tool == "pan" else Qt.CrossCursor)
         self.update()
 
@@ -96,6 +103,9 @@ class PdfCanvas(QWidget):
         if e.button() != Qt.LeftButton:
             return
         pt = self.to_pt(e.position())
+        if self.tool == "edit":
+            self.editAt.emit(*pt)
+            return
         self.points.append(pt)
         if self.tool == "scale" and len(self.points) == 2:
             d = math.dist(*self.points)
@@ -117,6 +127,12 @@ class PdfCanvas(QWidget):
             self.panBy.emit(-d.x(), -d.y())
             return
         self.cursor_pt = self.to_pt(e.position())
+        if self.tool == "edit" and self.probe is not None:
+            hover = self.probe(self.cursor_pt)
+            if hover != self._hover:
+                self._hover = hover
+                self.setCursor(Qt.IBeamCursor if hover else Qt.CrossCursor)
+                self.update()
         if self.points:
             self.update()
 
@@ -166,6 +182,12 @@ class PdfCanvas(QWidget):
         for m in self.measurements:
             if m.page == self.page_no:
                 self._draw(p, m.kind, m.points, m.text(), m.name)
+        if self.tool == "edit" and self._hover:
+            x0, y0, x1, y1 = self._hover
+            a, b = self.to_px((x0, y0)), self.to_px((x1, y1))
+            p.setPen(QPen(QColor("#1F6FEB"), 1.6, Qt.DashLine))
+            p.setBrush(QColor(31, 111, 235, 40))
+            p.drawRect(QRectF(a, b).normalized().adjusted(-2, -2, 2, 2))
         if self.points:
             pts = list(self.points)
             if self.cursor_pt is not None and self.tool != "count":
