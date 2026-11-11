@@ -81,3 +81,34 @@ def test_pdf_report(tmp_path):
     report_pdf(C.analyse(d), d, tmp_path / "calc.pdf")
     data = (tmp_path / "calc.pdf").read_bytes()
     assert data.startswith(b"%PDF") and data.count(b"/Type /Page\n") + data.count(b"/Type /Page ") >= 1
+
+
+def test_slab_coefficients_and_edge_continuity():
+    assert C.slab_moment(1.0, 0) == pytest.approx(0.033)              # interior panel
+    assert C.slab_moment(1.0, 4) == pytest.approx(0.050)              # all edges discontinuous
+    assert C.slab_moment(0.5, 2) == pytest.approx(0.090)
+    assert C.slab_moment(0.95, 1) == pytest.approx((0.041 + 0.048) / 2)
+    rooms = [dict(x=0, y=0, w=4, d=4), dict(x=4, y=0, w=4, d=4), dict(x=0, y=4, w=4, d=3)]
+    assert C.discontinuous_edges(rooms[0], rooms) == 2
+    assert C.discontinuous_edges(rooms[1], rooms) == 3
+    assert C.discontinuous_edges(dict(x=0, y=0, w=4, d=4), []) == 4
+
+
+def test_column_interaction_curve_and_ratio():
+    curve = C.pm_curve(B.DEFAULT_LIB["C1"], C.basis({}))
+    p0 = curve[0][1]
+    assert p0 == pytest.approx(0.8 * 0.7 * (0.85 * 240 * (400 - 4.52) + 4000 * 4.52), rel=0.01)
+    assert curve[-1][1] == 0.0 and curve[-1][0] > 0                  # pure bending at the end
+    assert max(m for m, _ in curve) > curve[-1][0]                    # the balance point bulges out
+    assert C.pm_ratio(curve, 0.0, p0 / 2) == pytest.approx(0.5, abs=0.01)
+    assert C.pm_ratio(curve, 5000.0, 10000.0) > 1.0
+
+
+def test_wind_uplift_on_a_light_roof():
+    d = _house([dict(name="a", x=0, y=0, w=4, d=4), dict(name="b", x=4, y=0, w=4, d=4)])
+    d["calc"] = {"wind": 100.0}
+    roof = [m for m in C.analyse(d)["members"] if m.group == "roof"]
+    assert any("แรงลม" in m.name for m in roof)
+    assert any("จุดยึด" in m.name for m in roof)
+    d["calc"] = {"wind": 0.0}
+    assert not any("แรงลม" in m.name for m in C.analyse(d)["members"])

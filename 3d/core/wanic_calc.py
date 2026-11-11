@@ -241,6 +241,133 @@ def column_capacity(spec: dict, b_: dict, fc: float) -> float:
     return 0.85 * (0.25 * fc * Ag + 0.40 * fy * Ast)
 
 
+# ---- slabs: the coefficient method ---------------------------------------------------------
+
+#: วสท./ACI 318-63 Method 2 — the largest short-span coefficient (negative at a
+#: continuous edge, positive at mid-span, negative at a discontinuous edge) for
+#: m = S/L of 1.0 0.9 0.8 0.7 0.6 0.5, by the number of discontinuous edges.
+SLAB_COEF = {
+    0: [(0.033, 0.025, 0.0), (0.040, 0.030, 0.0), (0.048, 0.036, 0.0), (0.055, 0.041, 0.0),
+        (0.063, 0.047, 0.0), (0.083, 0.062, 0.0)],
+    1: [(0.041, 0.031, 0.021), (0.048, 0.036, 0.024), (0.055, 0.041, 0.027), (0.062, 0.047, 0.031),
+        (0.069, 0.052, 0.035), (0.085, 0.064, 0.042)],
+    2: [(0.049, 0.037, 0.025), (0.057, 0.043, 0.028), (0.064, 0.048, 0.032), (0.071, 0.054, 0.036),
+        (0.078, 0.059, 0.039), (0.090, 0.068, 0.045)],
+    3: [(0.058, 0.044, 0.029), (0.066, 0.050, 0.033), (0.074, 0.056, 0.037), (0.082, 0.062, 0.041),
+        (0.090, 0.068, 0.045), (0.098, 0.074, 0.049)],
+    4: [(0.0, 0.050, 0.033), (0.0, 0.057, 0.038), (0.0, 0.064, 0.043), (0.0, 0.072, 0.047),
+        (0.0, 0.080, 0.053), (0.0, 0.083, 0.055)],
+}
+
+
+def slab_moment(m: float, disc: int) -> float:
+    """The governing coefficient C (M = C w S²) for m = S/L, interpolated."""
+    rows = SLAB_COEF[max(0, min(4, disc))]
+    ms = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+    m = max(0.5, min(1.0, m))
+    for i in range(5):
+        if ms[i + 1] - 1e-9 <= m <= ms[i] + 1e-9:
+            f = (ms[i] - m) / 0.1
+            return max(a + (b - a) * f for a, b in zip(rows[i], rows[i + 1]))
+    return max(rows[-1])
+
+
+def discontinuous_edges(rm, rooms) -> int:
+    """How many of a room's four edges have no room on the other side."""
+    x0, y0, x1, y1 = rm["x"], rm["y"], rm["x"] + rm["w"], rm["y"] + rm["d"]
+    n = 0
+    for side in ("l", "r", "b", "t"):
+        cont = False
+        for o in rooms:
+            if o is rm:
+                continue
+            ox0, oy0, ox1, oy1 = o["x"], o["y"], o["x"] + o["w"], o["y"] + o["d"]
+            if side in ("l", "r"):
+                edge = x0 if side == "l" else x1
+                other = ox1 if side == "l" else ox0
+                if abs(edge - other) < 1e-6 and min(y1, oy1) - max(y0, oy0) > 0.5 * (y1 - y0):
+                    cont = True
+            else:
+                edge = y0 if side == "b" else y1
+                other = oy1 if side == "b" else oy0
+                if abs(edge - other) < 1e-6 and min(x1, ox1) - max(x0, ox0) > 0.5 * (x1 - x0):
+                    cont = True
+        n += 0 if cont else 1
+    return n
+
+
+# ---- columns: axial load and moment (P-M) ---------------------------------------------------
+
+def pm_curve(spec: dict, b_: dict, steps: int = 40) -> list:
+    """The column's design interaction curve [(φMn kg·m, φPn kg)…] about
+    its stronger axis: strain compatibility, the bars half on each face."""
+    b, h = float(spec["b"]), float(spec["h"])
+    bar = R.parse_bar(spec.get("main"))
+    fc = b_["fc"]
+    n_ = bar.n if bar and bar.n else 4
+    As1 = (n_ / 2) * (bar.area if bar else 1.13)          # cm², each face
+    fy = bar.fy if bar else 4000.0
+    Es = 2.04e6
+    B_, H_ = b * 100, h * 100
+    dp = (R.COVER["column"] + 0.006 + (bar.d if bar else 12) / 2000.0) * 100
+    d = H_ - dp
+    beta = 0.85 if fc <= 280 else max(0.65, 0.85 - 0.05 * (fc - 280) / 70)
+    Ag, Ast = B_ * H_, 2 * As1
+    P0 = 0.85 * fc * (Ag - Ast) + fy * Ast
+    pts = [(0.0, 0.80 * 0.70 * P0)]
+    for i in range(1, steps + 1):
+        c = H_ * 1.5 * (1 - i / (steps + 1))
+        a = min(beta * c, H_)
+        Cc = 0.85 * fc * a * B_
+        es1 = 0.003 * (c - dp) / c
+        es2 = 0.003 * (c - d) / c
+        fs1 = max(-fy, min(fy, es1 * Es))
+        fs2 = max(-fy, min(fy, es2 * Es))
+        Fs1 = As1 * (fs1 - (0.85 * fc if a > dp else 0.0))
+        Fs2 = As1 * fs2
+        Pn = Cc + Fs1 + Fs2
+        Mn = Cc * (H_ / 2 - a / 2) + Fs1 * (H_ / 2 - dp) - Fs2 * (d - H_ / 2)
+        et = -es2
+        phi = 0.70 if et <= 0.002 else (0.90 if et >= 0.005 else 0.70 + 0.20 * (et - 0.002) / 0.003)
+        q = (phi * Mn / 100.0, min(phi * Pn, 0.80 * 0.70 * P0))
+        if q[1] < 0:                              # into tension: end on the M axis
+            m0, p0 = pts[-1]
+            f = p0 / (p0 - q[1]) if p0 != q[1] else 0.0
+            pts.append((m0 + (q[0] - m0) * f, 0.0))
+            break
+        pts.append(q)
+    if pts[-1][1] > 0:
+        pts.append((pts[-1][0], 0.0))
+    return pts
+
+
+def pm_ratio(curve, Mu, Pu) -> float:
+    """How far out the point (Mu, Pu) lies along its ray from the origin:
+    ≤ 1.0 inside the curve."""
+    Mu, Pu = abs(Mu), max(Pu, 0.0)
+    if Mu < 1e-9 and Pu < 1e-9:
+        return 0.0
+    ang = math.atan2(Pu, Mu)
+    best = None
+    for (m0, p0), (m1, p1) in zip(curve, curve[1:]):
+        a0, a1 = math.atan2(p0, m0), math.atan2(p1, m1)
+        lo, hi = min(a0, a1), max(a0, a1)
+        if lo - 1e-9 <= ang <= hi + 1e-9:
+            f = 0.0 if abs(a1 - a0) < 1e-12 else (ang - a0) / (a1 - a0)
+            rm, rp = m0 + (m1 - m0) * f, p0 + (p1 - p0) * f
+            r = math.hypot(rm, rp)
+            best = r if best is None else max(best, r)
+    if not best:
+        return 9.9
+    return math.hypot(Mu, Pu) / best
+
+
+@dataclass
+class PMResult:
+    curve: list
+    Mu: float
+    Pu: float
+
 # ---- the whole building ------------------------------------------------------------------
 
 @dataclass
@@ -306,6 +433,23 @@ def roof_checks(data, b_, out):
                           f"M = {M:,.1f} กก.-ม. · แอ่น {defl * 1000:.1f} มม. (ช่วง {span:.2f} ม.)",
                           f"Ma = {cap:,.1f} กก.-ม. · ยอมให้ {lim * 1000:.1f} มม. (L/{b_['defl']:g})",
                           r, f"น้ำหนัก {w:,.1f} กก./ม. (ASD)", res))
+        # D + W: the wind's suction on the slope (Cp 0.7) less the covering's
+        # weight; ASD with the one-third increase for wind
+        up = 0.7 * b_["wind"] - (tile + 0.0) * cosp
+        if up > 0:
+            ww = up * trib - sec["kg_m"] * cosp
+            resw = _simple(span, max(ww, 0.0))
+            capw = cap * 4.0 / 3.0
+            rw = resw.Mmax / capw if capw else 9.9
+            out.append(Member("roof", f"{th} {s[key]} — แรงลม (แรงยก)",
+                              f"M = {resw.Mmax:,.1f} กก.-ม. (แรงยกสุทธิ {up:,.1f} กก./ตร.ม.)",
+                              f"Ma × 4/3 = {capw:,.1f} กก.-ม.", rw,
+                              f"ลม {b_['wind']:g} กก./ตร.ม. × Cp 0.7 − น้ำหนักวัสดุมุง", resw))
+            if key == "rafter":
+                lift = up * trib * (half / cosp) / 2
+                out.append(Member("roof", "จุดยึดจันทันกับอะเส — แรงยก",
+                                  f"แรงยก {lift:,.0f} กก./จุด", "ต้องยึดด้วยเพลท/สลักให้รับได้", 0.0,
+                                  "ตรวจขนาดเพลทและรอยเชื่อม/สลักตามรายละเอียดแบบ"))
     # ridge and wall plate: they carry the rafters between the trusses
     sec = section(s["ridge"])
     truss = 4.0
@@ -338,8 +482,12 @@ def analyse(data) -> dict:
     roof_q = roof_checks(data, b_, out)                        # kg/m² of plan (service)
     floors = E["floors"]
     n = E["n"]
-    # -- slabs: one-way / two-way (Marcus strips), and what they give their beams
+    # -- slabs: the วสท. coefficient method (ACI 318-63 Method 2) by how many
+    # of the panel's edges are continuous; one-way slabs by wL²/8 or /10
     slab_q = {}
+    level_rooms = {}
+    for sl in E["slabs"]:
+        level_rooms.setdefault(sl.get("floor", 0), []).append(sl["room"])
     for sl in E["slabs"]:
         spc = lib.get(sl["mark"], {})
         rm = sl["room"]
@@ -347,13 +495,14 @@ def analyse(data) -> dict:
         a, b2 = sorted((float(rm["w"]), float(rm["d"])))
         dead = t * conc + b_["finish"]
         wu = D_ * dead + L_ * b_["ll_floor"]
-        if b2 / a > 2.0:
-            Mu = wu * a * a / 8.0
+        disc = discontinuous_edges(rm, level_rooms.get(sl.get("floor", 0), []))
+        m_ = a / b2
+        if m_ < 0.5:
+            Mu = wu * a * a / (10.0 if disc <= 2 else 8.0)
             kind = "พื้นทางเดียว"
         else:
-            ws = wu * b2 ** 4 / (a ** 4 + b2 ** 4)
-            Mu = ws * a * a / 8.0
-            kind = "พื้นสองทาง"
+            Mu = slab_moment(m_, disc) * wu * a * a
+            kind = f"พื้นสองทาง กรณี {disc + 1} (ขอบไม่ต่อเนื่อง {disc} ด้าน, m = {m_:.2f})"
         bar = R.parse_bar(spc.get("bars"))
         d = t - R.COVER["slab"] - (bar.d / 2000.0 if bar else 0.005)
         if bar and bar.s:
@@ -381,6 +530,7 @@ def analyse(data) -> dict:
     walls = E["walls"]
     beams_out = {}
     col_load: dict = {}
+    col_mom: dict = {}
     for key, segs in runs.items():
         level, mark, axis, c = key
         segs.sort(key=lambda e: min(e["p0"][0], e["p1"][0]) if axis == "x" else min(e["p0"][1], e["p1"][1]))
@@ -450,6 +600,11 @@ def analyse(data) -> dict:
         for p, Rv in zip(pts, res.reactions):
             k_ = (round(p[0], 3), round(p[1], 3))
             col_load[k_] = col_load.get(k_, 0.0) + Rv
+        # the moment a beam end hands its column (ACI coefficient wL²/16 at an
+        # end built into a column, shared by the columns above and below)
+        for p, sp_ in ((pts[0], spans[0]), (pts[-1], spans[-1])):
+            k_ = (round(p[0], 3), round(p[1], 3))
+            col_mom[k_] = max(col_mom.get(k_, 0.0), sp_.w * sp_.L ** 2 / 16.0 / 2.0)
     # -- columns: everything above, per column line (the ground floor's carries it all)
     cols_out = []
     for c_ in E["columns"]:
@@ -460,8 +615,18 @@ def analyse(data) -> dict:
         Pu = col_load.get(k_, 0.0) + D_ * float(spec.get("b", 0.2)) * float(spec.get("h", 0.2)) * \
             conc * float(s["floor_h"]) * n
         cap = column_capacity(spec, b_, fc)
+        hh = max(float(spec.get("b", 0.2)), float(spec.get("h", 0.2)))
+        Mu = max(Pu * (0.015 + 0.03 * hh), col_mom.get(k_, 0.0))      # e_min = 15 mm + 0.03 h
+        if b_["method"] == "SDM":
+            curve = pm_curve(spec, b_)
+            r = pm_ratio(curve, Mu, Pu)
+            dia = PMResult(curve, Mu, Pu)
+            capt = f"φPn {cap / 1000:,.2f} ตัน (แรงอัดล้วน) · ตรวจด้วยแผนภาพ P-M"
+        else:
+            r, dia, capt = Pu / cap if cap else 9.9, None, f"P ยอมให้ {cap / 1000:,.2f} ตัน"
         out.append(Member("column", f"{c_['mark']} ที่ ({c_['x']:.2f}, {c_['y']:.2f})",
-                          f"Pu = {Pu / 1000:,.2f} ตัน", f"φPn = {cap / 1000:,.2f} ตัน", Pu / cap if cap else 9.9))
+                          f"Pu = {Pu / 1000:,.2f} ตัน · Mu = {Mu:,.0f} กก.-ม.", capt, r,
+                          "Mu = ค่ามากกว่าของ Pu·emin และโมเมนต์จากปลายคาน (wL²/16 แบ่งเสาบน-ล่าง)", dia))
         cols_out.append((k_, Pu))
     # -- footings: the service load on the soil or the piles
     avg = (D_ + L_) / 2.0

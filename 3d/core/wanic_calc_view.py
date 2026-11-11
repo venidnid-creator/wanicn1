@@ -89,6 +89,66 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
     p.restore()
 
 
+def draw_pm(p: QPainter, rect: QRectF, res, title: str = "") -> None:
+    """A column's P-M interaction curve and the load point (Mu, Pu)."""
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    f = QFont(p.font())
+    f.setPointSizeF(8.5)
+    p.setFont(f)
+    top = rect.top()
+    if title:
+        tf = QFont(f)
+        tf.setBold(True)
+        tf.setPointSizeF(10)
+        p.setFont(tf)
+        p.setPen(QColor("#111827"))
+        p.drawText(QRectF(rect.left(), top, rect.width(), 18), Qt.AlignLeft | Qt.AlignVCenter,
+                   title + " — แผนภาพ P-M")
+        p.setFont(f)
+        top += 22
+    Mx = max(max(m for m, _ in res.curve), abs(res.Mu)) * 1.15 or 1.0
+    Px = max(max(q for _, q in res.curve), res.Pu) * 1.10 or 1.0
+    left, bottom = rect.left() + 70, rect.bottom() - 26
+    W, H = rect.right() - 20 - left, bottom - top - 6
+
+    def P(m, q):
+        return QPointF(left + W * m / Mx, bottom - H * q / Px)
+    p.setPen(QPen(QColor("#9CA3AF"), 1))
+    p.drawLine(P(0, 0), P(Mx, 0))
+    p.drawLine(P(0, 0), P(0, Px))
+    p.setPen(QColor("#374151"))
+    p.drawText(QRectF(left, bottom + 4, W, 16), Qt.AlignRight, "φMn (กก.-ม.)")
+    p.drawText(QRectF(rect.left(), top, 66, 16), Qt.AlignLeft, "φPn (ตัน)")
+    for k in range(1, 5):
+        q = Px * k / 5
+        p.drawText(QRectF(rect.left(), P(0, q).y() - 8, 64, 16), Qt.AlignRight | Qt.AlignVCenter, f"{q / 1000:,.0f}")
+        m = Mx * k / 5
+        p.drawText(QRectF(P(m, 0).x() - 30, bottom + 4, 60, 16), Qt.AlignCenter, f"{m:,.0f}")
+    fill = QColor(BMD_COLOR)
+    fill.setAlpha(35)
+    p.setBrush(fill)
+    p.setPen(QPen(BMD_COLOR, 1.8))
+    p.drawPolygon(QPolygonF([P(0, 0)] + [P(m, q) for m, q in res.curve]))
+    pt = P(abs(res.Mu), res.Pu)
+    p.setPen(QPen(SFD_COLOR, 1.2, Qt.DashLine))
+    p.drawLine(P(0, 0), pt)
+    p.setBrush(SFD_COLOR)
+    p.setPen(Qt.NoPen)
+    p.drawEllipse(pt, 5, 5)
+    p.setPen(SFD_COLOR)
+    p.drawText(QRectF(pt.x() + 8, pt.y() - 16, 220, 16), Qt.AlignLeft,
+               f"(Mu {abs(res.Mu):,.0f} กก.-ม., Pu {res.Pu / 1000:,.2f} ตัน)")
+    p.restore()
+
+
+def draw_any(p, rect, res, title=""):
+    if hasattr(res, "curve"):
+        draw_pm(p, rect, res, title)
+    else:
+        draw_diagrams(p, rect, res, title)
+
+
 class DiagramWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -105,10 +165,10 @@ class DiagramWidget(QWidget):
         p.fillRect(self.rect(), QColor("white"))
         if self.res is None:
             p.setPen(QColor("#6B7280"))
-            p.drawText(self.rect(), Qt.AlignCenter, "เลือกคานหรือชิ้นส่วนหลังคาในตาราง เพื่อดูแผนภาพแรงเฉือน (SFD) "
-                                                    "และโมเมนต์ดัด (BMD)")
+            p.drawText(self.rect(), Qt.AlignCenter, "เลือกคาน ชิ้นส่วนหลังคา หรือเสาในตาราง เพื่อดูแผนภาพแรงเฉือน (SFD) "
+                                                    "โมเมนต์ดัด (BMD) หรือแผนภาพ P-M ของเสา")
             return
-        draw_diagrams(p, QRectF(self.rect()).adjusted(8, 6, -8, -6), self.res, self.title)
+        draw_any(p, QRectF(self.rect()).adjusted(8, 6, -8, -6), self.res, self.title)
         p.end()
 
 
@@ -149,7 +209,8 @@ def report_pdf(res, data, path) -> None:
          f"SD40 / SR24 · SS400 Fy {b_['fy_steel']:g}")
     text(f"น้ำหนักบรรทุกจร พื้น {b_['ll_floor']:g} · หลังคา {b_['ll_roof']:g} กก./ตร.ม. · ผนัง {b_['wall_kg_m2']:g} "
          f"กก./ตร.ม. · ดินรับได้ {b_['soil']:g} ตัน/ตร.ม. · เข็ม {b_['pile_cap']:g} ตัน/ต้น")
-    text("U = 1.4D + 1.7L (SDM) · คานต่อเนื่องคำนวณด้วยวิธี stiffness · พื้นสองทางแบบแถบ (Marcus)")
+    text("U = 1.4D + 1.7L (SDM) · คานต่อเนื่อง: วิธี stiffness · พื้น: วิธีสัมประสิทธิ์ วสท. (Method 2) · "
+         "เสา: แรงอัดร่วมโมเมนต์ (แผนภาพ P-M, emin = 15 มม. + 0.03h) · หลังคา: D+L และ D+W (Cp 0.7, × 4/3)")
     text("เอกสารนี้เป็นเครื่องมือช่วยคำนวณ ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจสอบและลงนามรับรองก่อนก่อสร้าง",
          color="#B45309")
     y += 8
@@ -171,6 +232,6 @@ def report_pdf(res, data, path) -> None:
             w.newPage()
             y = 0.0
         p.setFont(f)
-        draw_diagrams(p, QRectF(0, y, page.width(), hgt), m.diagram, m.name)
+        draw_any(p, QRectF(0, y, page.width(), hgt), m.diagram, m.name)
         y += hgt + 10
     p.end()
