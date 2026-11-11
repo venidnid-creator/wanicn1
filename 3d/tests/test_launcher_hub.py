@@ -38,6 +38,7 @@ def test_themes_and_languages_switch_and_are_remembered(monkeypatch, tmp_path):
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
     monkeypatch.setattr(L.StartWindow, "_fetch_stats", lambda self, count: None)
     win = L.StartWindow()
+    win.set_lang("th")                        # whatever an earlier run left
     assert len(L.THEMES) == 5
     assert "ออกแบบโครงสร้าง คสล." in _texts(win) and "เริ่มงานใหม่  →" in _texts(win)
     for key in L.THEMES:
@@ -47,6 +48,8 @@ def test_themes_and_languages_switch_and_are_remembered(monkeypatch, tmp_path):
     t = _texts(win)
     assert "RC structure design" in t and "New project  →" in t and "Copy account number" in t
     assert str(win.settings.value("ui/lang")) == "en"
+    win.set_lang("th")
+    win.set_theme(L.DEFAULT_THEME)
     win.close()
 
 
@@ -60,6 +63,6 @@ def test_a_card_starts_its_program_with_the_language_and_the_tool(monkeypatch):
         (which, os.environ.get("WANIC_LANG"), os.environ.get("WANIC_START_PANEL"))) or True)
     win = L.StartWindow()
     win.lang = "en"
-    win.launch("3d", panel="building")
+    win.launch("3d", panel="rc")
     win.launch("cad")
-    assert seen == [("3d", "en", "building"), ("cad", "en", None)]
+    assert seen == [("3d", "en", "rc"), ("cad", "en", None)]

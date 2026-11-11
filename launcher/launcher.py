@@ -229,7 +229,7 @@ TEXT = {
 #: The cards: (tag, program, 3D panel to open, icon path (24×24 stroke), files)
 CARDS = [("2D", "cad", "", "M3 21V3h18v18H3zM3 9h18M9 21V9", "DWG · DXF"),
          ("3D", "3d", "", "M12 2l9 5v10l-9 5-9-5V7l9-5zM12 12l9-5M12 12v10M12 12L3 7", "IGZ · SKP · OBJ"),
-         ("RC", "3d", "building", "M4 21V8M12 21V8M20 21V8M2 8h20M4 21h16M8 4h8l4 4H4l4-4z",
+         ("RC", "3d", "rc", "M4 21V8M12 21V8M20 21V8M2 8h20M4 21h16M8 4h8l4 4H4l4-4z",
           "IGZ · DXF · XLSX"),
          ("ROAD", "3d", "road", "M4 21L10 3M20 21L14 3M12 7v2M12 12v2M12 17v2", "CSV · DXF · PDF")]
 
@@ -380,7 +380,7 @@ class StartWindow(QWidget):
         col.addLayout(head)
         col.addSpacing(14)
         actions = [lambda: None, lambda: self.launch("cad"), lambda: self.launch("3d"),
-                   lambda: self.launch("3d", panel="building"), lambda: self.launch("3d", panel="road"),
+                   lambda: self.launch("3d", panel="rc"), lambda: self.launch("3d", panel="road"),
                    lambda: self.launch("3d", panel="takeoff"), self.open_file, self._show_stats]
         for i, (label, fn) in enumerate(zip(t["nav"], actions)):
             b = QPushButton(f"  {label}")
