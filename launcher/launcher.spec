@@ -18,7 +18,7 @@ a = Analysis(
     [str(ROOT / "launcher" / "launcher.py")],
     pathex=[str(ROOT / "launcher")],
     datas=datas,
-    hiddenimports=["stats", "wanic_login"],
+    hiddenimports=["stats", "wanic_login", "PySide6.QtSvg"],
     excludes=["tkinter", "numpy", "PySide6.QtWebEngineCore", "PySide6.QtQml",
               "PySide6.QtQuick", "PySide6.QtMultimedia", "PySide6.Qt3DCore"],
     noarchive=False,

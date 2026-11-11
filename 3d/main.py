@@ -54,6 +54,11 @@ def _init_language() -> None:
     Portuguese, English otherwise.
     """
     saved = QSettings().value("language")
+    import os
+    pick = os.environ.get("WANIC_LANG")            # the start screen's ไทย / EN
+    if pick in ("th", "en"):
+        saved = pick
+        QSettings().setValue("language", pick)
     if not saved:
         system = QLocale.system()
         if system.language() == QLocale.Spanish:
@@ -586,6 +591,7 @@ def main() -> int:
         # association's double-click hands it as argv[1]): an extension may
         # register the opener for its own file type.
         window.load_extensions()
+        _open_start_panel(window)
         if arg:
             doc = Path(arg)
             if doc.exists():
@@ -601,6 +607,24 @@ def main() -> int:
     QTimer.singleShot(0, _after_first_frame)
     _offer_appimage_integration(window)
     return app.exec()
+
+
+def _open_start_panel(window) -> None:
+    """WANICNSURVEY's start screen opens 3D at one of its tools
+    (``WANIC_START_PANEL`` = building / takeoff / road): that tool's
+    side panel comes up shown, in front."""
+    import os
+    which = os.environ.pop("WANIC_START_PANEL", "")
+    panel = getattr(window, f"_wanic_{which}", None) if which else None
+    if panel is None:
+        return
+    from PySide6.QtWidgets import QDockWidget
+    w = panel
+    while w is not None and not isinstance(w, QDockWidget):
+        w = w.parentWidget()
+    if w is not None:
+        w.show()
+        w.raise_()
 
 
 def _offer_appimage_integration(window) -> None:

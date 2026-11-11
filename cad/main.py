@@ -110,6 +110,10 @@ def _init_language() -> None:
     deliberate opt-in via Tools > Language.
     """
     from core import branding
+    import os
+    pick = os.environ.get("WANIC_LANG")            # the start screen's ไทย / EN
+    if pick in ("th", "en"):
+        QSettings().setValue("language", pick)
     i18n.set_language(str(QSettings().value("language", branding.DEFAULT_LANGUAGE)))
     from views import qt_translations
 
