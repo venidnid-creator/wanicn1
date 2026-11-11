@@ -3770,6 +3770,11 @@ class EntityInfoPanel(QWidget):
         rows = wb.get("info") or []
         if not rows:
             return ""
+        try:                                 # measured again: a stretched part reads its new size
+            from core.wanic_partprice import live_rows
+            rows = live_rows(group) or rows
+        except Exception:                    # noqa: BLE001 - the stored rows still show
+            pass
         cells = "".join(
             f"<tr><td style='color:#667;padding-right:8px'>{html.escape(str(k))}</td>"
             f"<td>{html.escape(str(v))}</td></tr>" for k, v in rows)

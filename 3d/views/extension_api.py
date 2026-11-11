@@ -133,8 +133,23 @@ class ExtensionApp:
 
     def on_document_changed(self, fn) -> None:
         """Call ``fn()`` whenever the document changes — an edit, an undo,
-        New, Open — so a panel can show the current data."""
-        self.viewport.sceneVersionChanged.connect(lambda _v: fn())
+        New, Open — so a panel can show the current data.
+
+        A click that only changes the SELECTION is not a change of the
+        document (``Scene.bump_view``): it is filtered out here. The
+        building, take-off, road and profile panels each re-read the whole
+        model on this signal, so every click on a part used to re-walk the
+        model (the lag when selecting objects in a large house)."""
+        last = {"v": None}
+
+        def changed(_v):
+            sc = self.viewport.scene
+            v = (id(sc), getattr(sc, "content_version", sc.version))
+            if v == last["v"]:
+                return
+            last["v"] = v
+            fn()
+        self.viewport.sceneVersionChanged.connect(changed)
 
     # ---- Side panel ----------------------------------------------------------
     def add_panel(self, title: str, widget, name: str | None = None, *,

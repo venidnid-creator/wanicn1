@@ -22,12 +22,150 @@ STEEL_KINDS = ("ridge", "hip", "rafter", "purlin", "post", "valley",
                "wallplate", "tiebeam", "rbeam", "strut", "brace")
 
 
+def _det3(m) -> float:
+    """The volume scale of a matrix's linear part."""
+    d = m.data()                                        # column-major 4x4
+    a, b, c = d[0], d[4], d[8]
+    e, f, g_ = d[1], d[5], d[9]
+    h, i, j = d[2], d[6], d[10]
+    return a * (f * j - g_ * i) - b * (e * j - g_ * h) + c * (e * i - f * h)
+
+
 def _vol(g) -> float:
+    """The part's volume AS IT STANDS in the model: a copy that was
+    stretched shares its definition's mesh and carries the stretch in its
+    ``xform``, so the definition's volume alone read the same for every
+    copy, however tall."""
     from core import bim
     try:
-        return abs(float(bim.face_set_volume(list(g.mesh.faces)) or 0.0))
+        if getattr(g, "children", None):
+            from core.group import world_mesh
+            return abs(float(bim.face_set_volume(list(world_mesh(g).faces)) or 0.0))
+        v = abs(float(bim.face_set_volume(list(g.mesh.faces)) or 0.0))
+        m = getattr(g, "xform", None)
+        return v * abs(_det3(m)) if m is not None else v
     except Exception:                                   # noqa: BLE001
         return 0.0
+
+
+def extents(g) -> tuple:
+    """(dx, dy, dz) of the part in the world, after any stretch."""
+    m = getattr(g, "xform", None)
+    pts = []
+    for v in g.mesh.vertices:
+        p = v.position
+        if m is not None:
+            p = m.map(p)
+        pts.append((p.x(), p.y(), p.z()))
+    for kid in getattr(g, "children", None) or []:
+        from core.group import world_mesh
+        for v in world_mesh(kid).vertices:
+            p = v.position
+            if m is not None:
+                p = m.map(p)
+            pts.append((p.x(), p.y(), p.z()))
+    if not pts:
+        return 0.0, 0.0, 0.0
+    xs, ys, zs = zip(*pts)
+    return max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)
+
+
+def _money(text):
+    try:
+        return float(str(text).replace(",", "").split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+_LIVE: dict = {}
+
+
+def live_rows(g) -> list:
+    """Cached :func:`_live_rows` (a click must stay instant): the key is
+    what a stretch or an edit changes — the matrix, the mesh and its size,
+    the stored rows."""
+    m = getattr(g, "xform", None)
+    rec = ((g.ext or {}).get(B.EXT_KEY)) or {}
+    key = (id(g.mesh), len(g.mesh.faces), len(g.mesh.vertices),
+           tuple(round(x, 9) for x in m.data()) if m is not None else None,
+           repr(rec.get("info")))
+    hit = _LIVE.get(id(g))
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    if g.mesh.faces and len(g.mesh.faces) > 3000:
+        return [list(r) for r in (rec.get("info") or []) if r and len(r) > 1]
+    rows = _live_rows(g)
+    if len(_LIVE) > 4000:
+        _LIVE.clear()
+    _LIVE[id(g)] = (key, rows)
+    return rows
+
+
+def _live_rows(g) -> list:
+    """The part's info rows measured again from its geometry now: size,
+    concrete, quantity, length and the amounts follow a part that was
+    stretched, shortened or scaled after it was made (the unit prices stay
+    those it was priced with)."""
+    rec = ((g.ext or {}).get(B.EXT_KEY)) or {}
+    rows = [list(r) for r in (rec.get("info") or []) if r and len(r) > 1]
+    if not rows:
+        return rows
+    kind = rec.get("kind", "")
+    dx, dy, dz = extents(g)
+    v = _vol(g)
+    have = {r[0] for r in rows}
+    new = {}
+    qty = None
+    if kind in CONCRETE_KINDS:
+        a, b = sorted((dx, dy))
+        if kind in ("column", "stump"):
+            new["ขนาด"] = f"{a:.2f} × {b:.2f} ม. สูง {dz:.2f} ม."
+        elif kind == "footing":
+            new["ขนาด"] = f"{a:.2f} × {b:.2f} × {dz:.2f} ม."
+        elif kind == "beam":
+            new["ขนาด"] = f"{a:.2f} × {dz:.2f} ม."
+            if "ความยาวสุทธิ (ระหว่างหน้าเสา)" in have:
+                new["ความยาวสุทธิ (ระหว่างหน้าเสา)"] = f"{b:.2f} ม."
+        elif kind == "slab" and "ขนาดห้อง" in have:
+            new["ขนาดห้อง"] = f"{a:.2f} × {b:.2f} ม. หนา {dz:.2f} ม."
+        new["คอนกรีต"] = f"{v:.3f} ลบ.ม."
+        qty, unit = v, "ลบ.ม."
+    elif kind in STEEL_KINDS:
+        kg = v * STEEL_KG_M3
+        L = max(dx, dy, dz)
+        if "ความยาว" in have:
+            new["ความยาว"] = f"{L:.2f} ม."
+        qty, unit = kg, "กก."
+    if qty is not None:
+        old_q = next((r[1] for r in rows if r[0] == "ปริมาณ"), "")
+        if old_q and "·" in old_q and kind in STEEL_KINDS:
+            new["ปริมาณ"] = f"{max(dx, dy, dz):,.2f} ม. · {qty:,.2f} {unit}"
+        elif old_q:
+            new["ปริมาณ"] = f"{qty:,.3f} {unit}"
+        mat = _money(next((r[1] for r in rows if r[0] == "ราคาวัสดุ/หน่วย"), "")) or 0.0
+        lab = _money(next((r[1] for r in rows if r[0] == "ค่าแรง/หน่วย"), "")) or 0.0
+        if "ค่าวัสดุ" in have:
+            new["ค่าวัสดุ"] = f"{qty * mat:,.2f} บาท"
+        if "ค่าแรง" in have:
+            new["ค่าแรง"] = f"{qty * lab:,.2f} บาท"
+        if "รวม" in have:
+            new["รวม"] = f"{qty * (mat + lab):,.2f} บาท (ยังไม่คูณ Factor F)"
+    return [[k, new.get(k, val)] for k, val in rows]
+
+
+def refresh(g) -> bool:
+    """Write :func:`live_rows` back to the part (after a stretch), so the
+    BOQ lines that read the rows agree with the model. True when changed."""
+    rec = ((g.ext or {}).get(B.EXT_KEY)) or {}
+    if not rec.get("info"):
+        return False
+    rows = _live_rows(g)
+    if rows == [list(r) for r in rec["info"] if r and len(r) > 1]:
+        return False
+    ext = dict(g.ext)
+    ext[B.EXT_KEY] = dict(rec, info=rows)
+    g.ext = ext
+    return True
 
 
 def unit_rates(data) -> dict:

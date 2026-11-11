@@ -2828,6 +2828,18 @@ class ScaleVerticesCommand(Command):
             scene.version += 1
 
 
+def _refresh_part(group) -> None:
+    """A WANIC building part keeps its size, concrete and price as rows:
+    measure them again after it was stretched (and after the undo)."""
+    if not ((getattr(group, "ext", None) or {}).get("wanic_building") or {}).get("info"):
+        return
+    try:
+        from core.wanic_partprice import refresh
+        refresh(group)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
 class ScaleGroupCommand(Command):
     """Uniformly scale a whole group's isolated mesh about ``center``.
     Snapshot undo/redo on the group's own mesh."""
@@ -2847,12 +2859,14 @@ class ScaleGroupCommand(Command):
         if getattr(self.group, "xform", None) is not None:
             self.group.xform = scale_matrix(
                 self.center, self.factor, self.axes) * self.group.xform
+            _refresh_part(self.group)
             scene.version += 1
             return
         gmesh = self.group.mesh
         if self._after is not None:  # redo
             gmesh.restore_state(self._after)
             self.group.axes = self._axes_after
+            _refresh_part(self.group)
             scene.version += 1
             return
         self._before = gmesh.capture_state()
@@ -2865,6 +2879,7 @@ class ScaleGroupCommand(Command):
         carry_axes(self.group, m)             # the origin moves with it (#44)
         self._axes_after = self.group.axes
         self._after = gmesh.capture_state()
+        _refresh_part(self.group)
         scene.version += 1
 
     def undo(self, scene) -> None:
@@ -2872,11 +2887,13 @@ class ScaleGroupCommand(Command):
             self.group.xform = scale_matrix(
                 self.center, invert_scale_factor(self.factor),
                 self.axes) * self.group.xform
+            _refresh_part(self.group)
             scene.version += 1
             return
         if self._before is not None:
             self.group.mesh.restore_state(self._before)
             self.group.axes = self._axes_before
+            _refresh_part(self.group)
             scene.version += 1
 
 

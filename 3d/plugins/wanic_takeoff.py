@@ -250,7 +250,8 @@ class TakeoffPanel(QWidget):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(self._refresh_if_shown)
+        self._stale = False
 
     # ---- document data ----------------------------------------------------
     def data(self) -> dict:
@@ -513,6 +514,21 @@ class TakeoffPanel(QWidget):
     # ---- display ----------------------------------------------------------------
     def schedule(self) -> None:
         if not self._loading:
+            self._timer.start()
+
+    def _refresh_if_shown(self) -> None:
+        """Measuring the model takes seconds on a large house: only while
+        the panel is on screen; a hidden one catches up when it is shown."""
+        if not self.isVisible():
+            self._stale = True
+            return
+        self._stale = False
+        self.refresh()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if getattr(self, "_stale", False):
+            self._stale = False
             self._timer.start()
 
     def refresh(self) -> None:
