@@ -5,7 +5,7 @@ page edits, exports, take-off measurements and a 3D model viewer."""
 from __future__ import annotations
 
 APP_NAME = "ReadWanicn2027"
-VERSION = "2027.1.0"
+VERSION = "2027.2.0"
 ORG = "WANICNSURVEY"
 DEVELOPER = "นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ"
 #: Releases of this repository carry the installer: the latest tag tells
