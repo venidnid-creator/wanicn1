@@ -66,6 +66,9 @@ def test_report_workbook(tmp_path):
     d = B.default_data()
     d["floors"][0]["rooms"] = [dict(name="a", x=0, y=0, w=4, d=4)]
     R.report_xlsx(B.elements(d), tmp_path / "rc.xlsx")
-    from openpyxl import load_workbook
-    wb = load_workbook(tmp_path / "rc.xlsx")
-    assert wb.sheetnames == ["ตรวจเหล็กเสริม", "ปริมาณตามเบอร์", "เหล็กเสริมตามขนาด"]
+    import zipfile
+    with zipfile.ZipFile(tmp_path / "rc.xlsx") as z:
+        book = z.read("xl/workbook.xml").decode("utf-8")
+        assert len([n for n in z.namelist() if n.startswith("xl/worksheets/sheet")]) == 3
+    for name in ("ตรวจเหล็กเสริม", "ปริมาณตามเบอร์", "เหล็กเสริมตามขนาด"):
+        assert name in book

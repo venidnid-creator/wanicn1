@@ -379,43 +379,35 @@ def axis_names(n: int, letters: bool) -> list[str]:
 
 def report_xlsx(E, path) -> None:
     """สรุปโครงสร้าง คสล.: the checks of every mark, the members by mark
-    and the reinforcement by bar size."""
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill
+    and the reinforcement by bar size — written with the program's own
+    .xlsx writer (the one the BOQ uses), no extra library needed."""
+    from pathlib import Path
     from core import wanic_building as B
-    wb = Workbook()
-    head = Font(bold=True, color="FFFFFF")
-    fill = PatternFill("solid", fgColor="0F2A44")
-    ws = wb.active
-    ws.title = "ตรวจเหล็กเสริม"
-    ws.append(["เบอร์", "ชนิด", "ขนาด / เหล็กเสริม", "ผล", "รายละเอียด"])
-    for c in ws[1]:
-        c.font, c.fill = head, fill
+    from core.wanic_takeoff import _Sheet, _xlsx
     lib = E["lib"]
+    s1 = _Sheet("ตรวจเหล็กเสริม", landscape=True)
+    s1.widths = [10, 14, 60, 12, 90]
+    s1.add(["เบอร์", "ชนิด", "ขนาด / เหล็กเสริม", "ผล", "รายละเอียด"], style=3)
     for mark in sorted(lib):
         sp = lib[mark]
         res = check(mark, sp)
         fields = ", ".join(f"{th} {sp.get(k, '')}" for k, th in B.LIB_FIELDS.get(sp.get("kind"), [])
                            if k in sp)
-        ws.append([mark, B.LIB_KINDS.get(sp.get("kind"), sp.get("kind")), fields,
-                   "ผ่าน" if res.ok else "ตรวจสอบ", "\n".join(res.lines())])
-    ws.column_dimensions["C"].width = 60
-    ws.column_dimensions["E"].width = 80
+        s1.add([mark, B.LIB_KINDS.get(sp.get("kind"), sp.get("kind")), fields,
+                "ผ่าน" if res.ok else "ตรวจสอบ", " · ".join(res.lines())])
     T = takeoff(E)
-    ws2 = wb.create_sheet("ปริมาณตามเบอร์")
-    ws2.append(["เบอร์", "ชนิด", "จำนวน", "คอนกรีต (ลบ.ม.)", "เหล็กเสริม (กก.)"])
-    for c in ws2[1]:
-        c.font, c.fill = head, fill
+    s2 = _Sheet("ปริมาณตามเบอร์", landscape=False)
+    s2.widths = [10, 14, 10, 18, 18]
+    s2.add(["เบอร์", "ชนิด", "จำนวน", "คอนกรีต (ลบ.ม.)", "เหล็กเสริม (กก.)"], style=3)
     for mark, v in sorted(T["by_mark"].items()):
-        ws2.append([mark, B.LIB_KINDS.get(lib.get(mark, {}).get("kind"), ""), v["n"],
-                    round(v["concrete"], 3), round(v["kg"], 2)])
-    ws3 = wb.create_sheet("เหล็กเสริมตามขนาด")
-    ws3.append(["ขนาด", "ชั้นคุณภาพ", "ความยาว (ม.)", "น้ำหนัก (กก.)"])
-    for c in ws3[1]:
-        c.font, c.fill = head, fill
+        s2.add([mark, B.LIB_KINDS.get(lib.get(mark, {}).get("kind"), ""), v["n"],
+                round(v["concrete"], 3), round(v["kg"], 2)])
+    s3 = _Sheet("เหล็กเสริมตามขนาด", landscape=False)
+    s3.widths = [16, 14, 16, 16]
+    s3.add(["ขนาด", "ชั้นคุณภาพ", "ความยาว (ม.)", "น้ำหนัก (กก.)"], style=3)
     for key, v in T["bars"].items():
-        ws3.append([key, v["grade"], round(v["m"], 1), round(v["kg"], 2)])
-    ws3.append(["รวม", "", "", round(T["kg"], 2)])
-    ws3.append(["ลวดผูกเหล็ก", "", "", round(T["wire"], 2)])
-    ws3.append([f"รวมเผื่อเศษ {int(WASTE * 100)}% แล้ว · ลวดผูก {TIE_WIRE_KG_PER_T:g} กก./ตัน"])
-    wb.save(path)
+        s3.add([key, v["grade"], round(v["m"], 1), round(v["kg"], 2)])
+    s3.add(["รวม", "", "", round(T["kg"], 2)])
+    s3.add(["ลวดผูกเหล็ก", "", "", round(T["wire"], 2)])
+    s3.add([f"รวมเผื่อเศษ {int(WASTE * 100)}% แล้ว · ลวดผูก {TIE_WIRE_KG_PER_T:g} กก./ตัน", "", "", ""])
+    Path(path).write_bytes(_xlsx([s1, s2, s3]))

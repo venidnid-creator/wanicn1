@@ -16,7 +16,8 @@
 - ผู้ใช้ Wanicn / รหัสผ่าน Thammawong
 
 ## WANICNSURVEY (cad/ 3d/ launcher/) — workflow `build-windows.yml`
-รุ่นที่กำลังสร้าง: **2026.11.11.1** (dispatch, release=false) จาก commit 3dec99a — งานที่อนุมัติแล้ว:
+รุ่นที่กำลังสร้าง: **2026.11.11.1** (dispatch, release=false — ผู้ใช้จะลองก่อน ยังไม่เผยแพร่) รวมงานที่อนุมัติแล้วทั้งหมดรวมทั้งคำนวณโครงสร้าง
+(รอบแรกล้มเพราะ CI ไม่มี openpyxl → รายงาน RC ใช้ตัวเขียน .xlsx ของโปรแกรมเอง `core.wanic_takeoff._xlsx`):
 1. หลังคา: จั่วสมมาตร (โครงถักบนผนังจั่ว), ทรงไทย, จั่วซ้อน, โครงไม้ — `3d/core/wanic_building.py`
 2. หน้าเริ่มต้น 2027: ธีม 5 แบบ, ไทย/EN, การ์ด 4 ใบ, แผงผู้พัฒนา — `launcher/launcher.py`
    (ส่ง `WANIC_LANG`, `WANIC_START_PANEL` ให้ 2D/3D — `3d/main.py`, `cad/main.py`)
@@ -24,7 +25,7 @@
 4. แก้เลือกวัตถุช้า (`views/extension_api.py on_document_changed` กรองการเลือก) และข้อมูลชิ้นส่วนตามขนาดจริง
    (`core/wanic_partprice.py live_rows/refresh`, `core/history.py ScaleGroupCommand`)
 
-อนุมัติแล้วแต่ **ยังไม่อยู่ในตัวติดตั้ง** (อยู่ในสาขาแล้ว รุ่นถัดไป):
+อนุมัติแล้ว (อยู่ในตัวติดตั้ง 2026.11.11.1 รอบที่สอง):
 5. **คำนวณโครงสร้าง** ขั้น 9 — `3d/core/wanic_calc.py` (โหลด, คานต่อเนื่อง stiffness, SDM/WSD, ASD หลังคา,
    เสา, ฐานราก/เข็ม), `3d/core/wanic_calc_view.py` (SFD/BMD, รายการคำนวณ PDF), ทดสอบ `3d/tests/test_wanic_calc.py`
    ค่าออกแบบ (ผู้ใช้ตกลง): SDM วสท. 011008 (WSD ทางเลือก), fc′ 240, SD40/SR24, SS400 Fy 2450,
@@ -35,7 +36,7 @@
 - [x] เสา: แรงอัดร่วมโมเมนต์ แผนภาพ P-M — `pm_curve`, `pm_ratio`, `draw_pm`
 - [x] แรงลมบนหลังคา: D+W (Cp 0.7, ×4/3) แป/จันทัน + แรงยกที่จุดยึด
 - [ ] ส่งภาพให้อนุมัติ → สร้างตัวติดตั้งรุ่นถัดไป (dispatch build-windows.yml พร้อม version ใหม่)
-- [ ] ถามผู้ใช้: เผยแพร่ Release ของ WANICNSURVEY 2026.11.11.1 หรือไม่
+- [ ] ส่งลิงก์ตัวติดตั้งให้ผู้ใช้ลอง · เผยแพร่ Release เมื่อผู้ใช้สั่งเท่านั้น
 - [ ] (ตัวเลือก) ธีม 5 แบบในหน้าต่างโปรแกรม 2D/3D · ภาพเหล็กเสริมในโมเดล 3D · ค่าเริ่มต้น GB1 3-DB12
 
 ## การทดสอบ/ภาพหน้าจอ
