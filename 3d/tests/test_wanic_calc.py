@@ -128,3 +128,22 @@ def test_the_a3_booklet(tmp_path):
     beams = sum(1 for m in res["members"] if m.group == "beam")
     assert n >= 2 + beams + 1
     assert (tmp_path / "book.pdf").read_bytes().startswith(b"%PDF")
+
+
+def test_presets_and_bar_grade_follow_the_basis():
+    from core import wanic_rc as R
+    d = R.apply_grid(B.default_data(), [4, 4], [4, 4], 1)
+    bar = R.parse_bar("2-DB12")
+    for k in ("sdm", "wsd"):
+        d["calc"] = dict(C.PRESETS[k][1])
+        b_ = C.basis(d)
+        assert C.fy_of(bar, b_) == b_["fy_db"]
+    assert C.fs_of(bar, {"fy_db": 3000.0}) == 1500.0
+    assert C.fs_of(bar, {"fy_db": 4000.0}) == 1700.0                  # 0.5 fy capped at 1,700
+    assert C.fs_of(R.parse_bar("RB9@0.15"), {"fy_rb": 2400.0}) == 1200.0
+    d["calc"] = dict(C.PRESETS["sdm"][1])
+    hi = C.analyse(d)
+    d["calc"] = dict(C.PRESETS["wsd"][1])
+    lo = C.analyse(d)
+    assert len(hi["members"]) == len(lo["members"])
+    assert {v for _t, v in C.LIVE_LOADS} >= {150.0, 200.0, 250.0, 400.0, 500.0}

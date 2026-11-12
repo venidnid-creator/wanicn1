@@ -497,6 +497,16 @@ class RCPanel(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("ค่าที่ใช้ออกแบบ")
         form = QFormLayout(dlg)
+        preset = QComboBox()
+        preset.addItem("— เลือกชุดค่ามาตรฐาน —", "")
+        for k, (th, _v) in C.PRESETS.items():
+            preset.addItem(th, k)
+        form.addRow("ชุดค่ามาตรฐาน", preset)
+        use = QComboBox()
+        use.addItem("— เลือกประเภทการใช้อาคาร (กฎกระทรวง ฉบับที่ 6) —", 0.0)
+        for th, ll in C.LIVE_LOADS:
+            use.addItem(f"{th} — {ll:g} กก./ตร.ม.", ll)
+        form.addRow("ประเภทการใช้อาคาร", use)
         meth = QComboBox()
         meth.addItem("กำลัง (SDM) วสท. 011008", "SDM")
         meth.addItem("หน่วยแรงใช้งาน (WSD)", "WSD")
@@ -517,6 +527,29 @@ class RCPanel(QWidget):
             sp_.setValue(float(b_[key]))
             spins[key] = sp_
             form.addRow(th, sp_)
+        fy = QDoubleSpinBox()
+        fy.setRange(2400, 5000)
+        fy.setDecimals(0)
+        fy.setValue(float(b_["fy_db"]))
+        form.addRow("fy เหล็กข้ออ้อย (กก./ตร.ซม.)", fy)
+        spins["fy_db"] = fy
+
+        def apply_preset(_i=0):
+            k = preset.currentData()
+            if not k:
+                return
+            v = C.PRESETS[k][1]
+            meth.setCurrentIndex(0 if v["method"] == "SDM" else 1)
+            spins["fc"].setValue(v["fc"])
+            fy.setValue(v["fy_db"])
+
+        def apply_use(_i=0):
+            ll = use.currentData()
+            if ll:
+                spins["ll_floor"].setValue(ll)
+
+        preset.currentIndexChanged.connect(apply_preset)
+        use.currentIndexChanged.connect(apply_use)
         from PySide6.QtWidgets import QLineEdit
         texts = {}
         for key, th in (("project", "โครงการ"), ("owner", "เจ้าของ"), ("place", "สถานที่"),

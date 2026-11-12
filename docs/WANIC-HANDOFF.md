@@ -96,4 +96,5 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
   `3d/core/wanic_lateral_view.py` (LateralDialog, รูปด้านแรงแต่ละระดับ, lateral_pages เมื่อมี data["lateral"]), ปุ่ม «แรงด้านข้าง (แผ่นดินไหว/ลม)…» แถวล่าง, tests/test_wanic_lateral.py ใน CI — อนุมัติแล้ว
 - [x] ประมาณราคาเอกชน 8 หมวด — `3d/core/wanic_private_est.py` (ใช้ Q.compute แล้วจัด 8 หมวด, waste_kind แก้ % ได้, ราคาต่อหน่วยแก้ได้เก็บตามชื่อรายการ data["private_est"]["prices"], เหล็กที่ออกแบบ Truss/WF-H/แป เพิ่มตามน้ำหนัก, ดำเนินการ/กำไร % + VAT 7%, save_xlsx 2 แผ่น),
   `3d/core/wanic_private_est_view.py` PrivateEstDialog; ปุ่มใน BoqDialog («💼 ประมาณราคาเอกชน 8 หมวด») และแถวล่าง RCPanel, tests/test_wanic_private_est.py ใน CI — **รออนุมัติ**
-- [ ] ถัดไป: preset SDM/WSD → ตัวติดตั้งรุ่นใหม่ (รอผู้ใช้สั่ง)
+- [x] preset SDM/WSD — wanic_calc.PRESETS (วสท. SDM fc′240 SD40 / กทม.2522 WSD fc′173 SD30), LIVE_LOADS (กฎกระทรวง 6 ข้อ 15), fy_of/fs_of (fs = 0.5fy ≤ 1700) ใช้แทน bar.fy ทุกจุดใน calc/book; กล่อง «ค่าที่ใช้ออกแบบ…» มีชุดค่ามาตรฐาน + ประเภทการใช้อาคาร + fy ข้ออ้อย — **รออนุมัติ**
+- [ ] ถัดไป: ครบตามแผนที่อนุมัติแล้ว → ตัวติดตั้งรุ่นใหม่ (รวมทุกส่วน) เมื่อผู้ใช้สั่ง; ผู้ใช้ยังไม่ได้รายงานผลทดสอบ 2026.11.11.1 → ตัวติดตั้งรุ่นใหม่ (รอผู้ใช้สั่ง)

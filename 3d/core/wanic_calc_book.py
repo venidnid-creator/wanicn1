@@ -21,6 +21,7 @@ import math
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPolygonF
 
+from core import wanic_calc as C
 from core import wanic_rc as R
 
 BLUE = QColor("#1D4ED8")
@@ -141,8 +142,9 @@ def basis_page(bk: Book, b_: dict):
         k = 1 / (1 + fs / (n * 0.375 * fc))
         j = 1 - k / 3
         Rr = 0.5 * 0.375 * fc * k * j
-        rows.append((f"เหล็กเสริม {name}", f"fy {fy:,.0f} · fs {fs:,.0f} ksc · n {n:.0f} · k {k:.2f} · "
-                                          f"j {j:.2f} · R {Rr:.2f} ksc"))
+        used = (name == "SR24") or abs(fy - float(b_.get("fy_db", 4000.0))) < 1
+        rows.append((f"เหล็กเสริม {name}" + (" ✓ ใช้" if used else ""),
+                     f"fy {fy:,.0f} · fs {fs:,.0f} ksc · n {n:.0f} · k {k:.2f} · j {j:.2f} · R {Rr:.2f} ksc"))
     rows += [("หน่วยแรงเฉือนคอนกรีต (ไม่มีเหล็กลูกตั้ง)", f"{0.29 * math.sqrt(fc):.2f} ksc"),
              ("หน่วยแรงเฉือนคอนกรีต (มีเหล็กลูกตั้ง)", f"{1.32 * math.sqrt(fc):.2f} ksc"),
              ("แผ่นพื้น ฐานราก (เฉือนทะลุ)", f"{0.53 * math.sqrt(fc):.2f} ksc"),
@@ -184,13 +186,13 @@ def _span_rows(res, i, b_, fc):
     def need(Mx, bar):
         if Mx <= 0:
             return 0.0
-        fy = bar.fy if bar else 4000.0
+        fy = C.fy_of(bar, b_)
         if sdm:
             Rn = Mx * 100 / (0.9 * bw * 100 * (d * 100) ** 2)
             disc = 1 - 2 * Rn / (0.85 * fc)
             rho = 0.85 * fc / fy * (1 - math.sqrt(max(disc, 0.0)))
             return rho * bw * 100 * d * 100
-        fs = FS[bar.kind] if bar else 1700.0
+        fs = C.fs_of(bar, b_)
         return Mx * 100 / (fs * 0.88 * d * 100)
     if sdm:
         rho_b = 0.85 * 0.85 * fc / 4000 * 6120 / (6120 + 4000)
@@ -209,7 +211,7 @@ def _span_rows(res, i, b_, fc):
     vc = (0.53 * 0.85 if sdm else 0.29) * math.sqrt(fc) * bw * 100 * d * 100
     vs = 0.0
     if st and st.s:
-        vs = 2 * st.area * (st.fy * 0.85 if sdm else 0.5 * st.fy) * d * 100 / (st.s * 100)
+        vs = 2 * st.area * (C.fy_of(st, b_) * 0.85 if sdm else C.fs_of(st, b_)) * d * 100 / (st.s * 100)
     nt = top.n if top else 0
     nb = bot.n if bot else 0
     ast_used = nt * (top.area if top else 0)
@@ -342,9 +344,9 @@ def column_pages(bk: Book, res_all, b_, fc):
             Ag = b * h * 1e4
             As = (main.n * main.area) if main and main.n else 0.0
             Pg = As / Ag if Ag else 0.0
-            fs = FS[main.kind] if main else 1700.0
+            fs = C.fs_of(main, b_)
             if b_["method"] == "SDM":
-                cap = 0.80 * 0.70 * (0.85 * fc * (Ag - As) + (main.fy if main else 4000) * As)
+                cap = 0.80 * 0.70 * (0.85 * fc * (Ag - As) + C.fy_of(main, b_) * As)
                 cap_lab = "φPn (กก.)"
             else:
                 cap = 0.85 * Ag * (0.25 * fc + fs * Pg)

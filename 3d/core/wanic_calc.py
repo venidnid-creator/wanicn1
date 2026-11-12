@@ -56,6 +56,36 @@ DEFAULTS = {
 }
 
 
+#: ชุดค่ามาตรฐาน (preset) of the design basis
+PRESETS = {
+    "sdm": ("วสท. 011008 วิธีกำลัง (SDM) — fc′ 240 · SD40 · U = 1.4D + 1.7L",
+            {"method": "SDM", "fc": 240.0, "fy_db": 4000.0, "fy_rb": 2400.0}),
+    "wsd": ("ข้อบัญญัติ กทม. 2522 หน่วยแรงใช้งาน (WSD) — fc′ 173 · SD30 · fs ≤ 1,500",
+            {"method": "WSD", "fc": 173.0, "fy_db": 3000.0, "fy_rb": 2400.0}),
+}
+#: กฎกระทรวง ฉบับที่ 6 (2527) ข้อ 15 — live load by use (kg/m²)
+LIVE_LOADS = [("ที่พักอาศัย โรงเรียนอนุบาล ห้องน้ำ-ห้องส้วม", 150.0),
+              ("ห้องแถว ตึกแถวพักอาศัย อาคารชุด หอพัก โรงแรม", 200.0),
+              ("สำนักงาน ธนาคาร", 250.0),
+              ("อาคารพาณิชย์ โรงเรียน มหาวิทยาลัย โรงพยาบาล / ห้องโถง บันได ทางเดิน (อาคารชุด สำนักงาน)", 300.0),
+              ("ตลาด ห้างสรรพสินค้า หอประชุม ภัตตาคาร ห้องประชุม ที่จอดรถยนต์นั่ง", 400.0),
+              ("คลังสินค้า โรงกีฬา พิพิธภัณฑ์ โรงงาน โรงพิมพ์ / ห้องโถง บันได ทางเดิน (ตลาด ห้าง)", 500.0),
+              ("ห้องเก็บหนังสือของห้องสมุด", 600.0),
+              ("ที่จอดรถหรือเก็บรถยนต์บรรทุกเปล่า", 800.0)]
+
+
+def fy_of(bar, b_) -> float:
+    """The bar's yield strength from the design basis (SD30 / SD40, SR24)."""
+    if bar is None:
+        return float(b_.get("fy_db", 4000.0))
+    return float(b_.get("fy_rb" if bar.kind == "RB" else "fy_db", bar.fy))
+
+
+def fs_of(bar, b_) -> float:
+    """WSD allowable steel stress: 0.5 fy, not over 1,700 ksc."""
+    return min(0.5 * fy_of(bar, b_), 1700.0)
+
+
 def basis(data) -> dict:
     return {**DEFAULTS, **((data or {}).get("calc") or {})}
 
@@ -215,18 +245,18 @@ def beam_capacity(spec: dict, b_: dict, fc: float) -> dict:
             out[key] = 0.0
             continue
         As = bar.n * bar.area                       # cm²
-        fy = bar.fy
+        fy = fy_of(bar, b_)
         if b_["method"] == "SDM":
             a = As * fy / (0.85 * fc * bw * 100)    # cm
             Mn = As * fy * (d * 100 - a / 2) / 100  # kg·m
             out[key] = 0.90 * Mn
-        else:                                       # WSD: fs = 0.5 fy, j ≈ 0.875
-            out[key] = As * 0.5 * fy * 0.875 * d * 100 / 100
+        else:                                       # WSD: fs = 0.5 fy ≤ 1,700 ksc, j ≈ 0.875
+            out[key] = As * fs_of(bar, b_) * 0.875 * d * 100 / 100
     st = R.parse_bar(spec.get("stir"))
     vc = (0.53 if b_["method"] == "SDM" else 0.29) * math.sqrt(fc) * bw * 100 * d * 100
     vs = 0.0
     if st and st.s:
-        vs = 2 * st.area * (st.fy if b_["method"] == "SDM" else 0.5 * st.fy) * d * 100 / (st.s * 100)
+        vs = 2 * st.area * (fy_of(st, b_) if b_["method"] == "SDM" else fs_of(st, b_)) * d * 100 / (st.s * 100)
     out["V"] = (0.85 if b_["method"] == "SDM" else 1.0) * (vc + vs)
     out["d"] = d
     return out
@@ -238,7 +268,7 @@ def column_capacity(spec: dict, b_: dict, fc: float) -> float:
     Ag = b * h * 1e4
     bar = R.parse_bar(spec.get("main"))
     Ast = bar.n * bar.area if bar and bar.n else 0.0
-    fy = bar.fy if bar else 4000.0
+    fy = fy_of(bar, b_)
     if b_["method"] == "SDM":
         return 0.80 * 0.70 * (0.85 * fc * (Ag - Ast) + fy * Ast)
     return 0.85 * (0.25 * fc * Ag + 0.40 * fy * Ast)
@@ -309,7 +339,7 @@ def pm_curve(spec: dict, b_: dict, steps: int = 40) -> list:
     fc = b_["fc"]
     n_ = bar.n if bar and bar.n else 4
     As1 = (n_ / 2) * (bar.area if bar else 1.13)          # cm², each face
-    fy = bar.fy if bar else 4000.0
+    fy = fy_of(bar, b_)
     Es = 2.04e6
     B_, H_ = b * 100, h * 100
     dp = (R.COVER["column"] + 0.006 + (bar.d if bar else 12) / 2000.0) * 100
@@ -511,10 +541,10 @@ def analyse(data) -> dict:
         if bar and bar.s:
             As = bar.area / bar.s                                  # cm²/m
             if b_["method"] == "SDM":
-                aa = As * bar.fy / (0.85 * fc * 100)
-                cap = 0.90 * As * bar.fy * (d * 100 - aa / 2) / 100
+                aa = As * fy_of(bar, b_) / (0.85 * fc * 100)
+                cap = 0.90 * As * fy_of(bar, b_) * (d * 100 - aa / 2) / 100
             else:
-                cap = As * 0.5 * bar.fy * 0.875 * d * 100 / 100
+                cap = As * fs_of(bar, b_) * 0.875 * d * 100 / 100
         else:
             cap = 0.0
         if not sl.get("ground") and not spc.get("ground"):
