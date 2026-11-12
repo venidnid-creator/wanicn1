@@ -945,6 +945,16 @@ class BoqDialog(QDialog):
             "ค่าวัสดุ/หน่วย", "ค่าวัสดุ", "ค่าแรง/หน่วย", "ค่าแรง", "รวม (บาท)",
             "ที่มา / หมายเหตุ"]
 
+    def private_est(self):
+        """ประมาณราคางานเอกชน: the same quantities in eight categories,
+        the contractor's waste, overhead and profit, VAT."""
+        from core.wanic_private_est_view import PrivateEstDialog
+        d = self.panel.data()
+        dlg = PrivateEstDialog(self, d)
+        if dlg.exec() == PrivateEstDialog.Accepted:
+            d["private_est"] = dlg.params()
+            self.panel._write(d)
+
     def __init__(self, panel):
         super().__init__(panel)
         from PySide6.QtWidgets import QTabWidget
@@ -975,7 +985,8 @@ class BoqDialog(QDialog):
                 ("📤 ส่งเข้า ถอดปริมาณ (ปร.1–ปร.4)", "#2E7D4F", self.send),
                 ("📊 บันทึก Excel (ปร.1–ปร.4 + BOQ)", "#0F2A44",
                  self.save_xlsx),
-                ("📄 บันทึก CSV", "#3B6FB6", self.save_csv)):
+                ("📄 บันทึก CSV", "#3B6FB6", self.save_csv),
+                ("💼 ประมาณราคาเอกชน 8 หมวด", "#7C3AED", self.private_est)):
             b = QPushButton(text)
             b.setStyleSheet(f"QPushButton{{background:{color};color:white;"
                             "font-weight:bold;padding:6px;border-radius:6px}}")

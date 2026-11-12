@@ -109,6 +109,9 @@ class RCPanel(QWidget):
         self.lat_btn.clicked.connect(self.edit_lateral)
         row.addWidget(self.book_btn)
         row.addWidget(self.lat_btn)
+        self.est_btn = QPushButton("ประมาณราคาเอกชน 8 หมวด…")
+        self.est_btn.clicked.connect(self.edit_estimate)
+        row.addWidget(self.est_btn)
         row.addStretch(1)
         col.addLayout(row)
         self.roof_row = QWidget()
@@ -571,6 +574,19 @@ class RCPanel(QWidget):
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
         self.refresh()
+
+    def edit_estimate(self):
+        from core.wanic_private_est_view import PrivateEstDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = PrivateEstDialog(self, d)
+        if dlg.exec() != PrivateEstDialog.Accepted:
+            return
+        d["private_est"] = dlg.params()
+        bp._write(d)
+        self.status.setText("บันทึกค่าประมาณราคางานเอกชนแล้ว")
 
     def edit_lateral(self):
         from core.wanic_lateral_view import LateralDialog

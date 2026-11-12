@@ -93,5 +93,7 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
 - [x] Flat Slab + Drop (DDM) — `3d/core/wanic_flatslab.py` (min_thickness, design: Mo, สัมประสิทธิ์ช่วงใน/ริม, แถบเสา 75/60/100%, As SDM/WSD ≥0.0018bh, punching รอบเสา/รอบ drop เสาใน/ขอบ/มุม; ช่วงจาก data["grid"] หรือ grid_axes),
   `3d/core/wanic_flatslab_view.py` (FlatSlabDialog + ผังแถบเสา/drop, flatslab_pages เมื่อมี data["flatslab"]), ปุ่มในขั้น 5 พื้น, tests/test_wanic_flatslab.py ใน CI — อนุมัติแล้ว
 - [x] แรงด้านข้าง — `3d/core/wanic_lateral.py` (level_weights จาก cards แบบ DL, seismic มยผ.1301/1302-61 Fa/Fv/SDS/SD1/T/Cs + k / สูตรเดิม ZIKCSW, wind มยผ.1311-50 q·Ce·Cg2·Cp1.3 / กฎกระทรวง 6, analyse ตรวจเสา P-M ด้วย 0.75(1.4D+1.7L+1.87E/1.6W); eq_on=False ค่าเริ่มต้น (ต้องกรอก Ss/S1 ตามอำเภอ)),
-  `3d/core/wanic_lateral_view.py` (LateralDialog, รูปด้านแรงแต่ละระดับ, lateral_pages เมื่อมี data["lateral"]), ปุ่ม «แรงด้านข้าง (แผ่นดินไหว/ลม)…» แถวล่าง, tests/test_wanic_lateral.py ใน CI — **รออนุมัติ**
-- [ ] ถัดไป: ราคาเอกชน 8 หมวด (waste % แก้ได้) → preset SDM/WSD → ตัวติดตั้งรุ่นใหม่ (รอผู้ใช้สั่ง)
+  `3d/core/wanic_lateral_view.py` (LateralDialog, รูปด้านแรงแต่ละระดับ, lateral_pages เมื่อมี data["lateral"]), ปุ่ม «แรงด้านข้าง (แผ่นดินไหว/ลม)…» แถวล่าง, tests/test_wanic_lateral.py ใน CI — อนุมัติแล้ว
+- [x] ประมาณราคาเอกชน 8 หมวด — `3d/core/wanic_private_est.py` (ใช้ Q.compute แล้วจัด 8 หมวด, waste_kind แก้ % ได้, ราคาต่อหน่วยแก้ได้เก็บตามชื่อรายการ data["private_est"]["prices"], เหล็กที่ออกแบบ Truss/WF-H/แป เพิ่มตามน้ำหนัก, ดำเนินการ/กำไร % + VAT 7%, save_xlsx 2 แผ่น),
+  `3d/core/wanic_private_est_view.py` PrivateEstDialog; ปุ่มใน BoqDialog («💼 ประมาณราคาเอกชน 8 หมวด») และแถวล่าง RCPanel, tests/test_wanic_private_est.py ใน CI — **รออนุมัติ**
+- [ ] ถัดไป: preset SDM/WSD → ตัวติดตั้งรุ่นใหม่ (รอผู้ใช้สั่ง)
