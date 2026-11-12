@@ -1942,7 +1942,7 @@ def s_beams(sh, E, lvl):
                     v(x1 + nx * b / 2 * sg, y1 + ny * b / 2 * sg), "struct",
                     0.35, True)
         m = v((x0 + x1) / 2 + nx * 0.25, (y0 + y1) / 2 + ny * 0.25)
-        sh.text(m, bm["mark"], 2.2, "center", "struct", True,
+        sh.text(m, f"{bm['mark']} {float(bm.get('z', 0.0)):+.2f}", 2.2, "center", "struct", True,
                 90 if abs(x1 - x0) < 1e-6 else 0)
     cols = [c for c in E["columns"] if c["floor"] == min(lvl, E["n"] - 1)] \
         if lvl < E["n"] else [c for c in E["columns"] if c["floor"] == E["n"] - 1]
@@ -2495,6 +2495,13 @@ def build_set(data, info=None,
             lambda sh, _a: s_schedules(sh, E), "-")
         add("S", "แบบขยายเหล็กเสริมฐานรากและคาน",
             lambda sh, _a: s_rebar_details(sh, E), "ตามระบุ")
+        from core import wanic_struct_sheets as SS
+        add("S", "รายละเอียดฐานราก", lambda sh, _a: SS.s_footing_details(sh, E), "1:40")
+        add("S", "รายละเอียดเสา", lambda sh, _a: SS.s_column_details(sh, E), "1:25")
+        add("S", "รายละเอียดพื้น", lambda sh, _a: SS.s_slab_details(sh, E), "1:25")
+        for lines in SS.beam_sheets(E):
+            add("S", "รายละเอียดคาน", lambda sh, _a, lines=lines: SS.s_beam_details(sh, E, lines), "1:30")
+        add("S", "รายละเอียดการเสริมเหล็กคานทั่วไป", lambda sh, _a: SS.s_typical_beam(sh, E), "1:50")
     if "SN" in groups:
         add("SN", "สารบัญแบบ สัญลักษณ์ รายการประกอบแบบสุขาภิบาล",
             lambda sh, all_: sn_index(sh, all_), "-")
