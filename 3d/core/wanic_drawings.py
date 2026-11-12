@@ -2502,6 +2502,11 @@ def build_set(data, info=None,
         for lines in SS.beam_sheets(E):
             add("S", "รายละเอียดคาน", lambda sh, _a, lines=lines: SS.s_beam_details(sh, E, lines), "1:30")
         add("S", "รายละเอียดการเสริมเหล็กคานทั่วไป", lambda sh, _a: SS.s_typical_beam(sh, E), "1:50")
+        from core import wanic_steel_sheets as ST
+        if ST.has_steel(data):
+            add("S", "มาตรฐานงานเชื่อม", lambda sh, _a: ST.s_weld_standard(sh, E), "-")
+            add("S", "รอยต่อเหล็กรูปพรรณ แผ่นรองเสา ส้นโครง Truss",
+                lambda sh, _a: ST.s_steel_connections(sh, E, data), "ตามระบุ")
     if "SN" in groups:
         add("SN", "สารบัญแบบ สัญลักษณ์ รายการประกอบแบบสุขาภิบาล",
             lambda sh, all_: sn_index(sh, all_), "-")
