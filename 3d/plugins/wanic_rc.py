@@ -133,6 +133,10 @@ class RCPanel(QWidget):
         self.steel_btn.setToolTip("เสา H / คาน WF (ASD) จัดกลุ่มตามเบอร์ พร้อมแผ่นเหล็กรองฐาน")
         self.steel_btn.clicked.connect(self.edit_steel)
         rr.addWidget(self.steel_btn)
+        self.purlin_btn = QPushButton("แป / Sag Rod / Tie Rod…")
+        self.purlin_btn.setToolTip("แปเหล็กตัวซี · เหล็กยึดแป · ค้ำยันทแยง X-Bracing · แปผนังเมทัลชีท")
+        self.purlin_btn.clicked.connect(self.edit_purlin)
+        rr.addWidget(self.purlin_btn)
         rr.addStretch(1)
         col.addWidget(self.roof_row)
         self.grid_btn = QPushButton("โหมดกริด: สร้างผังจากเส้นแกน…")
@@ -557,6 +561,20 @@ class RCPanel(QWidget):
         R.apply_grid(d, sx, sy, n, omit, inner_walls=dlg.inner_walls())
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
+        self.refresh()
+
+    def edit_purlin(self):
+        from core.wanic_purlin_view import PurlinDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = PurlinDialog(self, d)
+        if dlg.exec() != PurlinDialog.Accepted:
+            return
+        d["purlin"] = dlg.params()
+        bp._write(d)
+        self.status.setText("บันทึกแป / Sag Rod / Tie Rod แล้ว — รวมในรูปเล่มรายการคำนวณ A4")
         self.refresh()
 
     def edit_steel(self):

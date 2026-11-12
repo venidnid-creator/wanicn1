@@ -395,6 +395,11 @@ def make_book(res_all, data, path, info: dict) -> int:
             truss_pages(bk, tp, td)
         except ValueError:
             pass
+    if (data or {}).get("purlin"):
+        from core import wanic_purlin as PU
+        from core.wanic_purlin_view import purlin_pages
+        pp, pr = PU.design_of(data)
+        purlin_pages(bk, pp, pr)
     if (data or {}).get("steel"):
         from core import wanic_steel as S
         from core.wanic_steel_view import steel_pages
