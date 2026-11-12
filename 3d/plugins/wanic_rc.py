@@ -83,6 +83,11 @@ class RCPanel(QWidget):
                             "(ไม่เปลี่ยนขนาดหน้าตัด)")
         self.fix.clicked.connect(self.fix_selected)
         row.addWidget(self.fix)
+        self.advice_btn = QPushButton("แก้ตามคำแนะนำ (ทุกเบอร์)")
+        self.advice_btn.setToolTip("ปรับขนาด/เหล็กของทุกเบอร์ที่ไม่ผ่าน ตามคำแนะนำ แล้วคำนวณซ้ำจนผ่าน "
+                                   "(รวมข้อกำหนดเหล็กขั้นต่ำ) — ถามยืนยันก่อน")
+        self.advice_btn.clicked.connect(self.apply_advice)
+        row.addWidget(self.advice_btn)
         self.select_btn = QPushButton("เลือกชิ้นส่วนในโมเดล")
         self.select_btn.clicked.connect(self.select_in_model)
         row.addWidget(self.select_btn)
@@ -220,6 +225,7 @@ class RCPanel(QWidget):
         self.grid_btn.setVisible(self.step == "grid")
         self.flat_btn.setVisible(self.step == "slab")
         self.fix.setVisible(self.step in STEP_MARKS)
+        self.advice_btn.setVisible(self.step == "calc")
         calc = self.step == "calc"
         self.diagram.setVisible(calc)
         self.checks.setVisible(not calc)
@@ -351,9 +357,15 @@ class RCPanel(QWidget):
             return
         names = {"roof": "หลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก/เข็ม"}
         ms = self._calc["members"]
+        from core import wanic_advice as AD
+        try:
+            tips = AD.advice_by_member(self._calc, self.data())
+        except Exception:                            # noqa: BLE001 - advice never breaks the table
+            tips = {}
         rows = [(names[m.group], m.name, m.demand, m.capacity, f"{m.ratio:.2f}",
-                 "✓ ผ่าน" if m.ok else "✗ ไม่ผ่าน") for m in ms]
-        self._fill(["กลุ่ม", "ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล"], rows)
+                 "✓ ผ่าน" if m.ok else "✗ ไม่ผ่าน", tips.get(m.name, "")) for m in ms]
+        self._fill(["กลุ่ม", "ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล",
+                    "คำแนะนำ (เพิ่มอะไร จุดไหน)"], rows)
         for r, m in enumerate(ms):
             for c in (4, 5):
                 self.table.item(r, c).setForeground(QColor("#15803D") if m.ok else QColor("#B91C1C"))
@@ -606,6 +618,28 @@ class RCPanel(QWidget):
         R.apply_grid(d, sx, sy, n, omit, inner_walls=dlg.inner_walls())
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
+        self.refresh()
+
+    def apply_advice(self):
+        """Apply the advice to every failing mark, after a confirmation that
+        lists the changes; the RC designer's undo brings it back."""
+        import copy
+        from core import wanic_advice as AD
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        trial = copy.deepcopy(d)
+        done = AD.apply_fixes(trial)
+        if not done:
+            QMessageBox.information(self, TITLE, "ทุกชิ้นส่วนผ่านแล้ว — ไม่มีอะไรต้องแก้")
+            return
+        if QMessageBox.question(self, TITLE, "จะปรับเบอร์ต่อไปนี้ให้ผ่าน:\n\n" + "\n".join(f"• {t}" for t in done)
+                                + "\n\nตกลงหรือไม่? (แก้คืนได้ด้วย Undo)") != QMessageBox.Yes:
+            return
+        d["library"] = trial.get("library") or {}
+        bp._write(d)
+        self.status.setText(f"ปรับตามคำแนะนำแล้ว {len(done)} รายการ — คำนวณใหม่แล้ว")
         self.refresh()
 
     def edit_estimate(self):

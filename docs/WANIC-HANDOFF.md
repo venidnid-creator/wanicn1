@@ -103,7 +103,8 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
        รูปฐานรากทุกเบอร์ (แปลน + รูปตัด, ทราย/คอนกรีตหยาบ 0.05) · หน้าตัดเสาแยกช่วงชั้น · รูปตัดพื้นต่อเนื่อง (L/4) ·
        รูปเหล็กคานทั่วไป (Start/Mid/End/CAN, L/4 L/5) · ค่าระดับกำกับคาน/พื้นในแปลน — `3d/core/wanic_drawings.py` กลุ่ม S
 2. [x] (อนุมัติแล้ว) `3d/core/wanic_steel_sheets.py` (s_weld_standard, s_steel_connections, connection_rows, plate_rows; เพิ่มใน build_set เมื่อ has_steel) — แบบงานเหล็ก: มาตรฐานงานเชื่อม + รอยต่อเสา-คาน/คาน-คาน ตามความลึกคาน + Turnbuckle (เมื่อมี data["steel"/"truss"/"purlin"])
-3. [x] (รออนุมัติภาพ) `3d/core/wanic_calc_cards.py` (footing_rows/pages, slab_rows/pages + coef, roof_page, attach_lateral_moments → แถว Me, critical_members); make_book(critical=) ถามตอนส่งออก — รูปเล่ม: การ์ดฐานราก (P Mx My แรงดันดิน ความลึก As เหล็ก เฉือน Vc) · การ์ดพื้นพร้อมรูป (ทางเดียว/สองทาง) · หน้าหลังคาแยกชิ้น (Z=M/Fy, แอ่น) · แถว Me · พิมพ์เฉพาะตัววิกฤต
+3. [x] (อนุมัติแล้ว) `3d/core/wanic_calc_cards.py` (footing_rows/pages, slab_rows/pages + coef, roof_page, attach_lateral_moments → แถว Me, critical_members); make_book(critical=) ถามตอนส่งออก — รูปเล่ม: การ์ดฐานราก (P Mx My แรงดันดิน ความลึก As เหล็ก เฉือน Vc) · การ์ดพื้นพร้อมรูป (ทางเดียว/สองทาง) · หน้าหลังคาแยกชิ้น (Z=M/Fy, แอ่น) · แถว Me · พิมพ์เฉพาะตัววิกฤต
+   + [x] (รออนุมัติภาพ) คำแนะนำเมื่อไม่ผ่าน — `3d/core/wanic_advice.py` (beam/column/slab/footing/roof_advice, advise, mark_fixes, apply_fixes + R.suggest, fit_in_row); คอลัมน์ «คำแนะนำ» ขั้น 9, ปุ่ม «แก้ตามคำแนะนำ (ทุกเบอร์)», หน้า Advice ในรูปเล่ม
 4. [ ] ออกแบบคาน: น้ำหนักจุด/แผ่เพิ่มเอง · คานยื่น · Checkload (Wcol / Wcol-Area / Wfloor)
 5. [ ] บันได คสล. ช่วงตรง / L / 2 ช่วง + คานชานพัก + รูปตัด
 6. [ ] A-01 สัญลักษณ์ + รหัสวัสดุ F/W/C · ป้ายห้อง · ABCD · ตารางประตู-หน้าต่าง · บ่อดักไขมัน/บ่อตะแกรง · ถังบำบัดตามจำนวนผู้ใช้ · ข้อกำหนด EE/SN

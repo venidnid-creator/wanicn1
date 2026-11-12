@@ -59,3 +59,24 @@ def test_critical_book_is_shorter(tmp_path):
     res = C.analyse(d)
     CC.attach_lateral_moments(res, d)
     assert any(getattr(m.diagram, "me", 0) > 0 for m in res["members"] if m.group == "beam")
+
+
+def test_advice_says_what_and_where_and_the_fixes_pass():
+    from core import wanic_advice as AD
+    d = _d()
+    res = C.analyse(d)
+    tips = AD.advise(res, d)
+    assert tips
+    text = " ".join(" ".join(t) for _n, t in tips)
+    assert "กลางช่วง" in text and "เหนือหัวเสา" in text and "ขั้น" in text
+    done = AD.apply_fixes(d)
+    assert done
+    res = C.analyse(d)
+    assert all(m.ok for m in res["members"])
+    assert all(r["ok"] for r in CC.slab_rows(res, d)) and all(r["ok"] for r in CC.footing_rows(res, d))
+    assert all(r.ok for r in R.check_library(B.library_of(d)).values())
+
+
+def test_bars_fit_in_the_beam():
+    from core import wanic_advice as AD
+    assert AD.fit_in_row(0.20, 12) == 4 and AD.fit_in_row(0.20, 16) == 3

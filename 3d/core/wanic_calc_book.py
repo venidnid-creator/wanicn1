@@ -382,6 +382,45 @@ def list_page(bk: Book, title: str, tag: str, members):
             y = 34
 
 
+def advice_page(bk: Book, res_all, data):
+    """รายการที่ไม่ผ่าน และคำแนะนำ — what to add, where, for each failing
+    member; then the change of each library mark that makes all pass."""
+    from core import wanic_advice as AD
+    tips = AD.advise(res_all, data)
+    if not tips:
+        return
+    bk.page("รายการที่ไม่ผ่าน และคำแนะนำการแก้ไข", "Advice")
+    y = 34
+    for name, lines in tips:
+        if y > 228:
+            bk.page("รายการที่ไม่ผ่าน และคำแนะนำการแก้ไข", "Advice")
+            y = 34
+        bk.text(12, y, 380, 6.5, f"✗ {name}", 5.8, RED, bold=True)
+        y += 6.5
+        for ln in lines:
+            bk.text(20, y, 372, 6, f"→ {ln}", 5.4)
+            y += 6
+        y += 1.5
+    try:
+        import copy
+        trial = copy.deepcopy(data)
+        done = AD.apply_fixes(trial)
+    except Exception:                                    # noqa: BLE001
+        done = []
+    if done:
+        if y > 200:
+            bk.page("รายการที่ไม่ผ่าน และคำแนะนำการแก้ไข", "Advice")
+            y = 34
+        y += 4
+        bk.text(12, y, 380, 7, "สรุปการแก้ตามเบอร์ (คำนวณซ้ำแล้วผ่านทุกรายการ):", 6.2, GREEN, bold=True)
+        y += 8
+        for t in done:
+            bk.text(20, y, 372, 6, f"• {t}", 5.4)
+            y += 6
+    bk.text(12, 244, 290, 6, "คำแนะนำคิดตามเกณฑ์เดียวกับรายการคำนวณ (วสท. 011008 / ACI 318 · AISC ASD) — "
+            "ผู้ออกแบบต้องตรวจและยืนยันก่อนใช้", 5.0)
+
+
 def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
     """Write the booklet; returns the number of pages. ``critical``: only the
     most stressed beam / column / slab / footing of each mark (a shorter book
@@ -433,6 +472,7 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
         if sel:
             list_page(bk, title, tag, sel)
     list_page(bk, "สรุปผลการตรวจสอบทุกชิ้นส่วน", "Summary", ms)
+    advice_page(bk, res_all, data)
     n = bk.n
     bk.close()
     return n
