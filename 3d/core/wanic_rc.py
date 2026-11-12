@@ -455,7 +455,8 @@ def grid_rooms(sx: list, sy: list, omit=(), start_id: int = 1, names=None) -> li
     return rooms
 
 
-def apply_grid(data: dict, sx: list, sy: list, floors: int, omit=(), omit_upper=None) -> dict:
+def apply_grid(data: dict, sx: list, sy: list, floors: int, omit=(), omit_upper=None,
+               inner_walls: bool = True) -> dict:
     """The building's floors rebuilt from the grid (``floors`` storeys);
     the grid is kept in data["grid"] to edit later. Openings and stairs of
     the replaced floors are dropped (their walls are new)."""
@@ -471,5 +472,7 @@ def apply_grid(data: dict, sx: list, sy: list, floors: int, omit=(), omit_upper=
         fl["rooms"] = rooms
         out.append(fl)
     data["floors"] = out
-    data["grid"] = {"x": list(sx), "y": list(sy), "floors": floors, "omit": [list(o) for o in omit]}
+    data.setdefault("settings", {})["inner_walls"] = bool(inner_walls)
+    data["grid"] = {"x": list(sx), "y": list(sy), "floors": floors, "omit": [list(o) for o in omit],
+                    "inner_walls": bool(inner_walls)}
     return data

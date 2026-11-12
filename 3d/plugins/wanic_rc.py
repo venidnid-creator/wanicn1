@@ -554,7 +554,7 @@ class RCPanel(QWidget):
                 != QMessageBox.Yes:
             return
         sx, sy, n, omit = dlg.values()
-        R.apply_grid(d, sx, sy, n, omit)
+        R.apply_grid(d, sx, sy, n, omit, inner_walls=dlg.inner_walls())
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
         self.refresh()

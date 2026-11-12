@@ -29,3 +29,13 @@ def test_grid_builds_the_plan_with_columns_on_every_node():
     res = C.analyse(d)
     assert res["beams"] and res["cards"]
     assert d["grid"]["omit"] == [[2, 1]]
+
+
+def test_open_hall_keeps_only_the_outer_walls():
+    d = R.apply_grid(B.default_data(), [4, 4], [4, 4], 1)
+    walls = B.elements(d)["walls"]
+    assert any(not w["exterior"] for w in walls)
+    d = R.apply_grid(B.default_data(), [4, 4], [4, 4], 1, inner_walls=False)
+    walls = B.elements(d)["walls"]
+    assert walls and all(w["exterior"] for w in walls)
+    assert len(walls) == 8

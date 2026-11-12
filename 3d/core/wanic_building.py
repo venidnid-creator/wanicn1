@@ -55,6 +55,8 @@ DEFAULT_SETTINGS = {
     "gb_b": 0.2, "gb_h": 0.4, "b_b": 0.2, "b_h": 0.4,
     "rb_b": 0.2, "rb_h": 0.4, "slab_t": 0.10,
     "walls": True, "wall_t": 0.10,
+    # ผนังภายใน: False = only the outer walls (an open hall / warehouse)
+    "inner_walls": True,
     "roof": "hip", "pitch": 30.0, "overhang": 0.6,
     "rafter_sp": 1.0, "purlin_sp": 0.32,
     "ridge": "C 150×65×20×3.2", "hip": "C 150×65×20×3.2",
@@ -472,6 +474,8 @@ def elements(data) -> dict:
         for p0, p1 in segments(f["rooms"]):
             mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
             sides = sum(1 for rm in f["rooms"] if _on_edge(rm, mx, my))
+            if sides > 1 and not s.get("inner_walls", True):
+                continue
             above = beam_at.get((k + 1, p0, p1)) or ROLE_DEFAULT[
                 "RB" if k == n - 1 else "B"]
             L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])

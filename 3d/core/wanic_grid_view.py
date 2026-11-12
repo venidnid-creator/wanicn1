@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import (QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
                                QVBoxLayout, QWidget)
 
 from core import wanic_rc as R
@@ -138,6 +138,10 @@ class GridDialog(QDialog):
         self.floors.setValue(int(g.get("floors", max(1, len((data or {}).get("floors") or [1])))))
         self.floors.valueChanged.connect(self.recalc)
         form.addRow("จำนวนชั้น", self.floors)
+        self.inner = QCheckBox("มีผนังภายในตามแนวกริด")
+        self.inner.setToolTip("เอาออก = ผนังเฉพาะรอบนอก (โถงโล่ง / โกดัง / อาคารเหล็ก)")
+        self.inner.setChecked(bool(g.get("inner_walls", True)))
+        form.addRow(self.inner)
         left.addLayout(form)
         tip = QLabel("พิมพ์ระยะคั่นด้วยจุลภาค เช่น 4, 4, 3.5 หรือ 3@4 (= 4, 4, 4)\n"
                      "คลิกช่องในรูปเพื่อเว้นช่องนั้น (ไม่มีพื้น/ห้อง) — คลิกอีกครั้งเพื่อคืน\n"
@@ -168,6 +172,9 @@ class GridDialog(QDialog):
     def values(self):
         return (R.parse_spacings(self.ex.text()), R.parse_spacings(self.ey.text()), self.floors.value(),
                 sorted(self.view.omit))
+
+    def inner_walls(self) -> bool:
+        return self.inner.isChecked()
 
     def recalc(self, *_):
         try:

@@ -88,5 +88,5 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
   `3d/core/wanic_steel_view.py` (SteelDialog 3 แท็บ, steel_pages ในรูปเล่มเมื่อมี data["steel"]), ปุ่ม «ออกแบบเหล็กรูปพรรณ…», tests/test_wanic_steel.py (4) ใน CI — **รออนุมัติหน้าจอ**
 - [x] เหล็กรูปพรรณอนุมัติแล้ว
 - [x] โหมดกริด — wanic_rc.parse_spacings/grid_rooms/apply_grid (ห้องต่อช่อง, data["grid"]), `3d/core/wanic_grid_view.py` GridDialog (คลิกเว้นช่อง),
-  ปุ่ม «โหมดกริด: สร้างผังจากเส้นแกน…» ในขั้น 1, tests/test_wanic_grid.py ใน CI — **รออนุมัติ** (ข้อสังเกต: ทุกช่องมีผนังรอบ — ถามผู้ใช้ว่าจะให้มีตัวเลือกไม่มีผนังภายใน)
+  ปุ่ม «โหมดกริด: สร้างผังจากเส้นแกน…» ในขั้น 1, tests/test_wanic_grid.py ใน CI — อนุมัติแล้ว + ตัวเลือก «มีผนังภายในตามแนวกริด» (settings["inner_walls"]=False → ผนังเฉพาะรอบนอก)
 - [ ] ถัดไป:  → แป → FlatSlab → แรงด้านข้าง → ราคาเอกชน
