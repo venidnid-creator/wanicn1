@@ -678,4 +678,6 @@ def balance_spec(spec: dict, keep_shape: bool = False) -> dict:
 def balanced_changes(full_before: dict, changes: dict) -> dict:
     """The changes to a mark after making the result symmetric and balanced."""
     after = balance_spec({**full_before, **changes})
+    if after.get("kind") and not R.check("?", after).ok:       # the detailing minimums too
+        after = balance_spec(R.suggest(after))
     return {k: v for k, v in after.items() if full_before.get(k) != v}

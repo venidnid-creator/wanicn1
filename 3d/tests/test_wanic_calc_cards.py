@@ -128,3 +128,14 @@ def test_every_change_is_symmetric_and_balanced():
             assert sp["w"] == sp["l"], mark
     res = C.analyse(d)
     assert all(m.ok for m in res["members"])
+
+
+def test_single_member_fix_meets_the_detailing_minimums():
+    from core import wanic_advice as AD
+    from core.wanic_fix_view import apply
+    d = _d()
+    res = C.analyse(d)
+    col = next(m for m in res["members"] if m.group == "column" and not m.ok)
+    fix = AD.member_fix(res, d, col)
+    apply(d, fix, {**B.library_of(d)["C1"], **fix["changes"]})
+    assert R.check("C1", B.library_of(d)["C1"]).ok
