@@ -13,7 +13,6 @@
 ## ReadWanicn2027 (โฟลเดอร์ `readwanicn2027/`)
 - รุ่นล่าสุดที่เผยแพร่: **2027.3.0** (Release `readwanicn-v2027.3.0`) — workflow `readwanicn-windows.yml`
 - คีย์ใบอนุญาตอยู่ใน GitHub secret `READWANICN_LICENSE_KEY` (ตั้งแล้ว) · รหัสต่ออายุ: `tools/readwanicn_code.py`
-- ผู้ใช้ Wanicn / รหัสผ่าน Thammawong
 
 ## WANICNSURVEY (cad/ 3d/ launcher/) — workflow `build-windows.yml`
 รุ่นที่กำลังสร้าง: **2026.11.11.1** (dispatch, release=false — ผู้ใช้จะลองก่อน ยังไม่เผยแพร่) รวมงานที่อนุมัติแล้วทั้งหมดรวมทั้งคำนวณโครงสร้าง
