@@ -135,6 +135,11 @@ class RCPanel(QWidget):
         rr.addWidget(self.steel_btn)
         rr.addStretch(1)
         col.addWidget(self.roof_row)
+        self.grid_btn = QPushButton("โหมดกริด: สร้างผังจากเส้นแกน…")
+        self.grid_btn.setStyleSheet("font-weight: 700;")
+        self.grid_btn.setToolTip("กำหนดระยะแกน 1-2-3 / A-B-C และจำนวนชั้น — ห้องทุกช่อง เสาทุกจุดตัด คานตามแนวกริด")
+        self.grid_btn.clicked.connect(self.edit_grid)
+        col.addWidget(self.grid_btn)
         self.status = QLabel()
         self.status.setWordWrap(True)
         col.addWidget(self.status)
@@ -197,6 +202,7 @@ class RCPanel(QWidget):
         label = dict(STEPS)[self.step]
         self.title.setText(label)
         self.roof_row.setVisible(self.step == "roof")
+        self.grid_btn.setVisible(self.step == "grid")
         self.fix.setVisible(self.step in STEP_MARKS)
         calc = self.step == "calc"
         self.diagram.setVisible(calc)
@@ -245,7 +251,8 @@ class RCPanel(QWidget):
                  enumerate(zip(ny, ys))]
         self._fill(["เส้นแกน", "ตำแหน่ง (ม.)", "ระยะช่วง (ม.)"], rows)
         long_ = [r for r in rows if r[2] != "—" and float(r[2]) > 4.0 + 1e-6]
-        self.note.setText(f"กริดมาจากผังห้องในแผง «ออกแบบอาคาร» — แกนตัวเลข {len(xs)} เส้น × "
+        src = "โหมดกริด" if (self.data() or {}).get("grid") else "ผังห้องในแผง «ออกแบบอาคาร»"
+        self.note.setText(f"กริดมาจาก{src} — แกนตัวเลข {len(xs)} เส้น × "
                           f"แกนตัวอักษร {len(ys)} เส้น · เสา {len(E['columns'])} ต้น · "
                           f"ฐานราก {len(E['footings'])} ฐาน"
                           + (f"\n⚠ ช่วงเสาเกิน 4.00 ม. {len(long_)} ช่วง — ตรวจขนาดคานให้รับได้" if long_ else ""))
@@ -531,6 +538,25 @@ class RCPanel(QWidget):
         d["truss"] = dlg.params()
         bp._write(d)
         self.status.setText("บันทึก Truss แล้ว — รวมในรูปเล่มรายการคำนวณ A4")
+        self.refresh()
+
+    def edit_grid(self):
+        from core.wanic_grid_view import GridDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = GridDialog(self, d)
+        if dlg.exec() != GridDialog.Accepted:
+            return
+        has = any(f.get("rooms") for f in d.get("floors") or [])
+        if has and QMessageBox.question(self, "โหมดกริด", "แทนที่ผังห้องเดิมทุกชั้นด้วยผังจากกริด?") \
+                != QMessageBox.Yes:
+            return
+        sx, sy, n, omit = dlg.values()
+        R.apply_grid(d, sx, sy, n, omit)
+        bp._write(d)
+        self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
         self.refresh()
 
     def edit_steel(self):

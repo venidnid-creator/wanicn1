@@ -411,3 +411,65 @@ def report_xlsx(E, path) -> None:
     s3.add(["ลวดผูกเหล็ก", "", "", round(T["wire"], 2)])
     s3.add([f"รวมเผื่อเศษ {int(WASTE * 100)}% แล้ว · ลวดผูก {TIE_WIRE_KG_PER_T:g} กก./ตัน", "", "", ""])
     Path(path).write_bytes(_xlsx([s1, s2, s3]))
+
+
+# ---- โหมดกริด: the plan from the grid ----------------------------------------------------
+
+def parse_spacings(text: str) -> list:
+    """"4, 4, 3.5" or "3@4, 3.5" → [4.0, 4.0, 4.0, 3.5]."""
+    out = []
+    for tok in str(text).replace(";", ",").replace(" ", ",").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "@" in tok:
+            n, v = tok.split("@", 1)
+            out += [float(v)] * int(n)
+        else:
+            out.append(float(tok))
+    if not out or any(v <= 0 for v in out):
+        raise ValueError("ระยะกริดต้องเป็นตัวเลขมากกว่า 0 เช่น 4, 4, 3.5 หรือ 3@4")
+    return out
+
+
+def grid_rooms(sx: list, sy: list, omit=(), start_id: int = 1, names=None) -> list:
+    """A room per grid bay (bay names "1-2/A-B"), less the ``omit`` bays
+    [(i, j)] — so the columns fall on the grid intersections."""
+    xs = [0.0]
+    for v in sx:
+        xs.append(xs[-1] + v)
+    ys = [0.0]
+    for v in sy:
+        ys.append(ys[-1] + v)
+    nx, ny = axis_names(len(xs), False), axis_names(len(ys), True)
+    omit = {tuple(o) for o in omit}
+    rooms, k = [], start_id
+    for j in range(len(sy)):
+        for i in range(len(sx)):
+            if (i, j) in omit:
+                continue
+            nm = (names or {}).get((i, j)) or f"ช่อง {nx[i]}-{nx[i + 1]}/{ny[j]}-{ny[j + 1]}"
+            rooms.append({"id": f"r{k}", "name": nm, "x": round(xs[i], 4), "y": round(ys[j], 4),
+                          "w": round(sx[i], 4), "d": round(sy[j], 4)})
+            k += 1
+    return rooms
+
+
+def apply_grid(data: dict, sx: list, sy: list, floors: int, omit=(), omit_upper=None) -> dict:
+    """The building's floors rebuilt from the grid (``floors`` storeys);
+    the grid is kept in data["grid"] to edit later. Openings and stairs of
+    the replaced floors are dropped (their walls are new)."""
+    from core import wanic_building as B
+    floors = max(1, int(floors))
+    out = []
+    k = 1
+    for f in range(floors):
+        om = omit if (f == 0 or omit_upper is None) else omit_upper
+        rooms = grid_rooms(sx, sy, om, k)
+        k += len(rooms)
+        fl = B.new_floor() if hasattr(B, "new_floor") else {"rooms": [], "openings": [], "stairs": [], "fixtures": []}
+        fl["rooms"] = rooms
+        out.append(fl)
+    data["floors"] = out
+    data["grid"] = {"x": list(sx), "y": list(sy), "floors": floors, "omit": [list(o) for o in omit]}
+    return data
