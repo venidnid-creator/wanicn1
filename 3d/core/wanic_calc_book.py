@@ -263,7 +263,7 @@ def _diagram_strip(bk: Book, y, res, kind):
         for sp in res.spans:
             p.fillRect(QRectF(X(x), base - 1.5 * mm, X(x + sp.L) - X(x), 3 * mm), GREEN)
             bk.text((X(x) / mm), y - 9, (X(x + sp.L) - X(x)) / mm, 6,
-                    f"{'Cantilever ' if sp.cant else ''}W={sp.w:,.1f} kg/m", 5,
+                    f"{'ยื่น ' if sp.cant else ''}W={sp.w:,.0f}" if sp.cant else f"W={sp.w:,.1f} kg/m", 5,
                     align=Qt.AlignCenter)
             bk.text((X(x) / mm), y + 2, (X(x + sp.L) - X(x)) / mm, 6, f"L= {sp.L:.2f} m.", 5,
                     align=Qt.AlignCenter)
@@ -449,6 +449,34 @@ def reserve_page(bk: Book, members):
             "(น้ำหนักจร) · เสา/ฐานราก = น้ำหนักลงต่อต้น/ฐาน", 5.0)
 
 
+def checkload_page(bk: Book, res_all, data):
+    """Checkload — Wcol, Wcol-Area and Wfloor of every ground-floor column."""
+    from core import wanic_calc as C2
+    try:
+        ck = C2.checkload(data, res_all)
+    except Exception:                                # noqa: BLE001 - the page is optional
+        return
+    if not ck["rows"]:
+        return
+    lo, hi = ck["range"]
+    head = ("เสา", "ตำแหน่ง", "พื้นที่รับ ตร.ม.", "Wcol ตัน", "Wcol-Area ตัน", "ต่าง %", "Wfloor กก./ตร.ม.", "ผล")
+    per = 24
+    rows = ck["rows"]
+    for k in range(0, len(rows), per):
+        bk.page("ตรวจน้ำหนักลงเสา (Checkload)", "Checkload")
+        bk.text(12, 32, 380, 7, f"น้ำหนักลงเสาชั้นล่างรวม {ck['total'] / 1000:,.1f} ตัน · พื้นที่รับรวม {ck['area']:,.1f} ตร.ม. "
+                f"(ทุกชั้น + หลังคา) · เฉลี่ย {ck['mean']:,.0f} กก./ตร.ม. (บ้าน คสล. ทั่วไป {lo:,.0f}–{hi:,.0f})",
+                6.0, bold=True)
+        tab = [head]
+        for r in rows[k:k + per]:
+            col = GREEN if r["ok"] and r["note"] == "ปกติ" else ORANGE if r["ok"] else RED
+            tab.append((r["mark"], f"({r['x']:.2f}, {r['y']:.2f})", f"{r['A']:,.2f}", f"{r['W'] / 1000:,.2f}",
+                        f"{r['WA'] / 1000:,.2f}", f"{r['diff']:+.0f}", f"{r['Wf']:,.0f}", (r["note"], col)))
+        bk.table(10, 42, [18, 34, 34, 26, 36, 20, 40, 176], tab, 6.6, left=True)
+        bk.text(12, 244, 380, 6, "Wcol = น้ำหนักใช้งานที่ลงเสาจากการคำนวณคาน · Wcol-Area = พื้นที่รับ × ค่าเฉลี่ยทั้งอาคาร · "
+                "Wfloor = Wcol ÷ พื้นที่ — ค่าที่ต่างมากแสดงว่ามีน้ำหนักพิเศษหรือข้อมูลผิด ควรตรวจทาน", 5.0)
+
+
 def advice_page(bk: Book, res_all, data):
     """รายการที่ไม่ผ่าน และคำแนะนำ — what to add, where, for each failing
     member; then the change of each library mark that makes all pass."""
@@ -540,6 +568,7 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
             list_page(bk, title, tag, sel)
     list_page(bk, "สรุปผลการตรวจสอบทุกชิ้นส่วน", "Summary", ms)
     reserve_page(bk, ms)
+    checkload_page(bk, res_all, data)
     advice_page(bk, res_all, data)
     n = bk.n
     bk.close()

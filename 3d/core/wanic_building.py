@@ -412,6 +412,24 @@ def _on_edge(room, px, py, tol=1e-6) -> bool:
            ((abs(py - y0) < tol or abs(py - y1) < tol) and inside_x)
 
 
+#: the four directions a cantilever beam can stick out of a column
+CANT_DIRS = {"+x": (1, 0), "-x": (-1, 0), "+y": (0, 1), "-y": (0, -1)}
+CANT_DIR_TH = {"+x": "ขวา (+x)", "-x": "ซ้าย (−x)", "+y": "บน (+y)", "-y": "ล่าง (−y)"}
+
+
+def cantilevers(data) -> list:
+    """คานยื่น: [{"level", "x", "y" (the column it sticks out of), "dir",
+    "L" (m), "mark" (optional)}]."""
+    return [c for c in ((data or {}).get("cantilevers") or []) if isinstance(c, dict) and "x" in c and "y" in c]
+
+
+def beam_loads(data) -> list:
+    """น้ำหนักเพิ่มบนคานที่ผู้ใช้ใส่: [{"level", "axis" ("x"/"y"), "line" (the
+    beam line's y or x), "a", "b" (along the axis, m — a = b is a point
+    load), "P" (kg) or "w" (kg/m), "type" ("D" คงที่ / "L" จร), "note"}]."""
+    return [q for q in ((data or {}).get("beam_loads") or []) if isinstance(q, dict) and "axis" in q]
+
+
 def elements(data) -> dict:
     """Every structural and architectural element of the plan, with its
     mark and position — the one inventory both the 3D build and the
@@ -463,6 +481,22 @@ def elements(data) -> dict:
                                "p1": p1, "z": lvl * H, "ground": lvl == 0,
                                "roof": lvl == n})
             beam_at[(lvl, p0, p1)] = mark
+    for cb in cantilevers(data):
+        lvl = min(max(int(cb.get("level", 1)), 0), n)
+        x, y, L = float(cb["x"]), float(cb["y"]), float(cb.get("L") or 0.0)
+        if L <= 0:
+            continue
+        dx, dy = CANT_DIRS.get(cb.get("dir"), (1, 0))
+        p0 = (x, y)
+        p1 = (round(x + dx * L, 6), round(y + dy * L, 6))
+        mark = cb.get("mark")
+        if mark not in lib or lib[mark].get("kind") != "beam":
+            horiz = dy == 0
+            mark = next((m for (lv, a, b), m in beam_at.items() if lv == lvl and p0 in (a, b)
+                         and (abs(a[1] - b[1]) < 1e-9) == horiz), None) or ROLE_DEFAULT[
+                "GB" if lvl == 0 else "RB" if lvl == n else "B"]
+        E["beams"].append({"mark": mark, "level": lvl, "p0": p0, "p1": p1, "z": lvl * H,
+                           "ground": lvl == 0, "roof": lvl == n, "cant": True})
     drop = max(float(s.get("wet_drop") or 0.0), 0.0)
     for k, rooms in enumerate(rooms_of):
         for rm in rooms:

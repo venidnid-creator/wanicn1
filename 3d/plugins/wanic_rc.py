@@ -124,6 +124,18 @@ class RCPanel(QWidget):
         self.est_btn = QPushButton("ประมาณราคาเอกชน 8 หมวด…")
         self.est_btn.clicked.connect(self.edit_estimate)
         row.addWidget(self.est_btn)
+        self.loads_btn = QPushButton("น้ำหนักเพิ่มบนคาน…")
+        self.loads_btn.setToolTip("น้ำหนักจุด (ถังน้ำ แอร์) / น้ำหนักแผ่ (ผนังบนคาน ระเบียง) ที่ไม่มีในผัง")
+        self.loads_btn.clicked.connect(self.edit_beam_loads)
+        row.addWidget(self.loads_btn)
+        self.cant_btn = QPushButton("คานยื่น…")
+        self.cant_btn.setToolTip("คานยื่นออกจากเสา ปลายลอย (ระเบียง กันสาด)")
+        self.cant_btn.clicked.connect(self.edit_cantilevers)
+        row.addWidget(self.cant_btn)
+        self.check_btn = QPushButton("Checkload (ตรวจน้ำหนักลงเสา)…")
+        self.check_btn.setToolTip("Wcol · Wcol-Area · Wfloor ทุกเสา เทียบค่าเฉลี่ยทั้งอาคารและช่วงปกติ")
+        self.check_btn.clicked.connect(self.show_checkload)
+        row.addWidget(self.check_btn)
         row.addStretch(1)
         col.addLayout(row)
         self.roof_row = QWidget()
@@ -240,6 +252,9 @@ class RCPanel(QWidget):
         self.basis_btn.setVisible(calc)
         self.pdf_btn.setVisible(calc)
         self.book_btn.setVisible(calc)
+        self.loads_btn.setVisible(calc or self.step in ("upper", "ground"))
+        self.cant_btn.setVisible(calc or self.step in ("upper", "ground"))
+        self.check_btn.setVisible(calc)
         self.select_btn.setVisible(not calc and self.step != "rebar")
         self._loading = True
         try:
@@ -702,6 +717,44 @@ class RCPanel(QWidget):
         apply(d, fix, dlg.values())
         bp._write(d)
         self._rebuild_after_fix(f"แก้ {fix['key']} แล้ว")
+
+    def edit_beam_loads(self):
+        from core.wanic_beamload_view import BeamLoadDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = BeamLoadDialog(self, d)
+        if dlg.exec() != BeamLoadDialog.Accepted:
+            return
+        d["beam_loads"] = dlg.loads()
+        bp._write(d)
+        self._rebuild_after_fix(f"บันทึกน้ำหนักเพิ่มบนคาน {len(d['beam_loads'])} รายการ")
+
+    def edit_cantilevers(self):
+        from core.wanic_beamload_view import CantileverDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = CantileverDialog(self, d)
+        if dlg.exec() != CantileverDialog.Accepted:
+            return
+        d["cantilevers"] = dlg.cantilevers()
+        bp._write(d)
+        self._rebuild_after_fix(f"บันทึกคานยื่น {len(d['cantilevers'])} ตัว")
+
+    def show_checkload(self):
+        from core import wanic_calc as C
+        from core.wanic_beamload_view import CheckloadDialog
+        d = self.data()
+        try:
+            res = self._calc or C.analyse(d)
+            ck = C.checkload(d, res)
+        except Exception as e:                       # noqa: BLE001 - shown, never a crash
+            QMessageBox.warning(self, TITLE, f"ตรวจน้ำหนักลงเสาไม่ได้: {e}")
+            return
+        CheckloadDialog(self, ck).exec()
 
     def edit_estimate(self):
         from core.wanic_private_est_view import PrivateEstDialog

@@ -75,6 +75,11 @@ changes are filtered out — keep it that way; it fixed the slow-selection bug).
 | `wanic_lateral.py` / `_view.py` | Seismic (มยผ. 1301/1302-61 or old ZIKCSW) + wind (มยผ. 1311-50 or กฎกระทรวง 6), column P-M checks. `data["lateral"]`. |
 | `wanic_private_est.py` / `_view.py` | Private estimate, 8 categories, editable waste/prices, overhead+VAT, xlsx. `data["private_est"]`. |
 | `wanic_grid_view.py` | Grid-mode dialog. |
+| `wanic_struct_sheets.py` | S sheets from the calculation: footing/column/slab details, typical beam, beam profiles per line (`beam_lines`, `beam_sheets`). |
+| `wanic_steel_sheets.py` | Steel sheets: AWS weld standard (`min_fillet`), connections, plates, clip angles (`has_steel`). |
+| `wanic_calc_cards.py` | Booklet cards: footing, slab, roof pages; `attach_lateral_moments` (Me row); `critical_members` (print only the critical ones). |
+| `wanic_advice.py` / `wanic_fix_view.py` | Advice for failing members (what to add, where), `apply_fixes` (all marks, iterates until pass incl. detailing minimums), `member_fix` + `FixDialog` (one row), `balance_spec(keep_shape)` = symmetric/balanced edits (square columns, bars ÷ 4, equal top/bottom bar size, square footings), `fit_in_row` (clear spacing ≥ max(25 mm, bar)). |
+| `wanic_beamload_view.py` | น้ำหนักเพิ่มบนคาน (`BeamLoadDialog`, presets: walls, water tanks, A/C, balcony), คานยื่น (`CantileverDialog`), `CheckloadDialog`; `beam_lines(data)`; row⇄dict helpers. |
 | `wanic_road*.py`, `wanic_pavement.py`, `wanic_sitemap.py` | Road design, AI 1970 / Road Note 29 pavement, sheets G PP ST VT SD DR TS QS, site map. |
 | `wanic_partprice.py` | Live part data/price as parts are stretched (`live_rows`, `refresh`, xform determinant). |
 | `wanic_login.py` | Sign-in (identical copy in launcher/, cad/core/, 3d/core/ — a test keeps them equal). |
@@ -142,20 +147,40 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   are entered; strength combos 0.75(1.4D+1.7L+1.87E / 1.6W).
 - Waste (private estimate defaults): RB 8 %, DB12–16 10 %, DB20 11 %, DB25+ 12 %, concrete 3 %, roofing 5 %, steel 5 %;
   overhead+profit 5 %, VAT 7 %.
+- Beam solver (`solve_beam`): `Span(L, w, P=[(a, kg)], U=[(a, b, kg/m)], cant="L"|"R")`, factored loads; a cantilever
+  hands its support a known moment and adds no support; `BeamResult.supports` = x of supports; two stations meet at each
+  point load so the SFD steps. Diagrams: SFD + above, BMD on the tension side, dashed capacity lines (φMn top/bottom, φVn,
+  dotted φVc), bottom ratio line.
+- User data: `data["beam_loads"]` = [{level, axis x|y, line, a, b (a = b → point P kg, else w kg/m), type D|L, note}]
+  (positions along the plan axis); `data["cantilevers"]` = [{level, x, y, dir ±x|±y, L, mark?}] → `B.elements` adds the
+  beam with `"cant": True` (3D, drawings, BOQ follow). Beam level 0 = ground beams, n = roof ring beams.
+- «รับเพิ่มได้อีก» (reserve, for laypeople): `Member.qty/qty_unit/qty_factor`, `reserve = qty(1/ratio − 1)/factor`,
+  `reserve_text()` (> 5× → «รับเพิ่มได้อีกมาก»), `reserve_summary()` weakest per group; units: slab kg/m² live (÷1.7),
+  beam kg/m, column / footing tonnes each, roof kg/m². Service values, no safety factor.
+- Checkload (`wanic_calc.checkload`): per ground column Wcol (service t), tributary area over every carried floor + roof,
+  Wfloor = Wcol/area, Wcol-Area = area × building mean; usual range `WFLOOR_RANGE` 450–1,600 kg/m²; flag > ±40 %.
 - New design data lives in the building document: `data["calc"]`, `["grid"]`, `["truss"]`, `["steel"]`, `["purlin"]`,
-  `["flatslab"]`, `["lateral"]`, `["private_est"]` — write through `bp._write(d)`, never directly to the scene.
+  `["flatslab"]`, `["lateral"]`, `["private_est"]`, `["beam_loads"]`, `["cantilevers"]` — write through `bp._write(d)`, never directly to the scene.
 
 ---
 
-## 6. Current state (2026-11-12)
+## 6. Current state (2026-11-12, after the QuickDesign workflow study)
 
-- Every planned item is done and approved. Installer **2026.11.12.1** built (run 43147870896, artifact
-  `wanicnsurvey-setup-2026.11.12.1`); waiting for the owner's test results. 2026.11.11.1 test result also not yet reported.
-- Not released: publish only on the owner's order (dispatch `build-windows.yml` with the same version and `release=true`).
+- Installer **2026.11.12.1** built (run 43147870896), not released; owner's test results for 2026.11.11.1 / .12.1 pending.
+- Since then, on branch `claude/youthful-pascal-ctgtr0`, committed `[skip ci]` (no installer yet), each approved by
+  screenshots: struct sheets, steel sheets, booklet cards, advice + per-member fix + symmetric/balanced edits, SFD/BMD with
+  capacity lines, «รับเพิ่มได้อีก» reserve, and plan item 4 (beam loads, cantilevers, Checkload — awaiting approval).
+- The QD study plan (approved): 1 struct sheets ✓ · 2 steel sheets ✓ · 3 booklet cards ✓ · 4 beam point/uniform loads,
+  cantilever, Checkload (Wcol / Wcol-Area / Wfloor) ✓ awaiting approval · 5 RC stair (straight / L / two-flight) ·
+  6 A-01 symbols + finish codes, room tags, ABCD markers, door/window schedule, grease trap / screen pit, septic tank by
+  users, EE/SN specifications · 7 two pile sizes, pile capacity from test results · 8 free drafting (columns/beams from
+  sketch lines, curved/inclined beams, curved walls). QD is studied for workflow only — never copy its code/UI/files.
+- Next installer only when the owner asks; it will contain all of the above.
 
 ## 7. Future development (agreed or proposed — confirm with the owner before starting)
 
 1. Fix whatever the owner finds in the 2026.11.12.1 / 2026.11.11.1 tests; then release on order.
+1b. Continue the QD plan items 5 → 8 (see §6) one by one: build → test → screenshot → approval.
 2. Ss/S1 table by district (มยผ. 1301/1302-61) and the Bangkok-basin spectrum — needs the owner's copy of the table.
 3. Storey drift check and a frame (stiffness) analysis for lateral loads instead of equal column shares.
 4. Remove double counting when a Truss replaces rafters in the BOQ; draw Truss/steel/purlins as 3D parts in the model.

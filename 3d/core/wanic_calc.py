@@ -204,6 +204,22 @@ def _shear_moment(sp, x, Rl, ml):
     return v, mm
 
 
+def _stations(sp, n) -> list:
+    """n+1 stations along a span; two of them meet at each point load so
+    the shear diagram steps there (the count stays n+1)."""
+    st = [sp.L * k / n for k in range(n + 1)]
+    used = set()
+    for a, _P in sorted(sp.P):
+        if not (0 < a < sp.L) or n < 4:
+            continue
+        k = min(max(round(a / sp.L * n), 1), n - 2)
+        if k in used or k + 1 in used or k - 1 in used:
+            continue
+        st[k], st[k + 1] = a, a + 1e-6
+        used |= {k, k + 1}
+    return st
+
+
 def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
     """A continuous beam over its supports: stiffness method on the
     rotations (supports do not settle); uniform, part-length uniform and
@@ -258,8 +274,7 @@ def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
     supports = []
     if lc is not None:
         tot, _mom = _span_loads(lc)
-        for s_ in range(n + 1):
-            x = lc.L * s_ / n
+        for x in _stations(lc, n):
             v, mm = _shear_moment(lc, x, 0.0, 0.0)
             xs.append(x)
             V.append(v)
@@ -276,8 +291,7 @@ def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
         reactions[i] += Rl
         reactions[i + 1] += Rr
         supports.append(x0)
-        for s_ in range(n + 1):
-            x = L * s_ / n
+        for x in _stations(sp, n):
             v, mm = _shear_moment(sp, x, Rl, ml)
             xs.append(x0 + x)
             V.append(v)
@@ -287,8 +301,7 @@ def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
     if rc is not None:
         tot, _mom = _span_loads(rc)
         reactions[-1] += tot
-        for s_ in range(n + 1):
-            x = rc.L * s_ / n
+        for x in _stations(rc, n):
             v, mm = _shear_moment(rc, x, tot, Mc_r)
             xs.append(x0 + x)
             V.append(v)
@@ -626,6 +639,12 @@ def stacked_floors(data):
     return fl
 
 
+def _along(e, axis) -> tuple:
+    """A beam segment's (low, high) coordinate along its axis."""
+    a, b = (e["p0"][0], e["p1"][0]) if axis == "x" else (e["p0"][1], e["p1"][1])
+    return min(a, b), max(a, b)
+
+
 def analyse(data) -> dict:
     """Every member's demand and capacity, the beam diagrams, the column
     loads and the footings: {"members": [Member…], "basis", "columns",
@@ -689,6 +708,7 @@ def analyse(data) -> dict:
     rooms_by_level = {i: (f.get("rooms") or []) for i, f in enumerate(floors)}
     walls = E["walls"]
     beams_out = {}
+    user_loads = B.beam_loads(data)
     col_load: dict = {}
     col_mom: dict = {}
     col_lv: dict = {}
@@ -735,9 +755,30 @@ def analyse(data) -> dict:
                             max(r["y"] + r["d"] for r in fl_) - min(r["y"] for r in fl_)) / 2 if fl_ else 2.0
                 w += (D_ * tile_weight(s) + L_ * b_["ll_roof"]) / math.cos(math.radians(
                     float(s["pitch"]))) * (half_ / 2 + float(s["overhang"]))
-            spans.append(Span(L, w))
+            lo_, hi_ = _along(e, axis)
+            sp_ = Span(L, w)
+            if e.get("cant"):
+                free = e["p1"][0] if axis == "x" else e["p1"][1]
+                sp_.cant = "L" if abs(free - lo_) < 1e-6 else "R"
+            for q in user_loads:
+                if q.get("level", 1) != level or q.get("axis") != axis or abs(float(q.get("line", 0)) - c) > 1e-3:
+                    continue
+                fac = D_ if q.get("type", "D") == "D" else L_
+                a_, b2_ = sorted((float(q.get("a", 0)), float(q.get("b", q.get("a", 0)))))
+                if "P" in q and b2_ - a_ < 1e-9:
+                    if lo_ - 1e-9 <= a_ < hi_ - 1e-9 or (abs(a_ - hi_) < 1e-9 and e is segs[-1]):
+                        sp_.P.append((a_ - lo_, fac * float(q["P"])))
+                elif "w" in q:
+                    ca, cb_ = max(a_, lo_), min(b2_, hi_)
+                    if cb_ - ca > 1e-6:
+                        sp_.U.append((ca - lo_, cb_ - lo_, fac * float(q["w"])))
+            spans.append(sp_)
         if not spans:
             continue
+        # a cantilever only at the ends of a run
+        for j, sp_ in enumerate(spans):
+            if sp_.cant == "L" and j != 0 or sp_.cant == "R" and j != len(spans) - 1:
+                sp_.cant = ""
         res = solve_beam(spans)
         res.mark, res.spec, res.level, res.axis, res.line = mark, spec, level, axis, c
         res.ground = bool(segs[0].get("ground"))
@@ -752,7 +793,9 @@ def analyse(data) -> dict:
                 res.Vmax / cap["V"] if cap["V"] else 9.9)
         name = (f"{mark} ชั้น {level + 1 if not segs[0].get('ground') else 'ดิน'} · "
                 f"แนว{'นอน' if axis == 'x' else 'ตั้ง'} {'y' if axis == 'x' else 'x'} = {c:.2f} · "
-                f"{len(spans)} ช่วง")
+                f"{len(spans) - sum(1 for sp_ in spans if sp_.cant)} ช่วง"
+                + (" + คานยื่น" if any(sp_.cant for sp_ in spans) else "")
+                + (" + น้ำหนักเพิ่ม" if any(sp_.P or sp_.U for sp_ in spans) else ""))
         out.append(Member("beam", name,
                           f"Mu+ {res.Mmax:,.0f} · Mu− {max(0.0, -res.Mmin):,.0f} กก.-ม. · Vu {res.Vmax:,.0f} กก.",
                           f"φMn ล่าง {cap['bot']:,.0f} · บน {cap['top']:,.0f} · φVn {cap['V']:,.0f}",
@@ -762,11 +805,19 @@ def analyse(data) -> dict:
         beams_out[name] = res
         # reactions to the columns at the supports
         x = 0.0
-        pts = [segs[0]["p0"] if (segs[0]["p0"][0] if axis == "x" else segs[0]["p0"][1]) <=
-               (segs[0]["p1"][0] if axis == "x" else segs[0]["p1"][1]) else segs[0]["p1"]]
-        for e in segs:
-            far = max((e["p0"], e["p1"]), key=lambda p: p[0] if axis == "x" else p[1])
-            pts.append(far)
+        ends = []
+        for e, sp_ in zip(segs, spans):
+            lo_, hi_ = _along(e, axis)
+            if sp_.cant == "L":
+                ends.append(hi_)
+            elif sp_.cant == "R":
+                if not ends:
+                    ends.append(lo_)
+            else:
+                if not ends:
+                    ends.append(lo_)
+                ends.append(hi_)
+        pts = [((v, c) if axis == "x" else (c, v)) for v in ends]
         for p, Rv in zip(pts, res.reactions):
             k_ = (round(p[0], 3), round(p[1], 3))
             col_load[k_] = col_load.get(k_, 0.0) + Rv
@@ -775,7 +826,12 @@ def analyse(data) -> dict:
         # end built into a column, shared by the columns above and below)
         for p, sp_ in ((pts[0], spans[0]), (pts[-1], spans[-1])):
             k_ = (round(p[0], 3), round(p[1], 3))
-            col_mom[k_] = max(col_mom.get(k_, 0.0), sp_.w * sp_.L ** 2 / 16.0 / 2.0)
+            if sp_.cant:                     # the whole cantilever moment, shared above and below
+                tot_, mom_ = _span_loads(sp_)
+                mc_ = tot_ * sp_.L - mom_ if sp_.cant == "L" else mom_
+                col_mom[k_] = max(col_mom.get(k_, 0.0), mc_ / 2.0)
+            else:
+                col_mom[k_] = max(col_mom.get(k_, 0.0), sp_.w * sp_.L ** 2 / 16.0 / 2.0)
     # -- columns: everything above, per column line (the ground floor's carries it all)
     cols_out = []
     for c_ in E["columns"]:
@@ -855,3 +911,59 @@ def summary(res) -> dict:
         g[1] += 0 if m.ok else 1
         g[2] = max(g[2], m.ratio)
     return groups
+
+
+#: the usual service load of a Thai RC house per m² of floor (all floors and
+#: the roof counted), for the Checkload sanity check
+WFLOOR_RANGE = (450.0, 1600.0)
+
+
+def checkload(data, res) -> dict:
+    """Checkload — the load on each ground-floor column three ways:
+    Wcol (from the beam reactions, service, tonnes), its tributary area
+    over every floor it carries and the roof (m²), Wfloor = Wcol / area
+    (kg/m²) and Wcol-Area = area × the building's average Wfloor; a column
+    far from the average (or Wfloor outside the usual range) is flagged."""
+    E = B.elements(data)
+    b_ = res["basis"]
+    D_, L_ = factors(b_)
+    avg = (D_ + L_) / 2.0
+    floors = E["floors"]
+    carried = [sl["room"] for sl in E["slabs"]
+               if not (sl.get("floor", 0) == 0 and (E["lib"].get(sl["mark"], {}).get("ground")
+                                                    or sl["mark"] == "S1"))]
+    roof = floors[-1]["rooms"] if floors else []
+    area: dict = {}
+    for group in (carried, roof):
+        for rm in group:
+            pts = [p for p in B.nodes([rm]) if B._on_edge(rm, *p)]
+            if not pts:
+                continue
+            share = float(rm["w"]) * float(rm["d"]) / len(pts)
+            for p in pts:
+                k_ = (round(p[0], 3), round(p[1], 3))
+                area[k_] = area.get(k_, 0.0) + share
+    rows = []
+    for k_, Pu in res["columns"]:
+        W = Pu / avg
+        A = area.get(k_, 0.0)
+        rows.append({"x": k_[0], "y": k_[1], "W": W, "A": A, "Wf": W / A if A else 0.0})
+    tot_A = sum(r["A"] for r in rows)
+    mean = sum(r["W"] for r in rows) / tot_A if tot_A else 0.0
+    marks = {(round(c["x"], 3), round(c["y"], 3)): c["mark"] for c in E["columns"] if c.get("floor", 0) == 0}
+    lo, hi = WFLOOR_RANGE
+    for r in rows:
+        r["mark"] = marks.get((r["x"], r["y"]), "C")
+        r["WA"] = r["A"] * mean
+        r["diff"] = (r["W"] - r["WA"]) / r["WA"] * 100 if r["WA"] else 0.0
+        if not r["A"]:
+            r["ok"], r["note"] = False, "ไม่มีพื้นที่รับน้ำหนัก — ตรวจผัง/คานยื่น"
+        elif r["Wf"] < lo or r["Wf"] > hi:
+            r["ok"], r["note"] = False, (f"Wfloor {'สูง' if r['Wf'] > hi else 'ต่ำ'}กว่าปกติ "
+                                         f"({lo:,.0f}–{hi:,.0f}) — ตรวจน้ำหนักที่ใส่")
+        elif abs(r["diff"]) > 40:
+            r["ok"], r["note"] = True, f"ต่างจากค่าเฉลี่ย {r['diff']:+.0f}% (มีผนัง/คานยื่น/น้ำหนักเพิ่ม)"
+        else:
+            r["ok"], r["note"] = True, "ปกติ"
+    return {"rows": rows, "mean": mean, "area": tot_A, "range": WFLOOR_RANGE,
+            "total": sum(r["W"] for r in rows)}

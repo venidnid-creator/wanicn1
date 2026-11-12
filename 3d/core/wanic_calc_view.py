@@ -73,7 +73,7 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
     def X(x):
         return left + W * x / L if L else left
     # ---- load diagram: the uniform loads, the point loads, the supports, the reactions
-    by = top + 34
+    by = top + 46
     x = 0.0
     sup = [0.0]                    # the span ends
     for sp in res.spans:
@@ -100,13 +100,13 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
             p.setBrush(QColor(124, 58, 237, 40))
             p.drawRect(QRectF(ua, by - 22, max(ub - ua, 1.0), 9))
             p.setBrush(Qt.NoBrush)
-            p.drawText(QRectF(ua, by - 46, max(ub - ua, 120), 12), Qt.AlignLeft, f"+{wu:,.0f} กก./ม.")
+            p.drawText(QRectF(ua, by - 44, max(ub - ua, 120), 12), Qt.AlignLeft, f"+{wu:,.0f} กก./ม.")
             p.setPen(QPen(QColor("#2563EB"), 1))
         for a_, P in getattr(sp, "P", []) or []:
             px = X(sup[i] + a_)
             p.setPen(QPen(QColor("#DC2626"), 1.6))
             p.drawLine(QPointF(px, by - 24), QPointF(px, by - 2))
-            p.drawText(QRectF(px + 2, by - 36, 90, 12), Qt.AlignLeft, f"P = {P:,.0f} กก.")
+            p.drawText(QRectF(px + 3, by - 44, 120, 12), Qt.AlignLeft, f"P = {P:,.0f} กก.")
             p.setPen(QPen(QColor("#2563EB"), 1))
     p.setPen(QPen(QColor("#374151"), 1.2))
     p.setBrush(QColor("#9CA3AF"))
