@@ -122,7 +122,12 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - core/wanic_stair.py: params (stair_bars DB12@0.15, stair_temp RB9@0.15, stair_ll 300, stair_beam "0.15x0.35 2-DB12/2-DB12 RB6@0.15"), geometry_checks (กฎกระทรวง 55: ลูกตั้ง ≤ 20, ลูกนอน ≥ 22, กว้าง ≥ 0.80, ช่วงละ ≤ 3.00 ม., 2R+T 60–65 แนะนำ), design (พื้นทางเดียวพาดตามแนวบันได, ชานพักรวมช่วง, solve_beam + U, φMn/φVc, L/20, As min, เหล็กกันร้าว 0.0025/0.0018bt, คาน BS1), designs(data), suggest/apply_all/advice_for/find_stair; ค่าเฉพาะบันได st["t","bars","temp","w","type","turn"]
      - analyse เพิ่ม group "stair" และ res["stairs"]; GROUP_PLAIN/ชื่อกลุ่มใน UI/PDF; wanic_advice (advise, advice_by_member, member_fix target "stair", apply_fixes เรียก ST.apply_all); wanic_fix_view รองรับ target "stair"/"none"
      - UI core/wanic_stair_view.py StairDialog (ตาราง แบบ/เลี้ยว/กว้าง/หนา/เหล็ก, ภาพผัง, ผลตรวจสด, ปุ่มปรับให้ผ่าน) ปุ่ม «บันได คสล.…» ขั้น 5 และ 9; รูปเล่ม stair_page (รูปตัดคลี่ เหล็ก คาน BS1 ตาราง)
-     - tests/test_wanic_stair.py (ใน CI แล้ว) · ถัดไปหลังอนุมัติ: แผนข้อ 6 (A-01 สัญลักษณ์/รหัสวัสดุ ป้ายห้อง ABCD ตารางประตูหน้าต่าง บ่อดักไขมัน/บ่อตะแกรง ถังบำบัดตามจำนวนคน รายการ EE/SN)
+     - อนุมัติแล้ว (13 พ.ย.)
+   + [ ] (กำลังทำ) แผนข้อ 6 — สิ่งที่มีอยู่แล้ว: symbols_legend, finish_codes (พ เท่านั้น), a_schedules, SEPTIC_SIZES/septic_table/septic_section, GT บนผัง SN, SN_NOTES/EE_NOTES, รูปด้านภายในห้องน้ำ ก ข ค ง (A-13)
+     - [ ] core/wanic_sanitary.py: users_of (settings "users" หรือ 2×ห้องนอน ขั้นต่ำ 4), septic_pick, grease_pick (ตาราง GT_SIZES ของเราเอง), บ่อตะแกรง SP
+     - [ ] SN: ป้าย ST/GT ตามขนาดที่เลือก + กล่อง SP ก่อนออกท่อสาธารณะ; SN-01 «ข้อมูลออกแบบ» + สัญลักษณ์ SP; SN-04 ไฮไลต์แถวที่เลือก + รูปตัด GT/SP; ข้อกำหนด SN/EE ฉบับเต็ม; ข้อมูลถังใน 3D ตามขนาดที่เลือก
+     - [ ] A-01: แก้ข้อความทับตารางสัญลักษณ์ · ตารางรหัสวัสดุ พ/ผ/ฝ (F/W/C) · ป้ายห้องแสดง พ ผ ฝ · เครื่องหมายรูปด้านภายใน A B C D ในห้องน้ำบนแปลน (อ้าง A-13) และ A-13 ใช้ชื่อ A–D
+     - (เดิม) ถัดไปหลังอนุมัติ: แผนข้อ 6 (A-01 สัญลักษณ์/รหัสวัสดุ ป้ายห้อง ABCD ตารางประตูหน้าต่าง บ่อดักไขมัน/บ่อตะแกรง ถังบำบัดตามจำนวนคน รายการ EE/SN)
 4. [ ] ออกแบบคาน: น้ำหนักจุด/แผ่เพิ่มเอง · คานยื่น · Checkload (Wcol / Wcol-Area / Wfloor)
 5. [ ] บันได คสล. ช่วงตรง / L / 2 ช่วง + คานชานพัก + รูปตัด
 6. [ ] A-01 สัญลักษณ์ + รหัสวัสดุ F/W/C · ป้ายห้อง · ABCD · ตารางประตู-หน้าต่าง · บ่อดักไขมัน/บ่อตะแกรง · ถังบำบัดตามจำนวนผู้ใช้ · ข้อกำหนด EE/SN
