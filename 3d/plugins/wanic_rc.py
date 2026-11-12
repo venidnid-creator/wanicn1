@@ -144,6 +144,10 @@ class RCPanel(QWidget):
         self.grid_btn.setToolTip("กำหนดระยะแกน 1-2-3 / A-B-C และจำนวนชั้น — ห้องทุกช่อง เสาทุกจุดตัด คานตามแนวกริด")
         self.grid_btn.clicked.connect(self.edit_grid)
         col.addWidget(self.grid_btn)
+        self.flat_btn = QPushButton("พื้นไร้คาน Flat Slab + Drop Panel (DDM)…")
+        self.flat_btn.setToolTip("ความหนาขั้นต่ำ · โมเมนต์แถบเสา/แถบกลาง · เหล็กเสริม · แรงเฉือนทะลุ")
+        self.flat_btn.clicked.connect(self.edit_flatslab)
+        col.addWidget(self.flat_btn)
         self.status = QLabel()
         self.status.setWordWrap(True)
         col.addWidget(self.status)
@@ -207,6 +211,7 @@ class RCPanel(QWidget):
         self.title.setText(label)
         self.roof_row.setVisible(self.step == "roof")
         self.grid_btn.setVisible(self.step == "grid")
+        self.flat_btn.setVisible(self.step == "slab")
         self.fix.setVisible(self.step in STEP_MARKS)
         calc = self.step == "calc"
         self.diagram.setVisible(calc)
@@ -561,6 +566,20 @@ class RCPanel(QWidget):
         R.apply_grid(d, sx, sy, n, omit, inner_walls=dlg.inner_walls())
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
+        self.refresh()
+
+    def edit_flatslab(self):
+        from core.wanic_flatslab_view import FlatSlabDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = FlatSlabDialog(self, d)
+        if dlg.exec() != FlatSlabDialog.Accepted:
+            return
+        d["flatslab"] = dlg.params()
+        bp._write(d)
+        self.status.setText("บันทึกพื้นไร้คานแล้ว — รวมในรูปเล่มรายการคำนวณ A4")
         self.refresh()
 
     def edit_purlin(self):

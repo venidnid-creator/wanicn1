@@ -395,6 +395,11 @@ def make_book(res_all, data, path, info: dict) -> int:
             truss_pages(bk, tp, td)
         except ValueError:
             pass
+    if (data or {}).get("flatslab"):
+        from core import wanic_flatslab as FS
+        from core.wanic_flatslab_view import flatslab_pages
+        fp, fr = FS.design_of(data)
+        flatslab_pages(bk, fp, fr)
     if (data or {}).get("purlin"):
         from core import wanic_purlin as PU
         from core.wanic_purlin_view import purlin_pages
