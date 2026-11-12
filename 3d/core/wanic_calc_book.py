@@ -1,0 +1,398 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
+"""รูปเล่มรายการคำนวณโครงสร้าง: the calculation booklet on A3 landscape
+sheets, the way Thai engineers hand it in with a permit:
+
+1. a cover (project, owner, place),
+2. the design basis (materials, allowable stresses, live loads by use,
+   wind by height and terrain, the strength-reduction factors),
+3. a page per beam line: its load, shear and moment diagrams and a table
+   per span (moments at the ends and mid-span, the capacity, the steel
+   needed and used, where the moment changes sign, the shear at d from
+   the support, Vc, the stirrups and Vs),
+4. the columns as cards floor by floor (load, bars, ties, Pg, capacity),
+5. the footings, the roof members and the summary,
+
+each page framed, titled, numbered and signed by the person who made it."""
+from __future__ import annotations
+
+import math
+
+from PySide6.QtCore import QMarginsF, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QPolygonF
+
+from core import wanic_rc as R
+
+BLUE = QColor("#1D4ED8")
+RED = QColor("#DC2626")
+GREEN = QColor("#16A34A")
+INK = QColor("#111827")
+
+#: Steel's allowable tensile stress in WSD (ksc), by bar.
+FS = {"RB": 1200.0, "DB": 1700.0}
+
+
+def _font(px, bold=False):
+    f = QFont()
+    f.setFamilies(["TH Sarabun New", "TH SarabunPSK", "Laksaman", "Tahoma"])
+    f.setPixelSize(int(px))
+    f.setBold(bold)
+    return f
+
+
+class Book:
+    """Pages on an A3 landscape PDF, 300 dpi (1 mm = 11.81 px)."""
+
+    def __init__(self, path, info: dict):
+        self.w = QPdfWriter(str(path))
+        self.w.setResolution(150)
+        self.w.setPageLayout(QPageLayout(QPageSize(QPageSize.A3), QPageLayout.Landscape,
+                                         QMarginsF(8, 8, 8, 8), QPageLayout.Millimeter))
+        self.p = QPainter(self.w)
+        self.W, self.H = self.w.width(), self.w.height()
+        self.mm = self.W / (420 - 16)
+        self.info = info
+        self.first = True
+        self.n = 0
+
+    def page(self, title: str, tag: str):
+        if not self.first:
+            self.w.newPage()
+        self.first = False
+        self.n += 1
+        p, mm = self.p, self.mm
+        p.setPen(QPen(INK, 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(QRectF(0, 0, self.W, self.H))
+        p.setFont(_font(9 * mm))
+        p.drawText(QRectF(14 * mm, 6 * mm, 260 * mm, 12 * mm), Qt.AlignLeft | Qt.AlignVCenter,
+                   f"Project : {self.info.get('project', '')}")
+        p.drawText(QRectF(8 * mm, 17 * mm, 300 * mm, 12 * mm), Qt.AlignLeft | Qt.AlignVCenter,
+                   f"รายการคำนวณ : {title}")
+        p.drawText(QRectF(self.W - 130 * mm, 6 * mm, 122 * mm, 12 * mm), Qt.AlignRight | Qt.AlignVCenter,
+                   f"Page : {tag}  ({self.n})")
+        self.sign()
+
+    def sign(self):
+        p, mm = self.p, self.mm
+        p.setFont(_font(8 * mm))
+        p.setPen(INK)
+        who = self.info.get("engineer", "")
+        qual = self.info.get("qualification", "")
+        p.drawText(QRectF(self.W - 120 * mm, self.H - 34 * mm, 110 * mm, 12 * mm), Qt.AlignLeft, who)
+        p.drawText(QRectF(self.W - 120 * mm, self.H - 22 * mm, 110 * mm, 12 * mm), Qt.AlignLeft, qual)
+
+    def text(self, x, y, w, h, t, px=6.0, color=INK, align=Qt.AlignLeft | Qt.AlignVCenter, bold=False):
+        mm = self.mm
+        self.p.setFont(_font(px * mm, bold))
+        self.p.setPen(color)
+        self.p.drawText(QRectF(x * mm, y * mm, w * mm, h * mm), int(align), t)
+
+    def table(self, x, y, widths, rows, h=7.0, left=False):
+        """Rows of cells (mm); a cell may be (text, QColor)."""
+        mm, p = self.mm, self.p
+        for r, row in enumerate(rows):
+            cx = x
+            for c, (wd, cell) in enumerate(zip(widths, row)):
+                col = INK
+                if isinstance(cell, tuple):
+                    cell, col = cell
+                p.setPen(QPen(INK, 1))
+                p.drawRect(QRectF(cx * mm, (y + r * h) * mm, wd * mm, h * mm))
+                self.text(cx + 1, y + r * h, wd - 2, h, str(cell), 5.2, col,
+                          Qt.AlignRight | Qt.AlignVCenter if (c and not left) else Qt.AlignLeft | Qt.AlignVCenter)
+                cx += wd
+        return y + len(rows) * h
+
+    def close(self):
+        self.p.end()
+
+
+# ---- the pages ---------------------------------------------------------------------------
+
+def cover(bk: Book):
+    bk.page("", "cover")
+    mm, p = bk.mm, bk.p
+    p.setPen(QPen(BLUE, 2))
+    for x0, x1, xc in ((30, 150, 32), (260, 380, 378)):
+        p.drawLine(QPointF(x0 * mm, 45 * mm), QPointF(x1 * mm, 45 * mm))
+        p.drawLine(QPointF(xc * mm, 35 * mm), QPointF(xc * mm, 75 * mm))
+        p.drawEllipse(QPointF(xc * mm, 45 * mm), 2.5 * mm, 2.5 * mm)
+    bk.text(0, 60, 404, 30, "รายการคำนวณโครงสร้าง", 22, align=Qt.AlignCenter)
+    i = bk.info
+    for k, (lab, val) in enumerate((("โครงการ", i.get("project", "")), ("เจ้าของ", i.get("owner", "")),
+                                    ("สถานที่", i.get("place", "")))):
+        bk.text(70, 100 + k * 24, 330, 20, f"{lab} :  {val}", 16)
+    bk.text(200, 255, 196, 12, "คำนวณโครงสร้างโดย WANICNSURVEY", 9, align=Qt.AlignRight | Qt.AlignVCenter)
+
+
+def basis_page(bk: Book, b_: dict):
+    bk.page("ข้อกำหนดในการออกแบบ", "Design")
+    sdm = b_["method"] == "SDM"
+    fc = b_["fc"]
+    n = 2.04e6 / (15100 * math.sqrt(fc))
+    rows = [("ข้อกำหนดในการออกแบบ", ""),
+            ("วิธีออกแบบ", "กำลัง (SDM) วสท. 011008" if sdm else "หน่วยแรงใช้งาน (WSD) ข้อบัญญัติ กทม. 2522"),
+            ("fc′ คอนกรีต", f"{fc:,.2f} ksc"), ("fc = 0.375 fc′ (WSD)", f"{0.375 * fc:,.2f} ksc"),
+            ("ตัวคูณน้ำหนักคงที่ / น้ำหนักจร", "1.40 / 1.70" if sdm else "1.00 / 1.00")]
+    for name, fy in (("SR24", 2400.0), ("SD30", 3000.0), ("SD40", 4000.0)):
+        fs = 1200.0 if name == "SR24" else (1500.0 if name == "SD30" else 1700.0)
+        k = 1 / (1 + fs / (n * 0.375 * fc))
+        j = 1 - k / 3
+        Rr = 0.5 * 0.375 * fc * k * j
+        rows.append((f"เหล็กเสริม {name}", f"fy {fy:,.0f} · fs {fs:,.0f} ksc · n {n:.0f} · k {k:.2f} · "
+                                          f"j {j:.2f} · R {Rr:.2f} ksc"))
+    rows += [("หน่วยแรงเฉือนคอนกรีต (ไม่มีเหล็กลูกตั้ง)", f"{0.29 * math.sqrt(fc):.2f} ksc"),
+             ("หน่วยแรงเฉือนคอนกรีต (มีเหล็กลูกตั้ง)", f"{1.32 * math.sqrt(fc):.2f} ksc"),
+             ("แผ่นพื้น ฐานราก (เฉือนทะลุ)", f"{0.53 * math.sqrt(fc):.2f} ksc"),
+             ("น้ำหนักบรรทุกจรที่ใช้", f"{b_['ll_floor']:g} กก./ตร.ม."),
+             ("วัสดุปูพื้น + ฝ้า", f"{b_['finish']:g} กก./ตร.ม."),
+             ("น้ำหนักบรรทุกจรหลังคา", f"{b_['ll_roof']:g} กก./ตร.ม."),
+             ("ดินรับน้ำหนักปลอดภัย / เสาเข็ม", f"{b_['soil']:g} ตัน/ตร.ม. · {b_['pile_cap']:g} ตัน/ต้น")]
+    y = bk.table(14, 34, [110, 150], rows, 8.2)
+    right = [("น้ำหนักบรรทุกจรสำหรับการออกแบบ (กฎกระทรวง)", ""),
+             ("ที่พักอาศัย ห้องน้ำ", "200 กก./ตร.ม."), ("อาคารชุด หอพัก โรงแรม", "200 กก./ตร.ม."),
+             ("สำนักงาน ธนาคาร", "250 กก./ตร.ม."), ("อาคารพาณิชย์ โรงเรียน", "400 กก./ตร.ม."),
+             ("คลังสินค้า โรงงาน", "500 กก./ตร.ม."), ("หลังคา", "50 กก./ตร.ม."),
+             ("น้ำหนักคอนกรีต", f"{b_['concrete']:,.0f} กก./ลบ.ม."),
+             ("ผนังก่ออิฐมอญ อิฐบล็อก", "180 กก./ตร.ม."), ("ผนังอิฐมวลเบา", "90 กก./ตร.ม."),
+             ("ผนังยิปซัม โครงไม้", "25 กก./ตร.ม."),
+             ("แรงลม เมือง/ชานเมือง สูงไม่เกิน 10 / 10–20 / 20–40 ม.", "60 / 80 / 120 กก./ตร.ม."),
+             ("แรงลม โล่งหรือชายฝั่งทะเล สูงไม่เกิน 10 / 10–20 / 20–40 ม.", "100 / 120 / 160 กก./ตร.ม."),
+             ("ค่าสัมประสิทธิ์ลดกำลัง φ (SDM)", "ดัด 0.90 · เฉือน 0.85 · เสาปลอกเกลียว 0.75 · เสาปลอกเดี่ยว 0.70")]
+    bk.table(285, 34, [70, 45], right, 8.2)
+    bk.text(14, y + 6, 380, 10, "เอกสารนี้ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจสอบและลงนามรับรองก่อนก่อสร้าง", 7, RED)
+
+
+def _span_rows(res, i, b_, fc):
+    """The table of one span: moments, steel, shear, stirrups."""
+    spec = res.spec
+    sp = res.spans[i]
+    n = 24
+    xs = res.xs[i * (n + 1):(i + 1) * (n + 1)]
+    V = res.V[i * (n + 1):(i + 1) * (n + 1)]
+    M = res.M[i * (n + 1):(i + 1) * (n + 1)]
+    bw, h = float(spec.get("b", 0.2)), float(spec.get("h", 0.4))
+    d = h - R.COVER["beam"] - 0.012
+    x0 = xs[0]
+    ML, MR = max(0.0, -M[0]), max(0.0, -M[-1])
+    Mm = max(M)
+    sdm = b_["method"] == "SDM"
+    top, bot, st = R.parse_bar(spec.get("top")), R.parse_bar(spec.get("bot")), R.parse_bar(spec.get("stir"))
+
+    def need(Mx, bar):
+        if Mx <= 0:
+            return 0.0
+        fy = bar.fy if bar else 4000.0
+        if sdm:
+            Rn = Mx * 100 / (0.9 * bw * 100 * (d * 100) ** 2)
+            disc = 1 - 2 * Rn / (0.85 * fc)
+            rho = 0.85 * fc / fy * (1 - math.sqrt(max(disc, 0.0)))
+            return rho * bw * 100 * d * 100
+        fs = FS[bar.kind] if bar else 1700.0
+        return Mx * 100 / (fs * 0.88 * d * 100)
+    if sdm:
+        rho_b = 0.85 * 0.85 * fc / 4000 * 6120 / (6120 + 4000)
+        Mc = 0.9 * 0.75 * rho_b * 4000 * (1 - 0.59 * 0.75 * rho_b * 4000 / fc) * bw * 100 * (d * 100) ** 2 / 100
+    else:
+        n_ = 2.04e6 / (15100 * math.sqrt(fc))
+        k = 1 / (1 + 1700 / (n_ * 0.375 * fc))
+        Mc = 0.5 * 0.375 * fc * k * (1 - k / 3) * bw * 100 * (d * 100) ** 2 / 100
+    # where the moment changes sign, measured from each end
+    zl = next((xs[j] - x0 for j in range(1, len(M)) if M[j - 1] < -1.0 <= M[j] + 1.0 and M[j] >= 0), 0.0)
+    zr = next((xs[-1] - xs[j] for j in range(len(M) - 1, 0, -1) if M[j] < -1.0 and M[j - 1] >= 0), 0.0)
+    RL, RR = V[0], -V[-1]
+    Rd_l = max(RL - sp.w * d, 0.0)
+    Rd_r = max(RR - sp.w * d, 0.0)
+    Rd_m = abs(V[len(V) // 2])
+    vc = (0.53 * 0.85 if sdm else 0.29) * math.sqrt(fc) * bw * 100 * d * 100
+    vs = 0.0
+    if st and st.s:
+        vs = 2 * st.area * (st.fy * 0.85 if sdm else 0.5 * st.fy) * d * 100 / (st.s * 100)
+    nt = top.n if top else 0
+    nb = bot.n if bot else 0
+    ast_used = nt * (top.area if top else 0)
+    asb_used = nb * (bot.area if bot else 0)
+    f2 = lambda v: f"{v:,.2f}"                       # noqa: E731
+    head = [("NO.", "กว้าง(ซม.)", "ลึก(ซม.)", "ยาว(ม.)", "span(ม.)", "ระดับ"),
+            ((res.mark, BLUE), (f"{bw * 100:.0f}", BLUE), (f"{h * 100:.0f}", BLUE), f2(sp.L),
+             f2(max(sp.L - 0.2, 0.0)), f"{res.z:+.2f}")]
+    body = [("Moment", "", "L", "M", "R"),
+            ("Moment", "kg-m", f"{ML:,.1f}", f"{Mm:,.1f}", f"{MR:,.1f}"),
+            ("Mc", "kg-m", f2(Mc), f2(Mc), f2(Mc)),
+            ("Ast", "cm²", f2(need(ML, top)), "0.00", f2(need(MR, top))),
+            ("Asb", "cm²", "0.00", f2(need(Mm, bot)), "0.00"),
+            ("เหล็กบน", (f"{top.kind}{top.d}" if top else "-", BLUE), (str(nt), BLUE), (str(nt), BLUE),
+             (str(nt), BLUE)),
+            ("เหล็กล่าง", (f"{bot.kind}{bot.d}" if bot else "-", BLUE), (str(nb), BLUE), (str(nb), BLUE),
+             (str(nb), BLUE)),
+            ("Ast (used)", "cm²", f2(ast_used), f2(ast_used), f2(ast_used)),
+            ("Asb (used)", "cm²", f2(asb_used), f2(asb_used), f2(asb_used)),
+            ("ระยะ M0", "m.", f2(zl), "", f2(zr)),
+            ("Shear", "", "L", "M", "R"),
+            ("R", "kg", f2(RL), "", f2(RR)),
+            ("Rd", "kg", f2(Rd_l), f2(Rd_m), f2(Rd_r)),
+            ("Vc", "kg", f2(vc), f2(vc), f2(vc)),
+            ("Rd−Vc", "kg", f2(max(Rd_l - vc, 0)), f2(max(Rd_m - vc, 0)), f2(max(Rd_r - vc, 0))),
+            ("เหล็กปลอก@", (f"{st.kind}{st.d}" if st else "-", BLUE), (f"{st.s:.2f}" if st else "-", BLUE),
+             (f"{st.s:.2f}" if st else "-", BLUE), (f"{st.s:.2f}" if st else "-", BLUE)),
+            ("Vs", "kg", f2(vs), f2(vs), f2(vs))]
+    ok = max(ML, MR) <= Mc and Mm <= Mc and need(max(ML, MR), top) <= ast_used + 1e-6 and \
+        need(Mm, bot) <= asb_used + 1e-6 and max(Rd_l, Rd_r) <= vc + vs
+    return head, body, ok
+
+
+def _diagram_strip(bk: Book, y, res, kind):
+    """One strip (load / shear / moment) across the page, values labelled."""
+    mm, p = bk.mm, bk.p
+    left, right = 120 * mm, 330 * mm
+    L = res.xs[-1] or 1.0
+
+    def X(x):
+        return left + (right - left) * x / L
+    base = y * mm
+    p.setPen(QPen(INK, 1))
+    if kind == "load":
+        x = 0.0
+        for sp in res.spans:
+            p.fillRect(QRectF(X(x), base - 1.5 * mm, X(x + sp.L) - X(x), 3 * mm), GREEN)
+            bk.text((X(x) / mm), y - 9, (X(x + sp.L) - X(x)) / mm, 6, f"W={sp.w:,.1f} kg/m", 5,
+                    align=Qt.AlignCenter)
+            bk.text((X(x) / mm), y + 2, (X(x + sp.L) - X(x)) / mm, 6, f"L= {sp.L:.2f} m.", 5,
+                    align=Qt.AlignCenter)
+            x += sp.L
+        x = 0.0
+        for k in range(len(res.spans) + 1):
+            cx = X(x)
+            p.setBrush(Qt.NoBrush)
+            p.drawPolygon(QPolygonF([QPointF(cx, base + 1.5 * mm), QPointF(cx - 1.5 * mm, base + 4 * mm),
+                                     QPointF(cx + 1.5 * mm, base + 4 * mm)]))
+            if k < len(res.spans):
+                x += res.spans[k].L
+        return
+    vals = res.V if kind == "shear" else res.M
+    big = max((abs(v) for v in vals), default=1.0) or 1.0
+    sc = 9 * mm / big
+    sgn = -1 if kind == "shear" else 1
+    p.drawLine(QPointF(left, base), QPointF(right, base))
+    pts = [QPointF(X(x), base + sgn * v * sc) for x, v in zip(res.xs, vals)]
+    p.setPen(QPen(INK, 1.4))
+    p.drawPolyline(QPolygonF(pts))
+    n = 24
+    for i in range(len(res.spans)):
+        seg = list(range(i * (n + 1), (i + 1) * (n + 1)))
+        if kind == "shear":
+            for j, lab in ((seg[0], "R"), (seg[-1], "R")):
+                bk.text(pts[j].x() / mm - 12, pts[j].y() / mm - 7 * (1 if vals[j] > 0 else -0.2), 24, 6,
+                        f"R={abs(vals[j]):,.2f}", 4.6, align=Qt.AlignCenter)
+        else:
+            jm = max(seg, key=lambda j: vals[j])
+            if vals[jm] > 1e-6:
+                bk.text(pts[jm].x() / mm - 15, pts[jm].y() / mm + 1, 30, 6, f"M+={vals[jm]:,.1f}", 4.6,
+                        align=Qt.AlignCenter)
+            for j in (seg[0], seg[-1]):
+                if vals[j] < -1e-6:
+                    bk.text(pts[j].x() / mm - 15, pts[j].y() / mm - 7, 30, 6, f"M−={vals[j]:,.1f}", 4.6,
+                            align=Qt.AlignCenter)
+
+
+def beam_pages(bk: Book, res_all, b_, fc):
+    k = 0
+    for m in res_all["members"]:
+        res = m.diagram
+        if m.group != "beam" or res is None or not hasattr(res, "spec"):
+            continue
+        k += 1
+        lvl = "ดิน (คานคอดิน)" if res.ground else f"{res.level}"
+        bk.page(f"คาน   ชั้น {lvl}", f"Beam{k}")
+        bk.text(40, 40, 70, 7, "Load Diagram", 6.5)
+        bk.text(40, 47, 70, 7, f"GridLine {'y' if res.axis == 'x' else 'x'} = {res.line:.2f}", 6.5)
+        _diagram_strip(bk, 46, res, "load")
+        bk.text(40, 75, 70, 7, "Shear Diagram", 6.5)
+        _diagram_strip(bk, 80, res, "shear")
+        bk.text(40, 108, 70, 7, "Moment Diagram", 6.5)
+        _diagram_strip(bk, 112, res, "moment")
+        x = 12
+        for i in range(len(res.spans)):
+            head, body, ok = _span_rows(res, i, b_, fc)
+            if x + 125 > 290:
+                break
+            y = bk.table(x, 135, [20, 20, 20, 18, 20, 22], head, 7.5)
+            bk.table(x, y + 3, [29, 19, 25, 25, 25], body, 6.6)
+            bk.text(x, y + 3 + len(body) * 6.6 + 1, 120, 6, "OK" if ok else "ตรวจสอบ — เพิ่มเหล็ก/ขนาดคาน", 5.5,
+                    GREEN if ok else RED)
+            x += 128
+        if len(res.spans) > 2:
+            bk.text(12, 262, 270, 6, f"(แสดง 2 ช่วงแรกจาก {len(res.spans)} ช่วง — ช่วงที่เหลือดูในรายการคำนวณแบบสรุป)",
+                    5, RED)
+
+
+def column_pages(bk: Book, res_all, b_, fc):
+    cards = sorted(res_all.get("cards") or [], key=lambda c: (c["x"], c["y"], c["floor"]))
+    per_page = 6
+    for start in range(0, len(cards), per_page):
+        bk.page("เสา", f"Column-{start // per_page + 1}")
+        for i, c in enumerate(cards[start:start + per_page]):
+            col, row = i % 3, i // 3
+            x, y = 12 + col * 92, 40 + row * 112
+            spec = c["spec"]
+            b, h = float(spec.get("b", 0.2)), float(spec.get("h", 0.2))
+            main, tie = R.parse_bar(spec.get("main")), R.parse_bar(spec.get("tie"))
+            Ag = b * h * 1e4
+            As = (main.n * main.area) if main and main.n else 0.0
+            Pg = As / Ag if Ag else 0.0
+            fs = FS[main.kind] if main else 1700.0
+            if b_["method"] == "SDM":
+                cap = 0.80 * 0.70 * (0.85 * fc * (Ag - As) + (main.fy if main else 4000) * As)
+                cap_lab = "φPn (กก.)"
+            else:
+                cap = 0.85 * Ag * (0.25 * fc + fs * Pg)
+                cap_lab = "0.85Ag(0.25fc′+fsPg)"
+            ok = c["P"] <= cap
+            yy = bk.table(x, y, [18, 22, 22, 20], [("NO.", "กว้าง(ซม.)", "ยาว(ซม.)", "สูง(ม.)"),
+                                                   ((c["mark"], BLUE), (f"{b * 100:.0f}", BLUE),
+                                                    (f"{h * 100:.0f}", BLUE), f"{c['H']:.2f}")], 7.5)
+            bk.table(x, yy + 2, [34, 24, 24], [
+                ("Column", "", ("OK" if ok else "NG", GREEN if ok else RED)),
+                ("P", "kg.", f"{c['P']:,.0f}"),
+                ("เหล็กยืน", (f"{main.kind}{main.d}" if main else "-", BLUE), (str(main.n if main else 0), BLUE)),
+                ("เหล็กปลอก", (f"1-{tie.kind}{tie.d}" if tie else "-", BLUE), (f"@{tie.s:.2f}" if tie else "-", BLUE)),
+                ("As", "cm²", f"{As:.2f}"), ("Ag", "cm²", f"{Ag:.2f}"), ("Pg", "", f"{Pg:.3f}"),
+                ("Fc′", "ksc", f"{fc:.2f}"), (cap_lab, "", (f"{cap:,.0f}", RED))], 7.0)
+            fl = "ตอม่อ" if c["floor"] < 0 else f"ชั้น {c['floor'] + 1}"
+            bk.text(x, yy + 2 + 9 * 7.0, 82, 6, f"{fl}      Grid ({c['x']:.2f}, {c['y']:.2f})", 5.2)
+
+
+def list_page(bk: Book, title: str, tag: str, members):
+    bk.page(title, tag)
+    rows = [("ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล")]
+    for m in members:
+        rows.append((m.name, m.demand, m.capacity, f"{m.ratio:.2f}",
+                     ("ผ่าน", GREEN) if m.ok else ("ไม่ผ่าน", RED)))
+    y = 34
+    for chunk in range(0, len(rows), 30):
+        y = bk.table(10, y, [95, 135, 110, 22, 18], rows[chunk:chunk + 30], 7.0, left=True)
+        if chunk + 30 < len(rows):
+            bk.page(title, tag)
+            y = 34
+
+
+def make_book(res_all, data, path, info: dict) -> int:
+    """Write the booklet; returns the number of pages."""
+    b_ = res_all["basis"]
+    fc = b_["fc"]
+    bk = Book(path, info)
+    cover(bk)
+    basis_page(bk, b_)
+    beam_pages(bk, res_all, b_, fc)
+    column_pages(bk, res_all, b_, fc)
+    ms = res_all["members"]
+    groups = (("หลังคา", "Roof", "roof"), ("พื้น", "Slab", "slab"), ("ฐานราก / เสาเข็ม", "Footing", "footing"))
+    for title, tag, g in groups:
+        sel = [m for m in ms if m.group == g]
+        if sel:
+            list_page(bk, title, tag, sel)
+    list_page(bk, "สรุปผลการตรวจสอบทุกชิ้นส่วน", "Summary", ms)
+    n = bk.n
+    bk.close()
+    return n

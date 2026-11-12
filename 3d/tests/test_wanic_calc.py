@@ -112,3 +112,19 @@ def test_wind_uplift_on_a_light_roof():
     assert any("จุดยึด" in m.name for m in roof)
     d["calc"] = {"wind": 0.0}
     assert not any("แรงลม" in m.name for m in C.analyse(d)["members"])
+
+
+def test_the_a3_booklet(tmp_path):
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core.wanic_calc_book import make_book
+    d = _house([dict(name="a", x=0, y=0, w=4, d=4), dict(name="b", x=4, y=0, w=4, d=4)])
+    res = C.analyse(d)
+    assert res["cards"] and all(c["P"] > 0 for c in res["cards"])
+    stump = max(c["P"] for c in res["cards"] if c["floor"] < 0)
+    col = max(c["P"] for c in res["cards"] if c["floor"] == 0)
+    assert stump > col                                              # the stump carries the ground beams too
+    n = make_book(res, d, tmp_path / "book.pdf", {"project": "ทดสอบ", "engineer": "ผู้คำนวณ"})
+    beams = sum(1 for m in res["members"] if m.group == "beam")
+    assert n >= 2 + beams + 1
+    assert (tmp_path / "book.pdf").read_bytes().startswith(b"%PDF")

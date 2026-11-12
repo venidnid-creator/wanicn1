@@ -100,6 +100,11 @@ class RCPanel(QWidget):
         self.pdf_btn = QPushButton("รายการคำนวณ (.pdf)")
         self.pdf_btn.clicked.connect(self.export_pdf)
         row.addWidget(self.pdf_btn)
+        self.book_btn = QPushButton("รูปเล่มรายการคำนวณ A3 (.pdf)")
+        self.book_btn.setToolTip("ปก · ข้อกำหนด · คานทุกแนวพร้อม Load/Shear/Moment Diagram และตาราง · "
+                                 "การ์ดเสาทุกชั้น · ฐานราก · หลังคา · สรุป — พร้อมช่องลงนามผู้คำนวณ")
+        self.book_btn.clicked.connect(self.export_book)
+        row.addWidget(self.book_btn)
         row.addStretch(1)
         col.addLayout(row)
         self.roof_row = QWidget()
@@ -188,6 +193,7 @@ class RCPanel(QWidget):
         self.checks.setVisible(not calc)
         self.basis_btn.setVisible(calc)
         self.pdf_btn.setVisible(calc)
+        self.book_btn.setVisible(calc)
         self.select_btn.setVisible(not calc and self.step != "rebar")
         self._loading = True
         try:
@@ -478,6 +484,13 @@ class RCPanel(QWidget):
             sp_.setValue(float(b_[key]))
             spins[key] = sp_
             form.addRow(th, sp_)
+        from PySide6.QtWidgets import QLineEdit
+        texts = {}
+        for key, th in (("project", "โครงการ"), ("owner", "เจ้าของ"), ("place", "สถานที่"),
+                        ("engineer", "ผู้คำนวณ (ลงนาม)"), ("qualification", "คุณวุฒิ / เลขทะเบียน")):
+            ed = QLineEdit(str(b_.get(key, "") or ""))
+            texts[key] = ed
+            form.addRow(th, ed)
         box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         box.button(QDialogButtonBox.Ok).setText("ตกลง")
         box.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
@@ -490,6 +503,8 @@ class RCPanel(QWidget):
         calc["method"] = meth.currentData()
         for k, sp_ in spins.items():
             calc[k] = sp_.value()
+        for k, ed in texts.items():
+            calc[k] = ed.text().strip()
         d["calc"] = calc
         bp._write(d)
         self.refresh()
@@ -503,6 +518,19 @@ class RCPanel(QWidget):
             return
         report_pdf(C.analyse(self.data()), self.data(), path)
         self.status.setText(f"บันทึกรายการคำนวณแล้ว: {path}")
+
+    def export_book(self):
+        from core import wanic_calc as C
+        from core.wanic_calc_book import make_book
+        path, _ = QFileDialog.getSaveFileName(self, "รูปเล่มรายการคำนวณ", "รายการคำนวณโครงสร้าง (A3).pdf",
+                                              "PDF (*.pdf)")
+        if not path:
+            return
+        d = self.data()
+        b_ = C.basis(d)
+        info = {k: b_.get(k, "") for k in ("project", "owner", "place", "engineer", "qualification")}
+        n = make_book(C.analyse(d), d, path, info)
+        self.status.setText(f"บันทึกรูปเล่มรายการคำนวณ {n} หน้าแล้ว: {path}")
 
     def export(self):
         path, _ = QFileDialog.getSaveFileName(self, "รายงานโครงสร้าง คสล.", "โครงสร้าง คสล.xlsx",

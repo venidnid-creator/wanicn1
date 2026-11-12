@@ -531,6 +531,7 @@ def analyse(data) -> dict:
     beams_out = {}
     col_load: dict = {}
     col_mom: dict = {}
+    col_lv: dict = {}
     for key, segs in runs.items():
         level, mark, axis, c = key
         segs.sort(key=lambda e: min(e["p0"][0], e["p1"][0]) if axis == "x" else min(e["p0"][1], e["p1"][1]))
@@ -578,6 +579,9 @@ def analyse(data) -> dict:
         if not spans:
             continue
         res = solve_beam(spans)
+        res.mark, res.spec, res.level, res.axis, res.line = mark, spec, level, axis, c
+        res.ground = bool(segs[0].get("ground"))
+        res.z = float(segs[0].get("z", 0.0))
         cap = beam_capacity(spec, b_, fc)
         r = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
                 -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
@@ -600,6 +604,7 @@ def analyse(data) -> dict:
         for p, Rv in zip(pts, res.reactions):
             k_ = (round(p[0], 3), round(p[1], 3))
             col_load[k_] = col_load.get(k_, 0.0) + Rv
+            col_lv[(k_, level)] = col_lv.get((k_, level), 0.0) + Rv
         # the moment a beam end hands its column (ACI coefficient wL²/16 at an
         # end built into a column, shared by the columns above and below)
         for p, sp_ in ((pts[0], spans[0]), (pts[-1], spans[-1])):
@@ -650,7 +655,21 @@ def analyse(data) -> dict:
                               f"q = {q:,.2f} ตัน/ตร.ม.", f"ดินรับได้ {b_['soil']:g} ตัน/ตร.ม.", q / b_["soil"],
                               f"ต้องใช้ฐานอย่างน้อย {math.sqrt(P / 1000 / b_['soil']):.2f} × "
                               f"{math.sqrt(P / 1000 / b_['soil']):.2f} ม."))
-    return {"members": out, "basis": b_, "beams": beams_out, "columns": cols_out}
+    # column loads floor by floor (for the booklet's column cards): a column
+    # of floor f carries the beams of the levels above it; the stump all
+    cards = []
+    levels = sorted({lv for (_k, lv) in col_lv})
+    for c_ in E["stumps"] + E["columns"]:
+        k_ = (round(c_["x"], 3), round(c_["y"], 3))
+        spec = lib.get(c_["mark"], {})
+        f = -1 if c_ in E["stumps"] else int(c_.get("floor", 0))
+        P = sum(v for (kk, lv), v in col_lv.items() if kk == k_ and lv >= f + 1)
+        P += float(spec.get("b", 0.2)) * float(spec.get("h", 0.2)) * conc * float(s["floor_h"]) * \
+            max(1, n - max(f, 0)) * D_
+        cards.append({"mark": c_["mark"], "x": c_["x"], "y": c_["y"], "floor": f, "P": P, "spec": spec,
+                      "H": abs(float(c_["z1"]) - float(c_["z0"]))})
+    return {"members": out, "basis": b_, "beams": beams_out, "columns": cols_out, "cards": cards,
+            "levels": levels}
 
 
 def summary(res) -> dict:
