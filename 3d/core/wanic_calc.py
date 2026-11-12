@@ -258,6 +258,7 @@ def beam_capacity(spec: dict, b_: dict, fc: float) -> dict:
     if st and st.s:
         vs = 2 * st.area * (fy_of(st, b_) if b_["method"] == "SDM" else fs_of(st, b_)) * d * 100 / (st.s * 100)
     out["V"] = (0.85 if b_["method"] == "SDM" else 1.0) * (vc + vs)
+    out["Vc"] = (0.85 if b_["method"] == "SDM" else 1.0) * vc
     out["d"] = d
     return out
 
@@ -462,6 +463,7 @@ def roof_checks(data, b_, out):
         defl = 5 * w * span ** 4 / (384 * Ei * 1e4 * sec["I"]) if sec["I"] else 1e9
         lim = span / b_["defl"]
         r = max(M / cap if cap else 9.9, defl / lim if lim else 0.0)
+        res.caps = {"M+": cap, "M-": cap, "lab_M": "Ma = Fb·S", "defl": (defl, lim)}
         out.append(Member("roof", f"{th} {s[key]}",
                           f"M = {M:,.1f} กก.-ม. · แอ่น {defl * 1000:.1f} มม. (ช่วง {span:.2f} ม.)",
                           f"Ma = {cap:,.1f} กก.-ม. · ยอมให้ {lim * 1000:.1f} มม. (L/{b_['defl']:g})",
@@ -473,6 +475,7 @@ def roof_checks(data, b_, out):
             ww = up * trib - sec["kg_m"] * cosp
             resw = _simple(span, max(ww, 0.0))
             capw = cap * 4.0 / 3.0
+            resw.caps = {"M+": capw, "M-": capw, "lab_M": "Ma × 4/3"}
             rw = resw.Mmax / capw if capw else 9.9
             out.append(Member("roof", f"{th} {s[key]} — แรงลม (แรงยก)",
                               f"M = {resw.Mmax:,.1f} กก.-ม. (แรงยกสุทธิ {up:,.1f} กก./ตร.ม.)",
@@ -490,6 +493,7 @@ def roof_checks(data, b_, out):
     w = q_slope / cosp * (half / 2) * 2 / 2 + sec["kg_m"]
     res = _simple(truss, w)
     cap = (b_["fb_timber"] if sec["timber"] else 0.6 * b_["fy_steel"]) * 1e4 * sec["S"]
+    res.caps = {"M+": cap, "M-": cap, "lab_M": "Ma = Fb·S"}
     out.append(Member("roof", f"อกไก่ {s['ridge']}", f"M = {res.Mmax:,.1f} กก.-ม. (ช่วงโครงถัก {truss:.2f} ม.)",
                       f"Ma = {cap:,.1f} กก.-ม.", res.Mmax / cap if cap else 9.9, "", res))
     return q_slope / cosp                                      # kg/m² of plan, service
@@ -616,6 +620,10 @@ def analyse(data) -> dict:
         res.ground = bool(segs[0].get("ground"))
         res.z = float(segs[0].get("z", 0.0))
         cap = beam_capacity(spec, b_, fc)
+        sdm = b_["method"] == "SDM"
+        res.caps = {"M+": cap["bot"], "M-": cap["top"], "V": cap["V"], "Vc": cap["Vc"],
+                    "lab_M": "φMn" if sdm else "Ma", "lab_V": "φVn" if sdm else "Va",
+                    "lab_Vc": "φVc" if sdm else "vc·bd"}
         r = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
                 -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
                 res.Vmax / cap["V"] if cap["V"] else 9.9)

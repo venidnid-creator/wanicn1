@@ -27,6 +27,7 @@ from core import wanic_rc as R
 BLUE = QColor("#1D4ED8")
 RED = QColor("#DC2626")
 GREEN = QColor("#16A34A")
+ORANGE = QColor("#B45309")
 INK = QColor("#111827")
 
 #: Steel's allowable tensile stress in WSD (ksc), by bar.
@@ -276,11 +277,35 @@ def _diagram_strip(bk: Book, y, res, kind):
                 x += res.spans[k].L
         return
     vals = res.V if kind == "shear" else res.M
-    big = max((abs(v) for v in vals), default=1.0) or 1.0
+    caps = getattr(res, "caps", None) or {}
+    lines = []
+    if kind == "shear" and "V" in caps:
+        lines = [(caps["V"], GREEN, Qt.DashLine, caps.get("lab_V", "φVn")), (-caps["V"], GREEN, Qt.DashLine, ""),
+                 (caps.get("Vc", 0), ORANGE, Qt.DotLine, caps.get("lab_Vc", "φVc")),
+                 (-caps.get("Vc", 0), ORANGE, Qt.DotLine, "")]
+    elif kind == "moment" and "M+" in caps:
+        lines = [(caps["M+"], GREEN, Qt.DashLine, f"{caps.get('lab_M', 'φMn')} ล่าง"),
+                 (-caps["M-"], GREEN, Qt.DashLine, f"{caps.get('lab_M', 'φMn')} บน")]
+    big = max([abs(v) for v in vals] + [abs(c) for c, *_r in lines if c] + [1.0])
     sc = 9 * mm / big
     sgn = -1 if kind == "shear" else 1
     p.drawLine(QPointF(left, base), QPointF(right, base))
     pts = [QPointF(X(x), base + sgn * v * sc) for x, v in zip(res.xs, vals)]
+    fillc = QColor(BLUE if kind == "shear" else RED)
+    fillc.setAlpha(40)
+    p.setPen(Qt.NoPen)
+    p.setBrush(fillc)
+    p.drawPolygon(QPolygonF([QPointF(X(res.xs[0]), base)] + pts + [QPointF(X(res.xs[-1]), base)]))
+    p.setBrush(Qt.NoBrush)
+    for c, col, style, lab in lines:
+        if not c:
+            continue
+        yy = base + sgn * c * sc
+        p.setPen(QPen(col, 1.0, style))
+        p.drawLine(QPointF(left, yy), QPointF(right, yy))
+        if lab:
+            below = col is ORANGE or "ล่าง" in lab
+            bk.text(right / mm + 1, yy / mm + (0.3 if below else -5.6), 62, 5.4, f"{lab} = {abs(c):,.0f}", 4.4, col)
     p.setPen(QPen(INK, 1.4))
     p.drawPolyline(QPolygonF(pts))
     n = 24
@@ -316,6 +341,9 @@ def beam_pages(bk: Book, res_all, b_, fc):
         bk.text(40, 75, 70, 7, "Shear Diagram", 6.5)
         _diagram_strip(bk, 80, res, "shear")
         bk.text(40, 108, 70, 7, "Moment Diagram", 6.5)
+        bk.text(40, 120, 80, 6, "(โมเมนต์บวกเขียนด้านล่าง = ด้านรับแรงดึง)", 4.4)
+        bk.text(120, 128, 210, 6, "เส้นประเขียว = กำลังที่หน้าตัดรับได้ (φMn / φVn) · เส้นจุดส้ม = φVc คอนกรีต · "
+                "แผนภาพต้องอยู่ภายในเส้นกำลัง", 4.6, GREEN)
         _diagram_strip(bk, 112, res, "moment")
         x = 12
         for i in range(len(res.spans)):

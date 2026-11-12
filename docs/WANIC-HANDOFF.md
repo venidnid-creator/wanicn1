@@ -107,6 +107,7 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
    + [x] (อนุมัติแล้ว) คำแนะนำเมื่อไม่ผ่าน — `3d/core/wanic_advice.py` (beam/column/slab/footing/roof_advice, advise, mark_fixes, apply_fixes + R.suggest, fit_in_row); คอลัมน์ «คำแนะนำ» ขั้น 9, ปุ่ม «แก้ตามคำแนะนำ (ทุกเบอร์)», หน้า Advice ในรูปเล่ม
    + [x] (อนุมัติแล้ว) แก้รายชิ้น — `3d/core/wanic_fix_view.py` FixDialog/apply, wanic_advice.member_fix (คิดจากชิ้นวิกฤตของเบอร์), ปุ่ม «แก้ชิ้นที่เลือกให้ผ่าน…»/ดับเบิลคลิกแถว → บันทึก → bp.build(structure, roof) → คำนวณใหม่ (RCPanel._rebuild_after_fix); «แก้ตามคำแนะนำ (ทุกเบอร์)» ก็อัปเดตโมเดล
    + [x] สมมาตร/สมดุลทุกครั้งที่แก้ — wanic_advice.balance_spec(keep_shape) (เสาจัตุรัส เหล็กยืนหาร 4 / สี่เหลี่ยมผืนผ้าเลขคู่, คานบน-ล่างขนาดเดียวกัน, ฐานจัตุรัส) ใช้ใน mark_fixes, apply_fixes, FixDialog.apply และการแก้ตารางขั้น 2–6 (keep_shape=True)
+   + [x] (รออนุมัติภาพ) SFD/BMD ตามหลักวิศวกรรม + เส้นกำลังที่รับได้ — wanic_calc: res.caps (φMn ล่าง/บน, φVn, φVc / Ma ASD, แอ่น) ทุกคานและชิ้นหลังคา; wanic_calc_view.draw_diagrams ใหม่ (Load diagram ลูกศรน้ำหนัก R1..Rn, SFD บวกด้านบน, BMD ด้านรับแรงดึง, Vmax/M±max @x, V=0 / M=0, เส้นประกำลัง, บรรทัดอัตราส่วน); รูปเล่ม _diagram_strip มีเส้นกำลัง
 4. [ ] ออกแบบคาน: น้ำหนักจุด/แผ่เพิ่มเอง · คานยื่น · Checkload (Wcol / Wcol-Area / Wfloor)
 5. [ ] บันได คสล. ช่วงตรง / L / 2 ช่วง + คานชานพัก + รูปตัด
 6. [ ] A-01 สัญลักษณ์ + รหัสวัสดุ F/W/C · ป้ายห้อง · ABCD · ตารางประตู-หน้าต่าง · บ่อดักไขมัน/บ่อตะแกรง · ถังบำบัดตามจำนวนผู้ใช้ · ข้อกำหนด EE/SN
