@@ -262,19 +262,30 @@ def _diagram_strip(bk: Book, y, res, kind):
         x = 0.0
         for sp in res.spans:
             p.fillRect(QRectF(X(x), base - 1.5 * mm, X(x + sp.L) - X(x), 3 * mm), GREEN)
-            bk.text((X(x) / mm), y - 9, (X(x + sp.L) - X(x)) / mm, 6, f"W={sp.w:,.1f} kg/m", 5,
+            bk.text((X(x) / mm), y - 9, (X(x + sp.L) - X(x)) / mm, 6,
+                    f"{'Cantilever ' if sp.cant else ''}W={sp.w:,.1f} kg/m", 5,
                     align=Qt.AlignCenter)
             bk.text((X(x) / mm), y + 2, (X(x + sp.L) - X(x)) / mm, 6, f"L= {sp.L:.2f} m.", 5,
                     align=Qt.AlignCenter)
             x += sp.L
-        x = 0.0
-        for k in range(len(res.spans) + 1):
+        ends = [0.0]
+        for sp in res.spans:
+            ends.append(ends[-1] + sp.L)
+            for a_, P in sp.P:
+                px = X(ends[-2] + a_)
+                p.setPen(QPen(RED, 1.2))
+                p.drawLine(QPointF(px, base - 7 * mm), QPointF(px, base - 1.5 * mm))
+                bk.text(px / mm + 0.5, y - 13, 30, 5, f"P={P:,.0f} kg", 4.6, RED)
+            for a_, b2, wu in sp.U:
+                p.fillRect(QRectF(X(ends[-2] + a_), base - 4.5 * mm, X(ends[-2] + b2) - X(ends[-2] + a_), 2.4 * mm),
+                           QColor(124, 58, 237, 90))
+                bk.text(X(ends[-2] + a_) / mm, y - 13, 40, 5, f"+{wu:,.0f} kg/m", 4.6, QColor("#7C3AED"))
+            p.setPen(QPen(INK, 1))
+        for x in (getattr(res, "supports", None) or ends):
             cx = X(x)
             p.setBrush(Qt.NoBrush)
             p.drawPolygon(QPolygonF([QPointF(cx, base + 1.5 * mm), QPointF(cx - 1.5 * mm, base + 4 * mm),
                                      QPointF(cx + 1.5 * mm, base + 4 * mm)]))
-            if k < len(res.spans):
-                x += res.spans[k].L
         return
     vals = res.V if kind == "shear" else res.M
     caps = getattr(res, "caps", None) or {}

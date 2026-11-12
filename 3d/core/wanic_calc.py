@@ -150,6 +150,8 @@ class Span:
     L: float
     w: float                       # uniform load, kg/m (factored)
     P: list = field(default_factory=list)   # point loads (a, kg)
+    U: list = field(default_factory=list)   # part-length uniform loads (a, b, kg/m)
+    cant: str = ""                 # "L" / "R": a cantilever (free at the outer end)
 
 
 @dataclass
@@ -162,29 +164,62 @@ class BeamResult:
     Mmax: float = 0.0
     Mmin: float = 0.0
     Vmax: float = 0.0
+    supports: list = field(default_factory=list)   # x of each support (m)
+
+
+def _span_loads(sp):
+    """(total, moment about the left end) of a span's loads."""
+    tot = sp.w * sp.L + sum(P for _a, P in sp.P) + sum(w * (b - a) for a, b, w in sp.U)
+    mom = sp.w * sp.L ** 2 / 2 + sum(P * a for a, P in sp.P) + sum(w * (b - a) * (a + b) / 2 for a, b, w in sp.U)
+    return tot, mom
+
+
+def _fem(sp):
+    """Fixed-end moments (left, right) of a span under all its loads; the
+    part-length loads by integrating the point-load formula."""
+    L = sp.L
+    fl = sp.w * L * L / 12.0
+    fr = -fl
+    pts = list(sp.P)
+    for a, b, w in sp.U:
+        k = 40
+        h = (b - a) / k
+        pts += [(a + h * (i + 0.5), w * h) for i in range(k)]
+    for a, P in pts:
+        b = L - a
+        fl += P * a * b * b / (L * L)
+        fr -= P * a * a * b / (L * L)
+    return fl, fr
+
+
+def _shear_moment(sp, x, Rl, ml):
+    """V and M at x along a span from its left reaction and end moment."""
+    v = Rl - sp.w * x - sum(P for a, P in sp.P if a < x - 1e-9)
+    mm = -ml + Rl * x - sp.w * x * x / 2 - sum(P * (x - a) for a, P in sp.P if a < x)
+    for a, b, w in sp.U:
+        e = min(max(x, a), b)
+        if e > a:
+            v -= w * (e - a)
+            mm -= w * (e - a) * (x - (a + e) / 2)
+    return v, mm
 
 
 def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
-    """A continuous beam over len(spans)+1 supports: stiffness method on the
-    rotations (supports do not settle); uniform and point loads per span.
+    """A continuous beam over its supports: stiffness method on the
+    rotations (supports do not settle); uniform, part-length uniform and
+    point loads per span; a first span marked cant "L" or a last one
+    marked "R" is a cantilever (its moment is known, it adds no support).
     Returns the shear and moment along it and the support reactions."""
-    k = len(spans)
-    # fixed-end moments (clockwise +) for each span: left, right
-    fem = []
-    for sp in spans:
-        L = sp.L
-        fl = sp.w * L * L / 12.0
-        fr = -fl
-        for a, P in sp.P:
-            b = L - a
-            fl += P * a * b * b / (L * L)
-            fr -= P * a * a * b / (L * L)
-        fem.append((fl, fr))
+    lc = spans[0] if spans and spans[0].cant == "L" else None
+    rc = spans[-1] if len(spans) > (1 if lc else 0) and spans[-1].cant == "R" else None
+    inner = spans[(1 if lc else 0):(len(spans) - (1 if rc else 0))]
+    k = len(inner)
+    fem = [_fem(sp) for sp in inner]
     ndof = k + 1
     K = [[0.0] * ndof for _ in range(ndof)]
     F = [0.0] * ndof
     EI = 1.0
-    for i, sp in enumerate(spans):
+    for i, sp in enumerate(inner):
         L = sp.L
         kk = [[4 * EI / L, 2 * EI / L], [2 * EI / L, 4 * EI / L]]
         for a in range(2):
@@ -192,9 +227,19 @@ def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
                 K[i + a][i + b] += kk[a][b]
         F[i] -= fem[i][0]
         F[i + 1] -= fem[i][1]
+    # a cantilever hands its support a known moment (hogging Mc)
+    Mc_l = Mc_r = 0.0
+    if lc is not None:
+        tot, mom = _span_loads(lc)
+        Mc_l = tot * lc.L - mom                      # about its right (built-in) end
+        F[0] += Mc_l
+    if rc is not None:
+        _tot, mom = _span_loads(rc)
+        Mc_r = mom                                   # about its left (built-in) end
+        F[ndof - 1] -= Mc_r
     free = [j for j in range(ndof)
-            if not ((j == 0 and fixed_ends[0]) or (j == ndof - 1 and fixed_ends[1]))]
-    # solve K_ff θ = F_f (Gauss)
+            if k and not ((j == 0 and fixed_ends[0] and lc is None) or
+                          (j == ndof - 1 and fixed_ends[1] and rc is None))]
     A = [[K[r][c] for c in free] + [F[r]] for r in free]
     m = len(free)
     for c in range(m):
@@ -210,26 +255,46 @@ def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
     xs, V, M = [], [], []
     reactions = [0.0] * ndof
     x0 = 0.0
-    for i, sp in enumerate(spans):
+    supports = []
+    if lc is not None:
+        tot, _mom = _span_loads(lc)
+        for s_ in range(n + 1):
+            x = lc.L * s_ / n
+            v, mm = _shear_moment(lc, x, 0.0, 0.0)
+            xs.append(x)
+            V.append(v)
+            M.append(mm)
+        reactions[0] += tot
+        x0 = lc.L
+    for i, sp in enumerate(inner):
         L = sp.L
-        ml = fem[i][0] + 4 * EI / L * th[i] + 2 * EI / L * th[i + 1]     # end moments (clockwise +)
+        ml = fem[i][0] + 4 * EI / L * th[i] + 2 * EI / L * th[i + 1]     # end moments
         mr = fem[i][1] + 2 * EI / L * th[i] + 4 * EI / L * th[i + 1]
-        tot = sp.w * L + sum(P for _a, P in sp.P)
-        mom_r = sp.w * L * L / 2 + sum(P * a for a, P in sp.P)
-        Rr = (mom_r - ml - mr) / L                                       # sum of moments about left
+        tot, mom_r = _span_loads(sp)
+        Rr = (mom_r - ml - mr) / L
         Rl = tot - Rr
         reactions[i] += Rl
         reactions[i + 1] += Rr
-        for s in range(n + 1):
-            x = L * s / n
-            v = Rl - sp.w * x - sum(P for a, P in sp.P if a < x - 1e-9)
-            mm = -ml + Rl * x - sp.w * x * x / 2 - sum(P * (x - a) for a, P in sp.P if a < x)
+        supports.append(x0)
+        for s_ in range(n + 1):
+            x = L * s_ / n
+            v, mm = _shear_moment(sp, x, Rl, ml)
             xs.append(x0 + x)
             V.append(v)
             M.append(mm)
         x0 += L
+    supports.append(x0)
+    if rc is not None:
+        tot, _mom = _span_loads(rc)
+        reactions[-1] += tot
+        for s_ in range(n + 1):
+            x = rc.L * s_ / n
+            v, mm = _shear_moment(rc, x, tot, Mc_r)
+            xs.append(x0 + x)
+            V.append(v)
+            M.append(mm)
     return BeamResult(spans, xs, V, M, reactions, max(M) if M else 0.0, min(M) if M else 0.0,
-                      max((abs(v) for v in V), default=0.0))
+                      max((abs(v) for v in V), default=0.0), supports)
 
 
 # ---- RC section design (SDM / WSD) ---------------------------------------------------------

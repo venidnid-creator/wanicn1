@@ -75,10 +75,11 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
     # ---- load diagram: the uniform loads, the point loads, the supports, the reactions
     by = top + 34
     x = 0.0
-    sup = [0.0]
+    sup = [0.0]                    # the span ends
     for sp in res.spans:
         x += sp.L
         sup.append(x)
+    supports = list(getattr(res, "supports", None) or sup)
     p.setPen(QPen(QColor("#374151"), 3))
     p.drawLine(QPointF(left, by), QPointF(right, by))
     p.setPen(QPen(QColor("#2563EB"), 1))
@@ -91,7 +92,16 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
             p.drawLine(QPointF(ax, by - 12), QPointF(ax, by - 2))
             p.drawLine(QPointF(ax, by - 2), QPointF(ax - 2, by - 5))
             p.drawLine(QPointF(ax, by - 2), QPointF(ax + 2, by - 5))
-        p.drawText(QRectF(xa, by - 26, xb - xa, 12), Qt.AlignCenter, f"w = {sp.w:,.0f} กก./ม. · L = {sp.L:.2f} ม.")
+        p.drawText(QRectF(xa, by - 26, xb - xa, 12), Qt.AlignCenter,
+                   f"{'คานยื่น · ' if getattr(sp, 'cant', '') else ''}w = {sp.w:,.0f} กก./ม. · L = {sp.L:.2f} ม.")
+        for a_, b_, wu in getattr(sp, "U", []) or []:
+            ua, ub = X(sup[i] + a_), X(sup[i] + b_)
+            p.setPen(QPen(QColor("#7C3AED"), 1.4))
+            p.setBrush(QColor(124, 58, 237, 40))
+            p.drawRect(QRectF(ua, by - 22, max(ub - ua, 1.0), 9))
+            p.setBrush(Qt.NoBrush)
+            p.drawText(QRectF(ua, by - 46, max(ub - ua, 120), 12), Qt.AlignLeft, f"+{wu:,.0f} กก./ม.")
+            p.setPen(QPen(QColor("#2563EB"), 1))
         for a_, P in getattr(sp, "P", []) or []:
             px = X(sup[i] + a_)
             p.setPen(QPen(QColor("#DC2626"), 1.6))
@@ -100,7 +110,7 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
             p.setPen(QPen(QColor("#2563EB"), 1))
     p.setPen(QPen(QColor("#374151"), 1.2))
     p.setBrush(QColor("#9CA3AF"))
-    for i, xs_ in enumerate(sup):
+    for i, xs_ in enumerate(supports):
         cx = X(xs_)
         p.drawPolygon(QPolygonF([QPointF(cx, by + 2), QPointF(cx - 6, by + 11), QPointF(cx + 6, by + 11)]))
         if i < len(res.reactions):
