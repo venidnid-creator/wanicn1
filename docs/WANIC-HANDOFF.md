@@ -84,4 +84,6 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
   `3d/core/wanic_truss_view.py` (draw_truss, TrussDialog, truss_pages ในรูปเล่ม A4 เมื่อมี data["truss"]), ปุ่ม «ออกแบบ Truss…» ในแถวทรงหลังคา (RCPanel.edit_truss),
   tests/test_wanic_truss.py (5) อยู่ใน CI แล้ว — **รออนุมัติหน้าจอ** (ส่งภาพ howe/arch/หน้ารูปเล่มแล้ว)
 - [x] Truss อนุมัติแล้ว + Truss เขียนเอง (CustomTrussDialog ตารางจุดต่อ/ชิ้นส่วน, T.build(p)) + รอยเชื่อมส้นโครง E70 (plate["weld"])
-- [ ] ถัดไป: เหล็กรูปพรรณ WF/H → โหมดกริด → แป → FlatSlab → แรงด้านข้าง → ราคาเอกชน
+- [x] เหล็กรูปพรรณ — `3d/core/wanic_steel.py` (WF/H คำนวณคุณสมบัติจากขนาด, ASD: Fb (Lc/F1-8), Fv, Δ L/360, เสา Fa+interaction Cm 0.85, base plate 0.35fc′; design_building ใช้ analyse แบบ WSD = น้ำหนักใช้งาน, คาน level≥1, เสา floor≥0, จัดกลุ่ม mark+ชั้น),
+  `3d/core/wanic_steel_view.py` (SteelDialog 3 แท็บ, steel_pages ในรูปเล่มเมื่อมี data["steel"]), ปุ่ม «ออกแบบเหล็กรูปพรรณ…», tests/test_wanic_steel.py (4) ใน CI — **รออนุมัติหน้าจอ**
+- [ ] ถัดไป: โหมดกริด → แป → FlatSlab → แรงด้านข้าง → ราคาเอกชน

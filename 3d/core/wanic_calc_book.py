@@ -395,6 +395,10 @@ def make_book(res_all, data, path, info: dict) -> int:
             truss_pages(bk, tp, td)
         except ValueError:
             pass
+    if (data or {}).get("steel"):
+        from core import wanic_steel as S
+        from core.wanic_steel_view import steel_pages
+        steel_pages(bk, S.design_building(data))
     ms = res_all["members"]
     groups = (("หลังคา", "Roof", "roof"), ("พื้น", "Slab", "slab"), ("ฐานราก / เสาเข็ม", "Footing", "footing"))
     for title, tag, g in groups:

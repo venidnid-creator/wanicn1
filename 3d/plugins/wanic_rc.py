@@ -129,6 +129,10 @@ class RCPanel(QWidget):
                                   "เลือกขนาดเหล็กท่อ/กล่อง/ตัวซี และแผ่นเหล็กรองฐาน")
         self.truss_btn.clicked.connect(self.edit_truss)
         rr.addWidget(self.truss_btn)
+        self.steel_btn = QPushButton("ออกแบบเหล็กรูปพรรณ…")
+        self.steel_btn.setToolTip("เสา H / คาน WF (ASD) จัดกลุ่มตามเบอร์ พร้อมแผ่นเหล็กรองฐาน")
+        self.steel_btn.clicked.connect(self.edit_steel)
+        rr.addWidget(self.steel_btn)
         rr.addStretch(1)
         col.addWidget(self.roof_row)
         self.status = QLabel()
@@ -527,6 +531,20 @@ class RCPanel(QWidget):
         d["truss"] = dlg.params()
         bp._write(d)
         self.status.setText("บันทึก Truss แล้ว — รวมในรูปเล่มรายการคำนวณ A4")
+        self.refresh()
+
+    def edit_steel(self):
+        from core.wanic_steel_view import SteelDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = SteelDialog(self, d)
+        if dlg.exec() != SteelDialog.Accepted:
+            return
+        d["steel"] = dlg.params()
+        bp._write(d)
+        self.status.setText("บันทึกการออกแบบเหล็กรูปพรรณแล้ว — รวมในรูปเล่มรายการคำนวณ A4")
         self.refresh()
 
     def export_pdf(self):
