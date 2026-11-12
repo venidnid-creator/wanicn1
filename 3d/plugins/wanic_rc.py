@@ -100,7 +100,7 @@ class RCPanel(QWidget):
         self.pdf_btn = QPushButton("รายการคำนวณ (.pdf)")
         self.pdf_btn.clicked.connect(self.export_pdf)
         row.addWidget(self.pdf_btn)
-        self.book_btn = QPushButton("รูปเล่มรายการคำนวณ A3 (.pdf)")
+        self.book_btn = QPushButton("รูปเล่มรายการคำนวณ A4 (.pdf)")
         self.book_btn.setToolTip("ปก · ข้อกำหนด · คานทุกแนวพร้อม Load/Shear/Moment Diagram และตาราง · "
                                  "การ์ดเสาทุกชั้น · ฐานราก · หลังคา · สรุป — พร้อมช่องลงนามผู้คำนวณ")
         self.book_btn.clicked.connect(self.export_book)
@@ -522,7 +522,7 @@ class RCPanel(QWidget):
     def export_book(self):
         from core import wanic_calc as C
         from core.wanic_calc_book import make_book
-        path, _ = QFileDialog.getSaveFileName(self, "รูปเล่มรายการคำนวณ", "รายการคำนวณโครงสร้าง (A3).pdf",
+        path, _ = QFileDialog.getSaveFileName(self, "รูปเล่มรายการคำนวณ", "รายการคำนวณโครงสร้าง (A4).pdf",
                                               "PDF (*.pdf)")
         if not path:
             return

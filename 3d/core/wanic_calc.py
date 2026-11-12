@@ -50,6 +50,9 @@ DEFAULTS = {
     "soil": 10.0,                    # allowable soil pressure, t/m²
     "pile_cap": 8.0,                 # safe load per pile, t
     "defl": 180.0,                   # roof member deflection limit L/…
+    # the booklet's signature (editable in «ค่าที่ใช้ออกแบบ…»)
+    "engineer": "นายเวนิช ธัมมะวงษ์", "qualification": "วิศวกรสำรวจ",
+    "project": "", "owner": "", "place": "",
 }
 
 

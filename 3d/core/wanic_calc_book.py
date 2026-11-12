@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
-"""รูปเล่มรายการคำนวณโครงสร้าง: the calculation booklet on A3 landscape
+"""รูปเล่มรายการคำนวณโครงสร้าง: the calculation booklet on A4 landscape
 sheets, the way Thai engineers hand it in with a permit:
 
 1. a cover (project, owner, place),
@@ -41,16 +41,17 @@ def _font(px, bold=False):
 
 
 class Book:
-    """Pages on an A3 landscape PDF, 300 dpi (1 mm = 11.81 px)."""
+    """Pages on an A4 landscape PDF. The layout is drawn in the units of a
+    404 mm wide sheet and scales to the paper (``mm`` = page width / 404)."""
 
     def __init__(self, path, info: dict):
         self.w = QPdfWriter(str(path))
-        self.w.setResolution(150)
-        self.w.setPageLayout(QPageLayout(QPageSize(QPageSize.A3), QPageLayout.Landscape,
-                                         QMarginsF(8, 8, 8, 8), QPageLayout.Millimeter))
+        self.w.setResolution(200)
+        self.w.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Landscape,
+                                         QMarginsF(6, 6, 6, 6), QPageLayout.Millimeter))
         self.p = QPainter(self.w)
         self.W, self.H = self.w.width(), self.w.height()
-        self.mm = self.W / (420 - 16)
+        self.mm = self.W / 404.0
         self.info = info
         self.first = True
         self.n = 0
