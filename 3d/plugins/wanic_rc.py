@@ -434,12 +434,18 @@ class RCPanel(QWidget):
                 return
         else:
             spec[key] = txt
+        # สมมาตรและสมดุล: the bars balanced, the shape the designer typed kept
+        from core import wanic_advice as AD
+        typed = dict(spec)
+        spec = AD.balance_spec(spec, keep_shape=True)
+        adj = [f"{AD._fmt(k, v)}" for k, v in spec.items() if typed.get(k) != v]
         self._loading = True
         try:
             bp.set_library(m, spec)
         finally:
             self._loading = False
-        self.status.setText(f"บันทึกเบอร์ {m} แล้ว — กด «สร้าง/อัปเดตโครงสร้างในโมเดล» เพื่อปรับโมเดล")
+        self.status.setText(f"บันทึกเบอร์ {m} แล้ว" + (f" · จัดให้สมมาตร/สมดุล: {', '.join(adj)}" if adj else "")
+                            + " — กด «สร้าง/อัปเดตโครงสร้างในโมเดล» เพื่อปรับโมเดล")
         QTimer.singleShot(0, self.refresh)
 
     def fix_selected(self):

@@ -75,7 +75,9 @@ class FixDialog(QDialog):
             self.edits[key] = ed
             form.addRow(f"หน้าตัด ({key})  (เดิม {cur})", ed)
         lay.addLayout(form)
-        info = QLabel("ช่องสีเหลือง = ค่าที่แนะนำให้ผ่าน (แก้เองได้) · กดบันทึกแล้วโปรแกรมจะอัปเดตโมเดลและคำนวณใหม่")
+        info = QLabel("ช่องสีเหลือง = ค่าที่แนะนำให้ผ่าน (แก้เองได้) · เมื่อบันทึก โปรแกรมจัดให้สมมาตรและสมดุล "
+                      "(เสาจัตุรัส เหล็กยืนหาร 4 ลงตัว · คานเหล็กบน-ล่างขนาดเดียวกัน · ฐานรากจัตุรัส) "
+                      "แล้วอัปเดตโมเดลและคำนวณใหม่")
         info.setWordWrap(True)
         lay.addWidget(info)
         b = QHBoxLayout()
@@ -107,9 +109,12 @@ class FixDialog(QDialog):
 def apply(data: dict, fix: dict, values: dict) -> dict:
     """Write the values into the library mark or the roof setting."""
     if fix["target"] == "lib":
+        from core import wanic_advice as AD
+        full = B.library_of(data).get(fix["key"], {})
+        ch = AD.balanced_changes(full, {k: v for k, v in values.items() if full.get(k) != v})
         lib = dict(data.get("library") or {})
         spec = dict(lib.get(fix["key"]) or {})
-        spec.update(values)
+        spec.update(ch)
         lib[fix["key"]] = spec
         data["library"] = lib
     else:

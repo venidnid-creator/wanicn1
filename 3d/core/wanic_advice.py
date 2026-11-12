@@ -458,7 +458,15 @@ def mark_fixes(res_all, data) -> list:
         if ch:
             text = ", ".join(f"{_TH.get(k, k)} {v}" for k, v in ch.items())
             out.append((mark, ch, f"{mark}: {text}"))
-    return out
+    lib0 = B.library_of(data)
+    bal = []
+    for mark, ch, text in out:
+        ch2 = balanced_changes(lib0.get(mark, {}), ch)
+        if ch2 != ch:
+            extra = ", ".join(_fmt(k, v) for k, v in ch2.items() if ch.get(k) != v)
+            text = f"{text} · จัดให้สมมาตร/สมดุล: {extra}" if extra else text
+        bal.append((mark, ch2 or ch, text))
+    return bal
 
 
 _TH = {"top": "เหล็กบน", "bot": "เหล็กล่าง", "stir": "ปลอก", "h": "ลึก", "main": "เหล็กยืน", "bars": "เหล็กพื้น",
@@ -502,6 +510,20 @@ def apply_fixes(data, rounds: int = 4) -> list:
             spec = dict(lib.get(mark) or {})
             spec.update(ch)
             lib[mark] = spec
+    data["library"] = lib
+    # symmetric and balanced, then the detailing checks again on the result
+    full = B.library_of(data)
+    lib = dict(data.get("library") or {})
+    for mark in list(lib):
+        spec = full.get(mark)
+        if not spec:
+            continue
+        new = balance_spec(spec)
+        if R.check(mark, new).ok is False:
+            new = balance_spec(R.suggest(new))
+        ch = {k: v for k, v in new.items() if spec.get(k) != v}
+        if ch:
+            lib[mark] = {**lib[mark], **ch}
     data["library"] = lib
     after = B.library_of(data)
     step = {"footing": "ขั้น 2 ฐานราก", "stump": "ขั้น 3 ตอม่อ", "slab": "ขั้น 5 พื้น", "column": "ขั้น 6 เสา",
@@ -558,7 +580,7 @@ def member_fix(res_all, data, m) -> dict | None:
         fixes = [f for f in mark_fixes(res_all, data) if f[0] == mark and lib.get(mark, {}).get("kind") == m.group]
         tips = beam_advice(m, b_) if m.group == "beam" else column_advice(m, data, b_)
         ch = fixes[0][1] if fixes else {}
-        return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}
+        return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}  # balanced in mark_fixes
     if m.group == "slab":
         mark = m.name.split(" ")[0]
         dims = re.search(r"([\d.]+)×([\d.]+) ม\.", m.name)
@@ -585,7 +607,8 @@ def member_fix(res_all, data, m) -> dict | None:
             x, y = float(xy.group(1)), float(xy.group(2))
             here = [r for r in rows if abs(r["x"] - x) < 0.01 and abs(r["y"] - y) < 0.01] or rows
         worst = max((r for r in rows if r["mark"] == mark), key=lambda r: r["P"], default=here[0])
-        return {"target": "lib", "key": mark, "kind": "footing", "changes": _footing_change(worst, b_),
+        return {"target": "lib", "key": mark, "kind": "footing",
+                "changes": balanced_changes(lib.get(mark, {}), _footing_change(worst, b_)),
                 "advice": footing_advice(here[0], b_)}
     if m.group == "roof":
         tips = roof_advice(m, b_)
@@ -595,3 +618,64 @@ def member_fix(res_all, data, m) -> dict | None:
         ch = {key: mm.group(1)} if key and mm else {}
         return {"target": "setting", "key": key or word, "kind": "roof", "changes": ch, "advice": tips}
     return None
+
+
+# ---- สมมาตรและสมดุล: every change made symmetric and balanced -----------------------------
+
+def balance_spec(spec: dict, keep_shape: bool = False) -> dict:
+    """A mark's spec made symmetric and balanced — never weaker (all rounding
+    is upward):
+    - columns / stumps: a square section (b = h = the larger), the main bars
+      a multiple of four (one bar per corner, the same on every face) of one
+      size;
+    - beams: the top and the bottom bars of the same size (the larger), at
+      least two each (the corner bars of the stirrup), two-way symmetric
+      about the beam's vertical axis by construction;
+    - footings: square (w = l = the larger), the same bars both ways;
+    - slabs: the same bars both ways (one ``bars`` entry) — kept."""
+    s = dict(spec)
+    kind = s.get("kind")
+    if kind in ("column", "stump"):
+        b, h = float(s.get("b", 0.2)), float(s.get("h", 0.2))
+        side = max(b, h)
+        square = not keep_shape or abs(b - h) < 1e-9
+        if not keep_shape:
+            s["b"] = s["h"] = side
+        bar = R.parse_bar(s.get("main"))
+        if bar:
+            step = 4 if square else 2                     # a rectangle: the same on the two long faces
+            n = max(4, int(math.ceil(bar.n / float(step))) * step)
+            dia = bar.d
+            # keep the bars within one row per face (clear ≥ 25 mm / the bar)
+            while square and n > 4 and (n // 4 + 1) > fit_in_row(side, dia):
+                nxt = [x for x in DB_SIZES if x > dia]
+                if not nxt:
+                    break
+                area = n * bar.area
+                dia = nxt[0]
+                n = max(4, int(math.ceil(area / (math.pi * (dia / 10) ** 2 / 4) / 4.0)) * 4)
+            s["main"] = f"{n}-{bar.kind}{dia}"
+    elif kind == "beam":
+        top, bot = R.parse_bar(s.get("top")), R.parse_bar(s.get("bot"))
+        if top and bot and top.kind == bot.kind:
+            dia = max(top.d, bot.d)
+            bw = float(s.get("b", 0.2))
+            nt, nb = max(2, top.n), max(2, bot.n)
+            # the same size top and bottom: fewer bars of the larger size carry no less
+            a = math.pi * (dia / 10) ** 2 / 4
+            nt = max(2, math.ceil(top.n * top.area / a - 1e-9))
+            nb = max(2, math.ceil(bot.n * bot.area / a - 1e-9))
+            if max(nt, nb) <= fit_in_row(bw, dia):
+                s["top"] = f"{nt}-{top.kind}{dia}"
+                s["bot"] = f"{nb}-{bot.kind}{dia}"
+    elif kind == "footing":
+        w, l = float(s.get("w", 1.0)), float(s.get("l", 1.0))
+        if not keep_shape and (not int(s.get("piles") or 0) or int(s.get("piles") or 0) in (1, 4, 9)):
+            s["w"] = s["l"] = max(w, l)
+    return s
+
+
+def balanced_changes(full_before: dict, changes: dict) -> dict:
+    """The changes to a mark after making the result symmetric and balanced."""
+    after = balance_spec({**full_before, **changes})
+    return {k: v for k, v in after.items() if full_before.get(k) != v}

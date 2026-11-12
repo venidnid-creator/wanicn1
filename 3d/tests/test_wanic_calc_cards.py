@@ -103,3 +103,28 @@ def test_every_failing_row_has_advice_and_a_fix_that_passes_its_mark():
     apply(d, fix, fix["changes"])
     res3 = C.analyse(d)
     assert all(m.ok for m in res3["members"] if m.group == "footing")
+
+
+def test_every_change_is_symmetric_and_balanced():
+    from core import wanic_advice as AD
+    col = AD.balance_spec({"kind": "column", "b": 0.25, "h": 0.20, "main": "6-DB12"})
+    assert col["b"] == col["h"] == 0.25 and col["main"] == "8-DB12"
+    rect = AD.balance_spec({"kind": "column", "b": 0.20, "h": 0.40, "main": "5-DB12"}, keep_shape=True)
+    assert (rect["b"], rect["h"], rect["main"]) == (0.20, 0.40, "6-DB12")
+    bm = AD.balance_spec({"kind": "beam", "b": 0.2, "h": 0.4, "top": "3-DB20", "bot": "3-DB16"})
+    t, b = R.parse_bar(bm["top"]), R.parse_bar(bm["bot"])
+    assert t.d == b.d and b.n * b.area >= 3 * R.parse_bar("1-DB16").area - 1e-9
+    ft = AD.balance_spec({"kind": "footing", "w": 2.2, "l": 1.8, "piles": 0})
+    assert ft["w"] == ft["l"] == 2.2
+    d = _d()
+    AD.apply_fixes(d)
+    lib = B.library_of(d)
+    for mark, sp in lib.items():
+        if sp.get("kind") in ("column", "stump"):
+            assert sp["b"] == sp["h"] and R.parse_bar(sp["main"]).n % 4 == 0, mark
+        if sp.get("kind") == "beam":
+            assert R.parse_bar(sp["top"]).d == R.parse_bar(sp["bot"]).d, mark
+        if sp.get("kind") == "footing":
+            assert sp["w"] == sp["l"], mark
+    res = C.analyse(d)
+    assert all(m.ok for m in res["members"])
