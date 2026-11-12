@@ -132,6 +132,10 @@ class RCPanel(QWidget):
         self.cant_btn.setToolTip("คานยื่นออกจากเสา ปลายลอย (ระเบียง กันสาด)")
         self.cant_btn.clicked.connect(self.edit_cantilevers)
         row.addWidget(self.cant_btn)
+        self.stair_btn = QPushButton("บันได คสล.…")
+        self.stair_btn.setToolTip("บันไดช่วงตรง / ตัว L / สองช่วง — ขนาดขั้นตามกฎกระทรวง 55 · ท้องบันได · เหล็ก · คานชานพัก")
+        self.stair_btn.clicked.connect(self.edit_stairs)
+        row.addWidget(self.stair_btn)
         self.check_btn = QPushButton("Checkload (ตรวจน้ำหนักลงเสา)…")
         self.check_btn.setToolTip("Wcol · Wcol-Area · Wfloor ทุกเสา เทียบค่าเฉลี่ยทั้งอาคารและช่วงปกติ")
         self.check_btn.clicked.connect(self.show_checkload)
@@ -255,6 +259,7 @@ class RCPanel(QWidget):
         self.loads_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.cant_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.check_btn.setVisible(calc)
+        self.stair_btn.setVisible(calc or self.step == "slab")
         self.select_btn.setVisible(not calc and self.step != "rebar")
         self._loading = True
         try:
@@ -378,7 +383,8 @@ class RCPanel(QWidget):
             self._calc = None
             self._fill(["ข้อผิดพลาด"], [(f"คำนวณไม่ได้: {e}",)])
             return
-        names = {"roof": "หลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก/เข็ม"}
+        names = {"roof": "หลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก/เข็ม",
+                 "stair": "บันได"}
         ms = self._calc["members"]
         from core import wanic_advice as AD
         try:
@@ -743,6 +749,19 @@ class RCPanel(QWidget):
         d["cantilevers"] = dlg.cantilevers()
         bp._write(d)
         self._rebuild_after_fix(f"บันทึกคานยื่น {len(d['cantilevers'])} ตัว")
+
+    def edit_stairs(self):
+        from core.wanic_stair_view import StairDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = StairDialog(self, d)
+        if dlg.exec() != StairDialog.Accepted:
+            return
+        n = dlg.apply(d)
+        bp._write(d)
+        self._rebuild_after_fix(f"บันทึกบันได {n} ชุด")
 
     def show_checkload(self):
         from core import wanic_calc as C

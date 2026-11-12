@@ -190,23 +190,20 @@ class PlanCanvas(QWidget):
         # Stairs: the flight's outline, its treads and the way up.
         storeys = len(B.stacked(self.panel.data())[0])
         for stp in self.panel.items("stairs"):
-            pts = [self.to_screen(*q) for q in B.stair_rect(stp, st)]
             sel = stp["id"] == self.selected
             if not B.stair_used(stp, st, storeys):
                 continue            # one storey: no flight is built, none drawn
+            pl = B.stair_plan(stp, st)
             p.setPen(QPen(SEL if sel else NAVY, 2 if sel else 1.2))
             p.setBrush(QColor(255, 255, 255, 200))
-            p.drawPolygon(QPolygonF(pts))
-            n, _L, _H = B.stair_geometry(stp, st)
-            a, b, c, d = pts
-            for i in range(1, n):
-                t = i / n
-                p.drawLine(a + (b - a) * t, d + (c - d) * t)
-            mid0 = (a + d) / 2
-            mid1 = (b + c) / 2
+            for poly in pl["polys"]:
+                p.drawPolygon(QPolygonF([self.to_screen(*q) for q in poly]))
+            for a_, b_ in pl["treads"]:
+                p.drawLine(self.to_screen(*a_), self.to_screen(*b_))
+            wk = [self.to_screen(*q) for q in pl["walk"]]
             p.setPen(QPen(QColor("#B01E33"), 1.6))
-            p.drawLine(mid0, mid1)
-            p.drawText(mid1 + QPointF(4, -4), "ขึ้น")
+            p.drawPolyline(QPolygonF(wk))
+            p.drawText(wk[-1] + QPointF(4, -4), "ขึ้น")
         # Doors and windows on the walls.
         segs = B.segments(rooms)
         for op in self.panel.items("openings"):

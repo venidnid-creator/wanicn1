@@ -268,6 +268,9 @@ def advise(res_all, data) -> list:
                 tips = column_advice(m, data, b_)
             elif m.group == "roof":
                 tips = roof_advice(m, b_)
+            elif m.group == "stair":
+                from core import wanic_stair as ST
+                tips = ST.advice_for(m, res_all, data)
             else:
                 tips = []
         except Exception as e:                             # noqa: BLE001 - advice never breaks the calc
@@ -315,6 +318,9 @@ def advice_by_member(res_all, data) -> dict:
                 rows = [r for r in feet if xy and abs(r["x"] - float(xy.group(1))) < 0.01
                         and abs(r["y"] - float(xy.group(2))) < 0.01]
                 tips = footing_advice(rows[0], b_) if rows else ["ขยายฐาน/เพิ่มเสาเข็ม (ขั้น 2)"]
+            elif m.group == "stair":
+                from core import wanic_stair as ST
+                tips = ST.advice_for(m, res_all, data)
             else:
                 tips = []
         except Exception as e:                             # noqa: BLE001
@@ -525,6 +531,8 @@ def apply_fixes(data, rounds: int = 4) -> list:
         if ch:
             lib[mark] = {**lib[mark], **ch}
     data["library"] = lib
+    from core import wanic_stair as ST
+    stairs_done = ST.apply_all(data)
     after = B.library_of(data)
     step = {"footing": "ขั้น 2 ฐานราก", "stump": "ขั้น 3 ตอม่อ", "slab": "ขั้น 5 พื้น", "column": "ขั้น 6 เสา",
             "beam": "ขั้น 4/6 คาน"}
@@ -536,7 +544,7 @@ def apply_fixes(data, rounds: int = 4) -> list:
             was = ", ".join(_fmt(k, old.get(k)) for k in ch if old.get(k) is not None)
             out.append(f"{mark} ({step.get(new.get('kind'), '')}): " + ", ".join(_fmt(k, v) for k, v in ch.items())
                        + (f"  (เดิม {was})" if was else ""))
-    return out
+    return out + stairs_done
 
 
 # ---- one member: the fields to change so it passes ---------------------------------------
@@ -617,6 +625,17 @@ def member_fix(res_all, data, m) -> dict | None:
         mm = re.search(r"เปลี่ยนเป็น (.+?) \(", tips[0]) if tips else None
         ch = {key: mm.group(1)} if key and mm else {}
         return {"target": "setting", "key": key or word, "kind": "roof", "changes": ch, "advice": tips}
+    if m.group == "stair":
+        from core import wanic_stair as ST
+        for dz in res_all.get("stairs") or []:
+            if m.name.startswith(dz["title"]):
+                tips = ST.advice_for(m, res_all, data)
+                if "ขนาดขั้น" in m.name:
+                    return {"target": "none", "key": "", "kind": "stair", "changes": {}, "advice": tips}
+                ch, beam, tips = ST.suggest(dz["st"], B.settings_of(data), b_)
+                return {"target": "stair", "key": dz["st"].get("id"), "kind": "stair", "changes": ch,
+                        "beam": beam, "current": {"t": dz["t"], "bars": dz["bars"], "temp": dz["temp"]},
+                        "beam_now": (dz["beam"] or {}).get("text", ""), "advice": tips}
     return None
 
 

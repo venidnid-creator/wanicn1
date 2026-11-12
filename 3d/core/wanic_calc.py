@@ -527,14 +527,15 @@ class Member:
 
 
 #: plain names of the groups, for the owner's summary
-GROUP_PLAIN = {"slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก", "roof": "โครงหลังคา"}
+GROUP_PLAIN = {"slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก", "roof": "โครงหลังคา",
+               "stair": "บันได"}
 
 
 def reserve_summary(members) -> list:
     """For each kind of member, the weakest one in plain words:
     [(group, text, ok)] — what the building can still take."""
     out = []
-    for g in ("slab", "beam", "column", "footing", "roof"):
+    for g in ("slab", "beam", "column", "footing", "roof", "stair"):
         ms = [m for m in members if m.group == g and m.qty and m.qty_unit]
         if not ms:
             continue
@@ -893,6 +894,14 @@ def analyse(data) -> dict:
             max(1, n - max(f, 0)) * D_
         cards.append({"mark": c_["mark"], "x": c_["x"], "y": c_["y"], "floor": f, "P": P, "spec": spec,
                       "H": abs(float(c_["z1"]) - float(c_["z0"]))})
+    stairs = []
+    try:
+        from core import wanic_stair as ST
+        stairs = ST.designs(data, b_)
+    except Exception:                                # noqa: BLE001 - the stairs never stop the rest
+        stairs = []
+    for dz in stairs:
+        out.extend(dz["members"])
     for m in out:
         if m.diagram is not None and m.qty:
             try:
@@ -900,6 +909,7 @@ def analyse(data) -> dict:
             except (AttributeError, TypeError):
                 pass
     return {"members": out, "basis": b_, "beams": beams_out, "columns": cols_out, "cards": cards,
+            "stairs": stairs,
             "levels": levels}
 
 

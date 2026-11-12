@@ -63,6 +63,32 @@ class FixDialog(QDialog):
                     th = f"{th}  (เดิม {_show(cur)})"
                 self.edits[k] = ed
                 form.addRow(th, ed)
+        elif fix["target"] == "stair":
+            note = QLabel("แก้ที่บันไดนี้ (ค่าเฉพาะบันไดตัวนี้) · คานรับชานพักใช้ร่วมทุกบันได")
+            note.setWordWrap(True)
+            lay.addWidget(note)
+            cur = fix.get("current") or {}
+            for k, th in (("t", "ความหนาท้องบันได (ม.)"), ("bars", "เหล็กหลักตามแนวบันได"),
+                          ("temp", "เหล็กกันร้าว (ตามขวาง)")):
+                new = fix["changes"].get(k, cur.get(k))
+                ed = QLineEdit(_show(new))
+                if k in fix["changes"]:
+                    pal = ed.palette()
+                    pal.setColor(QPalette.Base, QColor("#FEF3C7"))
+                    ed.setPalette(pal)
+                    th = f"{th}  (เดิม {_show(cur.get(k))})"
+                self.edits[k] = ed
+                form.addRow(th, ed)
+            if fix.get("beam") or fix.get("beam_now"):
+                ed = QLineEdit(fix.get("beam") or fix.get("beam_now"))
+                if fix.get("beam"):
+                    pal = ed.palette()
+                    pal.setColor(QPalette.Base, QColor("#FEF3C7"))
+                    ed.setPalette(pal)
+                self.edits["stair_beam"] = ed
+                form.addRow(f"คานรับชานพัก BS1 (ก×ล เหล็กล่าง/บน ปลอก)  (เดิม {fix.get('beam_now')})", ed)
+        elif fix["target"] == "none":
+            pass
         else:
             s = B.settings_of(data)
             key = fix["key"]
@@ -117,6 +143,17 @@ def apply(data: dict, fix: dict, values: dict) -> dict:
         spec.update(ch)
         lib[fix["key"]] = spec
         data["library"] = lib
+    elif fix["target"] == "stair":
+        from core import wanic_stair as ST
+        stp = ST.find_stair(data, fix["key"])
+        if stp is not None:
+            stp.update({k: v for k, v in values.items() if k in ("t", "bars", "temp") and v not in ("", None)})
+        if values.get("stair_beam"):
+            s = dict(data.get("settings") or {})
+            s["stair_beam"] = values["stair_beam"]
+            data["settings"] = s
+    elif fix["target"] == "none":
+        pass
     else:
         s = dict(data.get("settings") or {})
         s.update(values)

@@ -79,6 +79,7 @@ changes are filtered out — keep it that way; it fixed the slow-selection bug).
 | `wanic_steel_sheets.py` | Steel sheets: AWS weld standard (`min_fillet`), connections, plates, clip angles (`has_steel`). |
 | `wanic_calc_cards.py` | Booklet cards: footing, slab, roof pages; `attach_lateral_moments` (Me row); `critical_members` (print only the critical ones). |
 | `wanic_advice.py` / `wanic_fix_view.py` | Advice for failing members (what to add, where), `apply_fixes` (all marks, iterates until pass incl. detailing minimums), `member_fix` + `FixDialog` (one row), `balance_spec(keep_shape)` = symmetric/balanced edits (square columns, bars ÷ 4, equal top/bottom bar size, square footings), `fit_in_row` (clear spacing ≥ max(25 mm, bar)). |
+| `wanic_stair.py` / `wanic_stair_view.py` | RC stairs straight / L / U: `designs(data)` (step checks กฎกระทรวง 55, waist slab one-way along the flight incl. landing, L/20, steel minimums, landing beam BS1), `suggest`, `apply_all`, `advice_for`; `StairDialog`. Geometry in `wanic_building.stair_layout/stair_plan/stair_members`. |
 | `wanic_beamload_view.py` | น้ำหนักเพิ่มบนคาน (`BeamLoadDialog`, presets: walls, water tanks, A/C, balcony), คานยื่น (`CantileverDialog`), `CheckloadDialog`; `beam_lines(data)`; row⇄dict helpers. |
 | `wanic_road*.py`, `wanic_pavement.py`, `wanic_sitemap.py` | Road design, AI 1970 / Road Note 29 pavement, sheets G PP ST VT SD DR TS QS, site map. |
 | `wanic_partprice.py` | Live part data/price as parts are stretched (`live_rows`, `refresh`, xform determinant). |
@@ -157,6 +158,9 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - «รับเพิ่มได้อีก» (reserve, for laypeople): `Member.qty/qty_unit/qty_factor`, `reserve = qty(1/ratio − 1)/factor`,
   `reserve_text()` (> 5× → «รับเพิ่มได้อีกมาก»), `reserve_summary()` weakest per group; units: slab kg/m² live (÷1.7),
   beam kg/m, column / footing tonnes each, roof kg/m². Service values, no safety factor.
+- Stairs: `st = {id, x, y (footprint centre), dir, type straight|L|U, turn left|right, w?, t?, bars?, temp?}`; risers split
+  ⌈n/2⌉ + ⌊n/2⌋ with the landing at ⌈n/2⌉·R; settings `stair_t`, `riser_max`, `going`, `stair_bars`, `stair_temp`,
+  `stair_ll` (300), `stair_beam`; analyse adds group "stair" and `res["stairs"]`.
 - Checkload (`wanic_calc.checkload`): per ground column Wcol (service t), tributary area over every carried floor + roof,
   Wfloor = Wcol/area, Wcol-Area = area × building mean; usual range `WFLOOR_RANGE` 450–1,600 kg/m²; flag > ±40 %.
 - New design data lives in the building document: `data["calc"]`, `["grid"]`, `["truss"]`, `["steel"]`, `["purlin"]`,
@@ -169,9 +173,10 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - Installer **2026.11.12.1** built (run 43147870896), not released; owner's test results for 2026.11.11.1 / .12.1 pending.
 - Since then, on branch `claude/youthful-pascal-ctgtr0`, committed `[skip ci]` (no installer yet), each approved by
   screenshots: struct sheets, steel sheets, booklet cards, advice + per-member fix + symmetric/balanced edits, SFD/BMD with
-  capacity lines, «รับเพิ่มได้อีก» reserve, and plan item 4 (beam loads, cantilevers, Checkload — awaiting approval).
+  capacity lines, «รับเพิ่มได้อีก» reserve, plan item 4 (beam loads, cantilevers, Checkload — approved) and plan item 5
+  (RC stairs straight / L / two-flight — awaiting approval).
 - The QD study plan (approved): 1 struct sheets ✓ · 2 steel sheets ✓ · 3 booklet cards ✓ · 4 beam point/uniform loads,
-  cantilever, Checkload (Wcol / Wcol-Area / Wfloor) ✓ awaiting approval · 5 RC stair (straight / L / two-flight) ·
+  cantilever, Checkload (Wcol / Wcol-Area / Wfloor) ✓ · 5 RC stair (straight / L / two-flight) ✓ awaiting approval ·
   6 A-01 symbols + finish codes, room tags, ABCD markers, door/window schedule, grease trap / screen pit, septic tank by
   users, EE/SN specifications · 7 two pile sizes, pile capacity from test results · 8 free drafting (columns/beams from
   sketch lines, curved/inclined beams, curved walls). QD is studied for workflow only — never copy its code/UI/files.

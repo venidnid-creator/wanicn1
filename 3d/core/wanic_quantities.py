@@ -463,15 +463,25 @@ def compute(data) -> dict:
     g = "stair"
     vol = area = 0.0
     for e in E["stairs"]:
-        nr, L, Hs = B.stair_geometry(e["st"], s)
-        w = B.stair_width(e["st"], s)
-        sec = P.section_area("stair", dict(L=L * 1000, H=Hs * 1000, n=nr,
-                                           t=float(s["stair_t"]) * 1000))
-        vol += sec * w
-        slope = math.hypot(L, Hs)
-        area += slope * w + 2 * sec + nr * (Hs / nr) * w
-        bars([("DB12", S.bar_count(w, 0.15) * slope),
-              ("RB9", S.bar_count(slope, 0.20) * w)])
+        lay = B.stair_layout(e["st"], s)
+        w = lay["w"]
+        ts = float(s["stair_t"])
+        for f in lay["flights"]:
+            nr, L, Hs = f["n"], f["L"], f["n"] * lay["R"]
+            sec = P.section_area("stair", dict(L=L * 1000, H=Hs * 1000, n=nr, t=ts * 1000))
+            vol += sec * w
+            slope = math.hypot(L, Hs)
+            area += slope * w + 2 * sec + nr * (Hs / nr) * w
+            bars([("DB12", S.bar_count(w, 0.15) * slope),
+                  ("RB9", S.bar_count(slope, 0.20) * w)])
+        for ld in lay["landings"]:
+            xs = [q[0] for q in ld["pts"]]
+            ys = [q[1] for q in ld["pts"]]
+            a_ = (max(xs) - min(xs)) * (max(ys) - min(ys))
+            vol += a_ * ts
+            area += a_ + 2 * (max(xs) - min(xs) + max(ys) - min(ys)) * ts
+            bars([("DB12", S.bar_count(max(ys) - min(ys), 0.15) * (max(xs) - min(xs))),
+                  ("RB9", S.bar_count(max(xs) - min(xs), 0.20) * (max(ys) - min(ys)))])
     if vol:
         concrete(g, "บันได", vol, "พื้นที่หน้าตัดขั้นบันได × กว้าง")
         formwork(g, "บันได", area, "ท้องบันได + ข้าง 2 ด้าน + ลูกตั้ง")

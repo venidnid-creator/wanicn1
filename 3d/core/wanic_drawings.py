@@ -700,19 +700,15 @@ def draw_rooms(sh, v, E, k, fcodes=None, area=True):
 def draw_stairs(sh, v, E, k):
     s = E["settings"]
     for st in (x for x in E["stairs"] if x["floor"] == k):
-        pts = B.stair_rect(st["st"], s)
-        sh.poly([v(*p) for p in pts], "wall", 0.25)
-        n, L, _H = B.stair_geometry(st["st"], s)
-        a, b, c, d = pts
-        for i in range(1, n):
-            f = i / n
-            p = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
-            q = (d[0] + (c[0] - d[0]) * f, d[1] + (c[1] - d[1]) * f)
+        pl = B.stair_plan(st["st"], s)
+        for poly in pl["polys"]:
+            sh.poly([v(*p) for p in poly], "wall", 0.25)
+        for p, q in pl["treads"]:
             sh.line(v(*p), v(*q), "wall", 0.13)
-        m0 = ((a[0] + d[0]) / 2, (a[1] + d[1]) / 2)
-        m1 = ((b[0] + c[0]) / 2, (b[1] + c[1]) / 2)
-        sh.line(v(*m0), v(*m1), "dim", 0.18)
-        e = v(*m1)
+        w = pl["walk"]
+        for p, q in zip(w, w[1:]):
+            sh.line(v(*p), v(*q), "dim", 0.18)
+        e = v(*w[-1])
         sh.text((e[0], e[1] + 1.2), "ขึ้น", 2.0, "center", "dim")
 
 

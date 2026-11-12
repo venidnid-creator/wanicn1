@@ -116,7 +116,13 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - [x] data["cantilevers"] = [{"level","x","y","dir":"+x|-x|+y|-y","L","mark"}] → B.elements เพิ่มคาน "cant": True (โมเดล 3D/แบบ/BOQ ได้อัตโนมัติ) → analyse ทำ Span(cant=...) และแรงปฏิกิริยาเฉพาะจุดรองรับ
      - [x] checkload(data, res): ต่อเสาชั้นล่าง Wcol (ตัน ใช้งาน), Wcol-Area (พื้นที่รับน้ำหนักรวมทุกชั้น+หลังคา), Wfloor = Wcol/พื้นที่ (กก./ตร.ม.) เทียบช่วงปกติ 800–1,500 → หน้ารูปเล่ม + ปุ่มขั้น 9
      - [x] UI core/wanic_beamload_view.py: ขั้น 4/6/9 ปุ่ม «น้ำหนักเพิ่มบนคาน…» (เลือกคาน + ของที่วางสำเร็จรูป) «คานยื่น…»; ขั้น 9 «Checkload (ตรวจน้ำหนักลงเสา)…»; รูปเล่มหน้า Checkload; SFD ขั้นบันไดตรงน้ำหนักจุด (_stations); tests/test_wanic_beamload.py (ใส่ใน CI แล้ว); skill-venit อัปเดตแล้ว
-     - ถัดไปหลังอนุมัติ: แผนข้อ 5 บันไดคอนกรีต (ตรง / L / สองช่วง)
+     - อนุมัติแล้ว (13 พ.ย.)
+   + [x] (รออนุมัติภาพ) แผนข้อ 5 — บันได คสล. ช่วงตรง / ตัว L / สองช่วง:
+     - wanic_building: STAIR_TYPES, stair_type, stair_layout (flights p0/d/n/L/z0/w, landings pts/z, rect; x,y = กลาง footprint; turn left/right; U มีช่องว่าง STAIR_GAP 0.10), flight_rect, stair_plan (polys/treads/walk), stair_rect = กรอบ; stair_members (ช่วงบันได family "stair" + ชานพัก rect) ใช้ใน structure_members; ผัง (wanic_drawings.draw_stairs, plugins/wanic_building) และ BOQ (wanic_quantities หมวด 5 รวมชานพัก) อ่านจาก layout
+     - core/wanic_stair.py: params (stair_bars DB12@0.15, stair_temp RB9@0.15, stair_ll 300, stair_beam "0.15x0.35 2-DB12/2-DB12 RB6@0.15"), geometry_checks (กฎกระทรวง 55: ลูกตั้ง ≤ 20, ลูกนอน ≥ 22, กว้าง ≥ 0.80, ช่วงละ ≤ 3.00 ม., 2R+T 60–65 แนะนำ), design (พื้นทางเดียวพาดตามแนวบันได, ชานพักรวมช่วง, solve_beam + U, φMn/φVc, L/20, As min, เหล็กกันร้าว 0.0025/0.0018bt, คาน BS1), designs(data), suggest/apply_all/advice_for/find_stair; ค่าเฉพาะบันได st["t","bars","temp","w","type","turn"]
+     - analyse เพิ่ม group "stair" และ res["stairs"]; GROUP_PLAIN/ชื่อกลุ่มใน UI/PDF; wanic_advice (advise, advice_by_member, member_fix target "stair", apply_fixes เรียก ST.apply_all); wanic_fix_view รองรับ target "stair"/"none"
+     - UI core/wanic_stair_view.py StairDialog (ตาราง แบบ/เลี้ยว/กว้าง/หนา/เหล็ก, ภาพผัง, ผลตรวจสด, ปุ่มปรับให้ผ่าน) ปุ่ม «บันได คสล.…» ขั้น 5 และ 9; รูปเล่ม stair_page (รูปตัดคลี่ เหล็ก คาน BS1 ตาราง)
+     - tests/test_wanic_stair.py (ใน CI แล้ว) · ถัดไปหลังอนุมัติ: แผนข้อ 6 (A-01 สัญลักษณ์/รหัสวัสดุ ป้ายห้อง ABCD ตารางประตูหน้าต่าง บ่อดักไขมัน/บ่อตะแกรง ถังบำบัดตามจำนวนคน รายการ EE/SN)
 4. [ ] ออกแบบคาน: น้ำหนักจุด/แผ่เพิ่มเอง · คานยื่น · Checkload (Wcol / Wcol-Area / Wfloor)
 5. [ ] บันได คสล. ช่วงตรง / L / 2 ช่วง + คานชานพัก + รูปตัด
 6. [ ] A-01 สัญลักษณ์ + รหัสวัสดุ F/W/C · ป้ายห้อง · ABCD · ตารางประตู-หน้าต่าง · บ่อดักไขมัน/บ่อตะแกรง · ถังบำบัดตามจำนวนผู้ใช้ · ข้อกำหนด EE/SN

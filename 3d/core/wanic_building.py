@@ -846,19 +846,113 @@ def stair_used(st, s, storeys) -> bool:
     return storeys >= 2 or bool(st.get("w") or s.get("stair_w"))
 
 
-def stair_rect(st, s):
-    """The flight's plan rectangle as 4 corners (for drawing and picking)."""
-    n, L, _H = stair_geometry(st, s)
-    rx, ry = _DIRS[int(st.get("dir", 1)) % 4]
-    tx, ty = ry, -rx
+#: stair forms: ช่วงตรง · ตัว L (เลี้ยว 90° ที่ชานพัก) · สองช่วง (กลับทาง 180°)
+STAIR_TYPES = {"straight": "บันไดช่วงตรง", "L": "บันไดตัว L (ชานพักเลี้ยว 90°)",
+               "U": "บันไดสองช่วง (ชานพักกลับทาง)"}
+STAIR_GAP = 0.10                       # the well between the two flights of a U stair
+
+
+def stair_type(st) -> str:
+    t = (st or {}).get("type", "straight")
+    return t if t in STAIR_TYPES else "straight"
+
+
+def stair_layout(st, s) -> dict:
+    """The flights and landings of a stair in plan: {"flights": [{"p0" (the
+    foot, on the centre line), "d" (the way up), "n" (risers), "L" (run),
+    "z0" (its start above the floor), "w"}], "landings": [{"pts", "z"}],
+    "rect" (the footprint's 4 corners), "R" (riser), "g" (going)}. The
+    stair's ``x, y`` is the middle of its footprint; ``dir`` the way up
+    of the first flight; ``turn`` "left"/"right" for the L and U forms."""
+    n, _L, H = stair_geometry(st, s)
+    R_, g = H / n, float(s["going"])
     w = stair_width(st, s)
+    typ = stair_type(st)
+    sv = -1.0 if (st or {}).get("turn", "left") == "left" else 1.0   # the left of the way up is −t
+    fl, ld = [], []                    # in local (r, t): along the way up, across
+    if typ == "straight":
+        fl.append(((0.0, 0.0), (1.0, 0.0), n, 0.0))
+    else:
+        n1 = (n + 1) // 2
+        n2 = n - n1
+        L1 = n1 * g
+        fl.append(((0.0, 0.0), (1.0, 0.0), n1, 0.0))
+        if typ == "L":
+            ld.append(((L1, -w / 2), (L1 + w, w / 2)))
+            fl.append(((L1 + w / 2, sv * w / 2), (0.0, sv), n2, n1 * R_))
+        else:
+            far = sv * (w + STAIR_GAP + w / 2)
+            ld.append(((L1, min(-sv * w / 2, far)), (L1 + w, max(-sv * w / 2, far))))
+            fl.append(((L1, sv * (w + STAIR_GAP)), (-1.0, 0.0), n2, n1 * R_))
+    # the footprint in local coordinates
+    rs, ts = [], []
+    for (r0, t0), (dr, dt), k, _z in fl:
+        L_ = k * g
+        for u in (0.0, L_):
+            for v in (-w / 2, w / 2):
+                rs.append(r0 + dr * u + abs(dt) * v)
+                ts.append(t0 + dt * u + abs(dr) * v)
+    for (ra, ta), (rb, tb) in ld:
+        rs += [ra, rb]
+        ts += [ta, tb]
+    rc, tc = (min(rs) + max(rs)) / 2, (min(ts) + max(ts)) / 2
+    rx, ry = _DIRS[int((st or {}).get("dir", 1)) % 4]
+    tx, ty = ry, -rx
     cx, cy = float(st["x"]), float(st["y"])
-    a = (cx - rx * L / 2, cy - ry * L / 2)
-    pts = []
-    for su, sw in ((0, -1), (1, -1), (1, 1), (0, 1)):
-        pts.append((a[0] + rx * L * su + tx * w / 2 * sw,
-                    a[1] + ry * L * su + ty * w / 2 * sw))
-    return pts
+
+    def G(r, t):
+        r, t = r - rc, t - tc
+        return (cx + rx * r + tx * t, cy + ry * r + ty * t)
+    out = {"flights": [], "landings": [], "R": R_, "g": g, "w": w, "type": typ, "H": H, "n": n}
+    for (r0, t0), (dr, dt), k, z in fl:
+        out["flights"].append({"p0": G(r0, t0), "d": (rx * dr + tx * dt, ry * dr + ty * dt), "n": k,
+                               "L": k * g, "z0": z, "w": w})
+    for (ra, ta), (rb, tb) in ld:
+        out["landings"].append({"pts": [G(ra, ta), G(rb, ta), G(rb, tb), G(ra, tb)], "z": fl[0][2] * R_})
+    r0_, r1_, t0_, t1_ = min(rs), max(rs), min(ts), max(ts)
+    out["rect"] = [G(r0_, t0_), G(r1_, t0_), G(r1_, t1_), G(r0_, t1_)]
+    return out
+
+
+def flight_rect(f) -> list:
+    """A flight's 4 corners: foot left, top left, top right, foot right."""
+    (x, y), (dx, dy), L, w = f["p0"], f["d"], f["L"], f["w"]
+    nx, ny = dy, -dx
+    return [(x + nx * w / 2, y + ny * w / 2), (x + dx * L + nx * w / 2, y + dy * L + ny * w / 2),
+            (x + dx * L - nx * w / 2, y + dy * L - ny * w / 2), (x - nx * w / 2, y - ny * w / 2)]
+
+
+def stair_plan(st, s) -> dict:
+    """What a plan shows of a stair: outlines (flights and landings), the
+    tread lines, and the walking line (the way up) as a polyline."""
+    lay = stair_layout(st, s)
+    polys, treads, walk = [], [], []
+    for f in lay["flights"]:
+        a, b, c, d = flight_rect(f)
+        polys.append([a, b, c, d])
+        for i in range(1, f["n"]):
+            t = i / f["n"]
+            treads.append(((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t),
+                           (d[0] + (c[0] - d[0]) * t, d[1] + (c[1] - d[1]) * t)))
+    for ld in lay["landings"]:
+        polys.append(ld["pts"])
+    fs = lay["flights"]
+    w = lay["w"]
+
+    def at(f, u):
+        return (f["p0"][0] + f["d"][0] * u, f["p0"][1] + f["d"][1] * u)
+    if len(fs) == 1:
+        walk = [at(fs[0], 0.0), at(fs[0], fs[0]["L"])]
+    elif lay["type"] == "L":
+        walk = [at(fs[0], 0.0), at(fs[0], fs[0]["L"] + w / 2), at(fs[1], fs[1]["L"])]
+    else:
+        walk = [at(fs[0], 0.0), at(fs[0], fs[0]["L"] + w / 2), at(fs[1], -w / 2), at(fs[1], fs[1]["L"])]
+    return {"polys": polys, "treads": treads, "walk": walk, "layout": lay}
+
+
+def stair_rect(st, s):
+    """The stair's footprint as 4 corners (for picking and bounds)."""
+    return stair_layout(st, s)["rect"]
 
 
 # ---------------------------------------------------------------------------
@@ -1127,7 +1221,8 @@ def structure_members(data) -> tuple[list, dict]:
     if s.get("walls"):
         _walls(E, add)
     for e in E["stairs"]:
-        add(stair_member(e["st"], s, e["floor"] * E["H"]), "stair")
+        for g_ in stair_members(e["st"], s, e["floor"] * E["H"]):
+            add(g_, "stair")
     rooms_of = [f["rooms"] for f in E["floors"]]
     drop = max(float(s.get("wet_drop") or 0.0), 0.0)
     for e in E["fixtures"]:
@@ -1924,18 +2019,39 @@ def band_length(w, h, sill, door, band, wh) -> float:
     return L
 
 
+def stair_members(stp, s, z) -> list:
+    """The flights (side profile extruded across the width) and the
+    landing slabs of a stair, from :func:`stair_layout`."""
+    lay = stair_layout(stp, s)
+    t = float(s["stair_t"])
+    out = []
+    name = STAIR_TYPES[lay["type"]]
+    for i, f in enumerate(lay["flights"]):
+        (x, y), (dx, dy) = f["p0"], f["d"]
+        nx, ny = dy, -dx
+        w, zz = f["w"], z + f["z0"]
+        path = [(x - nx * w / 2, y - ny * w / 2, zz), (x + nx * w / 2, y + ny * w / 2, zz)]
+        out.append(_member("structure", "stair", "บันได คสล.", "stair",
+                           dict(L=_mm(f["L"]), H=_mm(f["n"] * lay["R"]), n=f["n"], t=_mm(t)), path,
+                           anchor="bl", ifc="IfcStair",
+                           name=f"{name} · ช่วงที่ {i + 1} ({f['n']} ลูกตั้ง)" if len(lay["flights"]) > 1
+                           else "บันได คสล."))
+    for ld in lay["landings"]:
+        xs = [q[0] for q in ld["pts"]]
+        ys = [q[1] for q in ld["pts"]]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        top = z + ld["z"]
+        out.append(_member("structure", "stair", "ชานพัก", "rect",
+                           dict(b=_mm(max(xs) - min(xs)), h=_mm(max(ys) - min(ys))),
+                           [(cx, cy, top - t), (cx, cy, top)], ifc="IfcSlab",
+                           name=f"ชานพักบันได หนา {_cm(t)} ซม. · ระดับ {top:+.2f}"))
+    return [g for g in out if g is not None]
+
+
 def stair_member(stp, s, z):
-    n, L, H = stair_geometry(stp, s)
-    rx, ry = _DIRS[int(stp.get("dir", 1)) % 4]
-    tx, ty = ry, -rx
-    w = stair_width(stp, s)
-    cx, cy = float(stp["x"]), float(stp["y"])
-    ax, ay = cx - rx * L / 2, cy - ry * L / 2
-    path = [(ax - tx * w / 2, ay - ty * w / 2, z),
-            (ax + tx * w / 2, ay + ty * w / 2, z)]
-    return _member("structure", "stair", "บันได คสล.", "stair",
-                   dict(L=_mm(L), H=_mm(H), n=n, t=_mm(s["stair_t"])), path,
-                   anchor="bl", ifc="IfcStair", name="บันได คสล.")
+    """The first flight (kept for callers of the old single-flight API)."""
+    ms = stair_members(stp, s, z)
+    return ms[0] if ms else None
 
 
 # ---------------------------------------------------------------------------

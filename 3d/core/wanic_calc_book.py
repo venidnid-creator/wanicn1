@@ -449,6 +449,102 @@ def reserve_page(bk: Book, members):
             "(น้ำหนักจร) · เสา/ฐานราก = น้ำหนักลงต่อต้น/ฐาน", 5.0)
 
 
+def stair_page(bk: Book, dz: dict, b_: dict):
+    """บันได คสล.: the developed section along the walking line (steps,
+    waist, landing, bars, supports), the step checks and every span."""
+    mm, p = bk.mm, bk.p
+    lay = dz["layout"]
+    bk.page(dz["title"], "Stair")
+    R_, g, w, t = lay["R"], lay["g"], lay["w"], dz["t"]
+    # the developed section: flight 1, the landing, flight 2 (unfolded)
+    segs = []                                          # (x0, run, z0, n, kind)
+    x = 0.0
+    for i, f in enumerate(lay["flights"]):
+        if i == 1:
+            segs.append((x, w, f["z0"], 0, "land"))
+            x += w
+        segs.append((x, f["L"], f["z0"], f["n"], "flight"))
+        x += f["L"]
+    Ltot, H = x, lay["H"]
+    X0, Y0, Wd, Hd = 24.0, 124.0, 214.0, 82.0
+    sc = min(Wd / max(Ltot, 0.1), Hd / max(H, 0.1))
+
+    def P(xx, zz):
+        return QPointF((X0 + xx * sc) * mm, (Y0 - zz * sc) * mm)
+    p.setPen(QPen(INK, 1.4))
+    p.setBrush(QColor(220, 220, 220, 120))
+    cos = dz["cos"]
+    for x0, run, z0, n, kind in segs:
+        if kind == "land":
+            p.drawRect(QRectF(P(x0, z0).x(), P(x0, z0).y(), run * sc * mm, t * sc * mm))
+            bk.text(X0 + (x0 + run / 2) * sc - 15, Y0 - z0 * sc - 7, 30, 5, f"ชานพัก +{z0:.2f}", 4.6,
+                    align=Qt.AlignCenter)
+            continue
+        r = R_
+        poly = [P(x0, z0)]
+        for k in range(n):
+            poly += [P(x0 + k * g, z0 + (k + 1) * r), P(x0 + (k + 1) * g, z0 + (k + 1) * r)]
+        tv = t / cos
+        poly += [P(x0 + run, z0 + n * r - tv), P(x0, z0 - tv)]
+        p.drawPolygon(QPolygonF(poly))
+        # the main bars: along the soffit at the cover
+        p.setPen(QPen(RED, 1.6))
+        c = (C2_COVER + 0.006) / cos
+        p.drawLine(P(x0, z0 - tv + c), P(x0 + run, z0 + n * r - tv + c))
+        p.setPen(QPen(INK, 1.4))
+    for x0, run, z0, n, kind in segs:
+        if kind == "land":
+            p.setPen(QPen(RED, 1.6))
+            p.drawLine(P(x0, z0 - t + C2_COVER + 0.006), P(x0 + run, z0 - t + C2_COVER + 0.006))
+            p.setPen(QPen(INK, 1.4))
+            # the landing beam under the far edge
+            bw, bh = 0.15, 0.35
+            p.setBrush(QColor(180, 180, 180))
+            p.drawRect(QRectF(P(x0 + run - bw, z0).x(), P(x0, z0).y(), bw * sc * mm, bh * sc * mm))
+            bk.text(X0 + (x0 + run) * sc - 14, Y0 - (z0 - bh) * sc + 1, 30, 5, "คาน BS1", 4.6)
+            p.setBrush(QColor(220, 220, 220, 120))
+    # supports: the floor beams at the foot and the top
+    p.setBrush(Qt.NoBrush)
+    for xx, zz in ((0.0, -t / cos), (Ltot, H - t / cos)):
+        c = P(xx, zz)
+        p.drawPolygon(QPolygonF([c, c + QPointF(-2 * mm, 3.5 * mm), c + QPointF(2 * mm, 3.5 * mm)]))
+    bk.text(10, Y0 + 6, 380, 6, f"รูปตัดตามแนวเดิน (คลี่) · ระยะราบรวม {Ltot:.2f} ม. · สูง {H:.2f} ม. · "
+            f"{lay['n']} ลูกตั้ง × {R_ * 100:.1f} ซม. · ลูกนอน {g * 100:.0f} ซม. · หนา {t * 100:.0f} ซม.", 5.2)
+    bk.text(10, Y0 + 12, 380, 6, f"เหล็กหลัก {dz['bars']} (เส้นแดง ด้านล่าง ตามลาด) · เหล็กกันร้าว {dz['temp']} ตามขวาง · "
+            f"ระยะหุ้ม {C2_COVER * 100:.0f} ซม.", 5.2, RED)
+    # the step checks
+    rows = [("รายการ (กฎกระทรวง 55)", "ค่า", "เกณฑ์")]
+    for a, v, lim, ok in dz["geo"]:
+        rows.append((a, (v, GREEN if ok else RED), lim))
+    bk.table(248, 34, [64, 34, 50], rows, 6.4, left=True)
+    loads = [("น้ำหนัก (กก./ตร.ม.)", "ลาดเอียง", "ชานพัก"),
+             ("คงที่", f"{dz['dead_inc']:,.0f}", f"{dz['dead_land']:,.0f}"),
+             ("จร", f"{dz['ll']:,.0f}", f"{dz['ll']:,.0f}"),
+             ("wu (1.4D + 1.7L)", f"{dz['wu_inc']:,.0f}", f"{dz['wu_land']:,.0f}")]
+    bk.table(248, 34 + 6.4 * len(rows) + 4, [64, 42, 42], loads, 6.4, left=True)
+    # every span
+    y = 150
+    tab = [("ช่วง", "พาด ม.", "Mu กก.-ม./ม.", "φMn", "Vu กก./ม.", "φVc", "หนาขั้นต่ำ L/20", "As ใช้/ต่ำสุด ซม²/ม.",
+            "อัตรา", "รับเพิ่มได้อีก / หมายเหตุ")]
+    for f, m in zip(dz["flights"], dz["members"][1:1 + len(dz["flights"])]):
+        tab.append((f"ช่วงที่ {f['i']} ({f['n']} ลูกตั้ง)", f"{f['span']:.2f}", f"{f['Mu']:,.0f}", f"{f['cap']:,.0f}",
+                    f"{f['Vu']:,.0f}", f"{f['vc']:,.0f}", f"{f['t_min'] * 100:.1f} ซม.",
+                    f"{dz['As']:.2f} / {dz['As_min']:.2f}", (f"{m.ratio:.2f}", GREEN if m.ok else RED),
+                    ("; ".join(f["notes"]) or m.reserve_text(), GREEN if m.ok else RED)))
+    if dz["beam"]:
+        bm = dz["beam"]
+        m = dz["members"][-1]
+        tab.append(("คานรับชานพัก BS1", f"{bm['L']:.2f}", f"{bm['res'].Mmax:,.0f}", "", f"{bm['res'].Vmax:,.0f}", "",
+                    "", "", (f"{bm['ratio']:.2f}", GREEN if m.ok else RED),
+                    (f"{bm['text']} · w = {bm['w']:,.0f} กก./ม. · " + m.reserve_text(), GREEN if m.ok else RED)))
+    bk.table(10, y, [42, 15, 23, 17, 21, 17, 27, 33, 13, 176], tab, 7.0, left=True)
+    bk.text(12, 244, 380, 6, "ท้องบันไดออกแบบเป็นพื้นทางเดียวพาดตามแนวบันได (ชานพักพาดรวมกับช่วงบันได รับด้วยคาน BS1) · "
+            "M = wL²/8 · เหล็กกันร้าว ≥ 0.0025bt (SR24) / 0.0018bt (SD40)", 4.6)
+
+
+C2_COVER = 0.020
+
+
 def checkload_page(bk: Book, res_all, data):
     """Checkload — Wcol, Wcol-Area and Wfloor of every ground-floor column."""
     from core import wanic_calc as C2
@@ -534,6 +630,9 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
     beam_pages(bk, res_all, b_, fc)
     column_pages(bk, res_all, b_, fc)
     CC.footing_pages(bk, res_all, data, critical)
+    for dz in res_all.get("stairs") or []:
+        if not critical or not all(m.ok for m in dz["members"]):
+            stair_page(bk, dz, b_)
     if (data or {}).get("truss"):
         from core import wanic_truss as T
         from core.wanic_truss_view import truss_pages

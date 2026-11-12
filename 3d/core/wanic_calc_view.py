@@ -93,7 +93,9 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
             p.drawLine(QPointF(ax, by - 2), QPointF(ax - 2, by - 5))
             p.drawLine(QPointF(ax, by - 2), QPointF(ax + 2, by - 5))
         p.drawText(QRectF(xa, by - 26, xb - xa, 12), Qt.AlignCenter,
-                   f"{'คานยื่น · ' if getattr(sp, 'cant', '') else ''}w = {sp.w:,.0f} กก./ม. · L = {sp.L:.2f} ม.")
+                   f"{'คานยื่น · ' if getattr(sp, 'cant', '') else ''}"
+                   + (f"w = {sp.w:,.0f} กก./ม. · " if sp.w or not getattr(sp, "U", None) else "")
+                   + f"L = {sp.L:.2f} ม.")
         for a_, b_, wu in getattr(sp, "U", []) or []:
             ua, ub = X(sup[i] + a_), X(sup[i] + b_)
             p.setPen(QPen(QColor("#7C3AED"), 1.4))
@@ -327,8 +329,9 @@ def report_pdf(res, data, path) -> None:
     text("เอกสารนี้เป็นเครื่องมือช่วยคำนวณ ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจสอบและลงนามรับรองก่อนก่อสร้าง",
          color="#B45309")
     y += 8
-    names = {"roof": "โครงหลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก / เสาเข็ม"}
-    for g in ("roof", "slab", "beam", "column", "footing"):
+    names = {"roof": "โครงหลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก / เสาเข็ม",
+             "stair": "บันได คสล."}
+    for g in ("roof", "slab", "beam", "column", "footing", "stair"):
         ms = [m for m in res["members"] if m.group == g]
         if not ms:
             continue
