@@ -60,6 +60,17 @@ def test_compression_allowable_drops_with_length():
     assert a2 < a1 < at
 
 
+def test_custom_truss_from_data_and_heel_welds():
+    data = {"truss": {"kind": "custom", "span": 8.0, "spacing": 3.0, "dead": 30, "live": 30,
+                      "nodes": [[0, 0], [4, 0], [8, 0], [2, 1], [4, 2], [6, 1]],
+                      "members": [[0, 1, "bottom"], [1, 2, "bottom"], [0, 3, "top"], [3, 4, "top"],
+                                  [4, 5, "top"], [5, 2, "top"], [3, 1, "web"], [1, 4, "web"], [1, 5, "web"]],
+                      "supports": {"0": "pin", "2": "roller"}}}
+    p, d = T.design_of(data)
+    assert len(d.truss.members) == 9 and max(r[6] for r in d.rows) <= 1.0
+    assert d.plate["weld"] and all(L >= 4 for *_x, L in d.plate["weld"])
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

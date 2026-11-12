@@ -124,6 +124,9 @@ def summary_lines(p: dict, d: T.Design) -> list:
                 lines.append(f"{GROUP_TH[g]}: {T.FAMILY_TH[p['family']]} {d.pick[g].label} มม. — "
                              f"แรงสูงสุด {worst[3]:+,.0f} กก. / รับได้ {worst[4]:,.0f} กก. "
                              f"(อัตราส่วน {worst[6]:.2f}, KL/r {worst[5]:.0f})")
+    if plate.get("weld"):
+        lines.append("รอยเชื่อมส้นโครง (เชื่อมพอก E70 6 มม., {:,.0f} กก./ซม.): ".format(plate["weld_cap"])
+                     + " · ".join(f"ชิ้น {no} ยาวรวม ≥ {L:.0f} ซม." for no, _g, _N, L in plate["weld"]))
     lines.append(f"น้ำหนักเหล็กต่อโครง {d.weight:,.1f} กก. (≈ {d.weight / (p['span'] * p['spacing']):.1f} "
                  f"กก./ตร.ม. หลังคา)")
     lines.append(f"แผ่นเหล็กรองฐาน (Base Plate): แรงปฏิกิริยา {plate['R']:,.0f} กก. → PL {plate['side']:.0f}×"
@@ -146,8 +149,8 @@ class TrussDialog(QDialog):
         form = QFormLayout()
         self.kind = QComboBox()
         for k, v in T.TYPES.items():
-            if k != "custom":
-                self.kind.addItem(v, k)
+            self.kind.addItem(v, k)
+        self.custom = {k: p[k] for k in ("nodes", "members", "supports") if p.get(k)}
         self.kind.setCurrentIndex(max(0, self.kind.findData(p["kind"])))
         form.addRow("รูปแบบ Truss", self.kind)
         self.sp = {}
@@ -188,6 +191,10 @@ class TrussDialog(QDialog):
         self.pdf_btn = QPushButton("รายการคำนวณ Truss (.pdf)")
         self.pdf_btn.clicked.connect(self.export_pdf)
         btns.addWidget(self.pdf_btn)
+        self.edit_btn = QPushButton("แก้จุดต่อ/ชิ้นส่วน…")
+        self.edit_btn.setToolTip("เขียน Truss เอง: เริ่มจากรูปที่เห็นอยู่ แล้วเพิ่ม/ลบ/ย้ายจุดต่อและชิ้นส่วน")
+        self.edit_btn.clicked.connect(self.edit_custom)
+        btns.addWidget(self.edit_btn)
         ok = QPushButton("บันทึก")
         ok.setStyleSheet("font-weight: 700;")
         ok.clicked.connect(self.accept)
@@ -213,12 +220,42 @@ class TrussDialog(QDialog):
     def params(self) -> dict:
         p = {k: s.value() for k, s in self.sp.items()}
         p.update(kind=self.kind.currentData(), panels=self.panels.value(), family=self.family.currentData())
+        if p["kind"] == "custom":
+            p.update(self.custom)
         return p
+
+    def edit_custom(self):
+        cur = self.d.truss if self.d is not None else T.make("howe", 12, 2, 6)
+        base = self.custom if self.custom.get("nodes") else {
+            "nodes": [list(n) for n in cur.nodes], "members": [list(m) for m in cur.members],
+            "supports": {str(k): v for k, v in cur.supports.items()}}
+        dlg = CustomTrussDialog(self, base)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.custom = dlg.result_data()
+        self.kind.blockSignals(True)
+        self.kind.setCurrentIndex(self.kind.findData("custom"))
+        self.kind.blockSignals(False)
+        self.recalc()
 
     def recalc(self, *_):
         p = self.params()
+        own = p["kind"] == "custom"
+        for k in ("span", "rise", "depth", "radius"):            # the user's own nodes set the form
+            self.sp[k].setEnabled(not own)
+        self.panels.setEnabled(not own)
         try:
-            t = T.make(p["kind"], p["span"], p["rise"], p["panels"], p["depth"], p["radius"])
+            if p["kind"] == "custom" and not p.get("nodes"):
+                raise ValueError("Truss เขียนเอง: กด «แก้จุดต่อ/ชิ้นส่วน…» เพื่อกำหนดจุดต่อและชิ้นส่วน")
+            t = T.build(p)
+            if p["kind"] == "custom":
+                xs = [n[0] for n in t.nodes]
+                p["span"] = max(xs) - min(xs)
+                p["rise"] = max(n[1] for n in t.nodes) - min(n[1] for n in t.nodes)
+                for k in ("span", "rise"):
+                    self.sp[k].blockSignals(True)
+                    self.sp[k].setValue(p[k])
+                    self.sp[k].blockSignals(False)
             self.d = T.design(t, p["span"], p["spacing"], p["dead"], p["live"], p["family"])
         except ValueError as e:
             self.d = None
@@ -282,3 +319,95 @@ def truss_pages(bk, p: dict, d: T.Design):
     for k in range(0, len(rows), per):
         bk.page("โครงหลังคา Truss — แรงในชิ้นส่วน", "Truss")
         bk.table(10, 34, widths, [head] + rows[k:k + per], 7.0)
+
+
+GROUP_KEYS = ("top", "bottom", "web")
+
+
+class CustomTrussDialog(QDialog):
+    """Truss เขียนเอง: two tables — the nodes (x, y, support) and the
+    members (from, to, group); nodes are numbered from 1 on screen."""
+
+    def __init__(self, parent, base: dict):
+        super().__init__(parent)
+        self.setWindowTitle("Truss เขียนเอง — จุดต่อและชิ้นส่วน")
+        self.resize(900, 620)
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        sup = {int(k): v for k, v in (base.get("supports") or {}).items()}
+        self.nodes = QTableWidget(len(base["nodes"]), 3)
+        self.nodes.setHorizontalHeaderLabels(["x (ม.)", "y (ม.)", "จุดรองรับ (pin/roller)"])
+        for i, (x, y) in enumerate(base["nodes"]):
+            for c, v in enumerate((f"{x:.3f}", f"{y:.3f}", sup.get(i, ""))):
+                self.nodes.setItem(i, c, QTableWidgetItem(v))
+        self.members = QTableWidget(len(base["members"]), 3)
+        self.members.setHorizontalHeaderLabels(["จากจุด", "ถึงจุด", "กลุ่ม (top/bottom/web)"])
+        for i, (a, b, g) in enumerate(base["members"]):
+            for c, v in enumerate((str(a + 1), str(b + 1), g)):
+                self.members.setItem(i, c, QTableWidgetItem(v))
+        for tb, th in ((self.nodes, "จุดต่อ"), (self.members, "ชิ้นส่วน")):
+            box = QVBoxLayout()
+            box.addWidget(QLabel(th))
+            tb.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            box.addWidget(tb)
+            b = QHBoxLayout()
+            add = QPushButton("+ เพิ่มแถว")
+            add.clicked.connect(lambda _=False, t=tb: t.insertRow(t.rowCount()))
+            rem = QPushButton("− ลบแถวที่เลือก")
+            rem.clicked.connect(lambda _=False, t=tb: t.removeRow(t.currentRow()) if t.currentRow() >= 0 else None)
+            b.addWidget(add)
+            b.addWidget(rem)
+            box.addLayout(b)
+            row.addLayout(box)
+        lay.addLayout(row)
+        self.msg = QLabel("ลำดับจุดต่อเริ่มที่ 1 · กลุ่ม top = จันทัน (รับแป), bottom = ขื่อ, web = ค้ำยัน/ดั้ง · "
+                          "ต้องมี pin อย่างน้อย 1 จุดและ roller/pin อีก 1 จุด")
+        self.msg.setWordWrap(True)
+        lay.addWidget(self.msg)
+        b = QHBoxLayout()
+        b.addStretch(1)
+        ok = QPushButton("ตกลง")
+        ok.clicked.connect(self._ok)
+        cancel = QPushButton("ยกเลิก")
+        cancel.clicked.connect(self.reject)
+        b.addWidget(ok)
+        b.addWidget(cancel)
+        lay.addLayout(b)
+        self._data = None
+
+    @staticmethod
+    def _cell(tb, r, c):
+        it = tb.item(r, c)
+        return (it.text() if it else "").strip()
+
+    def _ok(self):
+        try:
+            nodes, sup = [], {}
+            for r in range(self.nodes.rowCount()):
+                x, y = self._cell(self.nodes, r, 0), self._cell(self.nodes, r, 1)
+                if not x and not y:
+                    continue
+                nodes.append([float(x), float(y)])
+                s = self._cell(self.nodes, r, 2).lower()
+                if s in ("pin", "roller"):
+                    sup[str(len(nodes) - 1)] = s
+            mem = []
+            for r in range(self.members.rowCount()):
+                a, b = self._cell(self.members, r, 0), self._cell(self.members, r, 1)
+                if not a or not b:
+                    continue
+                g = self._cell(self.members, r, 2).lower() or "web"
+                a, b = int(a) - 1, int(b) - 1
+                if g not in GROUP_KEYS or not (0 <= a < len(nodes) and 0 <= b < len(nodes)) or a == b:
+                    raise ValueError(f"ชิ้นส่วนแถว {r + 1} ไม่ถูกต้อง")
+                mem.append([a, b, g])
+            t = T.custom([tuple(n) for n in nodes], [tuple(m) for m in mem], {int(k): v for k, v in sup.items()})
+            T.solve(t, {i: (0.0, -1.0) for i in t.top} or {0: (0.0, -1.0)})
+        except ValueError as e:
+            self.msg.setText(f"✗ {e}")
+            return
+        self._data = {"nodes": nodes, "members": mem, "supports": sup}
+        self.accept()
+
+    def result_data(self) -> dict:
+        return self._data

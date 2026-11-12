@@ -321,7 +321,17 @@ def design(t: Truss, span: float, spacing: float, q_dead: float, q_live: float, 
     f = R / (side * side)
     m = side / 2 - 5.0
     tp = max(6.0, math.ceil(math.sqrt(3 * f * m * m / (0.75 * FY)) * 10 / 1.0))    # mm
-    plate = {"R": R, "side": side, "f": f, "t": tp, "bolts": "2-Ø16 มม. ยึดพุก/เหล็กเดือย"}
+    # the heel (หัวเสา/ส้นโครง): fillet welds E70 6 มม. of the members meeting
+    # at the supports — Fv = 0.30 Fu = 1,470 ksc on the throat 0.707·0.6 cm
+    weld_cap = 0.30 * 4900 * 0.707 * 0.6                                           # kg per cm
+    heel = []
+    for nd in t.supports:
+        for k, (a, b, g) in enumerate(t.members):
+            if nd in (a, b):
+                need = abs(res["force"][k]) / weld_cap
+                heel.append((k + 1, g, res["force"][k], max(4.0, math.ceil(need))))
+    plate = {"R": R, "side": side, "f": f, "t": tp, "bolts": "2-Ø16 มม. ยึดพุก/เหล็กเดือย",
+             "weld": heel, "weld_cap": weld_cap}
     return Design(t, res, loads, pick, rows, weight, plate, q_dead + q_live)
 
 
@@ -362,9 +372,18 @@ def params_of(data) -> dict:
     return p
 
 
+def build(p: dict) -> Truss:
+    """The truss of the params: the user's own nodes/members when kind is
+    "custom", else the generated form."""
+    if p.get("kind") == "custom" and p.get("nodes"):
+        return custom([tuple(n) for n in p["nodes"]], [tuple(m) for m in p["members"]],
+                      {int(k): v for k, v in (p.get("supports") or {}).items()})
+    return make(p["kind"], p["span"], p["rise"], p["panels"], p["depth"], p["radius"])
+
+
 def design_of(data) -> tuple:
     """(params, Design) of the building's truss."""
     p = params_of(data)
-    t = make(p["kind"], p["span"], p["rise"], p["panels"], p["depth"], p["radius"])
+    t = build(p)
     from core import wanic_calc as C
     return p, design(t, p["span"], p["spacing"], p["dead"], p["live"], p["family"], C.basis(data or {})["fc"])
