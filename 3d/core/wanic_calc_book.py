@@ -220,8 +220,10 @@ def _span_rows(res, i, b_, fc):
     head = [("NO.", "กว้าง(ซม.)", "ลึก(ซม.)", "ยาว(ม.)", "span(ม.)", "ระดับ"),
             ((res.mark, BLUE), (f"{bw * 100:.0f}", BLUE), (f"{h * 100:.0f}", BLUE), f2(sp.L),
              f2(max(sp.L - 0.2, 0.0)), f"{res.z:+.2f}")]
+    me = float(getattr(res, "me", 0.0) or 0.0)
     body = [("Moment", "", "L", "M", "R"),
             ("Moment", "kg-m", f"{ML:,.1f}", f"{Mm:,.1f}", f"{MR:,.1f}"),
+            ("Me (EQ/ลม)", "kg-m", f"{me:,.1f}", "0", f"{me:,.1f}"),
             ("Mc", "kg-m", f2(Mc), f2(Mc), f2(Mc)),
             ("Ast", "cm²", f2(need(ML, top)), "0.00", f2(need(MR, top))),
             ("Asb", "cm²", "0.00", f2(need(Mm, bot)), "0.00"),
@@ -380,15 +382,24 @@ def list_page(bk: Book, title: str, tag: str, members):
             y = 34
 
 
-def make_book(res_all, data, path, info: dict) -> int:
-    """Write the booklet; returns the number of pages."""
+def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
+    """Write the booklet; returns the number of pages. ``critical``: only the
+    most stressed beam / column / slab / footing of each mark (a shorter book
+    for the permit)."""
+    from core import wanic_calc_cards as CC
     b_ = res_all["basis"]
     fc = b_["fc"]
+    CC.attach_lateral_moments(res_all, data)
+    if critical:
+        res_all = CC.critical_members(res_all)
     bk = Book(path, info)
     cover(bk)
     basis_page(bk, b_)
+    CC.roof_page(bk, res_all)
+    CC.slab_pages(bk, res_all, data, critical)
     beam_pages(bk, res_all, b_, fc)
     column_pages(bk, res_all, b_, fc)
+    CC.footing_pages(bk, res_all, data, critical)
     if (data or {}).get("truss"):
         from core import wanic_truss as T
         from core.wanic_truss_view import truss_pages
@@ -416,7 +427,7 @@ def make_book(res_all, data, path, info: dict) -> int:
         from core.wanic_steel_view import steel_pages
         steel_pages(bk, S.design_building(data))
     ms = res_all["members"]
-    groups = (("หลังคา", "Roof", "roof"), ("พื้น", "Slab", "slab"), ("ฐานราก / เสาเข็ม", "Footing", "footing"))
+    groups = ()
     for title, tag, g in groups:
         sel = [m for m in ms if m.group == g]
         if sel:

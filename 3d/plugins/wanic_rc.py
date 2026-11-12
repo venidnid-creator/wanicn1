@@ -697,7 +697,11 @@ class RCPanel(QWidget):
         d = self.data()
         b_ = C.basis(d)
         info = {k: b_.get(k, "") for k in ("project", "owner", "place", "engineer", "qualification")}
-        n = make_book(C.analyse(d), d, path, info)
+        crit = QMessageBox.question(
+            self, "รูปเล่มรายการคำนวณ",
+            "พิมพ์เฉพาะชิ้นส่วนที่รับน้ำหนักมากที่สุดของแต่ละเบอร์ (คาน เสา พื้น ฐานราก)?\n"
+            "«Yes» = เล่มสั้นสำหรับขออนุญาต · «No» = พิมพ์ทุกชิ้นส่วน") == QMessageBox.Yes
+        n = make_book(C.analyse(d), d, path, info, critical=crit)
         self.status.setText(f"บันทึกรูปเล่มรายการคำนวณ {n} หน้าแล้ว: {path}")
 
     def export(self):
