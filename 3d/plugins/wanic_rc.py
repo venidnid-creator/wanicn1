@@ -123,6 +123,12 @@ class RCPanel(QWidget):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, p=preset: self.set_frame(p))
             rr.addWidget(b)
+        rr.addSpacing(12)
+        self.truss_btn = QPushButton("ออกแบบ Truss…")
+        self.truss_btn.setToolTip("โครงถักเหล็ก Howe / Pratt / Fink / Warren / โค้ง — วิเคราะห์ Matrix "
+                                  "เลือกขนาดเหล็กท่อ/กล่อง/ตัวซี และแผ่นเหล็กรองฐาน")
+        self.truss_btn.clicked.connect(self.edit_truss)
+        rr.addWidget(self.truss_btn)
         rr.addStretch(1)
         col.addWidget(self.roof_row)
         self.status = QLabel()
@@ -507,6 +513,20 @@ class RCPanel(QWidget):
             calc[k] = ed.text().strip()
         d["calc"] = calc
         bp._write(d)
+        self.refresh()
+
+    def edit_truss(self):
+        from core.wanic_truss_view import TrussDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = TrussDialog(self, d)
+        if dlg.exec() != TrussDialog.Accepted:
+            return
+        d["truss"] = dlg.params()
+        bp._write(d)
+        self.status.setText("บันทึก Truss แล้ว — รวมในรูปเล่มรายการคำนวณ A4")
         self.refresh()
 
     def export_pdf(self):

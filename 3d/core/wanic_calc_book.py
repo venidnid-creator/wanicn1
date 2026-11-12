@@ -387,6 +387,14 @@ def make_book(res_all, data, path, info: dict) -> int:
     basis_page(bk, b_)
     beam_pages(bk, res_all, b_, fc)
     column_pages(bk, res_all, b_, fc)
+    if (data or {}).get("truss"):
+        from core import wanic_truss as T
+        from core.wanic_truss_view import truss_pages
+        try:
+            tp, td = T.design_of(data)
+            truss_pages(bk, tp, td)
+        except ValueError:
+            pass
     ms = res_all["members"]
     groups = (("หลังคา", "Roof", "roof"), ("พื้น", "Slab", "slab"), ("ฐานราก / เสาเข็ม", "Footing", "footing"))
     for title, tag, g in groups:

@@ -80,4 +80,7 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
 
 - [x] (ก) รูปเล่ม (เปลี่ยนเป็น A4 แนวนอนตามผู้ใช้ · ลายเซ็นค่าเริ่ม «นายเวนิช ธัมมะวงษ์ / วิศวกรสำรวจ» แก้ได้) — อนุมัติแล้ว · — `3d/core/wanic_calc_book.py` (make_book) + ปุ่ม «รูปเล่มรายการคำนวณ A3» ในขั้น 9 + ช่องโครงการ/เจ้าของ/สถานที่/ผู้คำนวณ/คุณวุฒิ
   ใน «ค่าที่ใช้ออกแบบ…» · analyse() คืน "cards" (น้ำหนักเสาทุกชั้น/ตอม่อ) และ BeamResult มี mark/spec/level/axis/line/z
-- [ ] ถัดไป: (ข) Truss Matrix (6 แบบ + โค้ง + เขียนเอง, ท่อ/C/กล่อง, แผ่นหัวเสา) → เหล็กรูปพรรณ → โหมดกริด → แป → FlatSlab → แรงด้านข้าง → ราคาเอกชน
+- [x] (ข) Truss Matrix — `3d/core/wanic_truss.py` (make 7 แบบ: howe pratt fink warren kingpost parallel arch + custom(); solve() stiffness 2D; design() ASD เลือกท่อ/กล่อง/ตัวซี ที่เบาที่สุดต่อกลุ่ม top/bottom/web, วนน้ำหนักตัวเอง; base plate; params_of/design_of อ่าน data["truss"]),
+  `3d/core/wanic_truss_view.py` (draw_truss, TrussDialog, truss_pages ในรูปเล่ม A4 เมื่อมี data["truss"]), ปุ่ม «ออกแบบ Truss…» ในแถวทรงหลังคา (RCPanel.edit_truss),
+  tests/test_wanic_truss.py (5) อยู่ใน CI แล้ว — **รออนุมัติหน้าจอ** (ส่งภาพ howe/arch/หน้ารูปเล่มแล้ว)
+- [ ] ถัดไป (หลังอนุมัติ Truss): Truss เขียนเองใน UI (ตารางโหนด/ชิ้น), แผ่นหัวเสา Truss → เหล็กรูปพรรณ WF/H → โหมดกริด → แป → FlatSlab → แรงด้านข้าง → ราคาเอกชน
