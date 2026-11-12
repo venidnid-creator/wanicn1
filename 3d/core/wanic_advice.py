@@ -286,8 +286,42 @@ def advise(res_all, data) -> list:
 
 
 def advice_by_member(res_all, data) -> dict:
-    """member name → joined advice text (for the calculation table)."""
-    return {name: " · ".join(tips) for name, tips in advise(res_all, data)}
+    """member name → joined advice text, for every failing row of the
+    calculation table (beams, columns, slabs, footings, roof members)."""
+    from core import wanic_calc_cards as CC
+    import re
+    b_ = res_all["basis"]
+    out = {}
+    slabs = CC.slab_rows(res_all, data)
+    feet = CC.footing_rows(res_all, data)
+    for m in res_all["members"]:
+        if m.ok:
+            continue
+        try:
+            if m.group == "beam" and m.diagram is not None and hasattr(m.diagram, "spec"):
+                tips = beam_advice(m, b_)
+            elif m.group == "column":
+                tips = column_advice(m, data, b_)
+            elif m.group == "roof":
+                tips = roof_advice(m, b_)
+            elif m.group == "slab":
+                mark = m.name.split(" ")[0]
+                dims = re.search(r"([\d.]+)×([\d.]+) ม\.", m.name)
+                rows = [r for r in slabs if r["mark"] == mark and not r["ok"] and (
+                    not dims or (abs(r["S"] - float(dims.group(1))) < 0.01 and abs(r["L"] - float(dims.group(2))) < 0.01))]
+                tips = slab_advice(rows[0], b_) if rows else ["เพิ่มเหล็ก/ความหนาพื้น (ขั้น 5)"]
+            elif m.group == "footing":
+                xy = re.search(r"\(([-\d.]+), ([-\d.]+)\)", m.name)
+                rows = [r for r in feet if xy and abs(r["x"] - float(xy.group(1))) < 0.01
+                        and abs(r["y"] - float(xy.group(2))) < 0.01]
+                tips = footing_advice(rows[0], b_) if rows else ["ขยายฐาน/เพิ่มเสาเข็ม (ขั้น 2)"]
+            else:
+                tips = []
+        except Exception as e:                             # noqa: BLE001
+            tips = [f"(คำนวณคำแนะนำไม่ได้: {e})"]
+        if tips:
+            out[m.name] = " · ".join(tips)
+    return out
 
 
 # ---- per mark: the fix of the library mark from its worst member --------------------
@@ -481,3 +515,83 @@ def apply_fixes(data, rounds: int = 4) -> list:
             out.append(f"{mark} ({step.get(new.get('kind'), '')}): " + ", ".join(_fmt(k, v) for k, v in ch.items())
                        + (f"  (เดิม {was})" if was else ""))
     return out
+
+
+# ---- one member: the fields to change so it passes ---------------------------------------
+
+ROOF_KEYS = {"แป": "purlin", "จันทัน": "rafter", "อกไก่": "ridge", "ตะเฆ่สัน": "hip", "อะเส": "wallplate",
+             "ดั้ง": "post", "ขื่อ": "tiebeam", "ตุ๊กตา": "strut"}
+
+
+def _footing_change(r, b_) -> dict:
+    load = r["P"] * 1.10
+    ch = {}
+    if r["piles"]:
+        n = math.ceil(load / (b_["pile_cap"] * 1000))
+        if n > r["piles"]:
+            ch["piles"] = n
+    elif r["q"] > r["soil"]:
+        side = math.ceil(math.sqrt(load / (b_["soil"] * 1000)) * 10) / 10
+        ch["w"] = ch["l"] = side
+    if r["V2"] > r["Vc2"] or r["V1"] > r["Vc1"] or ch.get("w"):
+        side = ch.get("w", r["w"])
+        t = max(r["t"], math.ceil(max(0.25, side / 5) * 20) / 20)
+        if t != r["t"]:
+            ch["t"] = t
+    return ch
+
+
+def member_fix(res_all, data, m) -> dict | None:
+    """What to change for one failing row of the calculation table:
+    {"target": "lib" | "setting", "key": mark / settings key, "kind",
+     "changes": {field: suggested}, "advice": [text…]} — or None."""
+    import re
+    from core import wanic_building as B
+    from core import wanic_calc_cards as CC
+    b_ = res_all["basis"]
+    if m.ok:
+        return None
+    lib = B.library_of(data)
+    if m.group in ("beam", "column"):
+        # the values that make every member of the mark pass (its worst one)
+        mark = m.diagram.mark if m.group == "beam" else m.name.split(" ")[0]
+        fixes = [f for f in mark_fixes(res_all, data) if f[0] == mark and lib.get(mark, {}).get("kind") == m.group]
+        tips = beam_advice(m, b_) if m.group == "beam" else column_advice(m, data, b_)
+        ch = fixes[0][1] if fixes else {}
+        return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}
+    if m.group == "slab":
+        mark = m.name.split(" ")[0]
+        dims = re.search(r"([\d.]+)×([\d.]+) ม\.", m.name)
+        rows = [r for r in CC.slab_rows(res_all, data) if r["mark"] == mark and not r["ok"]]
+        # the panel of the mark that needs the closest bars
+        rows.sort(key=lambda r: min((x for x in r["s"].values() if x), default=1.0))
+        if not rows:
+            return {"target": "lib", "key": mark, "kind": "slab", "changes": {}, "advice": []}
+        tips = slab_advice(rows[0], b_)
+        ch = {}
+        mm = re.search(r"(RB|DB)(\d+)@([\d.]+)", tips[0])
+        if mm:
+            ch["bars"] = f"{mm.group(1)}{mm.group(2)}@{float(mm.group(3)):.3f}".rstrip("0")
+        mm = re.search(r"ความหนาพื้นเป็น (\d+) ซม", tips[0])
+        if mm:
+            ch["t"] = int(mm.group(1)) / 100
+        return {"target": "lib", "key": mark, "kind": "slab", "changes": ch, "advice": tips}
+    if m.group == "footing":
+        mark = m.name.split(" ")[0]
+        xy = re.search(r"\(([-\d.]+), ([-\d.]+)\)", m.name)
+        rows = CC.footing_rows(res_all, data)
+        here = rows
+        if xy:
+            x, y = float(xy.group(1)), float(xy.group(2))
+            here = [r for r in rows if abs(r["x"] - x) < 0.01 and abs(r["y"] - y) < 0.01] or rows
+        worst = max((r for r in rows if r["mark"] == mark), key=lambda r: r["P"], default=here[0])
+        return {"target": "lib", "key": mark, "kind": "footing", "changes": _footing_change(worst, b_),
+                "advice": footing_advice(here[0], b_)}
+    if m.group == "roof":
+        tips = roof_advice(m, b_)
+        word = m.name.split(" ")[0]
+        key = ROOF_KEYS.get(word)
+        mm = re.search(r"เปลี่ยนเป็น (.+?) \(", tips[0]) if tips else None
+        ch = {key: mm.group(1)} if key and mm else {}
+        return {"target": "setting", "key": key or word, "kind": "roof", "changes": ch, "advice": tips}
+    return None

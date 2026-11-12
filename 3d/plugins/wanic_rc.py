@@ -67,6 +67,7 @@ class RCPanel(QWidget):
         self.table.verticalHeader().hide()
         self.table.itemChanged.connect(self._edited)
         self.table.currentCellChanged.connect(lambda *_: self._show_checks())
+        self.table.cellDoubleClicked.connect(lambda *_: self.fix_member() if self.step == "calc" else None)
         col.addWidget(self.table, 2)
         self.checks = QTextEdit()
         self.checks.setReadOnly(True)
@@ -88,6 +89,12 @@ class RCPanel(QWidget):
                                    "(รวมข้อกำหนดเหล็กขั้นต่ำ) — ถามยืนยันก่อน")
         self.advice_btn.clicked.connect(self.apply_advice)
         row.addWidget(self.advice_btn)
+        self.fix_one_btn = QPushButton("แก้ชิ้นที่เลือกให้ผ่าน…")
+        self.fix_one_btn.setStyleSheet("font-weight: 700; color: #B91C1C;")
+        self.fix_one_btn.setToolTip("เลือกแถวที่ไม่ผ่าน (หรือดับเบิลคลิกแถว) — กรอก/แก้ค่าที่แนะนำ "
+                                    "แล้วอัปเดตโมเดลและคำนวณใหม่")
+        self.fix_one_btn.clicked.connect(self.fix_member)
+        row.addWidget(self.fix_one_btn)
         self.select_btn = QPushButton("เลือกชิ้นส่วนในโมเดล")
         self.select_btn.clicked.connect(self.select_in_model)
         row.addWidget(self.select_btn)
@@ -226,6 +233,7 @@ class RCPanel(QWidget):
         self.flat_btn.setVisible(self.step == "slab")
         self.fix.setVisible(self.step in STEP_MARKS)
         self.advice_btn.setVisible(self.step == "calc")
+        self.fix_one_btn.setVisible(self.step == "calc")
         calc = self.step == "calc"
         self.diagram.setVisible(calc)
         self.checks.setVisible(not calc)
@@ -639,8 +647,50 @@ class RCPanel(QWidget):
             return
         d["library"] = trial.get("library") or {}
         bp._write(d)
-        self.status.setText(f"ปรับตามคำแนะนำแล้ว {len(done)} รายการ — คำนวณใหม่แล้ว")
+        self._rebuild_after_fix(f"ปรับตามคำแนะนำแล้ว {len(done)} เบอร์")
+
+    def _rebuild_after_fix(self, what: str):
+        """The model follows the new sizes; then the calculation again."""
+        bp = self.building()
+        try:
+            bp.build(("structure", "roof"))
+            built = " · อัปเดตโมเดลแล้ว"
+        except Exception as e:                       # noqa: BLE001 - shown, never a crash
+            built = f" · อัปเดตโมเดลไม่ได้: {e}"
         self.refresh()
+        bad = sum(1 for m in (self._calc or {}).get("members") or [] if not m.ok)
+        self.status.setText(what + built + (" · ✓ ผ่านทุกรายการ" if not bad else f" · ยังไม่ผ่าน {bad} รายการ"))
+
+    def fix_member(self):
+        """แก้ชิ้นที่เลือก: the advice and the passing values of the selected
+        failing row, editable; saved to its mark, the model rebuilt."""
+        from core import wanic_advice as AD
+        from core.wanic_fix_view import FixDialog, apply
+        if self.step != "calc" or not self._calc:
+            return
+        r = self.table.currentRow()
+        ms = self._calc.get("members") or []
+        if not (0 <= r < len(ms)):
+            QMessageBox.information(self, TITLE, "เลือกแถวที่ไม่ผ่าน (สีแดง) ในตารางก่อน")
+            return
+        m = ms[r]
+        if m.ok:
+            QMessageBox.information(self, TITLE, f"{m.name} ผ่านแล้ว — เลือกแถวที่ไม่ผ่าน (สีแดง)")
+            return
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        fix = AD.member_fix(self._calc, d, m)
+        if not fix:
+            QMessageBox.information(self, TITLE, "ไม่มีคำแนะนำสำหรับรายการนี้ — แก้ขนาดในขั้นที่เกี่ยวข้อง")
+            return
+        dlg = FixDialog(self, m, fix, d)
+        if dlg.exec() != FixDialog.Accepted:
+            return
+        apply(d, fix, dlg.values())
+        bp._write(d)
+        self._rebuild_after_fix(f"แก้ {fix['key']} แล้ว")
 
     def edit_estimate(self):
         from core.wanic_private_est_view import PrivateEstDialog

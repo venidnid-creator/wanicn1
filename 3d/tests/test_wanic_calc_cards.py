@@ -80,3 +80,26 @@ def test_advice_says_what_and_where_and_the_fixes_pass():
 def test_bars_fit_in_the_beam():
     from core import wanic_advice as AD
     assert AD.fit_in_row(0.20, 12) == 4 and AD.fit_in_row(0.20, 16) == 3
+
+
+def test_every_failing_row_has_advice_and_a_fix_that_passes_its_mark():
+    from core import wanic_advice as AD
+    from core.wanic_fix_view import apply
+    d = _d()
+    res = C.analyse(d)
+    tips = AD.advice_by_member(res, d)
+    bad = [m for m in res["members"] if not m.ok]
+    assert bad and all(m.name in tips for m in bad)
+    # fix one column row: every member of that mark passes afterwards
+    col = next(m for m in bad if m.group == "column")
+    fix = AD.member_fix(res, d, col)
+    assert fix["target"] == "lib" and fix["key"] == "C1" and fix["changes"]
+    apply(d, fix, fix["changes"])
+    res2 = C.analyse(d)
+    assert all(m.ok for m in res2["members"] if m.group == "column")
+    # a footing row: the mark is sized from its most loaded footing
+    ft = next(m for m in res2["members"] if m.group == "footing" and not m.ok)
+    fix = AD.member_fix(res2, d, ft)
+    apply(d, fix, fix["changes"])
+    res3 = C.analyse(d)
+    assert all(m.ok for m in res3["members"] if m.group == "footing")
