@@ -395,6 +395,10 @@ def make_book(res_all, data, path, info: dict) -> int:
             truss_pages(bk, tp, td)
         except ValueError:
             pass
+    if (data or {}).get("lateral"):
+        from core import wanic_lateral as LT
+        from core.wanic_lateral_view import lateral_pages
+        lateral_pages(bk, LT.analyse(data))
     if (data or {}).get("flatslab"):
         from core import wanic_flatslab as FS
         from core.wanic_flatslab_view import flatslab_pages

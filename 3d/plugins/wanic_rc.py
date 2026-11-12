@@ -104,7 +104,11 @@ class RCPanel(QWidget):
         self.book_btn.setToolTip("ปก · ข้อกำหนด · คานทุกแนวพร้อม Load/Shear/Moment Diagram และตาราง · "
                                  "การ์ดเสาทุกชั้น · ฐานราก · หลังคา · สรุป — พร้อมช่องลงนามผู้คำนวณ")
         self.book_btn.clicked.connect(self.export_book)
+        self.lat_btn = QPushButton("แรงด้านข้าง (แผ่นดินไหว/ลม)…")
+        self.lat_btn.setToolTip("มยผ. 1301/1302-61 · มยผ. 1311-50 หรือสูตรเดิม · แรงแต่ละชั้น · ตรวจเสา P-M")
+        self.lat_btn.clicked.connect(self.edit_lateral)
         row.addWidget(self.book_btn)
+        row.addWidget(self.lat_btn)
         row.addStretch(1)
         col.addLayout(row)
         self.roof_row = QWidget()
@@ -566,6 +570,20 @@ class RCPanel(QWidget):
         R.apply_grid(d, sx, sy, n, omit, inner_walls=dlg.inner_walls())
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
+        self.refresh()
+
+    def edit_lateral(self):
+        from core.wanic_lateral_view import LateralDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = LateralDialog(self, d)
+        if dlg.exec() != LateralDialog.Accepted:
+            return
+        d["lateral"] = dlg.params()
+        bp._write(d)
+        self.status.setText("บันทึกแรงด้านข้างแล้ว — รวมในรูปเล่มรายการคำนวณ A4")
         self.refresh()
 
     def edit_flatslab(self):

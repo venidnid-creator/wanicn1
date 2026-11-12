@@ -91,5 +91,7 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
   ปุ่ม «โหมดกริด: สร้างผังจากเส้นแกน…» ในขั้น 1, tests/test_wanic_grid.py ใน CI — อนุมัติแล้ว + ตัวเลือก «มีผนังภายในตามแนวกริด» (settings["inner_walls"]=False → ผนังเฉพาะรอบนอก)
 - [x] แป/Sag Rod/Tie Rod/ผนังเมทัลชีท — `3d/core/wanic_purlin.py` (LipC เส้นกลางความหนา, purlin_check ASD Mx+My+Δ L/180+แรงยกลม, rod_for 0.6Fy·0.75A, X-bracing จากลมหน้าจั่ว, girt), `3d/core/wanic_purlin_view.py` (PurlinDialog + ผังแป, purlin_pages เมื่อมี data["purlin"]), ปุ่ม «แป / Sag Rod / Tie Rod…», tests/test_wanic_purlin.py ใน CI — อนุมัติแล้ว
 - [x] Flat Slab + Drop (DDM) — `3d/core/wanic_flatslab.py` (min_thickness, design: Mo, สัมประสิทธิ์ช่วงใน/ริม, แถบเสา 75/60/100%, As SDM/WSD ≥0.0018bh, punching รอบเสา/รอบ drop เสาใน/ขอบ/มุม; ช่วงจาก data["grid"] หรือ grid_axes),
-  `3d/core/wanic_flatslab_view.py` (FlatSlabDialog + ผังแถบเสา/drop, flatslab_pages เมื่อมี data["flatslab"]), ปุ่มในขั้น 5 พื้น, tests/test_wanic_flatslab.py ใน CI — **รออนุมัติ**
-- [ ] ถัดไป: → แรงด้านข้าง → ราคาเอกชน
+  `3d/core/wanic_flatslab_view.py` (FlatSlabDialog + ผังแถบเสา/drop, flatslab_pages เมื่อมี data["flatslab"]), ปุ่มในขั้น 5 พื้น, tests/test_wanic_flatslab.py ใน CI — อนุมัติแล้ว
+- [x] แรงด้านข้าง — `3d/core/wanic_lateral.py` (level_weights จาก cards แบบ DL, seismic มยผ.1301/1302-61 Fa/Fv/SDS/SD1/T/Cs + k / สูตรเดิม ZIKCSW, wind มยผ.1311-50 q·Ce·Cg2·Cp1.3 / กฎกระทรวง 6, analyse ตรวจเสา P-M ด้วย 0.75(1.4D+1.7L+1.87E/1.6W); eq_on=False ค่าเริ่มต้น (ต้องกรอก Ss/S1 ตามอำเภอ)),
+  `3d/core/wanic_lateral_view.py` (LateralDialog, รูปด้านแรงแต่ละระดับ, lateral_pages เมื่อมี data["lateral"]), ปุ่ม «แรงด้านข้าง (แผ่นดินไหว/ลม)…» แถวล่าง, tests/test_wanic_lateral.py ใน CI — **รออนุมัติ**
+- [ ] ถัดไป: ราคาเอกชน 8 หมวด (waste % แก้ได้) → preset SDM/WSD → ตัวติดตั้งรุ่นใหม่ (รอผู้ใช้สั่ง)
