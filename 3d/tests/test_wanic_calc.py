@@ -147,3 +147,18 @@ def test_presets_and_bar_grade_follow_the_basis():
     lo = C.analyse(d)
     assert len(hi["members"]) == len(lo["members"])
     assert {v for _t, v in C.LIVE_LOADS} >= {150.0, 200.0, 250.0, 400.0, 500.0}
+
+
+def test_reserve_in_plain_words():
+    from core import wanic_calc as C
+    m = C.Member("column", "C1", "", "", 0.5, True)
+    m.qty, m.qty_unit = 10.0, "ตัน ต่อเสา 1 ต้น"
+    assert abs(m.reserve - 10.0) < 1e-9
+    assert "รับเพิ่มได้อีก ≈ 10.0 ตัน" in m.reserve_text()
+    m.ratio = 1.25
+    assert m.reserve < 0 and "เกินกำลังอยู่ ≈ 2.0 ตัน" in m.reserve_text()
+    s = C.Member("slab", "S1", "", "", 0.1, True)
+    s.qty, s.qty_unit, s.qty_factor = 500.0, "กก./ตร.ม.", 1.7
+    assert "มากกว่า 5 เท่า" in s.reserve_text()
+    rs = C.reserve_summary([m, s])
+    assert [g for g, _t, _ok in rs] == ["slab", "column"] and rs[1][2] is False

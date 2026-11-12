@@ -371,9 +371,13 @@ class RCPanel(QWidget):
         except Exception:                            # noqa: BLE001 - advice never breaks the table
             tips = {}
         rows = [(names[m.group], m.name, m.demand, m.capacity, f"{m.ratio:.2f}",
-                 "✓ ผ่าน" if m.ok else "✗ ไม่ผ่าน", tips.get(m.name, "")) for m in ms]
+                 "✓ ผ่าน" if m.ok else "✗ ไม่ผ่าน", m.reserve_text(), tips.get(m.name, "")) for m in ms]
         self._fill(["กลุ่ม", "ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล",
-                    "คำแนะนำ (เพิ่มอะไร จุดไหน)"], rows)
+                    "รับเพิ่มได้อีก (ภาษาง่าย)", "คำแนะนำ (เพิ่มอะไร จุดไหน)"], rows)
+        for r_, m in enumerate(ms):
+            it = self.table.item(r_, 6)
+            if it is not None:
+                it.setForeground(QColor("#15803D") if m.ok else QColor("#B91C1C"))
         for r, m in enumerate(ms):
             for c in (4, 5):
                 self.table.item(r, c).setForeground(QColor("#15803D") if m.ok else QColor("#B91C1C"))
@@ -384,6 +388,7 @@ class RCPanel(QWidget):
             f"{b_['method']} · fc′ {b_['fc']:g} · LL พื้น {b_['ll_floor']:g} / หลังคา {b_['ll_roof']:g} กก./ตร.ม. · "
             f"ดิน {b_['soil']:g} ตัน/ตร.ม. · เข็ม {b_['pile_cap']:g} ตัน/ต้น — "
             + (f"✗ ไม่ผ่าน {bad} รายการ: แก้ขนาด/เหล็กในขั้น 2–6 แล้วคำนวณใหม่" if bad else "✓ ผ่านทุกรายการ")
+            + "\n" + "\n".join(("✓ " if ok else "✗ ") + t for _g, t, ok in C.reserve_summary(ms))
             + "\nเครื่องมือช่วยคำนวณ — ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจและลงนามก่อนก่อสร้าง")
         first = next((i for i, m in enumerate(ms) if m.diagram is not None), -1)
         if first >= 0:

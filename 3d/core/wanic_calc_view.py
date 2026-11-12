@@ -187,7 +187,8 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
         okk = all(float(m.split("= ")[-1]) <= 1.0 for m in msgs if "/" in m and "แอ่น" not in m)
         p.setPen(QColor("#15803D") if okk else QColor("#B91C1C"))
         p.drawText(QRectF(left, rect.bottom() - 12, W, 12), Qt.AlignLeft | Qt.AlignVCenter,
-                   ("✓ " if okk else "✗ ") + "   ·   ".join(msgs) + "   (≤ 1.00 ผ่าน — แผนภาพต้องอยู่ภายในเส้นกำลัง)")
+                   ("✓ " if okk else "✗ ") + "   ·   ".join(msgs) + "   (≤ 1.00 ผ่าน — แผนภาพต้องอยู่ภายในเส้นกำลัง)"
+                   + (f"   ·   {res.reserve}" if getattr(res, "reserve", "") else ""))
     p.restore()
 
 
@@ -324,7 +325,7 @@ def report_pdf(res, data, path) -> None:
         text(names[g], True, 12)
         for m in ms:
             text(f"{'✓' if m.ok else '✗'} {m.name}: {m.demand} / {m.capacity} → {m.ratio:.2f} "
-                 f"({'ผ่าน' if m.ok else 'ไม่ผ่าน'})", color="#15803D" if m.ok else "#B91C1C", size=9)
+                 f"({'ผ่าน' if m.ok else 'ไม่ผ่าน'})" + (f" · {m.reserve_text()}" if m.qty else ""), color="#15803D" if m.ok else "#B91C1C", size=9)
         y += 6
     for m in res["members"]:
         if m.diagram is None:

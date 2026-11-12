@@ -410,6 +410,34 @@ def list_page(bk: Book, title: str, tag: str, members):
             y = 34
 
 
+def reserve_page(bk: Book, members):
+    """สรุปสำหรับเจ้าของอาคาร — how much more each member can take, in
+    kg/m², kg per metre or tonnes per column / footing."""
+    from core import wanic_calc as C2
+    rows = [m for m in members if m.qty and m.qty_unit]
+    if not rows:
+        return
+    bk.page("สรุปกำลังสำรอง (อธิบายแบบเข้าใจง่าย)", "Reserve")
+    bk.text(12, 32, 380, 7, "แรงที่ลงมา เทียบกับแรงที่ชิ้นส่วนรับได้ เมื่อหักลบกันแล้ว ยังรับน้ำหนักเพิ่มได้อีกเท่าไร "
+            "(ค่าเป็นน้ำหนักใช้งาน — ไม่รวมตัวคูณความปลอดภัย)", 5.8, bold=True)
+    y = 42
+    for g, t, ok in C2.reserve_summary(members):
+        bk.text(14, y, 380, 7, ("✓ " if ok else "✗ ") + t, 6.0, GREEN if ok else RED, bold=True)
+        y += 8
+    y += 4
+    tab = [("ชิ้นส่วน", "อัตราส่วน", "รับเพิ่มได้อีก / เกินกำลัง")]
+    for m in rows:
+        tab.append((m.name, f"{m.ratio:.2f}", (m.reserve_text(), GREEN if m.ok else RED)))
+    per = 22
+    for k in range(0, len(tab) - 1, per):
+        if k:
+            bk.page("สรุปกำลังสำรอง (อธิบายแบบเข้าใจง่าย)", "Reserve")
+            y = 34
+        bk.table(10, y, [130, 30, 230], [tab[0]] + tab[1 + k:1 + k + per], 7.0, left=True)
+    bk.text(12, 244, 290, 6, "คิดแบบเส้นตรง: ถ้าน้ำหนักเพิ่มเป็นสัดส่วน แรงในชิ้นส่วนเพิ่มตาม · พื้น = คน/ของวางเพิ่ม "
+            "(น้ำหนักจร) · เสา/ฐานราก = น้ำหนักลงต่อต้น/ฐาน", 5.0)
+
+
 def advice_page(bk: Book, res_all, data):
     """รายการที่ไม่ผ่าน และคำแนะนำ — what to add, where, for each failing
     member; then the change of each library mark that makes all pass."""
@@ -500,6 +528,7 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
         if sel:
             list_page(bk, title, tag, sel)
     list_page(bk, "สรุปผลการตรวจสอบทุกชิ้นส่วน", "Summary", ms)
+    reserve_page(bk, ms)
     advice_page(bk, res_all, data)
     n = bk.n
     bk.close()

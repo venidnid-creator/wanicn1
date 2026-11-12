@@ -413,10 +413,65 @@ class Member:
     ratio: float                  # demand / capacity (≤ 1.0 passes)
     note: str = ""
     diagram: object = None        # BeamResult for beams and roof members
+    #: the load it carries now in plain units (service), the unit, and the
+    #: load factor of an added load — for «รับเพิ่มได้อีก» (reserve)
+    qty: float = 0.0
+    qty_unit: str = ""
+    qty_factor: float = 1.0
 
     @property
     def ok(self) -> bool:
         return self.ratio <= 1.0 + 1e-9
+
+    @property
+    def reserve(self) -> float:
+        """How much more load (service, in ``qty_unit``) before the member is
+        at its capacity; negative = how much it is over. Loads scale linearly
+        with the member's forces, so the extra is qty·(1/ratio − 1); a factored
+        increment is turned back to service by ``qty_factor``."""
+        if not self.qty or self.ratio <= 0:
+            return 0.0
+        return self.qty * (1.0 / self.ratio - 1.0) / max(self.qty_factor, 1e-9)
+
+    def reserve_text(self) -> str:
+        """In plain words, for someone who does not build."""
+        if not self.qty_unit or not self.qty:
+            return ""
+        r = self.reserve
+        unit = self.qty_unit
+        nd = 1 if unit.startswith("ตัน") else 0
+        pct = (1.0 / self.ratio - 1.0) * 100 if self.ratio > 0 else 0.0
+        if r >= 0:
+            if pct > 500:
+                return f"รับเพิ่มได้อีกมาก — มากกว่า 5 เท่าของน้ำหนักที่ลงตอนนี้ ({unit})"
+            return f"รับเพิ่มได้อีก ≈ {r:,.{nd}f} {unit} (เผื่ออีก {pct:,.0f}%)"
+        return f"เกินกำลังอยู่ ≈ {-r:,.{nd}f} {unit} — ต้องแก้ก่อนก่อสร้าง"
+
+
+#: plain names of the groups, for the owner's summary
+GROUP_PLAIN = {"slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก", "roof": "โครงหลังคา"}
+
+
+def reserve_summary(members) -> list:
+    """For each kind of member, the weakest one in plain words:
+    [(group, text, ok)] — what the building can still take."""
+    out = []
+    for g in ("slab", "beam", "column", "footing", "roof"):
+        ms = [m for m in members if m.group == g and m.qty and m.qty_unit]
+        if not ms:
+            continue
+        weak = max(ms, key=lambda m: m.ratio)
+        r = weak.reserve
+        nd = 1 if weak.qty_unit.startswith("ตัน") else 0
+        if weak.ok:
+            txt = (f"{GROUP_PLAIN[g]}: ตัวที่รับน้ำหนักมากที่สุด ({weak.name.split(' ·')[0]}) ยังรับเพิ่มได้อีก "
+                   f"≈ {r:,.{nd}f} {weak.qty_unit}")
+        else:
+            bad = sum(1 for m in ms if not m.ok)
+            txt = (f"{GROUP_PLAIN[g]}: ไม่ผ่าน {bad} ชิ้น — ตัวที่หนักที่สุด ({weak.name.split(' ·')[0]}) "
+                   f"เกินกำลังอยู่ ≈ {-r:,.{nd}f} {weak.qty_unit}")
+        out.append((g, txt, weak.ok))
+    return out
 
 
 def _ok_text(r):
@@ -467,7 +522,8 @@ def roof_checks(data, b_, out):
         out.append(Member("roof", f"{th} {s[key]}",
                           f"M = {M:,.1f} กก.-ม. · แอ่น {defl * 1000:.1f} มม. (ช่วง {span:.2f} ม.)",
                           f"Ma = {cap:,.1f} กก.-ม. · ยอมให้ {lim * 1000:.1f} มม. (L/{b_['defl']:g})",
-                          r, f"น้ำหนัก {w:,.1f} กก./ม. (ASD)", res))
+                          r, f"น้ำหนัก {w:,.1f} กก./ม. (ASD)", res,
+                          qty=w / trib if trib else 0.0, qty_unit="กก./ตร.ม. ของหลังคา"))
         # D + W: the wind's suction on the slope (Cp 0.7) less the covering's
         # weight; ASD with the one-third increase for wind
         up = 0.7 * b_["wind"] - (tile + 0.0) * cosp
@@ -495,7 +551,8 @@ def roof_checks(data, b_, out):
     cap = (b_["fb_timber"] if sec["timber"] else 0.6 * b_["fy_steel"]) * 1e4 * sec["S"]
     res.caps = {"M+": cap, "M-": cap, "lab_M": "Ma = Fb·S"}
     out.append(Member("roof", f"อกไก่ {s['ridge']}", f"M = {res.Mmax:,.1f} กก.-ม. (ช่วงโครงถัก {truss:.2f} ม.)",
-                      f"Ma = {cap:,.1f} กก.-ม.", res.Mmax / cap if cap else 9.9, "", res))
+                      f"Ma = {cap:,.1f} กก.-ม.", res.Mmax / cap if cap else 9.9, "", res,
+                      qty=w, qty_unit="กก. ต่อเมตรของอกไก่"))
     return q_slope / cosp                                      # kg/m² of plan, service
 
 
@@ -554,7 +611,8 @@ def analyse(data) -> dict:
         if not sl.get("ground") and not spc.get("ground"):
             out.append(Member("slab", f"{sl['mark']} {rm.get('name', '')} {a:.2f}×{b2:.2f} ม.",
                               f"Mu = {Mu:,.1f} กก.-ม./ม. ({kind})", f"φMn = {cap:,.1f} กก.-ม./ม.",
-                              Mu / cap if cap else 9.9, f"wu = {wu:,.0f} กก./ตร.ม."))
+                              Mu / cap if cap else 9.9, f"wu = {wu:,.0f} กก./ตร.ม.",
+                              qty=wu, qty_unit="กก./ตร.ม. (คน/ของวางเพิ่ม)", qty_factor=L_))
         slab_q[id(rm)] = (D_ * dead + L_ * b_["ll_floor"], dead, b_["ll_floor"])
     # -- beams: collinear runs on the same level, continuous over the columns
     runs: dict = {}
@@ -633,7 +691,9 @@ def analyse(data) -> dict:
         out.append(Member("beam", name,
                           f"Mu+ {res.Mmax:,.0f} · Mu− {max(0.0, -res.Mmin):,.0f} กก.-ม. · Vu {res.Vmax:,.0f} กก.",
                           f"φMn ล่าง {cap['bot']:,.0f} · บน {cap['top']:,.0f} · φVn {cap['V']:,.0f}",
-                          r, f"w = {', '.join(f'{sp.w:,.0f}' for sp in spans)} กก./ม.", res))
+                          r, f"w = {', '.join(f'{sp.w:,.0f}' for sp in spans)} กก./ม.", res,
+                          qty=max(sp.w for sp in spans) / ((D_ + L_) / 2.0),
+                          qty_unit="กก. ต่อเมตรของคาน"))
         beams_out[name] = res
         # reactions to the columns at the supports
         x = 0.0
@@ -672,7 +732,8 @@ def analyse(data) -> dict:
             r, dia, capt = Pu / cap if cap else 9.9, None, f"P ยอมให้ {cap / 1000:,.2f} ตัน"
         out.append(Member("column", f"{c_['mark']} ที่ ({c_['x']:.2f}, {c_['y']:.2f})",
                           f"Pu = {Pu / 1000:,.2f} ตัน · Mu = {Mu:,.0f} กก.-ม.", capt, r,
-                          "Mu = ค่ามากกว่าของ Pu·emin และโมเมนต์จากปลายคาน (wL²/16 แบ่งเสาบน-ล่าง)", dia))
+                          "Mu = ค่ามากกว่าของ Pu·emin และโมเมนต์จากปลายคาน (wL²/16 แบ่งเสาบน-ล่าง)", dia,
+                          qty=Pu / ((D_ + L_) / 2.0) / 1000.0, qty_unit="ตัน ต่อเสา 1 ต้น"))
         cols_out.append((k_, Pu))
     # -- footings: the service load on the soil or the piles
     avg = (D_ + L_) / 2.0
@@ -689,13 +750,15 @@ def analyse(data) -> dict:
             out.append(Member("footing", f"{f['mark']} ที่ ({f['x']:.2f}, {f['y']:.2f}) · เข็ม {piles} ต้น",
                               f"P = {P / 1000:,.2f} ตัน (ใช้งาน)",
                               f"เข็ม {piles} × {b_['pile_cap']:g} = {cap / 1000:,.2f} ตัน", P / cap if cap else 9.9,
-                              f"ต้องใช้เข็มอย่างน้อย {max(1, math.ceil(P / (b_['pile_cap'] * 1000)))} ต้น"))
+                              f"ต้องใช้เข็มอย่างน้อย {max(1, math.ceil(P / (b_['pile_cap'] * 1000)))} ต้น",
+                              qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
         else:
             q = P / (w_ * l_) / 1000 if w_ * l_ else 99.0
             out.append(Member("footing", f"{f['mark']} ที่ ({f['x']:.2f}, {f['y']:.2f}) · ฐานแผ่ {w_:.2f}×{l_:.2f} ม.",
                               f"q = {q:,.2f} ตัน/ตร.ม.", f"ดินรับได้ {b_['soil']:g} ตัน/ตร.ม.", q / b_["soil"],
                               f"ต้องใช้ฐานอย่างน้อย {math.sqrt(P / 1000 / b_['soil']):.2f} × "
-                              f"{math.sqrt(P / 1000 / b_['soil']):.2f} ม."))
+                              f"{math.sqrt(P / 1000 / b_['soil']):.2f} ม.",
+                              qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
     # column loads floor by floor (for the booklet's column cards): a column
     # of floor f carries the beams of the levels above it; the stump all
     cards = []
@@ -709,6 +772,12 @@ def analyse(data) -> dict:
             max(1, n - max(f, 0)) * D_
         cards.append({"mark": c_["mark"], "x": c_["x"], "y": c_["y"], "floor": f, "P": P, "spec": spec,
                       "H": abs(float(c_["z1"]) - float(c_["z0"]))})
+    for m in out:
+        if m.diagram is not None and m.qty:
+            try:
+                m.diagram.reserve = m.reserve_text()
+            except (AttributeError, TypeError):
+                pass
     return {"members": out, "basis": b_, "beams": beams_out, "columns": cols_out, "cards": cards,
             "levels": levels}
 
