@@ -45,3 +45,14 @@
   (ติดตั้ง libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0
   libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1)
 - ชุดทดสอบใน CI: ดูบรรทัด pytest ใน `.github/workflows/build-windows.yml`
+
+## การศึกษาโปรแกรมในแฟลชไดรฟ์ของผู้ใช้ (2026-11-12)
+ผู้ใช้ส่ง «ขั้นตอนติดตั้ง.xls» และ «VDOsteel.xls» (คู่มือ) — เป็นโปรแกรมเชิงพาณิชย์ QuickDesign / HouseDemo / QuickSteel
+(AutoCAD VBA+LISP + Excel + ปลั๊กอิน SketchUp) เข้าถึงไดรฟ์ F: โดยตรงไม่ได้ (ไม่มีโฟลเดอร์ Remote Control) วิดีโอ .mp4/.swf ดูไม่ได้
+ขั้นตอนของโปรแกรมนั้น: กริด → เส้นร่างเสา/คาน → เสา คสล./เหล็ก คาน ผนัง (เมทัลชีท) พื้น (FlatSlab/Post-tension)
+→ หลังคา (เส้นชายคา อกไก่ ครอบ Truss หลัก/รอง วัสดุมุง แป SagRod TieRod) → ออกแบบ: ถ่ายน้ำหนักเสา (Checkload),
+เสา คสล. ตาราง, เสา/คานเหล็กจัดกลุ่มแล้วเลือกขนาด, FlatSlab + Drop panel บนเข็ม, PT (โมเมนต์เสาตาม วสท. M=(WL1−WDL2)/40,/30),
+Truss 6 แบบหรือเขียนเอง → Matrix หาแรงในชิ้นส่วน → เลือกเหล็ก → ออกแบบแป → รายการคำนวณ/แบบ Truss/แผ่นเหล็กหัวเสา
+→ ถอดปริมาณ (โครงสร้าง สถาปัตย์ เหล็ก หลังคา สุขภัณฑ์ ไฟฟ้า) → ประมาณราคา → ส่งออก SketchUp → รูปด้าน/รูปตัด DWG
+แผนที่เสนอผู้ใช้ (รออนุมัติ): A เหล็กรูปพรรณ เสา/คาน WF/H · B วิเคราะห์ Truss แบบ Matrix + Truss 6 แบบ/เขียนเอง + แผ่นหัวเสา
+· C แป + SagRod/TieRod · D FlatSlab + Drop panel · E หลังคาวาดอิสระ/หลังคาโค้ง ผนังเมทัลชีท · (เขียนเองทั้งหมด ไม่คัดลอกโปรแกรมเขา)
