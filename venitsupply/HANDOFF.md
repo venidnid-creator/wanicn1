@@ -65,6 +65,12 @@
 - สร้างบน GitHub สำเร็จ (ทดสอบ+self-test บน Windows ผ่าน): run 43423856196, artifact 14034644780
   `venitsupply-setup-2026.11.13.3` (42 MB) — ส่งให้เจ้าของทดสอบ รอผล; ยังไม่เผยแพร่
 
+## 2026.11.13.4 ปรับหน้าจอตามเครื่อง (เจ้าของทดสอบ 2026.11.13.3: มองไม่เห็นปุ่ม OK/ยกเลิก, ปีงบเห็นไม่ครบ, ตัวอักษรเล็ก)
+- `widgets.ui_metrics/make_style`: ฟอนต์ตามที่มีในเครื่อง (TH Sarabun 16pt / Leelawadee·Tahoma 11.5pt) × ขนาดจอ (≥1.0)
+- `FormDialog`: > 9 ช่องแบ่ง 2 คอลัมน์, อยู่ใน QScrollArea, ปุ่มอยู่นอก; `fit_to_screen` ไม่ให้เกิน 95 %×92 % ของจอ
+- ทุกหน้าในหน้าต่างหลัก + ProcDialog + OrdinanceDialog อยู่ใน `scrolled()`; จอเล็กกว่า 1600×950 เปิดเต็มจอ
+- ทดสอบที่ 1280×720 และ 1366×768: ปุ่มเห็นครบทุกหน้าต่าง
+
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
 - `venitsupply/depreciation.py` ค่าเสื่อมเส้นตรง · `thaidate.py` วันที่ พ.ศ./ปีงบประมาณ

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                                QFormLayout, QFrame, QGridLayout, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox,
-                               QPushButton, QSpinBox, QSplitter, QStackedWidget,
+                               QPushButton, QScrollArea, QSpinBox, QSplitter, QStackedWidget,
                                QTextBrowser, QVBoxLayout, QWidget)
 
 from . import DEVELOPER, PRODUCT_EN, PRODUCT_TH, QUALIFICATION, __version__
@@ -22,7 +22,7 @@ from . import i18n
 from . import reports as R
 from . import thaidate as TD
 from .i18n import T
-from .widgets import (NAVY, ORANGE, STYLE, FormDialog, error, fill, need_selection,
+from .widgets import (NAVY, ORANGE, FormDialog, fit_to_screen, make_style, pt, px, scrolled, error, fill, need_selection,
                       selected_id, table)
 
 FREE_USE = "โปรแกรมใช้ได้ฟรี ไม่มีค่าลิขสิทธิ์"
@@ -146,18 +146,24 @@ class HomePage(QWidget):
         QVBoxLayout(g3).addWidget(self.status)
         for g in (g1, g2, g3):
             lists.addWidget(g)
-        body.addWidget(self.developer_panel(), 0)
+        dev = QScrollArea()
+        dev.setWidgetResizable(True)
+        dev.setFrameShape(QFrame.NoFrame)
+        dev.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        dev.setWidget(self.developer_panel())
+        dev.setFixedWidth(px(350))
+        body.addWidget(dev, 0)
 
     def developer_panel(self):
         f = QFrame()
         f.setObjectName("card")
-        f.setFixedWidth(330)
+        f.setFixedWidth(px(330))
         v = QVBoxLayout(f)
         v.setAlignment(Qt.AlignTop)
         photo = QLabel()
         pm = QPixmap(str(asset_path("developer.jpg")))
         if not pm.isNull():
-            photo.setPixmap(pm.scaledToWidth(110, Qt.SmoothTransformation))
+            photo.setPixmap(pm.scaledToWidth(px(110), Qt.SmoothTransformation))
         v.addWidget(photo, 0, Qt.AlignHCenter)
         name = QLabel(f"<b>{DEVELOPER}</b><br>{QUALIFICATION}")
         name.setAlignment(Qt.AlignCenter)
@@ -172,7 +178,7 @@ class HomePage(QWidget):
         qr = QLabel()
         q = QPixmap(str(asset_path("contact-qr.png")))
         if not q.isNull():
-            qr.setPixmap(q.scaledToWidth(96, Qt.SmoothTransformation))
+            qr.setPixmap(q.scaledToWidth(px(96), Qt.SmoothTransformation))
         qr.setCursor(Qt.PointingHandCursor)
         qr.mousePressEvent = lambda e: QDesktopServices.openUrl(QUrl(CONTACT_LINE))
         v.addWidget(qr, 0, Qt.AlignHCenter)
@@ -180,9 +186,9 @@ class HomePage(QWidget):
         ql.setObjectName("hint")
         ql.setAlignment(Qt.AlignCenter)
         v.addWidget(ql)
-        bank = QLabel(f"<span style='font-size:12pt'>{T(SUPPORT)}<br>{BANK}<br>{ACCOUNT_TYPE} "
+        bank = QLabel(f"<span style='font-size:{pt(12)}pt'>{T(SUPPORT)}<br>{BANK}<br>{ACCOUNT_TYPE} "
                       f"{ACCOUNT_NAME}</span><br>"
-                      f"<b style='font-size:17pt; color:{NAVY}'>{ACCOUNT_NO}</b>")
+                      f"<b style='font-size:{pt(17)}pt; color:{NAVY}'>{ACCOUNT_NO}</b>")
         bank.setAlignment(Qt.AlignCenter)
         bank.setWordWrap(True)
         v.addWidget(bank)
@@ -611,7 +617,7 @@ class ReportPage(QWidget):
         QVBoxLayout(self).addWidget(w)
         top = QHBoxLayout()
         self.list = QListWidget()
-        self.list.setFixedWidth(360)
+        self.list.setFixedWidth(px(360))
         self.kinds = [("บัญชีครุภัณฑ์", lambda s: R.asset_list(s)),
                       ("รายงานค่าเสื่อมราคาประจำปี", lambda s: R.depreciation_year(s, self.fy.value())),
                       ("รายงานวัสดุคงเหลือ", lambda s: R.material_balance(s)),
@@ -774,19 +780,19 @@ class MainWindow(QMainWindow):
         icon = asset_path("venitsupply.png")
         if icon.exists():
             self.setWindowIcon(QIcon(str(icon)))
-        self.resize(1500, 920)
+        fit_to_screen(self, 1500, 920)
         central = QWidget()
         h = QHBoxLayout(central)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
         side = QWidget()
         side.setStyleSheet(f"background:{NAVY};")
-        side.setFixedWidth(230)
+        side.setFixedWidth(px(230))
         sv = QVBoxLayout(side)
         sv.setContentsMargins(0, 14, 0, 10)
-        brand = QLabel(f"<div style='color:white; font-size:22pt'><b>{T('พัสดุเวนิช')}</b></div>"
-                       f"<div style='color:#C9A14A; font-size:12pt'>{PRODUCT_TH if i18n.LANG == 'en' else PRODUCT_EN}</div>"
-                       f"<div style='color:#AFC0D2; font-size:11pt'>{T('โปรแกรมบริหารพัสดุภาครัฐ')}</div>")
+        brand = QLabel(f"<div style='color:white; font-size:{pt(22)}pt'><b>{T('พัสดุเวนิช')}</b></div>"
+                       f"<div style='color:#C9A14A; font-size:{pt(12)}pt'>{PRODUCT_TH if i18n.LANG == 'en' else PRODUCT_EN}</div>"
+                       f"<div style='color:#AFC0D2; font-size:{pt(11)}pt'>{T('โปรแกรมบริหารพัสดุภาครัฐ')}</div>")
         brand.setAlignment(Qt.AlignCenter)
         sv.addWidget(brand)
         self.nav = QListWidget()
@@ -794,7 +800,7 @@ class MainWindow(QMainWindow):
         for n in NAV:
             QListWidgetItem(T(n), self.nav)
         sv.addWidget(self.nav, 1)
-        ver = QLabel(f"<span style='color:#7F93A8; font-size:10pt'>{__version__}<br>"
+        ver = QLabel(f"<span style='color:#7F93A8; font-size:{pt(10)}pt'>{__version__}<br>"
                      f"© 2569 {DEVELOPER}</span>")
         ver.setAlignment(Qt.AlignCenter)
         sv.addWidget(ver)
@@ -816,7 +822,7 @@ class MainWindow(QMainWindow):
         self.pages = [self.home, self.budget, self.procs, self.stats, self.assets, self.materials, self.loans, self.inspect, self.reports,
                       self.settings_page]
         for p in self.pages:
-            self.stack.addWidget(p)
+            self.stack.addWidget(scrolled(p))
         self.nav.currentRowChanged.connect(self.go)
         self._menus()
         self.nav.setCurrentRow(0)
@@ -926,12 +932,16 @@ def main(argv=None):
         return selftest(argv[i + 1] if len(argv) > i + 1 else "selftest")
     app = QApplication(argv)
     app.setApplicationName(PRODUCT_EN)
-    app.setStyleSheet(STYLE)
+    app.setStyleSheet(make_style())
     i18n.set_lang(QSettings("Venit", "VenitSupply").value("lang", "th"))
     path = next((a for a in argv[1:] if a.endswith(".vsdb")), None)
     w = MainWindow(path)
     app._main = w
-    w.show()
+    g = app.primaryScreen().availableGeometry() if app.primaryScreen() else None
+    if g is not None and (g.width() < 1600 or g.height() < 950):
+        w.showMaximized()                 # small or scaled screens: use all of it
+    else:
+        w.show()
     return app.exec()
 
 

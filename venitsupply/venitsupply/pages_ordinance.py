@@ -15,7 +15,7 @@ from . import PRODUCT_TH
 from . import budget as B
 from . import thaidate as TD
 from .i18n import T
-from .widgets import MUTED, error
+from .widgets import MUTED, error, fit_to_screen, px, scrolled
 
 RED, GREEN = "#C72B1E", "#0E7F4F"
 DATA = Path(B.__file__).resolve().parent / "data"
@@ -67,8 +67,11 @@ class OrdinanceDialog(QDialog):
         self.items: list[dict] = []
         self.meta: dict = {}
         self.setWindowTitle(T("นำเข้าข้อบัญญัติงบประมาณรายจ่าย (PDF หรือตาราง)"))
-        self.resize(1500, 900)
-        lay = QVBoxLayout(self)
+        fit_to_screen(self, 1500, 900)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        root = QVBoxLayout(self)
+        root.addWidget(scrolled(body), 1)
 
         g = QGroupBox(T("1. ปีงบประมาณของข้อบัญญัติ"))
         gl = QHBoxLayout(g)
@@ -105,7 +108,7 @@ class OrdinanceDialog(QDialog):
         gl.addWidget(self.file, 1)
         self.bar = QProgressBar()
         self.bar.setVisible(False)
-        self.bar.setFixedWidth(260)
+        self.bar.setFixedWidth(px(260))
         gl.addWidget(self.bar)
         lay.addWidget(g)
 
@@ -154,7 +157,7 @@ class OrdinanceDialog(QDialog):
         cancel.clicked.connect(self.reject)
         row.addWidget(self.save_btn)
         row.addWidget(cancel)
-        lay.addLayout(row)
+        root.addLayout(row)                     # buttons stay visible
         self.check()
 
     # ---------------------------------------------------------- reading

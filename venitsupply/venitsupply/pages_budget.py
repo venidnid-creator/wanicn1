@@ -21,7 +21,7 @@ from . import procurement as P
 from . import reports as R
 from . import thaidate as TD
 from .i18n import T
-from .widgets import (MUTED, NAVY, FormDialog, ThaiDateEdit, error, fill, need_selection,
+from .widgets import (MUTED, NAVY, FormDialog, fit_to_screen, pt, px, scrolled, ThaiDateEdit, error, fill, need_selection,
                       selected_id, table)
 
 RED, GREEN = "#C72B1E", "#0E7F4F"
@@ -92,7 +92,7 @@ class BudgetBox(QGroupBox):
         self.detail = QLabel("")
         self.detail.setWordWrap(True)
         self.detail.setTextFormat(Qt.RichText)
-        self.detail.setStyleSheet("font-size:12pt; color:#33415C; background:#F7F4EC; padding:4px;"
+        self.detail.setStyleSheet(f"font-size:{pt(12)}pt; color:#33415C; background:#F7F4EC; padding:4px;"
                                   "border-radius:6px")
         g.addWidget(self.detail, len(self.ROWS) + 2, 0, 1, 2)
 
@@ -144,7 +144,7 @@ class BudgetPage(QWidget):
         self.fy.valueChanged.connect(self.refresh)
         top.addWidget(self.fy)
         self.years = QComboBox()
-        self.years.setMinimumWidth(190)
+        self.years.setMinimumWidth(px(190))
         self.years.setToolTip(T("ข้อบัญญัติที่มีในโปรแกรม"))
         self.years.activated.connect(lambda i: self.fy.setValue(self.years.itemData(i)))
         top.addWidget(self.years)
@@ -377,7 +377,7 @@ class BudgetPage(QWidget):
         rows = self.win.store.budget_changes(fy=self.fy.value())
         d = QDialog(self)
         d.setWindowTitle(T("ประวัติการโอน"))
-        d.resize(1100, 520)
+        fit_to_screen(d, 1100, 520)
         v = QVBoxLayout(d)
         t = table(["วันที่", "ชนิด", "รายการ", "จำนวนเงิน", "เลขที่เอกสาร", "หมายเหตุ"], stretch=2)
         fill(t, [[TD.thai(c["date"]), c["kind"], f"{c['type']} › {c['name']}", float(c["amount"]), c["doc_no"],
@@ -561,8 +561,11 @@ class ProcDialog(QDialog):
         p = dict(s.procurement(pid)) if pid else dict(kind=kind, vendor_vat=1)
         self.locked = bool(pid) and p.get("status") not in ("ขออนุมัติ", "อนุมัติแล้ว")
         self.setWindowTitle(f"{T('จัดซื้อจัดจ้าง')} — {p.get('number') or T('รายการใหม่')}")
-        self.resize(1500, 860)
-        outer = QHBoxLayout(self)
+        fit_to_screen(self, 1500, 860)
+        body = QWidget()
+        outer = QHBoxLayout(body)
+        root = QVBoxLayout(self)
+        root.addWidget(scrolled(body), 1)
         left = QVBoxLayout()
         outer.addLayout(left, 3)
         f = QFormLayout()
@@ -584,7 +587,7 @@ class ProcDialog(QDialog):
         self.title = QLineEdit(p.get("title") or "")
         f.addRow(T("รายการ/โครงการ"), self.title)
         self.reason = QPlainTextEdit(p.get("reason") or "")
-        self.reason.setFixedHeight(56)
+        self.reason.setFixedHeight(px(56))
         f.addRow(T("เหตุผลและความจำเป็น"), self.reason)
         fy = page.fy.value()
         if not pid and TD.fiscal_year(self.date.iso()) != fy:      # a request for another year
@@ -674,7 +677,7 @@ class ProcDialog(QDialog):
         bb.button(QDialogButtonBox.Cancel).setText(T("ยกเลิก"))
         bb.accepted.connect(self.save)
         bb.rejected.connect(self.reject)
-        right.addWidget(bb)
+        root.addWidget(bb)                      # always visible below the scroll area
         for ln in (s.lines(pid) if pid else []):
             self.lines.add(ln["name"], ln["qty"], ln["unit"], ln["unit_price"], ln["target"], ln["category_id"])
         if not pid:
@@ -930,7 +933,7 @@ class ProcPage(QWidget):
         dw.dateChanged.connect(lambda *_: fw.setValue(s.fine_for(pid, dw.iso())))
         reg = QCheckBox(T("ลงทะเบียนครุภัณฑ์/รับวัสดุเข้าคลังตามรายการที่เลือกไว้"))
         reg.setChecked(True)
-        dlg.layout().insertRow(3, reg)
+        dlg.add_row(reg)
         if dlg.exec():
             v = dlg.values()
             self._do(s.inspect_proc, pid, v["date"], v["note"], v["fine"], reg.isChecked())
@@ -956,7 +959,7 @@ class ProcPage(QWidget):
                          f"{T('ค่าปรับ')} {m(fine)} · <b>{T('จ่ายสุทธิ')} {m(aw.value() - tax - fine)}</b>")
         aw.valueChanged.connect(upd)
         upd()
-        dlg.layout().insertRow(4, info)
+        dlg.add_row(info)
         if dlg.exec():
             v = dlg.values()
             self._do(s.pay, pid, v["amount"], v["date"], v["voucher"], v["note"])
