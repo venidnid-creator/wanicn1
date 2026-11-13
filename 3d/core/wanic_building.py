@@ -63,6 +63,7 @@ DEFAULT_SETTINGS = {
     "rafter": "C 150×65×20×3.2", "purlin": "C 75×45×15×2.3",
     "post": "C 100×50×20×2.3", "skin": True, "roof_mode": "plan",
     "door_w": 0.9, "door_h": 2.0, "win_w": 1.2, "win_h": 1.1,
+    "users": 0,
     "win_sill": 0.9, "stair_w": 0.0, "riser_max": 0.18, "going": 0.25,
     "stair_t": 0.15, "fascia": True, "fascia_h": 0.20, "fascia_t": 0.025,
     "gutters": True,

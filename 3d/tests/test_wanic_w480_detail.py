@@ -605,7 +605,7 @@ def test_bath_elevations_and_rebar_details_in_the_set():
     titles = {s.title: s for s in sheets}
     el = titles["รูปด้านภายในห้องน้ำ"]
     txt = " ".join(el.texts())
-    assert "รูปด้านภายใน ก" in txt and "รูปด้านภายใน ง" in txt
+    assert "รูปด้านภายใน A" in txt and "รูปด้านภายใน D" in txt
     assert "WC1 โถส้วม" in txt and "กระจกเงา" in txt
     rb = titles["แบบขยายเหล็กเสริมฐานรากและคาน"]
     txt = " ".join(rb.texts())

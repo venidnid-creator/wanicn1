@@ -739,7 +739,7 @@ def ring_holes(E, s):
     return holes
 
 
-def septic_members(B, tank, box, half_c, d_off, gl, holes=()):
+def septic_members(B, tank, box, half_c, d_off, gl, holes=(), size_txt="Ø 1.10 × 1.60 ม. (1,200 ลิตร / 12 คน)"):
     """The septic tank as it is made: a round tank with a domed top, its
     access neck and lid at the ground, the inlet and outlet sockets
     (outlet 5 cm lower), the vent Ø 2", an inspection chamber on the soil
@@ -776,7 +776,7 @@ def septic_members(B, tank, box, half_c, d_off, gl, holes=()):
     if g is not None:
         g.ext[B.EXT_KEY]["info"] = [
             ["ชนิด", "ถังบำบัดน้ำเสียสำเร็จรูป ทรงกลม ไร้อากาศ ชนิดมีตัวกลาง (มอก. 2550-2554)"],
-            ["ขนาด", "Ø 1.10 × 1.60 ม. (1,200 ลิตร / 12 คน)"],
+            ["ขนาด", f"{size_txt}"],
             ["ท่อเข้า/ออก", "ท่อเข้า Ø 4\" ลึก 0.75 ม. · ท่อออก Ø 4\" ต่ำกว่า 0.05 ม."],
             ["ท่ออากาศ", "PVC Ø 2\" สูงจากดิน 1.80 ม. ปลายเป็นสามทางคว่ำ (หมวกกันฝน) บุตะแกรง"],
             ["ฝา", "Ø 0.50 ม. สูงกว่าดิน 0.05 ม."], ["จำนวน", "1 ชุด"],
@@ -1173,8 +1173,12 @@ def install_members(data, E, rooms):
         dists = [(sx - X0, (X0 - far, sy)), (X1 - sx, (X1 + far, sy)),
                  (sy - Y0, (sx, Y0 - far)), (Y1 - sy, (sx, Y1 + far))]
         tank = min(dists)[1]
+        from core import wanic_sanitary as SAN
+        st_ = SAN.design(data)["septic"]
         for g, kind in septic_members(B, tank, (X0, Y0, X1, Y1), half_c, d_off, gl,
-                                      ring_holes(E, s)):
+                                      ring_holes(E, s),
+                                      f"{st_['size']} ม. ({st_['litres']:,} ลิตร / {st_['users']} คน)"
+                                      + (f" × {st_['count']} ถัง" if st_["count"] > 1 else "")):
             out.append((g, kind))
     soil, grey = drain_routes(E, fx_pts, tank, (X0, Y0, X1, Y1), half_c, d_off)
     # the supply jogs (C) round every drain it would touch; drains keep their fall
@@ -1518,20 +1522,25 @@ def bill(data, E, add, labour) -> None:
             mat_key="ฟลอร์เดรนกันกลิ่น 2\"", lab=lab("3.13", "Dia 2\""),
             basis="1 ชุดต่อห้องน้ำ", ref=f"{W480} 3.13")
     beds = sum(1 for r in rooms if r["kind"] == "bed")
+    from core import wanic_sanitary as SAN
+    san = SAN.design(data)
     if wcs or beds:
-        persons = max(2 * beds, 4)
-        size = next((v for p_, v in ((5, 800), (7, 1000), (10, 1600), (15, 2000))
-                     if persons <= p_), 3000)
-        add(g, f"ถังบำบัดน้ำเสียสำเร็จรูป {size:,} ลิตร (ผู้อยู่อาศัย {persons} คน)", 1,
+        st_ = san["septic"]
+        size, persons = st_["litres"], san["users"]
+        add(g, f"ถังบำบัดน้ำเสียสำเร็จรูป {size:,} ลิตร (ผู้อยู่อาศัย {persons} คน)", st_["count"],
             "ชุด", mat_key=f"ถังบำบัดน้ำเสียสำเร็จรูป {size:,} ลิตร (พร้อมติดตั้ง)",
-            basis=f"ห้องนอน {beds} ห้อง × 2 คน", ref="กฎกระทรวง/มยผ. ระบบบำบัดน้ำเสีย",
+            basis=san["users_from"], ref="กฎกระทรวง/มยผ. ระบบบำบัดน้ำเสีย",
             note=unlisted)
+        add(g, "บ่อพักตะแกรง ค.ส.ล. ภายใน 0.40×0.40 ลึก 0.60 ม. พร้อมตะแกรงสแตนเลสและฝา (SP)", 1, "บ่อ",
+            mat_key="บ่อพักตะแกรง ค.ส.ล. 0.40×0.40 ม. พร้อมตะแกรงและฝา",
+            basis="ก่อนระบายสู่ท่อสาธารณะ 1 บ่อ", ref="มยผ. 1201", note=unlisted)
         add(g, "บ่อตรวจท่อโสโครก ค.ส.ล. 0.40×0.40 ม. พร้อมฝาปิด (MH-01)", 1, "บ่อ",
             mat_key="บ่อตรวจ ค.ส.ล. 0.40×0.40 ม. พร้อมฝา", basis="ก่อนเข้าถังบำบัด 1 บ่อ",
             ref="มยผ. 1201", note=unlisted)
     if kitchens:
-        add(g, "บ่อดักไขมันสำเร็จรูป", len(kitchens), "ชุด",
-            mat_key="บ่อดักไขมันสำเร็จรูป (พร้อมติดตั้ง)", basis="1 ชุดต่อครัว",
+        add(g, f"บ่อดักไขมันสำเร็จรูป {san['grease']['litres']} ลิตร", len(kitchens), "ชุด",
+            mat_key=f"บ่อดักไขมันสำเร็จรูป {san['grease']['litres']} ลิตร (พร้อมติดตั้ง)",
+            basis=f"1 ชุดต่อครัว · ผู้ใช้ {san['users']} คน",
             ref="มยผ. 1201", note=unlisted)
 
     # --- 12 ไฟฟ้า -----------------------------------------------------------

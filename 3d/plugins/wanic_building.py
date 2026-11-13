@@ -2551,6 +2551,8 @@ class BuildingPanel(QWidget):
         combo("truss", "แบบโครงถัก", list(B.TRUSS_TYPES.items()))
         num("walk_w", "ทางเท้ารอบอาคาร กว้าง (จากผิวเสา)", 0.0, 3.0, 0.05)
         num("drain_off", "ท่อระบายน้ำห่างอาคาร (จากผิวเสา)", 0.4, 5.0, 0.1)
+        num("users", "ผู้ใช้อาคาร — ขนาดถังบำบัด บ่อดักไขมัน", 0, 200, 1, 0, " คน")
+        self.fields["users"].setSpecialValueText("อัตโนมัติ (ห้องนอน × 2 คน ขั้นต่ำ 4)")
         sf = sf_keep
         lay.addWidget(fin)
         self.library = LibraryBox(self)

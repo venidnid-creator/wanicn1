@@ -679,6 +679,33 @@ def _door(sh, v, p0, u, n, c0, c1, t, el, wall, rooms):
         sh.arc(v(*hp), v.len(leaf), a0, a1, "door", 0.13)
 
 
+def room_codes(E, rm, fcodes) -> str:
+    """The room's finish codes as on A-14: พ (floor) ผ (wall: ผ2 plastered
+    and painted inside, ผ3 tiled) ฝ (the ceiling type, «-» none)."""
+    f = CAT.finish_of(rm)
+    fc = (fcodes or {}).get(f["floor"], ("พ-", ""))[0]
+    wc = "ผ3" if f.get("wall_tile") else "ผ2"
+    ct = E["settings"].get("ceiling_type", "cline")
+    keys = list(B.CEILING_TYPES)
+    cc = f"ฝ{keys.index(ct) + 1}" if f["ceiling"] and ct in keys else "ฝ-"
+    return f"{fc} {wc} {cc}"
+
+
+def elev_marker(sh, p, ref="", r=3.0):
+    """เครื่องหมายรูปด้านภายใน: a circle with four pointers A (south) B (east)
+    C (north) D (west) — the walls drawn as interior elevations on ``ref``."""
+    x, y = p
+    sh.circle((x, y), r, "text", 0.25)
+    for (dx, dy), lab in (((0, -1), "A"), ((1, 0), "B"), ((0, 1), "C"), ((-1, 0), "D")):
+        tip = (x + dx * (r + 2.2), y + dy * (r + 2.2))
+        nx, ny = -dy, dx
+        sh.fill([tip, (x + dx * r + nx * 1.6, y + dy * r + ny * 1.6),
+                 (x + dx * r - nx * 1.6, y + dy * r - ny * 1.6)], "hatch", 0.0)
+        sh.text((x + dx * (r + 4.2), y + dy * (r + 4.2) - 0.8), lab, 1.8, "center", "text", True)
+    if ref:
+        sh.text((x, y - 0.7), ref, 1.5, "center")
+
+
 def draw_rooms(sh, v, E, k, fcodes=None, area=True):
     for sl in (s for s in E["slabs"] if s["floor"] == k):
         rm = sl["room"]
@@ -691,9 +718,8 @@ def draw_rooms(sh, v, E, k, fcodes=None, area=True):
                     "center")
         if fcodes:
             f = CAT.finish_of(rm)
-            fc = fcodes.get(f["floor"], ("", ""))[0]
             lv = f"±{sl['z']:.2f}" if sl["z"] == 0 else f"+{sl['z']:.2f}"
-            tag = f"{fc}  {'ฝ1' if f['ceiling'] else ''}  {lv}".strip()
+            tag = f"{room_codes(E, rm, fcodes)}  {lv}"
             sh.text((p[0], p[1] - 6.0), tag, 2.0, "center")
 
 
@@ -792,7 +818,7 @@ A_NOTES = [
     "4. วัสดุพื้น ผนัง ฝ้า ตามตารางวัสดุตกแต่ง (พ/ฝ) และสัญลักษณ์ในแปลน",
     "5. ประตู-หน้าต่าง ตามตารางประตู-หน้าต่าง (ป/น) ขนาดเป็นขนาดช่องเปิด",
     "6. งานโครงสร้าง สุขาภิบาล ไฟฟ้า ให้ดูแบบหมวด S, SN, EE ประกอบ",
-    "7. วัสดุและการก่อสร้างให้เป็นไปตามมาตรฐาน มยผ. และ มอก. ที่เกี่ยวข้อง",
+    "7. วัสดุและการก่อสร้าง ให้เป็นไปตามมาตรฐาน มยผ. และ มอก. ที่เกี่ยวข้อง",
     "8. ห้ามวัดขนาดจากแบบ หากแบบขัดแย้งกันให้แจ้งผู้ออกแบบก่อนดำเนินการ",
 ]
 SYMBOLS = [("ป1", "รหัสประตู"), ("น1", "รหัสหน้าต่าง"), ("พ1", "วัสดุพื้น"),
@@ -807,15 +833,41 @@ def sheet_index(sheets, group, sh, x, y, w=190):
                             ("หน้า", 20, "center")], rows)
 
 
-def a_index(sh, sheets, info):
+def room_schedule(sh, E, x, y, y_min):
+    """ตารางวัสดุผิวห้อง: each room's floor (พ), wall (ผ) and ceiling (ฝ)
+    codes and its level — the codes of A-14; rows that do not fit are left
+    to A-14."""
+    if not E:
+        return y
+    fcodes = finish_codes(E)
+    names = {c: n for _k, (c, n) in fcodes.items()}
+    sh.text((x, y), "ตารางวัสดุผิวห้อง (พ = พื้น · ผ = ผนัง · ฝ = ฝ้าเพดาน — รายละเอียดดูรายการวัสดุ)", 2.6,
+            "left", "text", True)
+    rows = []
+    for sl in E["slabs"]:
+        rm = sl["room"]
+        pc, wc, cc = room_codes(E, rm, fcodes).split()
+        lv = f"±{sl['z']:.2f}" if sl["z"] == 0 else f"+{sl['z']:.2f}"
+        rows.append((f"ชั้น {sl['floor'] + 1}", rm.get("name") or "ห้อง", pc, (names.get(pc) or "")[:44], wc, cc, lv))
+    fit = max(0, int((y - 2 - 6 - y_min) / 4.6))
+    more = len(rows) - fit
+    if more > 0:
+        rows = rows[:max(fit - 1, 0)] + [("", f"… อีก {more + 1} ห้อง ดูแผ่นรายการวัสดุ", "", "", "", "", "")]
+    return table(sh, x, y - 2, [("ชั้น", 14.0, "center"), ("ห้อง", 40.0, "left"), ("พ", 10.0, "center"),
+                                ("วัสดุพื้น", 82.0, "left"), ("ผ", 10.0, "center"), ("ฝ", 10.0, "center"),
+                                ("ระดับ", 24.0, "center")], rows, h=2.0, row_h=4.6, head_h=6.0)
+
+
+def a_index(sh, sheets, info, E=None):
     x0, y0, x1, y1 = drawing_area()
     sh.text((x0 + 95, y1 - 6), "สารบัญแบบสถาปัตยกรรม", 4.0, "center", "text",
             True)
-    sheet_index(sheets, "A", sh, x0, y1 - 12, 190)
-    y = notes_block(sh, x0 + 200, y1 - 6, "รายการประกอบแบบงานสถาปัตยกรรม",
-                    A_NOTES, 2.3, 58)
-    y = notes_block(sh, x0 + 200, y - 4, "ข้อมูลอาคาร",
-                    info.get("summary") or [], 2.3, 58)
+    y_ = sheet_index(sheets, "A", sh, x0, y1 - 12, 190)
+    room_schedule(sh, E, x0, y_ - 8, y0 + 4)
+    y = notes_block(sh, x0 + 197, y1 - 6, "รายการประกอบแบบ",
+                    A_NOTES, 2.2, 40)
+    y = notes_block(sh, x0 + 197, y - 4, "ข้อมูลอาคาร",
+                    info.get("summary") or [], 2.2, 40)
     symbols_legend(sh, x0 + 264, y1 - 6, min(60.0, x1 - x0 - 266))
 
 
@@ -827,8 +879,8 @@ def symbols_legend(sh, x, y, w=60.0):
     rh = 7.5
     sx, tx = x + 12, x + 25
     yy = y - 7
-    sh.rect(x, yy - 16 * rh - 1, x + w, yy + 3.5, "text", 0.25)
-    sh.line((x + 23.5, yy + 3.5), (x + 23.5, yy - 16 * rh - 1), "text", 0.18)
+    sh.rect(x, yy - 17 * rh - 1, x + w, yy + 3.5, "text", 0.25)
+    sh.line((x + 23.5, yy + 3.5), (x + 23.5, yy - 17 * rh - 1), "text", 0.18)
 
     def row(text):
         nonlocal yy
@@ -879,8 +931,8 @@ def symbols_legend(sh, x, y, w=60.0):
     # room tag
     sh.rect(sx - 8, yy - 2.2, sx + 8, yy + 2.2, "text", 0.18)
     sh.text((sx, yy + 0.3), "ชื่อห้อง", 1.6, "center", "text", True)
-    sh.text((sx, yy - 1.9), "พ1  ฝ1  ±0.00", 1.3, "center")
-    row("ชื่อห้อง วัสดุพื้น ฝ้า ระดับพื้น")
+    sh.text((sx, yy - 1.9), "พ1 ผ2 ฝ1 ±0.00", 1.3, "center")
+    row("ชื่อห้อง รหัสพื้น(พ) ผนัง(ผ) ฝ้า(ฝ) ระดับ")
     sh.text((sx, yy - 0.8), "ป1", 2.4, "center", "door")
     row("หมายเลขประตู (ตารางประตู)")
     sh.circle((sx, yy), 2.4, "window", 0.18)
@@ -900,6 +952,8 @@ def symbols_legend(sh, x, y, w=60.0):
     sh.text((sx, yy + 0.5), "1", 1.6, "center")
     sh.text((sx, yy - 2.0), "S-09", 1.2, "center")
     row("แบบขยาย (เลข / แผ่นที่)")
+    elev_marker(sh, (sx, yy), "A-13", 1.6)
+    row("รูปด้านภายใน A B C D / แผ่นที่")
     sh.poly([(sx - 1.5, yy + 1.5), (sx + 1.5, yy + 1.5), (sx, yy)], "dim", 0.18)
     sh.line((sx - 5, yy), (sx + 8, yy), "dim", 0.13)
     sh.text((sx + 3, yy + 0.6), "+0.00", 1.5)
@@ -961,7 +1015,7 @@ def a_site(sh, E, info):
     ], 2.2, 50)
 
 
-def a_floor(sh, E, k, codes, fcodes):
+def a_floor(sh, E, k, codes, fcodes, sheets=None):
     v, sc = plan_view(sh, E)
     t = float(E["settings"].get("wall_t") or 0.1)
     draw_grid(sh, v, E)
@@ -971,6 +1025,14 @@ def a_floor(sh, E, k, codes, fcodes):
     draw_fixtures(sh, v, E, k)
     section_marks(sh, v, E, k)
     draw_wall_tags(sh, v, E, k, t)
+    # the interior elevations of the bathrooms: A B C D, the sheet they are on
+    refs = [s_.code for s_ in (sheets or []) if s_.title.startswith("รูปด้านภายใน")]
+    for i, (kk, rm) in enumerate(bathrooms(E)):
+        if kk != k:
+            continue
+        ref = refs[min(i // 2, len(refs) - 1)] if refs else ""
+        off = min(0.75, rm["w"] * 0.2)
+        elev_marker(sh, v(rm["x"] + rm["w"] - off, rm["y"] + rm["d"] / 2), ref)
     x0, y0, x1, y1 = drawing_area()
     north(sh, (x1 - 10, y1 - 12))
     wall_legend(sh, x0 + 4, y0 + 30, E)
@@ -2095,22 +2157,36 @@ SN_NOTES = [
     "4. ทุกจุดเปลี่ยนทิศท่อโสโครกให้มีช่องทำความสะอาด (FCO/CO) ปลายท่ออากาศสูงพ้นหลังคา",
     "5. ทดสอบท่อประปาด้วยแรงดันไม่น้อยกว่า 1.5 เท่าของแรงดันใช้งาน นาน 1 ชั่วโมง",
     "6. ท่อในแบบเป็นแนวโดยประมาณ ให้ปรับตามสภาพหน้างาน",
+    "7. ถังบำบัดน้ำเสียเป็นถังสำเร็จรูปไร้อากาศชนิดมีตัวกลาง มอก. 2550-2554 ขนาดตามจำนวนผู้ใช้ "
+    "(ดูข้อมูลการออกแบบ) วางบนทรายอัดแน่น 0.10 ม. และคอนกรีตหยาบ 0.05 ม. เติมน้ำเต็มถังก่อนกลบ",
+    "8. บ่อดักไขมัน รับน้ำจากซิงก์ครัว ก่อนเข้าท่อน้ำทิ้ง ตักไขมันทุก 1–2 สัปดาห์ "
+    "บ่อพักตะแกรง ล้างตะแกรงทุกเดือน",
+    "9. น้ำทิ้งที่ผ่านการบำบัดต้องมีคุณภาพตามมาตรฐานควบคุมการระบายน้ำทิ้งจากอาคาร "
+    "ก่อนระบายสู่ท่อสาธารณะ",
+    "10. ท่อประปาเดินลอยยึดด้วยแคล้มป์ทุกระยะ 1.50 ม. ท่อฝังดินลึกไม่น้อยกว่า 0.30 ม. "
+    "ติดตั้งประตูน้ำที่มาตรวัดน้ำและก่อนเข้าห้องน้ำทุกห้อง",
+    "11. ท่ออากาศ (V) ต่อจากท่อโสโครกทุกโถส้วม ขนาดไม่น้อยกว่าครึ่งหนึ่งของท่อโสโครก (Ø2\")",
+    "12. ฟลอร์เดรนเป็นชนิดกันกลิ่น พื้นห้องน้ำลาดเข้าฟลอร์เดรน 1:100",
 ]
 SN_SYMBOLS = [("S", "ท่อโสโครก"), ("W", "ท่อน้ำทิ้ง"), ("V", "ท่ออากาศ"),
               ("CW", "ท่อน้ำประปา"), ("FD", "ท่อระบายน้ำที่พื้น"),
               ("FCO", "ช่องทำความสะอาดที่พื้น"), ("ST", "บ่อบำบัดน้ำเสีย"),
-              ("GT", "บ่อดักไขมัน"), ("M", "มาตรวัดน้ำ")]
+              ("GT", "บ่อดักไขมัน"), ("SP", "บ่อพักตะแกรง (ก่อนออกท่อสาธารณะ)"),
+              ("MH", "บ่อตรวจ / บ่อพัก"), ("M", "มาตรวัดน้ำ")]
 
 
-def sn_index(sh, sheets):
+def sn_index(sh, sheets, E=None):
     x0, y0, x1, y1 = drawing_area()
     sh.text((x0 + 95, y1 - 6), "สารบัญแบบระบบสุขาภิบาล", 4.0, "center", "text",
             True)
     y = sheet_index(sheets, "SN", sh, x0, y1 - 12, 190)
     y = notes_block(sh, x0, y - 10, "สัญลักษณ์", [f"{a:<5}  {b}" for a, b in
                                               SN_SYMBOLS], 2.4, 60)
+    from core import wanic_sanitary as SAN
+    if E is not None:
+        notes_block(sh, x0, y - 6, "ข้อมูลการออกแบบระบบสุขาภิบาล", SAN.design_lines(E), 2.3, 90)
     notes_block(sh, x0 + 200, y1 - 6, "รายการประกอบแบบงานระบบสุขาภิบาล",
-                SN_NOTES, 2.3, 60)
+                SN_NOTES, 2.3, 48)
 
 
 def sn_plan(sh, E, k):
@@ -2127,11 +2203,22 @@ def sn_plan(sh, E, k):
     gt = (xs[0] - 1.6, ys[0] + 0.6)
     meter = (xs[-1] + 1.4, yw)
     if k == 0:
-        _box(sh, v, tank, 1.2, 0.8, "ST บ่อบำบัด")
-        _box(sh, v, gt, 0.5, 0.5, "GT")
+        from core import wanic_sanitary as SAN
+        dz = SAN.design(E)
+        st_, gt_ = dz["septic"], dz["grease"]
+        _box(sh, v, tank, 1.2, 0.8, f"ST {st_['litres']:,} ล." + (f" ×{st_['count']}" if st_["count"] > 1 else "")
+             + f" ({dz['users']} คน)")
+        _box(sh, v, gt, 0.5, 0.5, f"GT {gt_['litres']} ล.")
         _box(sh, v, meter, 0.3, 0.3, "M")
-        sh.line(v(gt[0], gt[1] - 0.25), v(tank[0], tank[1] + 0.4), "pipe",
-                0.35, True)
+        sp = (tank[0] - 2.4, yc - 1.6)                    # the screen pit before the public drain
+        _box(sh, v, sp, 0.5, 0.5, "SP")
+        # the grease trap's effluent and the tank's treated water through the screen pit
+        sh.line(v(gt[0] - 0.25, gt[1]), v(sp[0], gt[1]), "pipe", 0.35, True)
+        sh.line(v(sp[0], gt[1]), v(sp[0], sp[1] + 0.25), "pipe", 0.35, True)
+        sh.line(v(tank[0] - 0.6, tank[1]), v(sp[0] + 0.25, sp[1]), "pipe", 0.35, True)
+        a = v(sp[0] - 0.25, sp[1])
+        sh.line(a, (a[0] - 14, a[1]), "pipe", 0.35, True)
+        sh.text((a[0] - 15, a[1] - 0.7), "ท่อระบายสาธารณะ", 1.8, "right", "pipe")
     drops = []
     for f in (x for x in E["fixtures"] if x["floor"] == k):
         fx = f["fx"]
@@ -2200,6 +2287,16 @@ EE_NOTES = [
     "4. เต้ารับเป็นชนิดมีขั้วสายดิน สูง 0.30 ม. จากพื้น (ห้องน้ำ/ครัว 1.20 ม.) สวิตช์สูง 1.20 ม.",
     "5. จำนวนและตำแหน่งดวงโคมเป็นค่าเริ่มต้นตามพื้นที่ห้อง ให้วิศวกรไฟฟ้าตรวจสอบ"
     "และคำนวณโหลดก่อนใช้งาน",
+    "6. ขนาดสาย: วงจรแสงสว่าง 2.5 ตร.มม. ป้องกันด้วยเบรกเกอร์ 16 A · เต้ารับ 4 ตร.มม. เบรกเกอร์ 20 A · "
+    "เครื่องปรับอากาศ/เครื่องทำน้ำอุ่น วงจรเฉพาะ 4–6 ตร.มม. เบรกเกอร์ 20–32 A ตามพิกัดเครื่อง",
+    "7. สายดินขนาดตามตารางของ วสท. ไม่เล็กกว่า 2.5 ตร.มม. ความต้านทานหลักดินไม่เกิน 5 โอห์ม "
+    "ต่อจุดต่อลงดินที่แผงเมนเพียงจุดเดียว",
+    "8. วงจรห้องน้ำ เครื่องทำน้ำอุ่น เต้ารับนอกอาคาร และเต้ารับใกล้อ่างน้ำ "
+    "ต้องมีเครื่องตัดไฟรั่ว 30 mA",
+    "9. ท่อร้อยสายฝังในผนัง/พื้นใช้ท่อ PVC สีเหลือง (มอก. 216) เดินลอยใช้ท่อ EMT/IMC "
+    "ยึดด้วยแคล้มป์ทุกระยะ 1.50 ม. ท่อใต้ดินใช้ HDPE/IMC ลึกไม่น้อยกว่า 0.30 ม.",
+    "10. ขนาดมิเตอร์และสายเมนให้ยื่นขอกับการไฟฟ้าตามโหลดรวม (ดูตารางโหลด) "
+    "ก่อนเปิดใช้ให้ทดสอบความเป็นฉนวนและการทำงานของเครื่องตัดไฟรั่ว",
 ]
 EE_SYMBOLS = [("light", "ดวงโคมดาวน์ไลท์ / โคมเพดาน 20 W"),
               ("switch", "สวิตช์ทางเดียว สูง 1.20 ม."),
@@ -2435,12 +2532,12 @@ def build_set(data, info=None,
     floors = range(E["n"])
     if "A" in groups:
         add("A", "สารบัญแบบ รายการประกอบแบบสถาปัตยกรรม",
-            lambda sh, all_: a_index(sh, all_, info), "-")
+            lambda sh, all_: a_index(sh, all_, info, E), "-")
         add("A", "ผังบริเวณ", lambda sh, _a: a_site(sh, E, info), "1:200")
         for k in floors:
             add("A", f"แปลนพื้นชั้น {k + 1}",
-                lambda sh, _a, k=k: _set_scale(sh, a_floor(sh, E, k, codes,
-                                                           fcodes)))
+                lambda sh, all_, k=k: _set_scale(sh, a_floor(sh, E, k, codes,
+                                                             fcodes, all_)))
         if L:
             add("A", "แปลนหลังคา", lambda sh, _a: a_roof(sh, E, L))
         if elevations_fit(E, L):
@@ -2505,11 +2602,12 @@ def build_set(data, info=None,
                 lambda sh, _a: ST.s_steel_connections(sh, E, data), "ตามระบุ")
     if "SN" in groups:
         add("SN", "สารบัญแบบ สัญลักษณ์ รายการประกอบแบบสุขาภิบาล",
-            lambda sh, all_: sn_index(sh, all_), "-")
+            lambda sh, all_: sn_index(sh, all_, E), "-")
         for k in floors:
             add("SN", f"แปลนระบบสุขาภิบาลชั้น {k + 1}",
                 lambda sh, _a, k=k: sn_plan(sh, E, k))
         add("SN", "แบบขยายถังบำบัด บ่อพัก ฟลอร์เดรน", lambda sh, _a: sn_details(sh, E), "1:20")
+        add("SN", "แบบขยายบ่อดักไขมัน บ่อพักตะแกรง", lambda sh, _a: sn_traps(sh, E), "1:10")
         add("SN", "ภาพ 3 มิติ การต่อท่อน้ำดี ท่อน้ำเสีย ถังบำบัด",
             lambda sh, _a: sn_iso(sh, data, E), "-")
     if "EE" in groups:
@@ -2908,7 +3006,8 @@ def sn_details(sh, E):
     ox, oy = x0 + 100, y1 - 150
     septic_section(sh, ox, oy, k)
     caption(sh, (ox + 0.55 * k, oy - 24), "แบบขยายถังบำบัดน้ำเสียสำเร็จรูป (รูปตัด)", "1:20")
-    septic_table(sh, x0 + 4, y1 - 8)
+    from core import wanic_sanitary as SAN
+    septic_table(sh, x0 + 4, y1 - 8, SAN.design(E)["septic"])
     oy = y0 + 32
     # manhole
     ox2 = x0 + 140
@@ -2934,18 +3033,90 @@ def sn_details(sh, E):
 
 
 #: prefabricated septic tanks (anaerobic filter): litres → persons, size
-SEPTIC_SIZES = [(600, 5, "Ø 0.88 × 1.40"), (800, 7, "Ø 0.98 × 1.45"),
-                (1000, 10, "Ø 1.05 × 1.55"), (1200, 12, "Ø 1.10 × 1.65"),
-                (1600, 16, "Ø 1.20 × 1.80"), (2000, 20, "Ø 1.35 × 1.90")]
+from core.wanic_sanitary import SEPTIC_SIZES  # noqa: E402
 
 
-def septic_table(sh, x, y):
+def sn_traps(sh, E):
+    """แบบขยายบ่อดักไขมัน บ่อพักตะแกรง: the sections of the grease trap and
+    the screen pit, the grease-trap table with this building's size and the
+    design data (users → sizes)."""
+    from core import wanic_sanitary as SAN
+    x0, y0, x1, y1 = drawing_area()
+    dz = SAN.design(E)
+    k = 1000.0 / 10                                 # 1:10
+    # grease trap: a two-chamber box, the inlet tee down, a baffle, the outlet tee
+    gl, gw, gh = 0.55, 0.40, 0.40
+    ox, oy = x0 + 30, y1 - 120
+    sh.rect(ox, oy, ox + gl * k, oy + gh * k, "cut", 0.5)
+    sh.fill([(ox, oy - 0.05 * k), (ox + gl * k, oy - 0.05 * k), (ox + gl * k, oy), (ox, oy)], "hatch", 0.75)
+    sh.line((ox + gl * k * 0.55, oy + gh * k), (ox + gl * k * 0.55, oy + 0.08 * k), "cut", 0.35)  # baffle
+    sh.line((ox, oy + gh * k * 0.75), (ox - 15, oy + gh * k * 0.75), "pipe", 0.6)
+    sh.line((ox + 0.06 * k, oy + gh * k * 0.75), (ox + 0.06 * k, oy + gh * k * 0.30), "pipe", 0.5)
+    sh.line((ox + gl * k, oy + gh * k * 0.68), (ox + gl * k + 15, oy + gh * k * 0.68), "pipe", 0.6)
+    sh.line((ox + gl * k - 0.06 * k, oy + gh * k * 0.68), (ox + gl * k - 0.06 * k, oy + gh * k * 0.15),
+            "pipe", 0.5)
+    sh.line((ox, oy + gh * k * 0.62), (ox + gl * k, oy + gh * k * 0.62), "dim", 0.13, True)   # water
+    sh.rect(ox - 1, oy + gh * k, ox + gl * k + 1, oy + gh * k + 2, "struct", 0.35)          # lid
+    leaders(sh, [((ox + gl * k / 2, oy + gh * k + 2), "ฝาปิดถอดได้ (ตักไขมันทุก 1–2 สัปดาห์)"),
+                 ((ox + gl * k * 0.55, oy + gh * k * 0.5), "แผ่นกั้นแยกไขมัน"),
+                 ((ox + gl * k * 0.3, oy + gh * k * 0.62), "ระดับน้ำ / ชั้นไขมันลอยผิวน้ำ"),
+                 ((ox + gl * k - 0.06 * k, oy + gh * k * 0.3), "ท่อออกสามทาง Ø2\" (กันไขมันไหลออก)"),
+                 ((ox + gl * k * 0.5, oy - 0.03 * k), "ฐานทราย/คอนกรีตหยาบ 0.05 ม.")], ox + gl * k + 22)
+    sh.text((ox - 14, oy + gh * k * 0.75 + 1.2), "จากซิงก์ครัว Ø2\"", 1.8)
+    caption(sh, (ox + gl * k / 2 + 30, oy - 16),
+            f"แบบขยายบ่อดักไขมัน GT {dz['grease']['litres']} ลิตร (รูปตัด)", "1:10")
+    # the grease-trap table
+    sh.text((x0 + 4, y1 - 8), "ตารางเลือกขนาดบ่อดักไขมันสำหรับบ้านพักอาศัย (ค่าแนะนำ)", 2.4, "left", "text", True)
+    rows = [(f"{l_}", f"≤ {n}", sz, "ใช้" if dz["grease"]["litres"] == l_ else "") for l_, n, sz in SAN.GT_SIZES]
+    i = next(i for i, r in enumerate(SAN.GT_SIZES) if r[0] == dz["grease"]["litres"])
+    yy = y1 - 10 - 5.2 - i * 4.4
+    sh.fill([(x0 + 4, yy), (x0 + 100, yy), (x0 + 100, yy - 4.4), (x0 + 4, yy - 4.4)], "hatch", 0.88)
+    table(sh, x0 + 4, y1 - 10, [("ขนาด (ลิตร)", 22.0, "center"), ("ผู้ใช้ (คน)", 20.0, "center"),
+                                ("ขนาดภายนอก ก×ย×ส (ม.)", 38.0, "center"), ("อาคารนี้", 16.0, "center")],
+          rows, h=2.0, row_h=4.4, head_h=5.2)
+    # screen pit: RC box, a removable screen across the flow
+    sp = dz["screen"]
+    w_, d_, t_ = sp["l"], sp["depth"], sp["wall"]
+    ox2, oy2 = x0 + 175, y1 - 120
+    for a, b in ((ox2, ox2 + t_ * k), (ox2 + (t_ + w_) * k, ox2 + (2 * t_ + w_) * k)):
+        sh.fill([(a, oy2), (b, oy2), (b, oy2 + (d_ + t_) * k), (a, oy2 + (d_ + t_) * k)], "hatch", 0.75)
+        sh.rect(a, oy2, b, oy2 + (d_ + t_) * k, "cut", 0.35)
+    sh.fill([(ox2, oy2), (ox2 + (2 * t_ + w_) * k, oy2), (ox2 + (2 * t_ + w_) * k, oy2 + t_ * k),
+             (ox2, oy2 + t_ * k)], "hatch", 0.75)
+    sh.rect(ox2, oy2, ox2 + (2 * t_ + w_) * k, oy2 + t_ * k, "cut", 0.35)
+    mid = ox2 + (t_ + w_ / 2) * k
+    sh.line((mid, oy2 + (t_ + 0.05) * k), (mid + 0.08 * k, oy2 + (t_ + d_ - 0.05) * k), "pipe", 0.5, True)
+    sh.line((ox2 - 15, oy2 + (t_ + d_ * 0.55) * k), (ox2 + t_ * k, oy2 + (t_ + d_ * 0.55) * k), "pipe", 0.6)
+    sh.line((ox2 + (t_ + w_) * k, oy2 + (t_ + d_ * 0.45) * k),
+            (ox2 + (2 * t_ + w_) * k + 15, oy2 + (t_ + d_ * 0.45) * k), "pipe", 0.6)
+    sh.rect(ox2 - 1, oy2 + (t_ + d_) * k, ox2 + (2 * t_ + w_) * k + 1, oy2 + (t_ + d_) * k + 2.5, "struct", 0.35)
+    leaders(sh, [((ox2 + (t_ + w_ / 2) * k, oy2 + (t_ + d_) * k + 2.5), "ฝาตะแกรงเหล็ก/ฝา คสล. ถอดได้"),
+                 ((mid + 0.04 * k, oy2 + (t_ + d_ / 2) * k), sp["screen"]),
+                 ((ox2 + t_ * k / 2, oy2 + (t_ + d_ * 0.8) * k), f"ผนัง คสล. หนา {t_:.2f} ม."),
+                 ((ox2 + (2 * t_ + w_) * k + 10, oy2 + (t_ + d_ * 0.45) * k), "ออกสู่ท่อระบายสาธารณะ"),
+                 ((ox2 + (t_ + w_ / 2) * k, oy2 + t_ * k / 2), "พื้น คสล. หนา 0.10 ม. บนทรายอัดแน่น")],
+            ox2 + (2 * t_ + w_) * k + 22)
+    sh.text((ox2 - 15, oy2 + (t_ + d_ * 0.55) * k + 1.2), f"จาก GT / ST {sp['pipe']}", 1.8)
+    caption(sh, (ox2 + (t_ + w_ / 2) * k + 25, oy2 - 16),
+            f"แบบขยายบ่อพักตะแกรง SP ภายใน {sp['w']:.2f}×{sp['l']:.2f} ลึก {sp['depth']:.2f} ม. (รูปตัด)", "1:10")
+    # design data
+    notes_block(sh, x0 + 4, y0 + 58, "ข้อมูลการออกแบบ (คิดจากจำนวนผู้ใช้)", SAN.design_lines(E), 2.3, 120)
+
+
+def septic_table(sh, x, y, pick=None):
+    """The septic sizes; ``pick`` (from wanic_sanitary.septic_pick) marks
+    the one this building uses."""
     sh.text((x, y), "ตารางเลือกขนาดถังบำบัดน้ำเสียสำเร็จรูป (ไร้อากาศ ชนิดมีตัวกลาง)", 2.4,
             "left", "text", True)
+    rows = [(f"{l_:,}", str(p_), d_, ("ใช้" + (f" ×{pick['count']}" if pick["count"] > 1 else ""))
+             if pick and pick["litres"] == l_ else "") for l_, p_, d_ in SEPTIC_SIZES]
+    if pick:
+        i = next(i for i, r in enumerate(SEPTIC_SIZES) if r[0] == pick["litres"])
+        yy = y - 2 - 5.2 - i * 4.4
+        sh.fill([(x, yy), (x + 96, yy), (x + 96, yy - 4.4), (x, yy - 4.4)], "hatch", 0.88)
     return table(sh, x, y - 2, [("ขนาด (ลิตร)", 22.0, "center"), ("ผู้ใช้ (คน)", 20.0, "center"),
-                                ("ขนาดถังโดยประมาณ (ม.)", 38.0, "center")],
-                 [(f"{l_:,}", str(p_), d_) for l_, p_, d_ in SEPTIC_SIZES],
-                 h=2.0, row_h=4.4, head_h=5.2)
+                                ("ขนาดถังโดยประมาณ (ม.)", 38.0, "center"), ("อาคารนี้", 16.0, "center")],
+                 rows, h=2.0, row_h=4.4, head_h=5.2)
 
 
 def leaders(sh, items, x_col, side="right", gap=4.2, h=1.8):
@@ -3315,7 +3486,7 @@ def a_bath_elevations(sh, E, rooms):
     """รูปด้านภายในห้องน้ำ: the four walls of each bathroom (two rooms a
     sheet) at 1:50, side by side, named ก ข ค ง round the room."""
     x0, y0, x1, y1 = drawing_area()
-    names = ("ก", "ข", "ค", "ง")
+    names = ("A", "B", "C", "D")                   # as the marker on the floor plan
     side_name = ("ทิศใต้", "ทิศตะวันออก", "ทิศเหนือ", "ทิศตะวันตก")
     y = y1 - 20
     for k, rm in rooms:
@@ -3326,11 +3497,14 @@ def a_bath_elevations(sh, E, rooms):
         ix0, iy0, ix1, iy1 = B.room_inner(E, rm, k)
         for side in range(4):
             widths.append(((ix1 - ix0) if side in (0, 2) else (iy1 - iy0)) * kk)
-        need = sum(widths) + 4 * 44
-        if need > x1 - x0:
-            sc = 75
-            kk = 1000.0 / sc
-            widths = [w_ * 50 / 75 for w_ in widths]
+        avail = x1 - x0 - 26 - 14                    # the level marks left, the dims right
+        for sc_ in (50, 75, 100):
+            ws = [w_ * 50 / sc_ for w_ in widths]
+            gap = min(44.0, (avail - sum(ws)) / 3)
+            if gap >= 34:
+                break
+        sc, widths = sc_, ws
+        kk = 1000.0 / sc
         oy = y - zc * kk - 6
         x = x0 + 26
         for side in range(4):
@@ -3340,7 +3514,7 @@ def a_bath_elevations(sh, E, rooms):
             th_ = min(float(CAT.finish_of(rm).get("tile_h") or 2.0), zc)
             sh.text((x + w_ / 2, oy - 17), f"({side_name[side]}) 1:{sc} · กรุกระเบื้อง "
                                            f"0.30×0.60 สูง {th_:.2f} ม.", 2.0, "center")
-            x += w_ + 44
+            x += w_ + gap
         sh.text((x0 + 2, y + 6), f"{rm.get('name')} · ชั้น {k + 1} · "
                                  f"{rm['w']:.2f}×{rm['d']:.2f} ม. — พื้นต่ำกว่าห้องข้างเคียง "
                                  f"0.05 ม. ลาดเข้าฟลอร์เดรน 1:100", 3.0, "left", "text", True)
