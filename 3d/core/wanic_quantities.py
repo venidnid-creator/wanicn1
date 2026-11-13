@@ -420,6 +420,31 @@ def compute(data) -> dict:
             props(g, title, soffit * S.PROPS_PER_M_BEAM,
                   f"ท้องคานยาว {soffit:.2f} ม. × 1.5")
 
+    # --- 3b. เขียนแบบอิสระ: free beams and columns ----------------------
+    from core import wanic_free as FR
+    fr = FR.free_of(data)
+    for key, g_, title in (("beams", "beam", "คาน (เขียนอิสระ: เอียง/โค้ง)"), ("columns", "column", "เสา (เขียนอิสระ)")):
+        vol = area = 0.0
+        txt = []
+        for el in fr[key]:
+            spec = lib.get(el.get("mark"), lib["B1" if key == "beams" else "C1"])
+            b, h = float(spec.get("b", 0.2)), float(spec.get("h", 0.2))
+            L = FR.length3(el["pts"]) if key == "beams" else float(el["z1"]) - float(el["z0"])
+            vol += b * h * L
+            area += (b + 2 * h if key == "beams" else 2 * (b + h)) * L
+            txt.append(f"{el.get('mark')} {b:g}×{h:g}×{L:.2f}")
+            main = [spec.get("top", ""), spec.get("bot", "")] if key == "beams" else [spec.get("main", "")]
+            for t_ in main:
+                sp = S.parse_bar(t_ or "")
+                if sp and sp[0]:
+                    bars([(sp[1], sp[0] * L)])
+            tp = S.parse_bar(spec.get("stir" if key == "beams" else "tie", "") or "")
+            if tp and tp[2]:
+                bars([(tp[1], S.bar_count(L, tp[2]) * 2 * (b + h))])
+        if vol:
+            concrete(g_, title, vol, "; ".join(txt) + " (ยาวตามแนวจริง)")
+            formwork(g_, title, area, "ท้อง + ข้าง 2 ด้าน" if key == "beams" else "รอบเสา")
+
     # --- 4. Slabs --------------------------------------------------------
     g = "slab"
     for ground, title in ((True, "พื้นวางบนดิน"), (False, "พื้นชั้นบน")):
@@ -550,6 +575,17 @@ def compute(data) -> dict:
                 key = (True, sp["recipe"])
                 by_type[key] = by_type.get(key, 0.0) + a
                 ext_face += a
+        # free walls (เขียนอิสระ, straight or curved): interior brick, plaster both faces
+        from core import wanic_free as FR
+        for wl in FR.free_of(data)["walls"]:
+            hh = float(wl.get("h") or 0.0) or H - float(lib["B1"]["h"])
+            a = FR.length2(wl["pts"]) * hh
+            wall_a += a
+            sp = B.wall_spec(s, bool(wl.get("exterior")))
+            key = (bool(wl.get("exterior")), sp["recipe"])
+            by_type[key] = by_type.get(key, 0.0) + a
+            int_face += a if wl.get("exterior") else 2 * a
+            ext_face += a if wl.get("exterior") else 0.0
         # Wall tiles inside rooms that have them (bathroom, kitchen …).
         for e in E["slabs"]:
             rm = e["room"]

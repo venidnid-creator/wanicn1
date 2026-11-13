@@ -136,6 +136,11 @@ class RCPanel(QWidget):
         self.stair_btn.setToolTip("บันไดช่วงตรง / ตัว L / สองช่วง — ขนาดขั้นตามกฎกระทรวง 55 · ท้องบันได · เหล็ก · คานชานพัก")
         self.stair_btn.clicked.connect(self.edit_stairs)
         row.addWidget(self.stair_btn)
+        self.free_btn = QPushButton("ชิ้นส่วนเขียนอิสระ…")
+        self.free_btn.setToolTip("คาน/เสา/ผนัง จากเส้นที่วาดในโมเดล (ตรง เอียง โค้ง) — "
+                                 "วาดเส้น → เลือก → คลิกขวา «แปลงเส้นที่เลือกเป็น…»")
+        self.free_btn.clicked.connect(self.edit_free)
+        row.addWidget(self.free_btn)
         self.pile_btn = QPushButton("เสาเข็ม 2 ขนาด / กำลังเข็ม…")
         self.pile_btn.setToolTip("เสาเข็ม P1/P2 · กำลังจากผลทดสอบสถิต/พลวัต · บันทึกการตอก (Hiley) · ข้อมูลเจาะดิน")
         self.pile_btn.clicked.connect(self.edit_piles)
@@ -265,6 +270,7 @@ class RCPanel(QWidget):
         self.check_btn.setVisible(calc)
         self.stair_btn.setVisible(calc or self.step == "slab")
         self.pile_btn.setVisible(calc or self.step == "footing")
+        self.free_btn.setVisible(calc or self.step == "upper")
         self.select_btn.setVisible(not calc and self.step != "rebar")
         self._loading = True
         try:
@@ -696,6 +702,12 @@ class RCPanel(QWidget):
         except Exception as e:                       # noqa: BLE001 - shown, never a crash
             built = f" · อัปเดตโมเดลไม่ได้: {e}"
         self.refresh()
+        if self.step != "calc":                      # the table shows another step: a fresh calculation
+            from core import wanic_calc as C
+            try:
+                self._calc = C.analyse(self.data())
+            except Exception:                        # noqa: BLE001 - the status only
+                self._calc = None
         bad = sum(1 for m in (self._calc or {}).get("members") or [] if not m.ok)
         self.status.setText(what + built + (" · ✓ ผ่านทุกรายการ" if not bad else f" · ยังไม่ผ่าน {bad} รายการ"))
 
@@ -755,6 +767,50 @@ class RCPanel(QWidget):
         d["cantilevers"] = dlg.cantilevers()
         bp._write(d)
         self._rebuild_after_fix(f"บันทึกคานยื่น {len(d['cantilevers'])} ตัว")
+
+    def edit_free(self):
+        from core.wanic_free_view import FreeListDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = FreeListDialog(self, d)
+        if dlg.exec() != FreeListDialog.Accepted:
+            return
+        n = dlg.apply(d)
+        bp._write(d)
+        self._rebuild_after_fix(f"ชิ้นส่วนเขียนอิสระ {n} ชิ้น")
+
+    def convert_selection(self):
+        """แปลงเส้นที่เลือกเป็น คาน / เสา / ผนัง (เขียนแบบอิสระ)."""
+        from core import wanic_free as FR
+        from core.wanic_free_view import FreeConvertDialog
+        bp = self.building()
+        if bp is None:
+            return
+        scene = self.app.scene
+        edges = [e for e in scene.selection if hasattr(e, "v0") and hasattr(e, "v1")]
+        chains = FR.chains_from_edges(edges)
+        try:                                          # editing inside a group: to world metres
+            from plugins.wanic_profiles import _matrix_of
+            m = _matrix_of(scene, getattr(scene, "edit_group", None))
+        except Exception:                             # noqa: BLE001
+            m = None
+        if m is not None:
+            from PySide6.QtGui import QVector3D
+            for ch in chains:
+                ch["pts"] = [tuple(round(c, 4) for c in (lambda q: (q.x(), q.y(), q.z()))(m.map(QVector3D(*p))))
+                             for p in ch["pts"]]
+        if not chains:
+            QMessageBox.information(self, TITLE, "เลือกเส้นที่วาดไว้ในโมเดลก่อน (เส้นตรง เส้นโค้ง เส้นเอียง หรือเส้นดิ่ง)")
+            return
+        d = bp.data()
+        dlg = FreeConvertDialog(self, d, chains)
+        if dlg.exec() != FreeConvertDialog.Accepted:
+            return
+        n = dlg.apply(d, chains)
+        bp._write(d)
+        self._rebuild_after_fix(f"แปลงเป็น คาน {n['beams']} · เสา {n['columns']} · ผนัง {n['walls']} ชิ้น")
 
     def edit_piles(self):
         from core.wanic_pile_view import PileDialog
@@ -909,6 +965,15 @@ def setup(app) -> None:
         app.show_panel(dock)
         dock.raise_()
         panel.refresh()
+
+    def context(menu, selection):
+        if any(hasattr(e, "v0") and hasattr(e, "v1") for e in selection):
+            from PySide6.QtCore import QTimer as _T
+            menu.addAction("แปลงเส้นที่เลือกเป็น คาน / เสา / ผนัง…",
+                           lambda: _T.singleShot(0, panel.convert_selection))
+
+    if hasattr(app, "add_context_menu"):
+        app.add_context_menu(context)
 
     app.add_menu_action("WANIC ออกแบบโครงสร้าง คสล.…", show,
                         tip="กริด ฐานราก ตอม่อ คานคอดิน พื้น เสา คาน ถึงโครงหลังคา "

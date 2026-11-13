@@ -137,7 +137,13 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - wanic_calc footing ใช้ cap ต่อเบอร์ ชื่อ «เข็ม n ต้น (P1)»; calc_cards rows มี pcap/ptype; advice ใช้ pcap; บรรทัดหัวขั้น 9 และ PDF ใช้ pile_text
      - UI core/wanic_pile_view.py PileDialog (P1/P2 คู่กัน ผลสด, ตารางฐานราก จำนวนเข็ม + เลือก P1/P2) ปุ่ม «เสาเข็ม 2 ขนาด / กำลังเข็ม…» ขั้น 2 และ 9; รูปเล่ม pile_page
      - tests/test_wanic_pile.py (ใน CI; ต้อง deleteLater dialog กัน segfault ตอนปิด) · อนุมัติแล้ว (13 พ.ย.)
-   + [ ] (กำลังทำ) แผนข้อ 8 — เขียนแบบอิสระ:
+   + [x] (รออนุมัติภาพ) แผนข้อ 8 — เขียนแบบอิสระ (ทำครบแล้ว):
+     - core/wanic_free.py: chains_from_edges (แยกสายที่จุดแตกกิ่ง, curved จาก edge.curve/soft), add_from_chains (auto แยกช่วงดิ่งเป็นเสา), free_of, length2/3, supports_of (ปลาย + จุดที่มีเสาในระยะ 5 ซม.), members (กวาดหน้าตัดตามทั้งสาย: คาน anchor "tc", เสา, ผนัง "bc"), analyse_free (w ต่อเมตรแนวราบ = น้ำหนักตัวเอง×L3/Lh + w เพิ่ม + ผนังอิสระบนคาน; ปฏิกิริยาเข้า col_load/col_lv ของเสาเดิม; เสาอิสระตรวจ P-M; คานโค้งเตือนแรงบิด) — เรียกใน wanic_calc.analyse ก่อนส่วนเสา + ฐาน F1 ใต้เสาอิสระที่ไม่มีฐานกริด
+     - B.elements มี E["free"]; structure_members เพิ่ม FR.members; BOQ หมวด 3b คาน/เสาอิสระ (คอนกรีต ไม้แบบ เหล็ก) + ผนังอิสระในหมวดผนัง; drawings bbox รวมชิ้นอิสระ, draw_free ในแปลน A (ผนัง เสา) และแปลนคาน S (คาน «B1 เอียง +3.00→+4.00» / «โค้ง»)
+     - UI core/wanic_free_view.py: FreeConvertDialog (คลิกขวาที่เส้นที่เลือก «แปลงเส้นที่เลือกเป็น คาน / เสา / ผนัง…» — ลงทะเบียนใน plugins/wanic_rc.setup ผ่าน app.add_context_menu), FreeListDialog (ปุ่ม «ชิ้นส่วนเขียนอิสระ…» ขั้น 6 และ 9: แก้เบอร์ น้ำหนักเพิ่ม ลบ); แปลงพิกัดในกลุ่มด้วย plugins.wanic_profiles._matrix_of
+     - _rebuild_after_fix คำนวณใหม่เมื่อไม่ได้อยู่ขั้น 9 (เดิมสถานะ «ผ่านทุกรายการ» ผิด)
+     - tests/test_wanic_free.py (ใน CI) · แผนจากการศึกษา QD ครบทั้ง 8 ข้อแล้ว → รอผู้ใช้สั่งสร้างตัวติดตั้งรุ่นใหม่ (เช่น 2026.11.13.1) รวมทุกงาน
+   + (ข้อมูลออกแบบเดิมของข้อ 8):
      - ออกแบบ: data["free"] = {"beams": [{"pts": [[x,y,z]…] (ม.), "mark" (เบอร์คานในคลัง), "curved", "w" (กก./ม. เพิ่ม)}], "columns": [{"x","y","z0","z1","mark"}], "walls": [{"pts": [[x,y]…], "z", "h", "t", "curved"}]}
      - core/wanic_free.py: chains (แยกเส้นที่เลือกเป็นสาย, ใช้ core.sweep.order_path_edges เหมือน plugins/wanic_profiles.path_from_selection), classify (แนวดิ่ง → เสา, ระดับพื้น → ผนัง/คาน ตามที่ผู้ใช้เลือก), members 3D (กวาดหน้าตัดตามเส้นทั้งสาย — โค้ง/เอียงได้), BOQ, analyse (คานอิสระ: จุดรองรับ = ปลาย + จุดที่มีเสา; น้ำหนักตามแนวราบ /cos; คานโค้งเตือนแรงบิด; ปฏิกิริยาลงเสาเดิมเข้า col_load; เสาอิสระตรวจ P-M + ฐาน F1)
      - UI: เมนูคลิกขวา «แปลงเส้นที่เลือกเป็น คาน/เสา/ผนัง» + หน้าต่างรายการชิ้นส่วนอิสระในแผง คสล.; วาดในแปลน A/S

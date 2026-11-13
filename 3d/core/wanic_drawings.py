@@ -369,7 +369,71 @@ def bbox(E, pad=0.0):
     xs, ys = grids(E)
     if not xs:
         return (0, 0, 1, 1)
-    return (xs[0] - pad, ys[0] - pad, xs[-1] + pad, ys[-1] + pad)
+    x0, y0, x1, y1 = xs[0], ys[0], xs[-1], ys[-1]
+    fr = E.get("free") or {}
+    pts = [p for b in fr.get("beams") or [] for p in b["pts"]] + \
+        [p for w in fr.get("walls") or [] for p in w["pts"]] + \
+        [(c["x"], c["y"]) for c in fr.get("columns") or []]
+    for p in pts:
+        x0, y0, x1, y1 = min(x0, p[0]), min(y0, p[1]), max(x1, p[0]), max(y1, p[1])
+    return (x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+
+
+def _offset_line(pts, d):
+    """A polyline offset sideways by ``d`` (mitred joints)."""
+    out = []
+    n = len(pts)
+    for i in range(n):
+        a = pts[max(i - 1, 0)]
+        b = pts[min(i + 1, n - 1)]
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(dx, dy) or 1.0
+        out.append((pts[i][0] - dy / L * d, pts[i][1] + dx / L * d))
+    return out
+
+
+def draw_free(sh, v, E, z_lo, z_hi, what=("walls", "columns", "beams")):
+    """เขียนแบบอิสระ: the free walls (two lines, hatch-less), columns
+    (filled) and beams (dashed, with their mark) between levels z_lo–z_hi."""
+    fr = E.get("free") or {}
+    lib = E["lib"]
+    if "walls" in what:
+        for w in fr.get("walls") or []:
+            if not (z_lo - 0.05 <= float(w.get("z") or 0.0) < z_hi - 0.05):
+                continue
+            pts = [(p[0], p[1]) for p in w["pts"]]
+            t = float(w.get("t") or 0.10)
+            for side in (-1, 1):
+                q = _offset_line(pts, side * t / 2)
+                for a, b in zip(q, q[1:]):
+                    sh.line(v(*a), v(*b), "wall", 0.5)
+    if "columns" in what:
+        for c in fr.get("columns") or []:
+            if not (float(c["z0"]) <= z_lo + 0.05 and float(c["z1"]) > z_lo + 0.05):
+                continue
+            b = float(lib.get(c.get("mark"), {}).get("b", 0.2))
+            x, y = float(c["x"]), float(c["y"])
+            sh.fill([v(x - b / 2, y - b / 2), v(x + b / 2, y - b / 2), v(x + b / 2, y + b / 2), v(x - b / 2, y + b / 2)],
+                    "column", 0.15)
+            p = v(x + b / 2, y + b / 2)
+            sh.text((p[0] + 0.6, p[1] + 0.6), f"{c.get('mark') or 'C1'} (อิสระ)", 1.8, "left", "struct")
+    if "beams" in what:
+        for i, bm in enumerate(fr.get("beams") or []):
+            zs = [p[2] for p in bm["pts"]]
+            if not (z_lo - 0.05 <= min(zs) < z_hi - 0.05):
+                continue
+            b = float(lib.get(bm.get("mark"), {}).get("b", 0.2))
+            pts = [(p[0], p[1]) for p in bm["pts"]]
+            for side in (-1, 1):
+                q = _offset_line(pts, side * b / 2)
+                for a, c in zip(q, q[1:]):
+                    sh.line(v(*a), v(*c), "struct", 0.35, True)
+            mid = pts[len(pts) // 2] if len(pts) > 2 else ((pts[0][0] + pts[-1][0]) / 2, (pts[0][1] + pts[-1][1]) / 2)
+            m = v(*mid)
+            rise = max(zs) - min(zs)
+            lab = f"{bm.get('mark')} {'โค้ง' if bm.get('curved') else 'เอียง' if rise > 0.02 else ''}"
+            lab += f" {min(zs):+.2f}" + (f"→{max(zs):+.2f}" if rise > 0.02 else "")
+            sh.text((m[0], m[1] + 1.4), lab.replace("  ", " "), 2.0, "center", "struct", True)
 
 
 def outward(wall, rooms):
@@ -1021,6 +1085,7 @@ def a_floor(sh, E, k, codes, fcodes, sheets=None):
     draw_grid(sh, v, E)
     draw_walls(sh, v, E, k, t, codes)
     draw_rooms(sh, v, E, k, fcodes)
+    draw_free(sh, v, E, k * E["H"], (k + 1) * E["H"], ("walls", "columns"))
     draw_stairs(sh, v, E, k)
     draw_fixtures(sh, v, E, k)
     section_marks(sh, v, E, k)
@@ -2002,6 +2067,8 @@ def s_beams(sh, E, lvl):
         m = v((x0 + x1) / 2 + nx * 0.25, (y0 + y1) / 2 + ny * 0.25)
         sh.text(m, f"{bm['mark']} {float(bm.get('z', 0.0)):+.2f}", 2.2, "center", "struct", True,
                 90 if abs(x1 - x0) < 1e-6 else 0)
+    H_ = E["H"]
+    draw_free(sh, v, E, lvl * H_ - H_ / 2 if lvl else -9.0, lvl * H_ + H_ / 2, ("beams", "columns"))
     cols = [c for c in E["columns"] if c["floor"] == min(lvl, E["n"] - 1)] \
         if lvl < E["n"] else [c for c in E["columns"] if c["floor"] == E["n"] - 1]
     for c in cols:

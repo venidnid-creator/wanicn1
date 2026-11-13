@@ -833,6 +833,14 @@ def analyse(data) -> dict:
                 col_mom[k_] = max(col_mom.get(k_, 0.0), mc_ / 2.0)
             else:
                 col_mom[k_] = max(col_mom.get(k_, 0.0), sp_.w * sp_.L ** 2 / 16.0 / 2.0)
+    # -- เขียนแบบอิสระ: free beams (reactions into col_load) and free columns
+    free_cols = []
+    try:
+        from core import wanic_free as FR
+        if FR.free_of(data)["beams"] or FR.free_of(data)["columns"]:
+            free_cols = FR.analyse_free(data, b_, out, col_load, col_lv)
+    except Exception as e:                           # noqa: BLE001 - never stops the rest
+        out.append(Member("beam", "ชิ้นส่วนเขียนอิสระ", f"คำนวณไม่ได้: {e}", "-", 9.9))
     # -- columns: everything above, per column line (the ground floor's carries it all)
     cols_out = []
     for c_ in E["columns"]:
@@ -883,6 +891,27 @@ def analyse(data) -> dict:
                               f"q = {q:,.2f} ตัน/ตร.ม.", f"ดินรับได้ {b_['soil']:g} ตัน/ตร.ม.", q / b_["soil"],
                               f"ต้องใช้ฐานอย่างน้อย {math.sqrt(P / 1000 / b_['soil']):.2f} × "
                               f"{math.sqrt(P / 1000 / b_['soil']):.2f} ม.",
+                              qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
+    # footings under the free columns that stand on the ground (mark F1)
+    grid_feet = {(round(f["x"], 3), round(f["y"], 3)) for f in E["footings"]}
+    fspec = lib.get("F1", {})
+    for k_, Pu in free_cols:
+        if k_ in grid_feet:
+            continue
+        P = Pu / avg + float(fspec.get("w", 1)) * float(fspec.get("l", 1)) * float(fspec.get("t", 0.3)) * conc
+        piles = int(fspec.get("piles") or 0)
+        if piles:
+            from core import wanic_pile as PL
+            pc = PL.cap_of(fspec, data, b_)
+            cap = piles * pc * 1000
+            out.append(Member("footing", f"F1 ใต้เสาอิสระ ที่ ({k_[0]:.2f}, {k_[1]:.2f}) · เข็ม {piles} ต้น",
+                              f"P = {P / 1000:,.2f} ตัน (ใช้งาน)", f"เข็ม {piles} × {pc:,.2f} = {cap / 1000:,.2f} ตัน",
+                              P / cap if cap else 9.9, qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
+        else:
+            A_ = float(fspec.get("w", 1)) * float(fspec.get("l", 1))
+            q = P / A_ / 1000 if A_ else 99.0
+            out.append(Member("footing", f"F1 ใต้เสาอิสระ ที่ ({k_[0]:.2f}, {k_[1]:.2f}) · ฐานแผ่",
+                              f"q = {q:,.2f} ตัน/ตร.ม.", f"ดินรับได้ {b_['soil']:g} ตัน/ตร.ม.", q / b_["soil"],
                               qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
     # column loads floor by floor (for the booklet's column cards): a column
     # of floor f carries the beams of the levels above it; the stump all

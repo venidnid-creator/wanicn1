@@ -453,7 +453,7 @@ def elements(data) -> dict:
     E = {"footings": [], "stumps": [], "columns": [], "beams": [],
          "slabs": [], "walls": [], "openings": [], "stairs": [],
          "fixtures": [], "n": n,
-         "H": H, "lib": lib, "settings": s, "floors": floors}
+         "H": H, "lib": lib, "settings": s, "floors": floors, "free": {"beams": [], "columns": [], "walls": []}}
     if not floors:
         return E
     rooms_of = [f["rooms"] for f in floors]
@@ -545,6 +545,8 @@ def elements(data) -> dict:
                 E["stairs"].append({"floor": k, "st": stp})
         for fx in f.get("fixtures") or []:
             E["fixtures"].append({"floor": k, "fx": fx})
+    from core import wanic_free as FR
+    E["free"] = FR.free_of(data)
     return E
 
 
@@ -1254,6 +1256,9 @@ def structure_members(data) -> tuple[list, dict]:
             add(g, kind)
     except ImportError:                                 # pragma: no cover
         pass
+    from core import wanic_free as FR                    # เขียนแบบอิสระ
+    for g, kind in FR.members(data):
+        add(g, kind)
     return out, count
 
 
