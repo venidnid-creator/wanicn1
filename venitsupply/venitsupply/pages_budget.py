@@ -130,7 +130,10 @@ class BudgetBox(QGroupBox):
 # ================================================================ budget
 class BudgetPage(QWidget):
     COLS = ["รายการ", "ตามข้อบัญญัติ", "โอน/เพิ่มเติม", "งบหลังโอน", "จองเงิน", "ก่อหนี้ผูกพัน",
-            "เบิกจ่ายแล้ว", "คงเหลือ", "% ใช้"]
+            "เบิกจ่ายแล้ว", "คงเหลือ", "% ใช้", "การจัดหา"]
+    # แถบสีตามขั้นการจัดหาที่ยังค้างอยู่ (เจ้าของกำหนด 13 พ.ย. 2569)
+    STAGE_COLORS = {1: "#E2E2E2", 2: "#FDE3C8", 3: "#D3E8FB"}
+    STAGE_NAMES = {1: "จัดซื้อ/จัดจ้างแล้ว รอตรวจรับ", 2: "ตรวจรับแล้ว", 3: "เบิกจ่ายแล้ว"}
 
     def __init__(self, win):
         super().__init__()
@@ -163,6 +166,11 @@ class BudgetPage(QWidget):
         ob.clicked.connect(self.edit_ordinance)
         orow.addWidget(ob)
         lay.addLayout(orow)
+        legend = QLabel("  ".join(
+            f"<span style='background:{c}; border:1px solid #BBB'>&nbsp;&nbsp;&nbsp;&nbsp;</span> {T(n)}"
+            for c, n in ((self.STAGE_COLORS[k], self.STAGE_NAMES[k]) for k in (1, 2, 3))))
+        legend.setTextFormat(Qt.RichText)
+        lay.addWidget(legend)
         split = QSplitter(Qt.Horizontal)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels([T(c) for c in self.COLS])
@@ -208,6 +216,7 @@ class BudgetPage(QWidget):
         self.tree.clear()
         self.info.setHtml("")
         rows = s.budget_summary(fy)
+        stages = s.proc_stage(fy)
         tot = dict(budget=0, reserved=0, committed=0, paid=0, available=0)
         nodes = {}
         sums = {}
@@ -238,6 +247,12 @@ class BudgetPage(QWidget):
                     r["available"]]
             leaf = QTreeWidgetItem([b["name"]] + [m(v) for v in vals] + [self._pct(r)])
             leaf.setData(0, Qt.UserRole, b["id"])
+            if b["id"] in stages:
+                stage, text = stages[b["id"]]
+                leaf.setText(9, text)
+                color = QColor(self.STAGE_COLORS[stage])
+                for c in range(len(self.COLS)):
+                    leaf.setBackground(c, color)
             leaf.setToolTip(0, f"{b['type']} › {b['name']}" + (f"\n{b['note']}" if b["note"] else ""))
             self._style(leaf, r["available"])
             parent.addChild(leaf)
@@ -606,7 +621,7 @@ class ProcDialog(QDialog):
         self.lines = LineTable(s, self.update_box)
         left.addWidget(QLabel(f"<b>{T('รายละเอียดพัสดุ')}</b>"))
         left.addWidget(self.lines, 1)
-        lr, _ = _buttons(("เพิ่มแถว", lambda: self.lines.add()), ("ลบแถว", self._del_line), (None, None))
+        lr, _ = _buttons(("เพิ่มแถว", self._add_line), ("ลบแถว", self._del_line), (None, None))
         left.addLayout(lr)
         g = QFormLayout()
         self.amount = QDoubleSpinBox()
@@ -727,7 +742,28 @@ class ProcDialog(QDialog):
             self.lines.removeRow(r)
             self.update_box()
 
+    def _add_line(self):
+        self.lines.add()
+        self._last_target = None
+        self.update_box()
+
+    def _auto_targets(self):
+        """Lines bought with ค่าครุภัณฑ์/ค่าวัสดุ go to the asset register / stock card by themselves."""
+        kind, cid = self.store.target_for(self.bitem.currentData(), self.kind.currentData())
+        if getattr(self, "_last_target", None) == (kind, cid):
+            return
+        self._last_target = (kind, cid)
+        for r in range(self.lines.rowCount()):
+            tc, cc = self.lines.cellWidget(r, 5), self.lines.cellWidget(r, 6)
+            if tc is None:
+                continue
+            tc.setCurrentIndex(max(0, tc.findData(kind)))
+            if cid is not None and cc.findData(cid) >= 0:
+                cc.setCurrentIndex(cc.findData(cid))
+
     def update_box(self, *_):
+        if not self.locked and hasattr(self, "bitem"):
+            self._auto_targets()
         if self.auto.isChecked():
             self.amount.blockSignals(True)
             self.amount.setValue(self.lines.total())

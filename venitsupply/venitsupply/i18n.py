@@ -6,6 +6,7 @@ LANG = "th"
 
 EN = {
     "พัสดุเวนิช": "VENIT SUPPLY", "โปรแกรมบริหารพัสดุภาครัฐ": "Government supply management",
+    "โปรแกรมบริหารพัสดุภาคเวนิช FC": "Venit FC supply management",
     "หน้าหลัก": "Home", "ครุภัณฑ์": "Assets", "วัสดุ": "Materials", "ยืม-คืน": "Loans",
     "ตรวจสอบประจำปี": "Annual check", "จำหน่าย": "Disposal", "รายงาน": "Reports", "ตั้งค่า": "Settings",
     "ไฟล์": "File", "ฐานข้อมูลใหม่…": "New database…", "เปิดฐานข้อมูล…": "Open database…",

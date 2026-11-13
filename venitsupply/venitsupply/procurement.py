@@ -223,7 +223,92 @@ class ProcurementMixin:
             self.dispose(p["exchange_asset_id"], date, "แลกเปลี่ยน", 0, p["number"])
         return fine
 
+    # ------------------------------------------------- automatic registration
+    def register_target(self, pid) -> tuple[str, int | None]:
+        """Where a purchase goes by its budget: ค่าครุภัณฑ์ → ทะเบียนครุภัณฑ์, ค่าวัสดุ → บัญชีวัสดุ.
+
+        Only ซื้อ / แลกเปลี่ยน; repairs and services (จ้าง, เช่า, ค่าบำรุงรักษา…) are not registered.
+        Returns (target, category id of the asset/material type that best matches the budget type).
+        """
+        p = self.procurement(pid)
+        return self.target_for(p["budget_item_id"], p["kind"]) if p else ("", None)
+
+    def target_for(self, bid, kind) -> tuple[str, int | None]:
+        b = self.budget_item(bid) if bid else None
+        if b is None or kind not in ("ซื้อ", "แลกเปลี่ยน"):
+            return "", None
+        cat, typ = b["category"] or "", (b["type"] or "").replace(" ", "")
+        if typ.startswith(("ค่าบำรุง", "ค่าซ่อม", "ค่าปรับปรุง")):
+            return "", None
+        kind = "asset" if cat == "ค่าครุภัณฑ์" else "material" if cat == "ค่าวัสดุ" else ""
+        if not kind:
+            return "", None
+        best, score = None, 0
+        for c in self.categories(kind):
+            name = c["name"].replace(" ", "")
+            core = name.replace("ครุภัณฑ์", "").replace("วัสดุ", "")
+            sc = 100 if name == typ else (len(core) if core and core in typ else 0)
+            if sc > score:
+                best, score = c["id"], sc
+        if best is None:                          # «…อื่น» of that kind
+            other = [c for c in self.categories(kind) if c["name"].endswith("อื่น")]
+            best = other[0]["id"] if other else None
+        return kind, best
+
+    def auto_lines(self, pid):
+        """Make sure a ซื้อ/แลกเปลี่ยน of ครุภัณฑ์/วัสดุ has lines that will be registered."""
+        kind, cid = self.register_target(pid)
+        if not kind:
+            return
+        p = self.procurement(pid)
+        lines = self.lines(pid)
+        if not lines:
+            name = (p["title"] or "").strip()
+            for pre in ("จัดซื้อ", "ซื้อ"):
+                if name.startswith(pre):
+                    name = name[len(pre):].strip()
+            self.con.execute("INSERT INTO procurement_lines(proc_id,name,qty,unit,unit_price,target,category_id)"
+                             " VALUES(?,?,?,?,?,?,?)",
+                             (pid, name or p["title"], 1, "เครื่อง" if kind == "asset" else "หน่วย",
+                              p["contract_amount"] or p["amount"] or 0, kind, cid))
+        else:
+            for ln in lines:
+                if not ln["target"] and not ln["registered"]:
+                    self.con.execute("UPDATE procurement_lines SET target=?, category_id=? WHERE id=?",
+                                     (kind, ln["category_id"] or cid, ln["id"]))
+        self.con.commit()
+
+    def register_missing(self) -> int:
+        """ลงทะเบียนย้อนหลัง: purchases already inspected or paid whose ครุภัณฑ์/วัสดุ are not recorded."""
+        n = 0
+        for p in self.q("SELECT id, inspect_date, order_date, date_request FROM procurements "
+                        "WHERE status IN ('ตรวจรับแล้ว','เบิกจ่ายแล้ว') AND kind IN ('ซื้อ','แลกเปลี่ยน')"):
+            before = self.one("SELECT COUNT(*) AS n FROM procurement_lines WHERE proc_id=? AND registered=1",
+                              (p["id"],))["n"]
+            self.auto_lines(p["id"])
+            self.register_lines(p["id"], p["inspect_date"] or p["order_date"] or p["date_request"])
+            after = self.one("SELECT COUNT(*) AS n FROM procurement_lines WHERE proc_id=? AND registered=1",
+                             (p["id"],))["n"]
+            n += after - before
+        return n
+
+    def proc_stage(self, fy) -> dict:
+        """Per budget item: (stage, text). stage 1 = รอตรวจรับ (เทา), 2 = ตรวจรับแล้ว ยังจ่ายไม่ครบ (ส้มอ่อน),
+        3 = เบิกจ่ายครบแล้ว (ฟ้า) — the stage still outstanding when an item has several purchases."""
+        out: dict[int, list] = {}
+        for p in self.q("SELECT p.budget_item_id AS bid, p.status FROM procurements p "
+                        "JOIN budget_items b ON b.id=p.budget_item_id WHERE b.fy=? AND p.status<>'ยกเลิก'", (fy,)):
+            st = 3 if p["status"] == "เบิกจ่ายแล้ว" else 2 if p["status"] == "ตรวจรับแล้ว" else 1
+            out.setdefault(p["bid"], []).append(st)
+        res = {}
+        for bid, sts in out.items():
+            parts = [f"{lab} {sts.count(k)}" for k, lab in ((1, "รอตรวจรับ"), (2, "ตรวจรับแล้ว"),
+                                                             (3, "เบิกจ่ายแล้ว")) if sts.count(k)]
+            res[bid] = (min(sts), " · ".join(parts))
+        return res
+
     def register_lines(self, pid, date):
+        self.auto_lines(pid)
         p = self.procurement(pid)
         for ln in self.lines(pid):
             if ln["registered"] or ln["target"] not in ("asset", "material"):
@@ -264,6 +349,8 @@ class ProcurementMixin:
                        (pid, str(date or TD.today()), amount, tax, fine, net, voucher_no, note))
         if final or (final is None and done + amount >= total - 0.004):
             self.run("UPDATE procurements SET status='เบิกจ่ายแล้ว' WHERE id=?", (pid,))
+            # paid without a separate inspection step: record what was received now
+            self.register_lines(pid, p["inspect_date"] or str(date or TD.today()))
         return mid
 
     def cancel(self, pid, reason=""):

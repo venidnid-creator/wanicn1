@@ -116,7 +116,7 @@ def test_demo_data():
     from venitsupply import demo
     s = demo.fill(Store())
     sm = s.summary()
-    assert sm["assets"] == 8 and sm["materials"] == 5 and sm["loans_open"] == 2
+    assert sm["assets"] == 8 and sm["materials"] >= 5 and sm["loans_open"] == 2
 
 
 def test_leap_year_is_one_full_year():

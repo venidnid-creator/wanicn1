@@ -792,7 +792,7 @@ class MainWindow(QMainWindow):
         sv.setContentsMargins(0, 14, 0, 10)
         brand = QLabel(f"<div style='color:white; font-size:{pt(22)}pt'><b>{T('พัสดุเวนิช')}</b></div>"
                        f"<div style='color:#C9A14A; font-size:{pt(12)}pt'>{PRODUCT_TH if i18n.LANG == 'en' else PRODUCT_EN}</div>"
-                       f"<div style='color:#AFC0D2; font-size:{pt(11)}pt'>{T('โปรแกรมบริหารพัสดุภาครัฐ')}</div>")
+                       f"<div style='color:#AFC0D2; font-size:{pt(11)}pt'>{T('โปรแกรมบริหารพัสดุภาคเวนิช FC')}</div>")
         brand.setAlignment(Qt.AlignCenter)
         sv.addWidget(brand)
         self.nav = QListWidget()
@@ -825,7 +825,11 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(scrolled(p))
         self.nav.currentRowChanged.connect(self.go)
         self._menus()
+        mf = self.menuBar().font()
+        mf.setPointSizeF(pt(17))                  # the menu bar was too small on Windows
+        self.menuBar().setFont(mf)
         self.nav.setCurrentRow(0)
+        self._backfill()
         self.refresh()
 
     def _menus(self):
@@ -849,6 +853,19 @@ class MainWindow(QMainWindow):
         a = QAction(T("เกี่ยวกับโปรแกรม"), self)
         a.triggered.connect(self.about)
         hm.addAction(a)
+
+    def _backfill(self):
+        """ลงทะเบียนครุภัณฑ์/วัสดุย้อนหลังจากการซื้อที่ตรวจรับหรือเบิกจ่ายแล้ว (เจ้าของอนุมัติ 13 พ.ย. 2569)."""
+        try:
+            n = self.store.register_missing()
+        except Exception:  # noqa: BLE001 — never block opening the file
+            return
+        if n:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(400, lambda: QMessageBox.information(
+                self, PRODUCT_TH, f"ลงทะเบียนครุภัณฑ์/รับวัสดุเข้าคลังย้อนหลังให้แล้ว {n} รายการ\n"
+                "จากการซื้อที่ตรวจรับหรือเบิกจ่ายแล้ว — ดูได้ที่หน้า «ครุภัณฑ์» และ «วัสดุ»"))
+            self.refresh()
 
     def go(self, i):
         if self.nav.currentRow() != i:
@@ -890,6 +907,7 @@ class MainWindow(QMainWindow):
         self.store = DB.Store(path)
         self.cfg.setValue("last_db", path)
         self.go(0)
+        self._backfill()
 
     def about(self):
         QMessageBox.about(self, T("เกี่ยวกับโปรแกรม"),

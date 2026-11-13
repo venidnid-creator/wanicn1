@@ -242,3 +242,51 @@ def test_read_pdf_if_available():
     s = Store()
     got = s.import_ordinance(O.to_rows(items, meta))
     assert got["fy"] == meta["fy"]
+
+
+def test_auto_register_assets_and_materials():
+    """ค่าครุภัณฑ์ → ทะเบียนครุภัณฑ์, ค่าวัสดุ → บัญชีวัสดุ เมื่อตรวจรับ (ไม่ต้องตั้งค่าเอง)."""
+    s = Store()
+    eq = item(s, "จัดซื้อเครื่องคอมพิวเตอร์", 100000, cat="ค่าครุภัณฑ์",
+              typ="ครุภัณฑ์คอมพิวเตอร์หรืออิเล็กทรอนิกส์", grp="งบลงทุน")
+    pc = s.save_procurement(dict(kind="ซื้อ", title="ซื้อคอมพิวเตอร์", budget_item_id=eq, amount=45000,
+                                 date_request="2026-11-13"))
+    s.approve(pc)
+    s.order(pc, "นาย บี", 45000)
+    s.inspect_proc(pc, "2026-11-13", register=True)
+    a = [x for x in s.assets() if x["name"] == "คอมพิวเตอร์"]
+    assert len(a) == 1 and a[0]["price"] == 45000 and a[0]["category"] == "ครุภัณฑ์คอมพิวเตอร์"
+    mat = item(s, "วัสดุสำนักงาน", 50000)
+    pm = s.save_procurement(dict(kind="ซื้อ", title="ซื้อกระดาษ A4", budget_item_id=mat,
+                                 date_request="2026-11-13"),
+                            lines=[dict(name="กระดาษ A4", qty=10, unit="รีม", unit_price=120)])
+    s.approve(pm)
+    s.order(pm, "ร้าน", 1200)
+    s.pay(pm)                                    # paid without a separate inspection: still recorded
+    m = [x for x in s.materials() if x["name"] == "กระดาษ A4"]
+    assert m and m[0]["qty"] == 10 and m[0]["category"] == "วัสดุสำนักงาน"
+    hire = item(s, "ค่าซ่อม", 50000, cat="ค่าใช้สอย", typ="ค่าบำรุงรักษาและซ่อมแซม")
+    ph = s.save_procurement(dict(kind="จ้าง", title="จ้างซ่อม", budget_item_id=hire, amount=5000))
+    s.approve(ph)
+    s.order(ph, "ช่าง", 5000)
+    s.inspect_proc(ph)
+    assert not s.lines(ph)                       # services are not registered
+    st = s.proc_stage(FY)
+    assert st[eq][0] == 2 and st[mat][0] == 3 and st[hire][0] == 2
+
+
+def test_backfill_and_mixed_stages():
+    s = Store()
+    eq = item(s, "จัดซื้อเครื่องคอมพิวเตอร์", 100000, cat="ค่าครุภัณฑ์", typ="ครุภัณฑ์คอมพิวเตอร์", grp="งบลงทุน")
+    p1 = s.save_procurement(dict(kind="ซื้อ", title="คอมพิวเตอร์", budget_item_id=eq, amount=45000))
+    s.approve(p1)
+    s.order(p1, "นาย บี", 45000)
+    s.run("UPDATE procurements SET status='เบิกจ่ายแล้ว' WHERE id=?", (p1,))   # an older version's record
+    assert not s.assets()
+    assert s.register_missing() == 1 and len(s.assets()) == 1
+    assert s.register_missing() == 0                              # only once
+    p2 = s.save_procurement(dict(kind="ซื้อ", title="จอภาพ", budget_item_id=eq, amount=5000))
+    st = s.proc_stage(FY)[eq]
+    assert st[0] == 1 and "รอตรวจรับ 1" in st[1] and "เบิกจ่ายแล้ว 1" in st[1]
+    s.cancel(p2)
+    assert s.proc_stage(FY)[eq][0] == 3

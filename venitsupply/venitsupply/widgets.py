@@ -75,7 +75,9 @@ QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}
 QSpinBox {{ min-width: 6.5em; font-size: {round(m["base"] * 1.12, 1)}pt; font-weight: bold;
             color: {NAVY}; padding: 2px 4px; }}
 QComboBox {{ min-width: 6em; }}
-QMenuBar {{ font-size: {m["base"]}pt; }}
+QMenuBar {{ font-size: {round(m["base"] * 1.15, 1)}pt; padding: 2px; }}
+QMenuBar::item {{ padding: 4px 14px; }}
+QMenu {{ font-size: {round(m["base"] * 1.1, 1)}pt; }}
 """
 
 
