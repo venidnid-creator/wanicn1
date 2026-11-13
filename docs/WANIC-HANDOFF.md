@@ -144,6 +144,10 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - แก้ (ผู้ใช้แจ้ง «ตำแหน่งไม่ตรงกัน»): โมเดลยกทั้งอาคารขึ้น floor_lift (0.60) — เส้นที่วาดบนโมเดลเป็นพิกัดโมเดล ต้องลบ lift ก่อนเก็บ (FR.model_to_building ใน convert_selection) · ตรวจแล้ว x,y ตรงกับแปลน (มุมมองบนของ 3D เทียบ A-03/S-04) · test_lines_drawn_on_the_model_keep_their_place
      - _rebuild_after_fix คำนวณใหม่เมื่อไม่ได้อยู่ขั้น 9 (เดิมสถานะ «ผ่านทุกรายการ» ผิด)
      - tests/test_wanic_free.py (ใน CI) · แผนจากการศึกษา QD ครบทั้ง 8 ข้อแล้ว (อนุมัติ 13 พ.ย.)
+   + [x] (รออนุมัติภาพ) ปรับหน้าจอให้พอดีทุกเครื่อง (ผู้ใช้แจ้ง 13 พ.ย.: จอ 1920×1080 สเกล Windows 150 % มองไม่เห็นหลายปุ่ม):
+     - core/ui_fit.py: reflow_rows (แถว QHBoxLayout ที่มีปุ่ม → FlowLayout ห่อบรรทัด, ใช้ views.tray.FlowLayout), relax_combos (AdjustToMinimumContentsLengthWithIcon 12 ตัวอักษร), wrap_labels, wrap_forms (QFormLayout WrapLongRows), fit(widget) → ห่อใน QScrollArea; fit_dialog + install(app) (event filter: ทุก QDialog ตอนแสดงครั้งแรก จำกัดขนาดไม่เกินจอ 96 %/92 % และย้ายเข้าในจอ); widen_docks (แผงขวาอย่างน้อย ~42 % ของหน้าต่าง)
+     - views/extension_api.add_panel: แผงที่ key มี "wanic" ผ่าน fit() อัตโนมัติ; plugins/wanic_rc.setup เรียก ui_fit.install + widen_docks; แถวปุ่มของแผง คสล. ใช้ FlowLayout เอง
+     - ทดสอบด้วย QT_SCALE_FACTOR=1.5 บน xvfb 1920×1080 (= 1280×720 logical) และ 1366×768: ทุกแผงไม่มีปุ่มถูกตัด, หน้าต่างหลักย่อได้ถึง 943×579, dialog ทั้งหมดอยู่ในจอ · tests/test_ui_fit.py (ใน CI)
    + [x] ตัวติดตั้ง 2026.11.13.1 สร้างสำเร็จ 13 พ.ย. 11:03 UTC (ทดสอบ CI ผ่าน, ไม่ได้เผยแพร่) — รอผลลองจากผู้ใช้ (ผู้ใช้อนุมัติ 13 พ.ย.) — dispatch build-windows.yml ref claude/youthful-pascal-ctgtr0 inputs {version: 2026.11.13.1, release: false} → run 43411762994 · artifact wanicnsurvey-setup-2026.11.13.1 · ห้ามเผยแพร่จนกว่าผู้ใช้สั่ง (dispatch เดิม release=true)
    + (ข้อมูลออกแบบเดิมของข้อ 8):
      - ออกแบบ: data["free"] = {"beams": [{"pts": [[x,y,z]…] (ม.), "mark" (เบอร์คานในคลัง), "curved", "w" (กก./ม. เพิ่ม)}], "columns": [{"x","y","z0","z1","mark"}], "walls": [{"pts": [[x,y]…], "z", "h", "t", "curved"}]}

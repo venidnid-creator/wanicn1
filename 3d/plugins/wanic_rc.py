@@ -78,7 +78,10 @@ class RCPanel(QWidget):
         self.diagram.setMinimumHeight(300)
         col.addWidget(self.diagram, 2)
         self._calc = None
-        row = QHBoxLayout()
+        # the buttons wrap onto more lines on a narrow or scaled screen (125–150 %)
+        from views.tray import FlowLayout
+        self.btn_box = QWidget()
+        row = FlowLayout(self.btn_box, spacing=4)
         self.fix = QPushButton("ปรับเหล็กให้ผ่านขั้นต่ำ")
         self.fix.setToolTip("เพิ่มจำนวนเหล็ก / ลดระยะเรียง / เพิ่มขนาดเหล็ก ให้เบอร์ที่เลือกผ่านการตรวจ "
                             "(ไม่เปลี่ยนขนาดหน้าตัด)")
@@ -149,11 +152,9 @@ class RCPanel(QWidget):
         self.check_btn.setToolTip("Wcol · Wcol-Area · Wfloor ทุกเสา เทียบค่าเฉลี่ยทั้งอาคารและช่วงปกติ")
         self.check_btn.clicked.connect(self.show_checkload)
         row.addWidget(self.check_btn)
-        row.addStretch(1)
-        col.addLayout(row)
+        col.addWidget(self.btn_box)
         self.roof_row = QWidget()
-        rr = QHBoxLayout(self.roof_row)
-        rr.setContentsMargins(0, 0, 0, 0)
+        rr = FlowLayout(self.roof_row, spacing=4)
         rr.addWidget(QLabel("ทรงหลังคา:"))
         self.roof_btns = {}
         for k, v in B.ROOF_TYPES.items():
@@ -162,12 +163,10 @@ class RCPanel(QWidget):
             b.clicked.connect(lambda _=False, key=k: self.set_roof(key))
             self.roof_btns[k] = b
             rr.addWidget(b)
-        rr.addSpacing(12)
         for text, preset in (("โครงเหล็ก", B.STEEL_FRAME), ("โครงไม้", B.TIMBER_FRAME)):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, p=preset: self.set_frame(p))
             rr.addWidget(b)
-        rr.addSpacing(12)
         self.truss_btn = QPushButton("ออกแบบ Truss…")
         self.truss_btn.setToolTip("โครงถักเหล็ก Howe / Pratt / Fink / Warren / โค้ง — วิเคราะห์ Matrix "
                                   "เลือกขนาดเหล็กท่อ/กล่อง/ตัวซี และแผ่นเหล็กรองฐาน")
@@ -181,7 +180,6 @@ class RCPanel(QWidget):
         self.purlin_btn.setToolTip("แปเหล็กตัวซี · เหล็กยึดแป · ค้ำยันทแยง X-Bracing · แปผนังเมทัลชีท")
         self.purlin_btn.clicked.connect(self.edit_purlin)
         rr.addWidget(self.purlin_btn)
-        rr.addStretch(1)
         col.addWidget(self.roof_row)
         self.grid_btn = QPushButton("โหมดกริด: สร้างผังจากเส้นแกน…")
         self.grid_btn.setStyleSheet("font-weight: 700;")
@@ -957,6 +955,12 @@ class RCPanel(QWidget):
 
 
 def setup(app) -> None:
+    # ปรับหน้าจอให้พอดีทุกเครื่อง: every dialog fits the screen; the side panel starts wide enough
+    from PySide6.QtCore import QTimer as _QT
+    from PySide6.QtWidgets import QApplication
+    from core import ui_fit
+    ui_fit.install(QApplication.instance())
+    _QT.singleShot(800, lambda: ui_fit.widen_docks(app.window))
     panel = RCPanel(app)
     dock = app.add_panel(TITLE, panel)
     app.window._wanic_rc = panel

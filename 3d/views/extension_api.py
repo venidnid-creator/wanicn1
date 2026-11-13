@@ -198,6 +198,10 @@ class ExtensionApp:
             box.setSpacing(4)
             box.addWidget(widget, stretch)
             widget = holder
+        if "wanic" in str(self.key).lower():
+            # ปรับให้พอดีทุกหน้าจอ: rows of buttons wrap, the panel scrolls
+            from core.ui_fit import fit
+            widget = fit(widget)
         dock = QDockWidget(title, win)
         dock.setObjectName(object_name)
         if start_hidden:

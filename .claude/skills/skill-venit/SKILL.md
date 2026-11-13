@@ -164,6 +164,9 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - Stairs: `st = {id, x, y (footprint centre), dir, type straight|L|U, turn left|right, w?, t?, bars?, temp?}`; risers split
   ⌈n/2⌉ + ⌊n/2⌋ with the landing at ⌈n/2⌉·R; settings `stair_t`, `riser_max`, `going`, `stair_bars`, `stair_temp`,
   `stair_ll` (300), `stair_beam`; analyse adds group "stair" and `res["stairs"]`.
+- Screens: every WANIC side panel goes through `core/ui_fit.fit` (in `views/extension_api.add_panel`) — rows of
+  buttons wrap, forms wrap, the panel scrolls; every dialog is capped to the screen (`ui_fit.install`). Test new UI at
+  `QT_SCALE_FACTOR=1.5` on xvfb 1920×1080 (= Windows 150 %) and on 1366×768; never use fixed wide rows.
 - Drawings: never put characters outside cp874 (e.g. ✓) on a sheet — the DXF writes «?» and a test fails. Room tags
   `room_codes` = พ# ผ2|ผ3 ฝ#; interior elevations A B C D (`elev_marker` on plans, A-13 titles).
 - Checkload (`wanic_calc.checkload`): per ground column Wcol (service t), tributary area over every carried floor + roof,
