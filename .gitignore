@@ -4,3 +4,5 @@ dist/
 __pycache__/
 *.pyc
 cad/vendor/libredwg/win64/
+venitsupply/dist/
+venitsupply/build/

@@ -3,6 +3,7 @@
 """หน้าต่างหลักของ «พัสดุเวนิช» (VENIT SUPPLY)."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -897,8 +898,32 @@ class MainWindow(QMainWindow):
         super().closeEvent(e)
 
 
+def selftest(out_dir) -> int:
+    """Used by the installer build: data, reports, PDF writing and the PDF reader all load."""
+    from . import demo
+    import importlib
+    importlib.import_module("pdfminer.high_level")      # the PDF reader must be bundled
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    s = demo.fill(DB.Store(":memory:"))
+    assert round(s.ordinance(2570)["amount"]) == 205000000
+    pid = s.procurements(2570)[0]["id"]
+    for name, rep in (("budget", R.budget_status(s, 2570, "plan")), ("request", R.proc_request(s, pid)),
+                      ("assets", R.asset_list(s))):
+        R.to_pdf(rep, out / f"{name}.pdf")
+        assert (out / f"{name}.pdf").stat().st_size > 1000
+    R.to_xlsx(R.proc_register(s, 2570), out / "register.xlsx")
+    (out / "selftest-ok.txt").write_text(f"{PRODUCT_EN} {__version__} OK", encoding="utf-8")
+    return 0
+
+
 def main(argv=None):
     argv = argv if argv is not None else sys.argv
+    if "--selftest" in argv:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        app = QApplication(argv)
+        i = argv.index("--selftest")
+        return selftest(argv[i + 1] if len(argv) > i + 1 else "selftest")
     app = QApplication(argv)
     app.setApplicationName(PRODUCT_EN)
     app.setStyleSheet(STYLE)

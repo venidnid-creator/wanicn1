@@ -55,6 +55,14 @@
   เล่ม 2570 (292 หน้า) อ่านประมาณ 10 วินาที; แก้วรรณยุกต์ท้ายบรรทัดที่หลุด (เส้นอักษรเดี่ยว)
 - ตัวติดตั้ง (ขั้นต่อไป) ต้องรวม pdfminer.six (requirements.txt)
 
+## ตัวติดตั้ง Windows (เจ้าของ «อนุมัติ» 13 พ.ย. 2569)
+- `packaging/venitsupply.spec` (PyInstaller โฟลเดอร์เดียว, รวม data/*.csv, assets, pdfminer)
+- `installer/venitsupply.iss` (Inno Setup ภาษาไทย ใช้ ../../installer/Thai.isl, ไฟล์ .vsdb เปิดด้วยดับเบิลคลิก)
+- `.github/workflows/venitsupply-windows.yml`: push ที่แก้ venitsupply/ บนสาขา claude/** → ทดสอบ → bundle →
+  `venitsupply.exe --selftest` → ตัวติดตั้ง → artifact `venitsupply-setup-<รุ่น>` (ไม่เผยแพร่)
+  เผยแพร่ Release เฉพาะ tag `venitsupply-v<รุ่น>` หรือสั่ง workflow_dispatch release=true — ตามคำสั่งเจ้าของเท่านั้น
+- ทดสอบในเครื่อง Linux: bundle 235 MB, self-test ผ่าน
+
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
 - `venitsupply/depreciation.py` ค่าเสื่อมเส้นตรง · `thaidate.py` วันที่ พ.ศ./ปีงบประมาณ
