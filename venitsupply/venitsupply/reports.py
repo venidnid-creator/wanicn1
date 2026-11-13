@@ -1,0 +1,291 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""รายงานพัสดุ: HTML (สำหรับพิมพ์/ส่งออก PDF) และแถวตาราง (ส่งออกตารางคำนวณ).
+
+ทุกรายงานมีหัวหน่วยงาน, ช่องลงนามเจ้าหน้าที่ตามระเบียบฯ และบรรทัดผู้พัฒนาโปรแกรม.
+"""
+from __future__ import annotations
+
+from html import escape
+
+from . import DEVELOPER, PRODUCT_EN, PRODUCT_TH, QUALIFICATION
+from . import thaidate as TD
+
+FONT = "'TH Sarabun New','TH SarabunPSK','Laksaman','Loma','Tahoma'"
+
+
+def money(v) -> str:
+    return f"{float(v or 0):,.2f}"
+
+
+def qty(v) -> str:
+    v = float(v or 0)
+    return f"{v:,.0f}" if abs(v - round(v)) < 1e-9 else f"{v:,.2f}"
+
+
+def _e(v) -> str:
+    return escape("" if v is None else str(v))
+
+
+class Report:
+    """A titled table with signature lines."""
+
+    def __init__(self, store, title, subtitle="", landscape=False):
+        self.s = store
+        self.title = title
+        self.subtitle = subtitle
+        self.landscape = landscape
+        self.header: list[str] = []
+        self.rows: list[list] = []
+        self.align: list[str] = []
+        self.totals: list | None = None
+        self.before = ""
+        self.signers = ["officer", "head_officer", "head"]
+
+    # rows used for the spreadsheet export
+    def table(self) -> list[list]:
+        org = self.s.setting("org_name") or ""
+        out = [[self.title], [org + ("  " + self.subtitle if self.subtitle else "")], self.header]
+        out += self.rows
+        if self.totals:
+            out.append(self.totals)
+        return out
+
+    def html(self) -> str:
+        st = self.s.settings()
+        org = _e(st.get("org_name") or "(ยังไม่ได้ตั้งชื่อหน่วยงาน — ไปที่ «ตั้งค่า»)")
+        h = [f"<html><body style=\"font-family:{FONT}; font-size:14pt;\">",
+             f"<p align=center style='font-size:18pt'><b>{_e(self.title)}</b><br>{org}"]
+        if self.subtitle:
+            h.append(f"<br>{_e(self.subtitle)}")
+        h.append("</p>")
+        if self.before:
+            h.append(self.before)
+        if self.header:
+            h.append("<table border=1 cellspacing=0 cellpadding=3 width='100%' "
+                     "style='border-collapse:collapse; font-size:12pt'>")
+            h.append("<tr style='background:#E8EEF5'>" + "".join(
+                f"<th>{_e(c)}</th>" for c in self.header) + "</tr>")
+            for r in self.rows:
+                h.append("<tr>" + "".join(
+                    f"<td align={self._al(i)}>{_e(self._fmt(i, v))}</td>"
+                    for i, v in enumerate(r)) + "</tr>")
+            if self.totals:
+                h.append("<tr style='background:#F4F1E8'>" + "".join(
+                    f"<td align={self._al(i)}><b>{_e(self._fmt(i, v))}</b></td>"
+                    for i, v in enumerate(self.totals)) + "</tr>")
+            h.append("</table>")
+        h.append(self._signatures(st))
+        h.append(f"<p style='font-size:10pt; color:#55657A'>พิมพ์เมื่อ {TD.thai(TD.today())} · "
+                 f"{PRODUCT_TH} ({PRODUCT_EN}) · ผู้พัฒนา {DEVELOPER} {QUALIFICATION} · "
+                 "ตรวจสอบความถูกต้องกับระเบียบกระทรวงการคลังว่าด้วยการจัดซื้อจัดจ้างและ"
+                 "การบริหารพัสดุภาครัฐ พ.ศ. 2560 ก่อนใช้งานจริง</p>")
+        h.append("</body></html>")
+        return "".join(h)
+
+    def _al(self, i):
+        return self.align[i] if i < len(self.align) else "left"
+
+    def _fmt(self, i, v):
+        a = self._al(i)
+        if isinstance(v, float) and a == "right":
+            return money(v)
+        if isinstance(v, int) and a == "right":
+            return f"{v:,}"
+        return v
+
+    def _signatures(self, st) -> str:
+        cells = []
+        for k in self.signers:
+            name = st.get(k) or "...................................................."
+            cells.append("<td align=center width='33%'><br><br>ลงชื่อ ......................................<br>"
+                         f"( {_e(name)} )<br>{_e(st.get(k + '_pos', ''))}</td>")
+        return "<br><table width='100%'><tr>" + "".join(cells) + "</tr></table>"
+
+
+# ---------------------------------------------------------------- reports
+def asset_list(store, status=None) -> Report:
+    r = Report(store, "บัญชีครุภัณฑ์", status or "ทุกสถานะ", landscape=True)
+    r.header = ["ลำดับ", "เลขรหัสครุภัณฑ์", "รายการ", "ยี่ห้อ/รุ่น", "หมายเลขเครื่อง", "วันที่ได้มา",
+                "ราคา (บาท)", "หน่วยงาน/สถานที่", "ผู้รับผิดชอบ", "สถานะ"]
+    r.align = ["center", "left", "left", "left", "left", "center", "right", "left", "left", "center"]
+    tot = 0.0
+    for i, a in enumerate(store.assets(status=status), 1):
+        r.rows.append([i, a["number"], a["name"], " ".join(x for x in (a["brand"], a["model"]) if x),
+                       a["serial"], TD.thai(a["acquire_date"]), float(a["price"] or 0),
+                       " / ".join(x for x in (a["department"], a["location"]) if x),
+                       a["custodian"] or "", a["status"]])
+        tot += a["price"] or 0
+    r.totals = ["", "", f"รวม {len(r.rows)} รายการ", "", "", "", tot, "", "", ""]
+    return r
+
+
+def asset_card(store, aid, until_fy=None) -> Report:
+    """ทะเบียนคุมทรัพย์สิน (หนึ่งรายการ) พร้อมตารางค่าเสื่อมราคา."""
+    a = store.asset(aid)
+    r = Report(store, "ทะเบียนคุมทรัพย์สิน", f"เลขรหัส {a['number']}")
+    info = [("ประเภท", a["category"]), ("รายการ", a["name"]),
+            ("ยี่ห้อ/รุ่น", " ".join(x for x in (a["brand"], a["model"]) if x)),
+            ("หมายเลขเครื่อง", a["serial"]), ("วันที่ได้มา", TD.thai(a["acquire_date"])),
+            ("ราคาต่อหน่วย", money(a["price"]) + " บาท"), ("วิธีได้มา", a["method"]),
+            ("แหล่งเงิน", a["budget"]), ("เลขที่เอกสาร", a["document_no"]), ("ผู้ขาย/ผู้รับจ้าง", a["vendor"]),
+            ("หน่วยงาน", a["department"]), ("สถานที่ตั้ง", a["location"]),
+            ("ผู้รับผิดชอบ", a["custodian"]), ("อายุการใช้งาน", f"{a['life_years'] or 0:g} ปี"),
+            ("ราคาซาก", money(a["salvage"]) + " บาท"), ("สถานะ", a["status"])]
+    if a["disposed_date"]:
+        info += [("จำหน่ายเมื่อ", TD.thai(a["disposed_date"])), ("วิธีจำหน่าย", a["disposal_method"]),
+                 ("จำนวนเงินที่ได้", money(a["disposal_amount"]) + " บาท")]
+    cells = "".join(f"<tr><td width='30%'><b>{_e(k)}</b></td><td>{_e(v)}</td></tr>" for k, v in info)
+    r.before = f"<table cellpadding=2 width='100%'>{cells}</table><br>"
+    rows = store.depreciation(a, until_fy=until_fy)
+    if rows:
+        r.header = ["ปีงบประมาณ", "จำนวนวัน", "ค่าเสื่อมราคา (บาท)", "ค่าเสื่อมสะสม (บาท)",
+                    "มูลค่าสุทธิ (บาท)"]
+        r.align = ["center", "right", "right", "right", "right"]
+        r.rows = [[x["fy"], x["days"], x["dep"], x["acc"], x["book"]] for x in rows]
+    else:
+        r.before += ("<p>ราคาต่ำกว่าเกณฑ์การบันทึกเป็นสินทรัพย์ "
+                     f"({money(store.fnum('threshold'))} บาท) — ไม่คิดค่าเสื่อมราคา</p>")
+    return r
+
+
+def depreciation_year(store, fy) -> Report:
+    r = Report(store, "รายงานค่าเสื่อมราคาครุภัณฑ์", f"ประจำปีงบประมาณ พ.ศ. {fy}", landscape=True)
+    r.header = ["ลำดับ", "เลขรหัสครุภัณฑ์", "รายการ", "วันที่ได้มา", "อายุ (ปี)", "ราคาทุน",
+                "ค่าเสื่อมปีนี้", "ค่าเสื่อมสะสม", "มูลค่าสุทธิ"]
+    r.align = ["center", "left", "left", "center", "center", "right", "right", "right", "right"]
+    t = [0.0, 0.0, 0.0, 0.0]
+    for i, x in enumerate(store.depreciation_report(fy), 1):
+        a = x["asset"]
+        r.rows.append([i, a["number"], a["name"], TD.thai(a["acquire_date"]), f"{a['life_years']:g}",
+                       float(a["price"]), x["dep"], x["acc"], x["book"]])
+        for k, v in enumerate((a["price"], x["dep"], x["acc"], x["book"])):
+            t[k] += v
+    r.totals = ["", "", "รวม", "", "", *t]
+    return r
+
+
+def material_balance(store) -> Report:
+    r = Report(store, "รายงานวัสดุคงเหลือ", f"ณ วันที่ {TD.thai(TD.today())}")
+    r.header = ["ลำดับ", "รหัส", "รายการ", "ประเภท", "หน่วย", "คงเหลือ", "มูลค่า (บาท)", "หมายเหตุ"]
+    r.align = ["center", "left", "left", "left", "center", "right", "right", "left"]
+    tot = 0.0
+    for i, m in enumerate(store.materials(), 1):
+        low = "ต่ำกว่าจุดสั่งซื้อ" if m["min_qty"] and m["qty"] <= m["min_qty"] else ""
+        r.rows.append([i, m["code"], m["name"], m["category"] or "", m["unit"], qty(m["qty"]),
+                       float(m["value"]), low])
+        tot += m["value"]
+    r.totals = ["", "", "รวมมูลค่า", "", "", "", tot, ""]
+    return r
+
+
+def stock_card(store, mid) -> Report:
+    m = store.one("SELECT m.*, c.name AS category FROM materials m "
+                  "LEFT JOIN categories c ON c.id=m.category_id WHERE m.id=?", (mid,))
+    r = Report(store, "บัญชีวัสดุ", f"{m['code']} {m['name']} · หน่วย {m['unit']} · "
+               f"ประเภท {m['category'] or '-'}", landscape=True)
+    r.header = ["วัน เดือน ปี", "รับจาก/จ่ายให้", "เลขที่เอกสาร", "ราคาต่อหน่วย", "รับ", "จ่าย",
+                "คงเหลือ", "มูลค่าคงเหลือ", "หมายเหตุ"]
+    r.align = ["center", "left", "left", "right", "right", "right", "right", "right", "left"]
+    for c in store.card(mid):
+        who = c["party"] or ""
+        if c["department"]:
+            who = f"{who} ({c['department']})" if who else c["department"]
+        r.rows.append([TD.thai(c["date"]), who, c["doc_no"], float(round(c["unit_price"], 2)),
+                       qty(c["qty"]) if c["kind"] == "in" else "",
+                       qty(c["qty"]) if c["kind"] == "out" else "",
+                       qty(c["bal_qty"]), float(c["bal_val"]), c["note"]])
+    return r
+
+
+def issue_slip(store, move_ids) -> Report:
+    """ใบเบิกพัสดุ for one or more issue moves."""
+    r = Report(store, "ใบเบิกพัสดุ")
+    r.header = ["ลำดับ", "รายการ", "จำนวน", "หน่วย", "ราคาต่อหน่วย", "จำนวนเงิน", "หมายเหตุ"]
+    r.align = ["center", "left", "right", "center", "right", "right", "left"]
+    party = dept = doc = date = ""
+    tot = 0.0
+    for i, mv in enumerate(move_ids, 1):
+        row = store.one("SELECT mv.*, m.name, m.unit, m.id AS mid FROM moves mv "
+                        "JOIN materials m ON m.id=mv.material_id WHERE mv.id=?", (mv,))
+        c = next(x for x in store.card(row["mid"]) if x["id"] == mv)
+        party, doc, date = row["party"], row["doc_no"], row["date"]
+        dept = c["department"] or dept
+        r.rows.append([i, row["name"], qty(row["qty"]), row["unit"], float(round(c["unit_price"], 2)),
+                       float(c["value"]), row["note"]])
+        tot += c["value"]
+    r.subtitle = f"เลขที่ {doc or '-'}  วันที่ {TD.thai(date)}"
+    r.before = (f"<p>ข้าพเจ้า {_e(party or '..............................')} "
+                f"หน่วยงาน {_e(dept or '..............................')} "
+                "ขอเบิกพัสดุตามรายการต่อไปนี้ เพื่อใช้ในราชการ</p>")
+    r.totals = ["", "รวมเงิน", "", "", "", tot, ""]
+    return r
+
+
+def loans_report(store, open_only=False) -> Report:
+    r = Report(store, "ทะเบียนการยืมพัสดุ", "เฉพาะที่ยังไม่คืน" if open_only else "ทั้งหมด",
+               landscape=True)
+    r.header = ["ลำดับ", "เลขรหัส", "รายการ", "ผู้ยืม", "หน่วยงาน", "วัตถุประสงค์", "วันที่ยืม",
+                "กำหนดคืน", "วันที่คืน", "สภาพเมื่อคืน"]
+    r.align = ["center", "left", "left", "left", "left", "left", "center", "center", "center", "left"]
+    for i, ln in enumerate(store.loans(open_only), 1):
+        r.rows.append([i, ln["number"], ln["asset_name"], ln["borrower"], ln["department"],
+                       ln["purpose"], TD.thai(ln["date_out"]), TD.thai(ln["due_date"]),
+                       TD.thai(ln["date_back"]) or "ยังไม่คืน", ln["condition_back"]])
+    return r
+
+
+def inspection_report(store, fy) -> Report:
+    """รายงานผลการตรวจสอบพัสดุประจำปี (ข้อ 213)."""
+    rows = store.inspection(fy)
+    r = Report(store, "รายงานผลการตรวจสอบพัสดุประจำปี", f"ปีงบประมาณ พ.ศ. {fy}", landscape=True)
+    r.header = ["ลำดับ", "เลขรหัสครุภัณฑ์", "รายการ", "สถานที่", "ราคา (บาท)", "ผลการตรวจ", "หมายเหตุ"]
+    r.align = ["center", "left", "left", "left", "right", "center", "left"]
+    for i, x in enumerate(rows, 1):
+        a = x["asset"]
+        r.rows.append([i, a["number"], a["name"], a["location"], float(a["price"] or 0),
+                       x["result"] or "ยังไม่ได้ตรวจ", x["note"]])
+    counts = {}
+    for x in rows:
+        counts[x["result"] or "ยังไม่ได้ตรวจ"] = counts.get(x["result"] or "ยังไม่ได้ตรวจ", 0) + 1
+    summ = " · ".join(f"{k} {v} รายการ" for k, v in counts.items())
+    r.before = (f"<p>คณะกรรมการตรวจสอบพัสดุได้ตรวจสอบการรับจ่ายพัสดุตั้งแต่วันที่ "
+                f"{TD.thai(TD.fiscal_range(fy)[0])} ถึงวันที่ "
+                f"{TD.thai(TD.fiscal_range(fy)[1])} และตรวจนับพัสดุคงเหลือ ณ วันสิ้นปีงบประมาณ "
+                f"รวม {len(rows)} รายการ — {_e(summ)}</p>")
+    r.signers = ["officer", "head_officer", "head"]
+    return r
+
+
+def disposal_report(store) -> Report:
+    r = Report(store, "ทะเบียนการจำหน่ายพัสดุ", landscape=True)
+    r.header = ["ลำดับ", "เลขรหัส", "รายการ", "ราคาทุน", "วันที่จำหน่าย", "วิธีจำหน่าย",
+                "จำนวนเงินที่ได้", "เลขที่เอกสาร"]
+    r.align = ["center", "left", "left", "right", "center", "left", "right", "left"]
+    for i, a in enumerate(store.assets(status="จำหน่ายแล้ว"), 1):
+        r.rows.append([i, a["number"], a["name"], float(a["price"] or 0), TD.thai(a["disposed_date"]),
+                       a["disposal_method"], float(a["disposal_amount"] or 0), a["disposal_doc"]])
+    return r
+
+
+def to_pdf(report: Report, path) -> None:
+    """Render *report* to an A4 PDF with Qt (Thai text shaped by Qt)."""
+    from PySide6.QtCore import QMarginsF, QSizeF
+    from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
+
+    w = QPdfWriter(str(path))
+    w.setResolution(150)
+    w.setPageLayout(QPageLayout(QPageSize(QPageSize.A4),
+                                QPageLayout.Landscape if report.landscape else QPageLayout.Portrait,
+                                QMarginsF(12, 12, 12, 12)))
+    w.setTitle(report.title)
+    w.setCreator(f"{PRODUCT_TH} ({PRODUCT_EN})")
+    doc = QTextDocument()
+    doc.setHtml(report.html())
+    rect = w.pageLayout().paintRectPixels(w.resolution())
+    doc.setPageSize(QSizeF(rect.width(), rect.height()))
+    doc.print_(w)
+
+
+def to_xlsx(report: Report, path) -> None:
+    from . import xlsx
+    xlsx.write(path, [(report.title, report.table())], header_rows=3)

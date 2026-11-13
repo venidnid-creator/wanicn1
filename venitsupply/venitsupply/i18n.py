@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""ไทย / English for the program's screens (official forms stay in Thai)."""
+from __future__ import annotations
+
+LANG = "th"
+
+EN = {
+    "พัสดุเวนิช": "VENIT SUPPLY", "โปรแกรมบริหารพัสดุภาครัฐ": "Government supply management",
+    "หน้าหลัก": "Home", "ครุภัณฑ์": "Assets", "วัสดุ": "Materials", "ยืม-คืน": "Loans",
+    "ตรวจสอบประจำปี": "Annual check", "จำหน่าย": "Disposal", "รายงาน": "Reports", "ตั้งค่า": "Settings",
+    "ไฟล์": "File", "ฐานข้อมูลใหม่…": "New database…", "เปิดฐานข้อมูล…": "Open database…",
+    "ออก": "Exit", "ภาษา": "Language", "ช่วยเหลือ": "Help", "เกี่ยวกับโปรแกรม": "About",
+    "ครุภัณฑ์ที่ใช้อยู่": "Assets in use", "มูลค่าครุภัณฑ์": "Asset cost",
+    "มูลค่าสุทธิ": "Net book value", "ค่าเสื่อมปีนี้": "Depreciation this year",
+    "รายการวัสดุ": "Material items", "มูลค่าวัสดุคงเหลือ": "Material stock value",
+    "ยืมอยู่": "On loan", "เกินกำหนดคืน": "Overdue", "ตรวจแล้ว": "Checked",
+    "วัสดุต่ำกว่าจุดสั่งซื้อ": "Materials below reorder point", "ไม่มี": "None",
+    "สถานะครุภัณฑ์": "Asset status", "บาท": "THB", "รายการ": "items", "ปีงบประมาณ": "Fiscal year",
+    "ค้นหา…": "Search…", "ทุกสถานะ": "All statuses", "เพิ่ม": "Add", "แก้ไข": "Edit", "ลบ": "Delete",
+    "ทะเบียนคุม": "Asset card", "ส่งออกตาราง": "Export table", "พิมพ์ PDF": "Print PDF",
+    "เลขรหัสครุภัณฑ์": "Asset number", "รายการ ": "Item", "ประเภท": "Type", "ยี่ห้อ": "Brand",
+    "รุ่น": "Model", "หมายเลขเครื่อง": "Serial no.", "หน่วยนับ": "Unit", "วันที่ได้มา": "Acquired",
+    "ราคาต่อหน่วย (บาท)": "Unit price (THB)", "วิธีได้มา": "Acquisition method", "แหล่งเงิน": "Funding",
+    "เลขที่เอกสาร": "Document no.", "ผู้ขาย/ผู้รับจ้าง": "Vendor", "หน่วยงาน": "Department",
+    "สถานที่ตั้ง": "Location", "ผู้รับผิดชอบ": "Custodian", "อายุการใช้งาน (ปี)": "Useful life (years)",
+    "ราคาซาก (บาท)": "Salvage (THB)", "สถานะ": "Status", "หมายเหตุ": "Note",
+    "เว้นว่างให้โปรแกรมออกเลขให้": "Leave blank to number automatically",
+    "บันทึก": "Save", "ยกเลิก": "Cancel", "ครุภัณฑ์ใหม่": "New asset", "แก้ไขครุภัณฑ์": "Edit asset",
+    "ลบรายการนี้?": "Delete this item?", "เลือกรายการก่อน": "Select an item first",
+    "รหัส": "Code", "ชื่อวัสดุ": "Material", "คงเหลือ": "Balance", "มูลค่า": "Value",
+    "จุดสั่งซื้อ": "Reorder point", "เพิ่มวัสดุ": "Add material", "รับเข้า": "Receive",
+    "เบิกจ่าย": "Issue", "บัญชีวัสดุ": "Stock card", "ใบเบิก": "Issue slip",
+    "วันที่": "Date", "จำนวน": "Quantity", "รับจาก": "Received from", "ผู้เบิก": "Requested by",
+    "หน่วยงานผู้เบิก": "Requesting department", "รับ": "In", "จ่าย": "Out",
+    "รับวัสดุเข้าคลัง": "Receive material", "เบิกจ่ายวัสดุ": "Issue material",
+    "ยืมครุภัณฑ์": "Lend asset", "คืนครุภัณฑ์": "Return asset", "ผู้ยืม": "Borrower",
+    "วัตถุประสงค์": "Purpose", "วันที่ยืม": "Date out", "กำหนดคืน": "Due", "วันที่คืน": "Returned",
+    "สภาพเมื่อคืน": "Condition", "แสดงเฉพาะที่ยังไม่คืน": "Only open loans", "ยังไม่คืน": "Not returned",
+    "ผลการตรวจ": "Result", "ยังไม่ได้ตรวจ": "Not checked", "บันทึกผลการตรวจ": "Save results",
+    "ตั้งผลที่เลือกเป็น": "Set selected to",
+    "จำหน่ายครุภัณฑ์": "Dispose asset", "วิธีจำหน่าย": "Disposal method",
+    "จำนวนเงินที่ได้ (บาท)": "Proceeds (THB)", "วันที่จำหน่าย": "Disposal date",
+    "ดูตัวอย่าง": "Preview", "ข้อมูลหน่วยงาน": "Agency", "ชื่อหน่วยงาน": "Agency name",
+    "รหัสหน่วยงาน": "Agency code", "ที่อยู่": "Address", "ผู้ลงนาม": "Signatories",
+    "เจ้าหน้าที่พัสดุ": "Supply officer", "หัวหน้าเจ้าหน้าที่": "Head of supply",
+    "หัวหน้าหน่วยงานของรัฐ": "Head of agency", "ตำแหน่ง": "Position",
+    "การคิดค่าเสื่อมและเลขรหัส": "Depreciation and numbering",
+    "เกณฑ์ราคาบันทึกเป็นสินทรัพย์ (บาท)": "Capitalisation threshold (THB)",
+    "รูปแบบเลขรหัสครุภัณฑ์": "Asset number format", "ประเภทครุภัณฑ์และอายุการใช้งาน": "Asset types and useful life",
+    "บันทึกการตั้งค่า": "Save settings", "บันทึกแล้ว": "Saved",
+    "ติดต่อผู้พัฒนาระบบ": "Contact the developer", "สแกนเพิ่มเพื่อน LINE": "Scan to add on LINE",
+    "โปรแกรมใช้ได้ฟรี ไม่มีค่าลิขสิทธิ์": "Free to use, no licence fee",
+    "สนใจสนับสนุนผู้พัฒนา สามารถทำได้ที่": "To support the developer:",
+    "คัดลอกเลขบัญชี": "Copy account no.", "คัดลอกแล้ว": "Copied",
+    "บัญชีครุภัณฑ์": "Asset register", "ทะเบียนคุมทรัพย์สิน (รายการที่เลือก)": "Asset card (selected)",
+    "รายงานค่าเสื่อมราคาประจำปี": "Annual depreciation", "รายงานวัสดุคงเหลือ": "Material balance",
+    "ทะเบียนการยืมพัสดุ": "Loan register", "รายงานผลการตรวจสอบพัสดุประจำปี": "Annual inspection report",
+    "ทะเบียนการจำหน่ายพัสดุ": "Disposal register",
+    "รายงานเป็นแบบฟอร์มราชการภาษาไทย": "Reports are official Thai forms",
+    "ไฟล์ฐานข้อมูล": "Database file", "บันทึก PDF แล้ว": "PDF saved", "ส่งออกแล้ว": "Exported",
+    "ข้อผิดพลาด": "Error", "ใช้งาน": "In use", "ชำรุด": "Damaged", "เสื่อมสภาพ": "Deteriorated",
+    "สูญหาย": "Lost", "ไม่จำเป็นต้องใช้": "Not needed", "จำหน่ายแล้ว": "Disposed",
+    "ใช้งานได้ปกติ": "Working", "สูญไป": "Lost", "ไม่พบ": "Not found",
+    "ทั้งหมด": "All",
+}
+
+
+def T(s: str) -> str:
+    return EN.get(s, s) if LANG == "en" else s
+
+
+def set_lang(lang: str):
+    global LANG
+    LANG = "en" if lang == "en" else "th"
