@@ -98,3 +98,20 @@ def test_boq_and_sheets():
     txt = " ".join(t for s in sheets for t in s.texts())
     assert "(อิสระ)" in txt and "เอียง" in txt
     D.dxf_bytes(sheets).decode("cp874")
+
+
+def test_lines_drawn_on_the_model_keep_their_place():
+    """The building stands lifted by its floor lift (±0.00 at z = lift in
+    the model): a line drawn on the model at +3.60 is the +3.00 level."""
+    d = _house()
+    lift = B.floor_lift(B.settings_of(d))
+    chains = [{"pts": [(9.8, 0.0, 3.0 + lift), (12.8, 0.0, 4.0 + lift)], "closed": False, "curved": False}]
+    FR.model_to_building(chains, d)
+    FR.add_from_chains(d, chains, "beam")
+    assert d["free"]["beams"][0]["pts"][0][2] == 3.0
+    g = FR.members(d)[0][0]
+    B.lift_groups([g], lift)
+    zs = [v.position.z() for v in g.mesh.vertices]
+    if getattr(g, "xform", None) is not None:
+        zs = [g.xform.map(v.position).z() for v in g.mesh.vertices]
+    assert abs(max(zs) - (4.0 + lift)) < 0.05                      # its top back where it was drawn

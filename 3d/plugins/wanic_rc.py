@@ -805,6 +805,7 @@ class RCPanel(QWidget):
             QMessageBox.information(self, TITLE, "เลือกเส้นที่วาดไว้ในโมเดลก่อน (เส้นตรง เส้นโค้ง เส้นเอียง หรือเส้นดิ่ง)")
             return
         d = bp.data()
+        FR.model_to_building(chains, d)               # model z (lifted) → the building's levels
         dlg = FreeConvertDialog(self, d, chains)
         if dlg.exec() != FreeConvertDialog.Accepted:
             return

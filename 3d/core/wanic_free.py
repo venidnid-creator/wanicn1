@@ -65,6 +65,18 @@ def chains_from_edges(edges) -> list:
     return res
 
 
+def model_to_building(chains, data) -> list:
+    """Lines drawn on the model are in model metres, where the building
+    stands lifted by its floor lift (ground at z = 0, ±0.00 at z = lift);
+    the free members are kept in the building's own levels (±0.00 = the
+    ground-floor finish), so take the lift off every z."""
+    from core import wanic_building as B
+    lift = B.floor_lift(B.settings_of(data))
+    for ch in chains:
+        ch["pts"] = [(p[0], p[1], round(p[2] - lift, 4)) for p in ch["pts"]]
+    return chains
+
+
 def is_vertical(p, q) -> bool:
     return abs(q[2] - p[2]) > 0.05 and math.hypot(q[0] - p[0], q[1] - p[1]) < 0.02
 
