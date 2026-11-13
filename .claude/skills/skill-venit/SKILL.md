@@ -185,7 +185,8 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   6 ✓ A-01 symbols + finish codes, room tags, ABCD markers, door/window schedule, grease trap / screen pit, septic tank by
   users, EE/SN specifications · 7 ✓ two pile sizes, pile capacity from test results · 8 ✓ awaiting approval: free drafting (columns/beams from
   sketch lines, curved/inclined beams, curved walls). QD is studied for workflow only — never copy its code/UI/files.
-- Next installer only when the owner asks; it will contain all of the above.
+- Installer **2026.11.13.1** built (run 43411762994, artifact `wanicnsurvey-setup-2026.11.13.1`) with all of the above;
+  not released — waiting for the owner's test results.
 
 ## 7. Future development (agreed or proposed — confirm with the owner before starting)
 
