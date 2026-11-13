@@ -182,7 +182,7 @@ class BudgetPage(QWidget):
         lay.addWidget(split, 1)
         row, _ = _buttons(("เพิ่มรายการ", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete),
                           (None, None), ("โอนงบประมาณ", self.transfer), ("เพิ่ม/ลดงบประมาณ", self.change),
-                          ("ประวัติการโอน", self.history), ("อ่านข้อบัญญัติ (PDF)…", self.import_),
+                          ("ประวัติการโอน", self.history), ("นำเข้าข้อบัญญัติ", self.import_),
                           ("คัดลอกจากปีก่อน", self.copy), ("รายงาน", self.report))
         lay.addLayout(row)
 
@@ -203,7 +203,7 @@ class BudgetPage(QWidget):
                              f"{T('รายการ')} · {T('รวมตามข้อบัญญัติ')} {m(o['amount'])} {T('บาท')}{src}")
         else:
             self.ord.setText(f"<span style='color:{RED}'>ยังไม่มีข้อบัญญัติปีงบประมาณ {fy} — "
-                             "กด «อ่านข้อบัญญัติ (PDF)…» หรือ «คัดลอกจากปีก่อน» แล้วแก้ไขให้ตรงข้อบัญญัติปีนี้ "
+                             "กด «นำเข้าข้อบัญญัติ» หรือ «คัดลอกจากปีก่อน» แล้วแก้ไขให้ตรงข้อบัญญัติปีนี้ "
                              "(แต่ละปีโครงสร้างไม่จำเป็นต้องเหมือนกัน)</span>")
         self.tree.clear()
         self.info.setHtml("")

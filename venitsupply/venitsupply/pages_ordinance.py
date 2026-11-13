@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""หน้าต่าง «อ่านข้อบัญญัติ»: เลือกปีงบประมาณ → เลือกไฟล์ (PDF/ตาราง) → อ่าน → ตรวจรายการ → บันทึก."""
+"""หน้าต่าง «นำเข้าข้อบัญญัติ»: เลือกปีงบประมาณ → เลือกไฟล์ (PDF/ตาราง) → อ่าน → ตรวจรายการ → บันทึก."""
 from __future__ import annotations
 
 from html import escape
@@ -66,7 +66,7 @@ class OrdinanceDialog(QDialog):
         self.rows = None            # table rows ready for Store.import_ordinance
         self.items: list[dict] = []
         self.meta: dict = {}
-        self.setWindowTitle(T("อ่านข้อบัญญัติงบประมาณรายจ่าย"))
+        self.setWindowTitle(T("นำเข้าข้อบัญญัติงบประมาณรายจ่าย (PDF หรือตาราง)"))
         self.resize(1500, 900)
         lay = QVBoxLayout(self)
 
