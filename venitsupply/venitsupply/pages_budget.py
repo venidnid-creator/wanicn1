@@ -2,6 +2,8 @@
 """หน้าจองบประมาณ (ข้อบัญญัติ), จัดซื้อจัดจ้าง และสถิติ."""
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
@@ -141,8 +143,8 @@ class BudgetPage(QWidget):
         lay.addWidget(self.tree, 1)
         row, _ = _buttons(("เพิ่มรายการ", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete),
                           (None, None), ("โอนงบประมาณ", self.transfer), ("เพิ่ม/ลดงบประมาณ", self.change),
-                          ("ประวัติการโอน", self.history), ("นำเข้าจากตาราง", self.import_),
-                          ("คัดลอกจากปีก่อน", self.copy), ("รายงานสถานะงบประมาณ", self.report))
+                          ("ประวัติการโอน", self.history), ("นำเข้าข้อบัญญัติ", self.import_),
+                          ("คัดลอกจากปีก่อน", self.copy), ("รายงาน", self.report))
         lay.addLayout(row)
 
     def refresh(self):
@@ -173,14 +175,17 @@ class BudgetPage(QWidget):
         for r in rows:
             b = r["item"]
             path = (b["plan"], b["task"], b["grp"], b["category"], b["type"])
+            if b["type"] == b["name"]:          # ประเภทที่เป็นรายการเดียว — ไม่ต้องซ้อนอีกชั้น
+                path = path[:4]
             parent = node(path)
             vals = [r["approved"], r["changes"], r["budget"], r["reserved"], r["committed"], r["paid"],
                     r["available"]]
             leaf = QTreeWidgetItem([b["name"]] + [m(v) for v in vals] + [self._pct(r)])
             leaf.setData(0, Qt.UserRole, b["id"])
+            leaf.setToolTip(0, f"{b['type']} › {b['name']}" + (f"\n{b['note']}" if b["note"] else ""))
             self._style(leaf, r["available"])
             parent.addChild(leaf)
-            for i in range(1, 6):
+            for i in range(1, len(path) + 1):
                 acc = sums[path[:i]]
                 for j, v in enumerate(vals):
                     acc[j] += v
@@ -281,7 +286,7 @@ class BudgetPage(QWidget):
             self.refresh()
 
     def _items(self):
-        return [(b["id"], f"{b['category']} › {b['type']} › {b['name'][:50]}  "
+        return [(b["id"], f"{b['task']} › {b['type']} › {b['name'][:50]}  "
                  f"({T('คงเหลือ')} {m(self.win.store.balance(b['id'])['available'])})")
                 for b in self.win.store.budget_items(self.fy.value())]
 
@@ -334,6 +339,52 @@ class BudgetPage(QWidget):
             t.removeRow(t.currentRow())
 
     def import_(self):
+        menu = QMenu(self)
+        menu.addAction(T("ข้อบัญญัติ อบต.ไม้ขาว ปี 2570 (ในชุดโปรแกรม)"), self.import_maikhao)
+        menu.addAction(T("จากตารางรายงานประมาณการรายจ่าย (.csv/.xlsx)…"), self.import_ordinance_file)
+        menu.addAction(T("จากตารางทั่วไป 7 คอลัมน์ (.csv/.xlsx)…"), self.import_simple)
+        menu.exec(self.cursor().pos())
+
+    def _ordinance(self, rows, what):
+        s = self.win.store
+        years = [int(m) for h in rows[0] for m in re.findall(r"ประมาณการ\s*(25\d\d)", str(h))]
+        have = [y for y in years if s.budget_items(y)]
+        replace = False
+        if have:
+            ans = QMessageBox.question(
+                self, PRODUCT_TH, f"มีงบประมาณปี {', '.join(map(str, have))} อยู่แล้ว\n"
+                "ใช่ = แทนที่ของเดิม (รายการที่มีการจัดซื้ออ้างอิงจะลบไม่ได้) · ไม่ใช่ = เพิ่มต่อท้าย",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if ans == QMessageBox.Cancel:
+                return
+            replace = ans == QMessageBox.Yes
+        try:
+            got = s.import_ordinance(rows, replace=replace)
+        except Exception as exc:  # noqa: BLE001
+            return error(self, exc)
+        lines = [f"งบประมาณปี {fy}: {n} รายการ" for fy, n in sorted(got["budget"].items())]
+        lines += [f"รายจ่ายจริงปี {fy}: {n} รายการ (ใช้เปรียบเทียบหลายปี)" for fy, n in sorted(got["actual"].items())]
+        QMessageBox.information(self, PRODUCT_TH, f"{what}\n\n" + "\n".join(lines))
+        if got["budget"]:
+            self.fy.setValue(max(got["budget"]))
+        self.refresh()
+
+    def import_maikhao(self):
+        from pathlib import Path
+        path = Path(B.__file__).resolve().parent / "data" / "maikhao_2570.csv"
+        self._ordinance(B.read_table(path), "นำเข้าข้อบัญญัติงบประมาณรายจ่ายประจำปี 2570 "
+                        "องค์การบริหารส่วนตำบลไม้ขาว อ.ถลาง จ.ภูเก็ต (รวม 205,000,000 บาท)")
+
+    def import_ordinance_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, T("นำเข้าจากตาราง"), "", "ตาราง (*.xlsx *.csv)")
+        if path:
+            try:
+                rows = B.read_table(path)
+            except Exception as exc:  # noqa: BLE001
+                return error(self, exc)
+            self._ordinance(rows, T("นำเข้าแล้ว"))
+
+    def import_simple(self):
         path, _ = QFileDialog.getOpenFileName(self, T("นำเข้าจากตาราง"), "",
                                               "ตาราง (*.xlsx *.csv)")
         if not path:
@@ -360,6 +411,10 @@ class BudgetPage(QWidget):
                              ("สรุปตามงบ", "grp"), ("สรุปตามหมวด", "category"), ("สรุปตามประเภท", "type")):
             menu.addAction(T(label), lambda lv=level: self.win.preview(
                 R.budget_status(self.win.store, self.fy.value(), lv)))
+        menu.addSeparator()
+        for label, level in (("เปรียบเทียบหลายปี ตามแผนงาน", "plan"), ("เปรียบเทียบหลายปี ตามหมวด", "category"),
+                             ("เปรียบเทียบหลายปี ตามประเภท", "type")):
+            menu.addAction(T(label), lambda lv=level: self.win.preview(R.budget_compare(self.win.store, lv)))
         menu.exec(self.cursor().pos())
 
 
@@ -487,12 +542,12 @@ class ProcDialog(QDialog):
         self.bitem = QComboBox()
         self.bitem.addItem(T("— เลือกรายการงบประมาณ —"), None)
         for b in s.budget_items(fy, procurement_only=True):
-            self.bitem.addItem(f"{b['category']} › {b['type']} › {b['name'][:60]}", b["id"])
+            self.bitem.addItem(f"{b['task']} › {b['type']} › {b['name'][:60]}", b["id"])
         if p.get("budget_item_id"):
             i = self.bitem.findData(p["budget_item_id"])
             if i < 0:
                 b = s.budget_item(p["budget_item_id"])
-                self.bitem.addItem(f"{b['category']} › {b['type']} › {b['name'][:60]}", b["id"])
+                self.bitem.addItem(f"{b['task']} › {b['type']} › {b['name'][:60]}", b["id"])
                 i = self.bitem.count() - 1
             self.bitem.setCurrentIndex(i)
         f.addRow(T("งบประมาณจากข้อบัญญัติ"), self.bitem)

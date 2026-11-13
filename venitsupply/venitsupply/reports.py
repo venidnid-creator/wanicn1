@@ -461,3 +461,24 @@ def stats_report(store, rows, title, subtitle) -> Report:
     r.totals = ["รวม", *t]
     r.signers = ["officer", "head"]
     return r
+
+
+def budget_compare(store, level="category") -> Report:
+    """เปรียบเทียบงบประมาณ/รายจ่ายจริงหลายปี ตามระดับที่เลือก."""
+    from .budget import LEVEL_NAMES, LEVELS
+    years, rows = store.compare_years(level)
+    actual = {r["fy"] for r in store.q("SELECT DISTINCT fy FROM budget_actuals")}
+    r = Report(store, "เปรียบเทียบงบประมาณรายจ่ายหลายปี",
+               f"สรุปตาม{LEVEL_NAMES[LEVELS.index(level)]} · ปีที่มีรายจ่ายจริงแสดงรายจ่ายจริง "
+               "ปีอื่นแสดงงบประมาณหลังโอน", landscape=True)
+    n = LEVELS.index(level) + 1
+    r.header = LEVEL_NAMES[:n] + [f"{'จ่ายจริง' if y in actual else 'งบประมาณ'} {y}" for y in years]
+    r.align = ["left"] * n + ["right"] * len(years)
+    tot = [0.0] * len(years)
+    for x in rows:
+        vals = [float(x["values"].get(y, 0)) for y in years]
+        r.rows.append(list(x["key"]) + vals)
+        tot = [a + b for a, b in zip(tot, vals)]
+    r.totals = ["รวม"] + [""] * (n - 1) + tot
+    r.signers = ["officer", "head"]
+    return r

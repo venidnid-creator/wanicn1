@@ -148,3 +148,36 @@ def test_budget_reports():
                 R.payment_register(s, FY), R.budget_status(s, FY), R.budget_status(s, FY, "category"),
                 R.stats_report(s, s.stats("month", fy=FY), "สถิติ", "")):
         assert "นายเวนิช" in rep.html()
+
+
+def test_maikhao_ordinance_2570():
+    """ข้อบัญญัติ อบต.ไม้ขาว 2570 ในชุดโปรแกรม: ยอดตรงกับข้อ 4 ทุกแผนงาน."""
+    from venitsupply import reports as R
+    path = os.path.join(os.path.dirname(B.__file__), "data", "maikhao_2570.csv")
+    rows = B.read_table(path)
+    s = Store()
+    got = s.import_ordinance(rows)
+    assert set(got["budget"]) == {2569, 2570} and set(got["actual"]) == {2567, 2568}
+    plans = {r["key"][0]: r["budget"] for r in s.budget_summary(2570, "plan")}
+    assert round(sum(plans.values())) == 205000000
+    expect = {"แผนงานบริหารงานทั่วไป": 43090770, "แผนงานการรักษาความสงบภายใน": 12701580,
+              "แผนงานการศึกษา": 27769330, "แผนงานสาธารณสุข": 7697460, "แผนงานสังคมสงเคราะห์": 3773160,
+              "แผนงานเคหะและชุมชน": 19480040, "แผนงานสร้างความเข้มแข็งของชุมชน": 4422200,
+              "แผนงานการศาสนา วัฒนธรรม และนันทนาการ": 8646280, "แผนงานอุตสาหกรรมและการโยธา": 40828020,
+              "แผนงานการพาณิชย์": 7454460, "แผนงานงบกลาง": 29136700}
+    assert {k: round(v) for k, v in plans.items()} == expect
+    years, cmp = s.compare_years("plan")
+    assert years == [2567, 2568, 2569, 2570]
+    assert "จ่ายจริง 2567" in R.budget_compare(s, "category").html()
+    again = s.import_ordinance(rows, replace=True)
+    assert again == got and round(sum(r["budget"] for r in s.budget_summary(2570))) == 205000000
+
+
+def test_ordinance_tool_header():
+    rows = [["แผนงาน", "งาน", "งบ", "หมวด", "ประเภท", "รายการ", "ประมาณการ 2570", "หมายเหตุ"],
+            ["ก", "ข", "งบดำเนินงาน", "ค่าวัสดุ", "วัสดุสำนักงาน", "วัสดุสำนักงาน", "1,000.00", ""],
+            ["ก", "ข", "งบดำเนินงาน", "ค่าวัสดุ", "วัสดุอื่น", "วัสดุอื่น", "0", ""]]
+    s = Store()
+    assert s.import_ordinance(rows) == {"budget": {2570: 1}, "actual": {}}
+    with pytest.raises(ValueError):
+        s.import_ordinance([["แผนงาน", "งาน"]])
