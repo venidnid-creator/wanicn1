@@ -136,7 +136,11 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - data["piles"] = {"P1": {...}, "P2": {...}}; footing spec "pile": "P1"/"P2"; B.library_of เมื่อมี data["piles"] ตั้ง pile_b/pile_len/pile_name/pile_shape ตามชนิด (เอกสารเก่าไม่เปลี่ยน); 3D เข็มกลมใช้ family "pile"; BOQ ชื่อเข็มตามชนิด
      - wanic_calc footing ใช้ cap ต่อเบอร์ ชื่อ «เข็ม n ต้น (P1)»; calc_cards rows มี pcap/ptype; advice ใช้ pcap; บรรทัดหัวขั้น 9 และ PDF ใช้ pile_text
      - UI core/wanic_pile_view.py PileDialog (P1/P2 คู่กัน ผลสด, ตารางฐานราก จำนวนเข็ม + เลือก P1/P2) ปุ่ม «เสาเข็ม 2 ขนาด / กำลังเข็ม…» ขั้น 2 และ 9; รูปเล่ม pile_page
-     - tests/test_wanic_pile.py (ใน CI; ต้อง deleteLater dialog กัน segfault ตอนปิด) · ถัดไปหลังอนุมัติ: แผนข้อ 8 (เขียนแบบอิสระ: เสา/คานตามเส้นร่าง คานโค้ง/เอียง ผนังโค้ง)
+     - tests/test_wanic_pile.py (ใน CI; ต้อง deleteLater dialog กัน segfault ตอนปิด) · อนุมัติแล้ว (13 พ.ย.)
+   + [ ] (กำลังทำ) แผนข้อ 8 — เขียนแบบอิสระ:
+     - ออกแบบ: data["free"] = {"beams": [{"pts": [[x,y,z]…] (ม.), "mark" (เบอร์คานในคลัง), "curved", "w" (กก./ม. เพิ่ม)}], "columns": [{"x","y","z0","z1","mark"}], "walls": [{"pts": [[x,y]…], "z", "h", "t", "curved"}]}
+     - core/wanic_free.py: chains (แยกเส้นที่เลือกเป็นสาย, ใช้ core.sweep.order_path_edges เหมือน plugins/wanic_profiles.path_from_selection), classify (แนวดิ่ง → เสา, ระดับพื้น → ผนัง/คาน ตามที่ผู้ใช้เลือก), members 3D (กวาดหน้าตัดตามเส้นทั้งสาย — โค้ง/เอียงได้), BOQ, analyse (คานอิสระ: จุดรองรับ = ปลาย + จุดที่มีเสา; น้ำหนักตามแนวราบ /cos; คานโค้งเตือนแรงบิด; ปฏิกิริยาลงเสาเดิมเข้า col_load; เสาอิสระตรวจ P-M + ฐาน F1)
+     - UI: เมนูคลิกขวา «แปลงเส้นที่เลือกเป็น คาน/เสา/ผนัง» + หน้าต่างรายการชิ้นส่วนอิสระในแผง คสล.; วาดในแปลน A/S
      - (เดิม) แผนข้อ 6 (A-01 สัญลักษณ์/รหัสวัสดุ ป้ายห้อง ABCD ตารางประตูหน้าต่าง บ่อดักไขมัน/บ่อตะแกรง ถังบำบัดตามจำนวนคน รายการ EE/SN)
 4. [ ] ออกแบบคาน: น้ำหนักจุด/แผ่เพิ่มเอง · คานยื่น · Checkload (Wcol / Wcol-Area / Wfloor)
 5. [ ] บันได คสล. ช่วงตรง / L / 2 ช่วง + คานชานพัก + รูปตัด
