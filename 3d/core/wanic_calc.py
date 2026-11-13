@@ -640,6 +640,85 @@ def stacked_floors(data):
     return fl
 
 
+# ---- serviceability and code minimums (ACI 318 / วสท. 011008) --------------------------------
+
+def fy_factor(fy_ksc: float) -> float:
+    """ACI Table 9.5(a) is for fy = 60 ksi; other steels × (0.4 + fy/100 000 psi)."""
+    return 0.4 + fy_ksc * 14.2233 / 100000.0
+
+
+def beam_hmin(L: float, cont_l: bool, cont_r: bool, cant: bool, fy: float) -> float:
+    """Minimum beam depth that needs no deflection calculation (m)."""
+    div = 8.0 if cant else 21.0 if (cont_l and cont_r) else 18.5 if (cont_l or cont_r) else 16.0
+    return L / div * fy_factor(fy)
+
+
+def slab_tmin(a: float, b: float, oneway: bool, disc: int, fy: float) -> float:
+    """Minimum slab thickness (m): one-way per ACI 9.5(a); two-way as
+    วสท. practice — perimeter / 180 and never under 9 cm."""
+    if oneway:
+        div = 20.0 if disc >= 3 else 24.0
+        return max(0.08, a / div * fy_factor(fy))
+    return max(0.09, 2 * (a + b) / 180.0)
+
+
+def ext_neg_moments(spans) -> tuple:
+    """ACI coefficient at an exterior end built into a column: −wL²/16
+    (the stiffness analysis takes that end as a hinge)."""
+    def wbar(sp):
+        tot, _m = _span_loads(sp)
+        return tot / sp.L if sp.L else 0.0
+    left = 0.0 if not spans or spans[0].cant else wbar(spans[0]) * spans[0].L ** 2 / 16.0
+    right = 0.0 if not spans or spans[-1].cant else wbar(spans[-1]) * spans[-1].L ** 2 / 16.0
+    return left, right
+
+
+def beam_deflection(L, spec, b_, Mm, Ml, Mr) -> float:
+    """Long-term deflection (m) of a span under its service moments
+    (kg·m; Mm sagging +, Ml/Mr the end moments, hogging −) — ACI 9.5.2:
+    Branson's Ie, Δ = 5L²/(48 Ec Ie)·(Mm − 0.1(Ma + Mb)), × (1 + λ),
+    λ = 2 / (1 + 50ρ′)."""
+    fc = b_["fc"]
+    bw, h = float(spec.get("b", 0.2)) * 100, float(spec.get("h", 0.4)) * 100     # cm
+    d = h - R.COVER["beam"] * 100 - 1.2
+    Ec = 15100.0 * math.sqrt(fc)                                                   # ksc
+    n = 2.04e6 / Ec
+    bot, top = R.parse_bar(spec.get("bot")), R.parse_bar(spec.get("top"))
+    As = bot.n * bot.area if bot and bot.n else 0.5
+    As2 = top.n * top.area if top and top.n else 0.0
+    Ig = bw * h ** 3 / 12.0
+    fr = 2.0 * math.sqrt(fc)
+    Mcr = fr * Ig / (h / 2.0)                                                     # kg·cm
+    nA = n * As
+    kd = (-nA + math.sqrt(nA * nA + 2 * bw * nA * d)) / bw
+    Icr = bw * kd ** 3 / 3.0 + nA * (d - kd) ** 2
+    Ma = max(Mm, 1e-6) * 100.0
+    Ie = Ig if Ma <= Mcr else min(Ig, (Mcr / Ma) ** 3 * Ig + (1 - (Mcr / Ma) ** 3) * Icr)
+    Mnet = max(Mm - 0.1 * (abs(min(Ml, 0.0)) + abs(min(Mr, 0.0))), 0.0) * 100.0
+    Lc = L * 100.0
+    di = 5.0 * Lc * Lc / (48.0 * Ec * Ie) * Mnet                                 # cm
+    lam = 2.0 / (1.0 + 50.0 * As2 / (bw * d))
+    return di * (1.0 + lam) / 100.0
+
+
+def column_magnifier(spec, b_, Pu: float, Lu: float, k: float = 1.0) -> tuple:
+    """ACI 10.12 non-sway magnifier: (kLu/r, δns); δns = Cm/(1 − Pu/0.75Pc)
+    with Cm = 1.0 (minimum eccentricity), EI = 0.4EcIg/(1 + βd), βd = 0.6;
+    no magnification when kLu/r ≤ 22. δ = 9.9 when Pu ≥ 0.75Pc (buckles)."""
+    b, h = float(spec.get("b", 0.2)), float(spec.get("h", 0.2))
+    rmin = 0.3 * min(b, h)
+    slender = k * Lu / rmin if rmin else 99.0
+    if slender <= 22.0:
+        return slender, 1.0
+    Ec = 15100.0 * math.sqrt(b_["fc"]) * 1e4                                       # kg/m²
+    Ig = max(b, h) * min(b, h) ** 3 / 12.0                                         # m⁴, about the weak axis
+    EI = 0.4 * Ec * Ig / 1.6
+    Pc = math.pi ** 2 * EI / (k * Lu) ** 2                                         # kg
+    if Pu >= 0.75 * Pc:
+        return slender, 9.9
+    return slender, max(1.0, 1.0 / (1.0 - Pu / (0.75 * Pc)))
+
+
 def _along(e, axis) -> tuple:
     """A beam segment's (low, high) coordinate along its axis."""
     a, b = (e["p0"][0], e["p1"][0]) if axis == "x" else (e["p0"][1], e["p1"][1])
@@ -693,10 +772,14 @@ def analyse(data) -> dict:
                 cap = As * fs_of(bar, b_) * 0.875 * d * 100 / 100
         else:
             cap = 0.0
+        tmin = slab_tmin(a, b2, m_ < 0.5, disc, fy_of(bar, b_) if bar else b_["fy_rb"])
+        r_t = tmin / t if t else 9.9
         if not sl.get("ground") and not spc.get("ground"):
             out.append(Member("slab", f"{sl['mark']} {rm.get('name', '')} {a:.2f}×{b2:.2f} ม.",
                               f"Mu = {Mu:,.1f} กก.-ม./ม. ({kind})", f"φMn = {cap:,.1f} กก.-ม./ม.",
-                              Mu / cap if cap else 9.9, f"wu = {wu:,.0f} กก./ตร.ม.",
+                              max(Mu / cap if cap else 9.9, r_t),
+                              f"wu = {wu:,.0f} กก./ตร.ม. · หนาขั้นต่ำ (กันแอ่น) {tmin * 100:.1f} ซม."
+                              + (f" — บางกว่า ต้องหนา ≥ {math.ceil(tmin * 100 - 1e-6):.0f} ซม." if r_t > 1 else ""),
                               qty=wu, qty_unit="กก./ตร.ม. (คน/ของวางเพิ่ม)", qty_factor=L_))
         slab_q[id(rm)] = (D_ * dead + L_ * b_["ll_floor"], dead, b_["ll_floor"])
     # -- beams: collinear runs on the same level, continuous over the columns
@@ -789,9 +872,38 @@ def analyse(data) -> dict:
         res.caps = {"M+": cap["bot"], "M-": cap["top"], "V": cap["V"], "Vc": cap["Vc"],
                     "lab_M": "φMn" if sdm else "Ma", "lab_V": "φVn" if sdm else "Va",
                     "lab_Vc": "φVc" if sdm else "vc·bd"}
+        # the exterior ends built into columns: −wL²/16 at least (an envelope with the hinged analysis)
+        mext_l, mext_r = ext_neg_moments(spans)
+        res.Mext = (mext_l, mext_r)
+        res.Mmin = min(res.Mmin, -mext_l, -mext_r)
+        # deflection: ACI 9.5(a) minimum depth, else the long-term deflection ≤ L/240
+        avg_ = (D_ + L_) / 2.0
+        fy_main = fy_of(R.parse_bar(spec.get("bot")), b_) if R.parse_bar(spec.get("bot")) else b_["fy_db"]
+        rd, dnote, worst = 0.0, [], None
+        n_st = 24
+        for j, sp_ in enumerate(spans):
+            cont_l = j > 0 or bool(spans[0].cant and j == 1)
+            cont_r = j < len(spans) - 1
+            hmin = beam_hmin(sp_.L, cont_l, cont_r, bool(sp_.cant), fy_main)
+            if h >= hmin - 1e-9:
+                continue
+            if sp_.cant:
+                rd = max(rd, hmin / h)
+                dnote.append(f"ช่วง {j + 1} คานยื่นลึกน้อยกว่า L/8 = {hmin * 100:.0f} ซม.")
+                continue
+            seg = res.M[j * (n_st + 1):(j + 1) * (n_st + 1)]
+            dd = beam_deflection(sp_.L, spec, b_, max(seg) / avg_, seg[0] / avg_, seg[-1] / avg_)
+            lim = sp_.L / 240.0
+            rd = max(rd, dd / lim)
+            if worst is None or dd / lim > worst[0] / worst[1]:
+                worst = (dd, lim)
+            dnote.append(f"ช่วง {j + 1} ลึก {h * 100:.0f} < {hmin * 100:.0f} ซม. → แอ่นระยะยาว {dd * 1000:.1f} มม. "
+                         f"(ยอมให้ L/240 = {lim * 1000:.1f})")
+        if worst:
+            res.caps["defl"] = worst
         r = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
                 -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
-                res.Vmax / cap["V"] if cap["V"] else 9.9)
+                res.Vmax / cap["V"] if cap["V"] else 9.9, rd)
         name = (f"{mark} ชั้น {level + 1 if not segs[0].get('ground') else 'ดิน'} · "
                 f"แนว{'นอน' if axis == 'x' else 'ตั้ง'} {'y' if axis == 'x' else 'x'} = {c:.2f} · "
                 f"{len(spans) - sum(1 for sp_ in spans if sp_.cant)} ช่วง"
@@ -800,7 +912,9 @@ def analyse(data) -> dict:
         out.append(Member("beam", name,
                           f"Mu+ {res.Mmax:,.0f} · Mu− {max(0.0, -res.Mmin):,.0f} กก.-ม. · Vu {res.Vmax:,.0f} กก.",
                           f"φMn ล่าง {cap['bot']:,.0f} · บน {cap['top']:,.0f} · φVn {cap['V']:,.0f}",
-                          r, f"w = {', '.join(f'{sp.w:,.0f}' for sp in spans)} กก./ม.", res,
+                          r, f"w = {', '.join(f'{sp.w:,.0f}' for sp in spans)} กก./ม."
+                          + (f" · ปลายริมติดเสา Mu− ≥ wL²/16 = {max(mext_l, mext_r):,.0f}" if max(mext_l, mext_r) else "")
+                          + ("".join(f" · {t}" for t in dnote)), res,
                           qty=max(sp.w for sp in spans) / ((D_ + L_) / 2.0),
                           qty_unit="กก. ต่อเมตรของคาน"))
         beams_out[name] = res
@@ -853,25 +967,64 @@ def analyse(data) -> dict:
         cap = column_capacity(spec, b_, fc)
         hh = max(float(spec.get("b", 0.2)), float(spec.get("h", 0.2)))
         Mu = max(Pu * (0.015 + 0.03 * hh), col_mom.get(k_, 0.0))      # e_min = 15 mm + 0.03 h
+        # slender column: the clear height between the ground beam and the beam above
+        bh_ = float(lib.get("B1", {}).get("h", 0.4))
+        Lu = max(float(s["floor_h"]) - bh_, 0.5)
+        slender, delta = column_magnifier(spec, b_, Pu, Lu)
+        Mu *= delta
         if b_["method"] == "SDM":
             curve = pm_curve(spec, b_)
             r = pm_ratio(curve, Mu, Pu)
             dia = PMResult(curve, Mu, Pu)
+            dia.M0, dia.Lu = Mu / delta if delta < 9.9 else Mu / 9.9, Lu   # for the advice: δ again per size
             capt = f"φPn {cap / 1000:,.2f} ตัน (แรงอัดล้วน) · ตรวจด้วยแผนภาพ P-M"
         else:
             r, dia, capt = Pu / cap if cap else 9.9, None, f"P ยอมให้ {cap / 1000:,.2f} ตัน"
         out.append(Member("column", f"{c_['mark']} ที่ ({c_['x']:.2f}, {c_['y']:.2f})",
                           f"Pu = {Pu / 1000:,.2f} ตัน · Mu = {Mu:,.0f} กก.-ม.", capt, r,
-                          "Mu = ค่ามากกว่าของ Pu·emin และโมเมนต์จากปลายคาน (wL²/16 แบ่งเสาบน-ล่าง)", dia,
+                          "Mu = ค่ามากกว่าของ Pu·emin และโมเมนต์จากปลายคาน (wL²/16 แบ่งเสาบน-ล่าง)"
+                          + (f" · เสาชะลูด kLu/r = {slender:.0f} > 22 → ขยายโมเมนต์ δ = {delta:.2f} "
+                             "(โครงไม่เซ k = 1.0 — ถ้าโครงเซได้ ให้วิศวกรตรวจเพิ่ม)" if delta > 1.0
+                             else f" · kLu/r = {slender:.0f} ≤ 22 ไม่ต้องขยายโมเมนต์")
+                          + (" — เสาโก่งเดาะ (Pu ≥ 0.75Pc) ต้องขยายหน้าตัด" if delta >= 9.9 else ""), dia,
                           qty=Pu / ((D_ + L_) / 2.0) / 1000.0, qty_unit="ตัน ต่อเสา 1 ต้น"))
         cols_out.append((k_, Pu))
+    # -- stumps (ตอม่อ): the ground-floor column's load plus its own weight, checked as a short column
+    stump_pu = {}
+    col_at = dict(cols_out)
+    for st_ in E["stumps"]:
+        k_ = (round(st_["x"], 3), round(st_["y"], 3))
+        if k_ not in col_at:
+            continue
+        spec = lib.get(st_["mark"], {})
+        Ls = abs(float(st_["z1"]) - float(st_["z0"]))
+        Pu = col_at[k_] + D_ * float(spec.get("b", 0.2)) * float(spec.get("h", 0.2)) * conc * Ls
+        hh = max(float(spec.get("b", 0.2)), float(spec.get("h", 0.2)))
+        Mu = max(Pu * (0.015 + 0.03 * hh), col_mom.get(k_, 0.0))
+        slender, delta = column_magnifier(spec, b_, Pu, max(Ls - float(lib.get("GB1", {}).get("h", 0.4)), 0.3))
+        Mu *= delta
+        cap = column_capacity(spec, b_, fc)
+        if b_["method"] == "SDM":
+            curve = pm_curve(spec, b_)
+            r, dia = pm_ratio(curve, Mu, Pu), PMResult(curve, Mu, Pu)
+            dia.M0 = Mu / delta if delta < 9.9 else Mu / 9.9
+            dia.Lu = max(Ls - float(lib.get("GB1", {}).get("h", 0.4)), 0.3)
+            capt = f"φPn {cap / 1000:,.2f} ตัน (แรงอัดล้วน) · ตรวจด้วยแผนภาพ P-M"
+        else:
+            r, dia, capt = Pu / cap if cap else 9.9, None, f"P ยอมให้ {cap / 1000:,.2f} ตัน"
+        out.append(Member("column", f"{st_['mark']} ตอม่อ ที่ ({st_['x']:.2f}, {st_['y']:.2f})",
+                          f"Pu = {Pu / 1000:,.2f} ตัน · Mu = {Mu:,.0f} กก.-ม.", capt, r,
+                          f"ตอม่อรับแรงจากเสาชั้นล่าง + น้ำหนักตัวเอง (สูง {Ls:.2f} ม.)", dia,
+                          qty=Pu / ((D_ + L_) / 2.0) / 1000.0, qty_unit="ตัน ต่อตอม่อ 1 ต้น"))
+        stump_pu[k_] = Pu
+    cols_out = [(k_, stump_pu.get(k_, P)) for k_, P in cols_out]
     # -- footings: the service load on the soil or the piles
     avg = (D_ + L_) / 2.0
     for f in E["footings"]:
         k_ = (round(f["x"], 3), round(f["y"], 3))
         spec = lib.get(f["mark"], {})
         Pu = next((p for kk, p in cols_out if kk == k_), 0.0)
-        P = Pu / avg                                                # back to service
+        P = Pu / D_                       # back to service: ÷ 1.4 (all dead) — never under the real D + L
         w_, l_, t_ = (float(spec.get(k, 0)) for k in ("w", "l", "t"))
         P += w_ * l_ * t_ * conc
         piles = int(spec.get("piles") or 0)
@@ -898,7 +1051,7 @@ def analyse(data) -> dict:
     for k_, Pu in free_cols:
         if k_ in grid_feet:
             continue
-        P = Pu / avg + float(fspec.get("w", 1)) * float(fspec.get("l", 1)) * float(fspec.get("t", 0.3)) * conc
+        P = Pu / D_ + float(fspec.get("w", 1)) * float(fspec.get("l", 1)) * float(fspec.get("t", 0.3)) * conc
         piles = int(fspec.get("piles") or 0)
         if piles:
             from core import wanic_pile as PL

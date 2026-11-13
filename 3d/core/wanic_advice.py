@@ -152,10 +152,21 @@ def column_advice(m, data, b_) -> list:
     lib = B.library_of(data)
     mark = m.name.split(" ")[0]
     spec = dict(lib.get(mark, {}))
+    step = "ขั้น 3 ตอม่อ" if spec.get("kind") == "stump" else "ขั้น 6 เสา"
     dia = m.diagram
     if dia is None or not spec:
-        return [f"{mark} (ขั้น 6): เพิ่มขนาดเสาหรือเหล็กยืน"]
+        return [f"{mark} ({step}): เพิ่มขนาดเสาหรือเหล็กยืน"]
     Pu, Mu = dia.Pu, dia.Mu
+
+    def ratio_of(sp):
+        """P-M ratio of a candidate, its slender magnifier worked out again for its own size."""
+        mu = Mu
+        if hasattr(dia, "M0"):
+            _sl, dl = C.column_magnifier(sp, b_, Pu, dia.Lu)
+            if dl >= 9.9:
+                return 9.9
+            mu = dia.M0 * dl
+        return C.pm_ratio(C.pm_curve(sp, b_), mu, Pu)
     main = R.parse_bar(spec.get("main"))
     b, h = float(spec.get("b", 0.2)), float(spec.get("h", 0.2))
     kind = main.kind if main else "DB"
@@ -165,16 +176,16 @@ def column_advice(m, data, b_) -> list:
             if n * math.pi * (d / 10) ** 2 / 4 > 0.025 * b * h * 1e4:     # ρ ≤ 2.5 %: economical
                 break
             sp = dict(spec, main=f"{n}-{kind}{d}")
-            if C.pm_ratio(C.pm_curve(sp, b_), Mu, Pu) <= 1.0:
-                return [f"{mark} (ขั้น 6 เสา): เพิ่มเหล็กยืนเป็น {n}-{kind}{d} (ขนาดเสาเดิม {b * 100:.0f}×{h * 100:.0f} ซม.)"]
+            if ratio_of(sp) <= 1.0:
+                return [f"{mark} ({step}): เพิ่มเหล็กยืนเป็น {n}-{kind}{d} (ขนาดเสาเดิม {b * 100:.0f}×{h * 100:.0f} ซม.)"]
     for add in range(1, 9):
         nb, nh = b + 0.05 * add, h + 0.05 * add
         for n in (4, 6, 8):
             sp = dict(spec, b=nb, h=nh, main=f"{n}-{kind}{max(d0, 12)}")
-            if C.pm_ratio(C.pm_curve(sp, b_), Mu, Pu) <= 1.0:
-                return [f"{mark} (ขั้น 6 เสา): ขยายเสาเป็น {nb * 100:.0f}×{nh * 100:.0f} ซม. "
+            if ratio_of(sp) <= 1.0:
+                return [f"{mark} ({step}): ขยายเสาเป็น {nb * 100:.0f}×{nh * 100:.0f} ซม. "
                         f"เหล็กยืน {n}-{kind}{max(d0, 12)}"]
-    return [f"{mark} (ขั้น 6 เสา): ขยายเสาให้ใหญ่กว่า {b * 100 + 40:.0f} ซม. หรือใช้เสาเหล็ก"]
+    return [f"{mark} ({step}): ขยายเสาให้ใหญ่กว่า {b * 100 + 40:.0f} ซม. หรือใช้เสาเหล็ก"]
 
 
 def slab_advice(row, b_) -> list:
@@ -314,7 +325,11 @@ def advice_by_member(res_all, data) -> dict:
                 dims = re.search(r"([\d.]+)×([\d.]+) ม\.", m.name)
                 rows = [r for r in slabs if r["mark"] == mark and not r["ok"] and (
                     not dims or (abs(r["S"] - float(dims.group(1))) < 0.01 and abs(r["L"] - float(dims.group(2))) < 0.01))]
-                tips = slab_advice(rows[0], b_) if rows else ["เพิ่มเหล็ก/ความหนาพื้น (ขั้น 5)"]
+                tips = slab_advice(rows[0], b_) if rows else []
+                mm_t = re.search(r"ต้องหนา ≥ (\d+) ซม", m.note or "")
+                if mm_t:
+                    tips = tips + [f"{mark} (ขั้น 5 พื้น): เพิ่มความหนาพื้นเป็น {mm_t.group(1)} ซม. กันการแอ่นตัว (ACI 9.5)"]
+                tips = tips or ["เพิ่มเหล็ก/ความหนาพื้น (ขั้น 5)"]
             elif m.group == "footing":
                 xy = re.search(r"\(([-\d.]+), ([-\d.]+)\)", m.name)
                 rows = [r for r in feet if xy and abs(r["x"] - float(xy.group(1))) < 0.01
@@ -445,6 +460,23 @@ def mark_fixes(res_all, data) -> list:
             mm = re.search(r"ความหนาพื้นเป็น (\d+) ซม", tip)
             if mm:
                 out.append((mark, {"t": int(mm.group(1)) / 100}, tip))
+    # slabs thinner than the minimum against deflection (ACI 9.5 / perimeter ÷ 180)
+    import re as _re
+    thick = {}
+    for m in res_all["members"]:
+        if m.group == "slab" and not m.ok:
+            mm = _re.search(r"ต้องหนา ≥ (\d+) ซม", m.note or "")
+            if mm:
+                mk = m.name.split(" ")[0]
+                thick[mk] = max(thick.get(mk, 0), int(mm.group(1)))
+    for mk, tn in thick.items():
+        tip = f"{mk} (ขั้น 5 พื้น): เพิ่มความหนาพื้นเป็น {tn} ซม. กันการแอ่นตัว (ACI 9.5)"
+        hit = next((i for i, (m_, _c, _t) in enumerate(out) if m_ == mk), None)
+        if hit is None:
+            out.append((mk, {"t": tn / 100}, tip))
+        else:
+            m_, ch_, t_ = out[hit]
+            out[hit] = (m_, dict(ch_, t=max(float(ch_.get("t", 0)), tn / 100)), t_ + " · " + tip)
     # footings: the most loaded of each mark
     best = {}
     for r in CC.footing_rows(res_all, data):
@@ -535,6 +567,30 @@ def apply_fixes(data, rounds: int = 4) -> list:
     data["library"] = lib
     from core import wanic_stair as ST
     stairs_done = ST.apply_all(data)
+    # a stump is never smaller than the column standing on it (nor with fewer bars)
+    full = B.library_of(data)
+    lib = dict(data.get("library") or {})
+    E_ = B.elements(data)
+    on = {}
+    for c_ in E_["columns"]:
+        if c_.get("floor", 0) == 0:
+            on[(round(c_["x"], 3), round(c_["y"], 3))] = c_["mark"]
+    for st_ in E_["stumps"]:
+        cm = on.get((round(st_["x"], 3), round(st_["y"], 3)))
+        if not cm:
+            continue
+        sp_, cp_ = full[st_["mark"]], full[cm]
+        ch = {}
+        for k in ("b", "h"):
+            if float(sp_.get(k, 0)) < float(cp_.get(k, 0)) - 1e-9:
+                ch[k] = float(cp_[k])
+        sb, cb_ = R.parse_bar(sp_.get("main")), R.parse_bar(cp_.get("main"))
+        if sb and cb_ and sb.n * sb.area < cb_.n * cb_.area - 1e-9:
+            ch["main"] = cp_["main"]
+        if ch:
+            lib[st_["mark"]] = {**(lib.get(st_["mark"]) or {}), **ch}
+            full = {**full, st_["mark"]: {**sp_, **ch}}
+    data["library"] = lib
     after = B.library_of(data)
     step = {"footing": "ขั้น 2 ฐานราก", "stump": "ขั้น 3 ตอม่อ", "slab": "ขั้น 5 พื้น", "column": "ขั้น 6 เสา",
             "beam": "ขั้น 4/6 คาน"}
@@ -587,7 +643,8 @@ def member_fix(res_all, data, m) -> dict | None:
     if m.group in ("beam", "column"):
         # the values that make every member of the mark pass (its worst one)
         mark = m.diagram.mark if m.group == "beam" else m.name.split(" ")[0]
-        fixes = [f for f in mark_fixes(res_all, data) if f[0] == mark and lib.get(mark, {}).get("kind") == m.group]
+        fixes = [f for f in mark_fixes(res_all, data) if f[0] == mark
+                 and lib.get(mark, {}).get("kind") in ((m.group, "stump") if m.group == "column" else (m.group,))]
         tips = beam_advice(m, b_) if m.group == "beam" else column_advice(m, data, b_)
         ch = fixes[0][1] if fixes else {}
         return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}  # balanced in mark_fixes
@@ -597,16 +654,20 @@ def member_fix(res_all, data, m) -> dict | None:
         rows = [r for r in CC.slab_rows(res_all, data) if r["mark"] == mark and not r["ok"]]
         # the panel of the mark that needs the closest bars
         rows.sort(key=lambda r: min((x for x in r["s"].values() if x), default=1.0))
-        if not rows:
+        mm_t = re.search(r"ต้องหนา ≥ (\d+) ซม", m.note or "")
+        if not rows and not mm_t:
             return {"target": "lib", "key": mark, "kind": "slab", "changes": {}, "advice": []}
-        tips = slab_advice(rows[0], b_)
+        tips = slab_advice(rows[0], b_) if rows else []
+        if mm_t:
+            tips = tips + [f"{mark} (ขั้น 5 พื้น): เพิ่มความหนาพื้นเป็น {mm_t.group(1)} ซม. กันการแอ่นตัว (ACI 9.5)"]
         ch = {}
         mm = re.search(r"(RB|DB)(\d+)@([\d.]+)", tips[0])
         if mm:
             ch["bars"] = f"{mm.group(1)}{mm.group(2)}@{float(mm.group(3)):.3f}".rstrip("0")
-        mm = re.search(r"ความหนาพื้นเป็น (\d+) ซม", tips[0])
-        if mm:
-            ch["t"] = int(mm.group(1)) / 100
+        for tp in tips:
+            mm = re.search(r"ความหนาพื้นเป็น (\d+) ซม", tp)
+            if mm:
+                ch["t"] = max(ch.get("t", 0), int(mm.group(1)) / 100)
         return {"target": "lib", "key": mark, "kind": "slab", "changes": ch, "advice": tips}
     if m.group == "footing":
         mark = m.name.split(" ")[0]

@@ -180,6 +180,11 @@ def _span_rows(res, i, b_, fc):
     d = h - R.COVER["beam"] - 0.012
     x0 = xs[0]
     ML, MR = max(0.0, -M[0]), max(0.0, -M[-1])
+    ext = getattr(res, "Mext", (0.0, 0.0))                 # exterior ends built into columns: wL²/16
+    if i == 0:
+        ML = max(ML, ext[0])
+    if i == len(res.spans) - 1:
+        MR = max(MR, ext[1])
     Mm = max(M)
     sdm = b_["method"] == "SDM"
     top, bot, st = R.parse_bar(spec.get("top")), R.parse_bar(spec.get("bot")), R.parse_bar(spec.get("stir"))

@@ -96,7 +96,7 @@ def test_every_failing_row_has_advice_and_a_fix_that_passes_its_mark():
     assert fix["target"] == "lib" and fix["key"] == "C1" and fix["changes"]
     apply(d, fix, fix["changes"])
     res2 = C.analyse(d)
-    assert all(m.ok for m in res2["members"] if m.group == "column")
+    assert all(m.ok for m in res2["members"] if m.group == "column" and m.name.startswith("C1 "))
     # a footing row: the mark is sized from its most loaded footing
     ft = next(m for m in res2["members"] if m.group == "footing" and not m.ok)
     fix = AD.member_fix(res2, d, ft)

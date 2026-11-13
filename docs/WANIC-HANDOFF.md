@@ -144,6 +144,13 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - แก้ (ผู้ใช้แจ้ง «ตำแหน่งไม่ตรงกัน»): โมเดลยกทั้งอาคารขึ้น floor_lift (0.60) — เส้นที่วาดบนโมเดลเป็นพิกัดโมเดล ต้องลบ lift ก่อนเก็บ (FR.model_to_building ใน convert_selection) · ตรวจแล้ว x,y ตรงกับแปลน (มุมมองบนของ 3D เทียบ A-03/S-04) · test_lines_drawn_on_the_model_keep_their_place
      - _rebuild_after_fix คำนวณใหม่เมื่อไม่ได้อยู่ขั้น 9 (เดิมสถานะ «ผ่านทุกรายการ» ผิด)
      - tests/test_wanic_free.py (ใน CI) · แผนจากการศึกษา QD ครบทั้ง 8 ข้อแล้ว (อนุมัติ 13 พ.ย.)
+   + [x] (ผู้ใช้อนุมัติ 13 พ.ย. «ทำข้อ 1 ก่อน แล้วค่อยทำข้อ 2») ตรวจตามหลักวิศวกรรมเพิ่ม + รายงานเทียบมือ:
+     - wanic_calc: fy_factor, beam_hmin (ACI 9.5a L/16 · 18.5 · 21 · 8), slab_tmin (ทางเดียว L/20–24 · สองทาง เส้นรอบรูป/180 ≥ 9 ซม.), ext_neg_moments (ปลายริมติดเสา wL²/16 — envelope: res.Mext, res.Mmin), beam_deflection (Branson Ie, 5L²/48EcIe·(Mm−0.1(Ma+Mb)), ×(1+λ), L/240 → res.caps["defl"]), column_magnifier (ACI 10.12 non-sway k = 1.0, Cm = 1.0, EI = 0.4EcIg/1.6, ≤ 22 ไม่ขยาย, 9.9 = โก่งเดาะ) ใช้กับเสาชั้นล่างและตอม่อ
+     - ตรวจตอม่อ (ใหม่ — พบจากการเทียบมือ): Member "PC1 ตอม่อ ที่ (x, y)" group column; cols_out ใช้แรงที่ตอม่อ; advice step «ขั้น 3 ตอม่อ»; apply_fixes ให้ตอม่อ ≥ เสาที่ตั้งอยู่ (ขนาดและเหล็ก)
+     - column_advice คิด δ ใหม่ทุกขนาดที่ลอง (dia.M0, dia.Lu) → ไม่ได้เสาใหญ่เกินจำเป็น (บ้านตัวอย่าง C1/PC1 25×25 8-DB12)
+     - แรงใช้งานลงฐานราก = Pu ÷ 1.4 (เดิม ÷ 1.55 ต่ำกว่าจริง ~5%) ใน wanic_calc และ calc_cards.footing_rows
+     - หนาพื้นขั้นต่ำเข้า mark_fixes/advice («ต้องหนา ≥ N ซม.»); รูปเล่มตารางคานใช้ Mext ที่ปลายริม
+     - tools/verify_hand_calc.py (สูตรตำราแยกจากโปรแกรม 27 รายการ ทุกรายการตรง ≤ 1%) + tests/test_wanic_hand_verify.py, tests/test_wanic_checks.py (ใน CI); รายงาน PDF «รายงานเทียบผลการคำนวณ» ส่งผู้ใช้แล้ว
    + [x] (รออนุมัติภาพ) ปรับหน้าจอให้พอดีทุกเครื่อง (ผู้ใช้แจ้ง 13 พ.ย.: จอ 1920×1080 สเกล Windows 150 % มองไม่เห็นหลายปุ่ม):
      - core/ui_fit.py: reflow_rows (แถว QHBoxLayout ที่มีปุ่ม → FlowLayout ห่อบรรทัด, ใช้ views.tray.FlowLayout), relax_combos (AdjustToMinimumContentsLengthWithIcon 12 ตัวอักษร), wrap_labels, wrap_forms (QFormLayout WrapLongRows), fit(widget) → ห่อใน QScrollArea; fit_dialog + install(app) (event filter: ทุก QDialog ตอนแสดงครั้งแรก จำกัดขนาดไม่เกินจอ 96 %/92 % และย้ายเข้าในจอ); widen_docks (แผงขวาอย่างน้อย ~42 % ของหน้าต่าง)
      - views/extension_api.add_panel: แผงที่ key มี "wanic" ผ่าน fit() อัตโนมัติ; plugins/wanic_rc.setup เรียก ui_fit.install + widen_docks; แถวปุ่มของแผง คสล. ใช้ FlowLayout เอง

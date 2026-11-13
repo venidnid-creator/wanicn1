@@ -169,6 +169,11 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   `QT_SCALE_FACTOR=1.5` on xvfb 1920×1080 (= Windows 150 %) and on 1366×768; never use fixed wide rows.
 - Drawings: never put characters outside cp874 (e.g. ✓) on a sheet — the DXF writes «?» and a test fails. Room tags
   `room_codes` = พ# ผ2|ผ3 ฝ#; interior elevations A B C D (`elev_marker` on plans, A-13 titles).
+- Code checks in `analyse`: exterior beam ends −wL²/16 envelope (`ext_neg_moments`, `res.Mext`), ACI 9.5 minimum
+  depth/thickness (`beam_hmin`, `slab_tmin`) and long-term deflection L/240 (`beam_deflection`), slender columns and
+  stumps (`column_magnifier`, non-sway k = 1.0), stumps checked (P-M) and never smaller than their column, service load
+  to footings = Pu / 1.4. `tools/verify_hand_calc.py` compares 27 values with textbook hand formulas — keep it passing
+  (`tests/test_wanic_hand_verify.py`) whenever the calculation changes.
 - Checkload (`wanic_calc.checkload`): per ground column Wcol (service t), tributary area over every carried floor + roof,
   Wfloor = Wcol/area, Wcol-Area = area × building mean; usual range `WFLOOR_RANGE` 450–1,600 kg/m²; flag > ±40 %.
 - New design data lives in the building document: `data["calc"]`, `["grid"]`, `["truss"]`, `["steel"]`, `["purlin"]`,
