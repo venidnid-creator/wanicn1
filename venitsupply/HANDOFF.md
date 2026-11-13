@@ -62,6 +62,8 @@
   `venitsupply.exe --selftest` → ตัวติดตั้ง → artifact `venitsupply-setup-<รุ่น>` (ไม่เผยแพร่)
   เผยแพร่ Release เฉพาะ tag `venitsupply-v<รุ่น>` หรือสั่ง workflow_dispatch release=true — ตามคำสั่งเจ้าของเท่านั้น
 - ทดสอบในเครื่อง Linux: bundle 235 MB, self-test ผ่าน
+- สร้างบน GitHub สำเร็จ (ทดสอบ+self-test บน Windows ผ่าน): run 43423856196, artifact 14034644780
+  `venitsupply-setup-2026.11.13.3` (42 MB) — ส่งให้เจ้าของทดสอบ รอผล; ยังไม่เผยแพร่
 
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
