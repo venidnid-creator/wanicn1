@@ -100,8 +100,11 @@ def test_hire_rent_exchange_assets():
 def test_statistics():
     s = Store()
     a = item(s, "วัสดุ", 500000)
+    a69 = s.save_budget_item(dict(fy=2569, plan="ก", task="ข", grp="งบดำเนินงาน", category="ค่าวัสดุ",
+                                  type="วัสดุสำนักงาน", name="วัสดุ", amount=500000))
     for d, amt in (("2025-11-10", 10000), ("2026-11-03", 20000), ("2026-11-03", 5000), ("2026-12-01", 7000)):
-        pid = s.save_procurement(dict(kind="ซื้อ", title="x", budget_item_id=a, amount=amt, date_request=d))
+        bid = a69 if d < "2025-10-01" or d < "2026-10-01" and d.startswith("2025") else a
+        pid = s.save_procurement(dict(kind="ซื้อ", title="x", budget_item_id=bid, amount=amt, date_request=d))
         s.approve(pid, d)
         s.order(pid, "ร้าน", amt, date=d)
         s.pay(pid, date=d)
@@ -150,34 +153,75 @@ def test_budget_reports():
         assert "นายเวนิช" in rep.html()
 
 
-def test_maikhao_ordinance_2570():
-    """ข้อบัญญัติ อบต.ไม้ขาว 2570 ในชุดโปรแกรม: ยอดตรงกับข้อ 4 ทุกแผนงาน."""
-    from venitsupply import reports as R
-    path = os.path.join(os.path.dirname(B.__file__), "data", "maikhao_2570.csv")
-    rows = B.read_table(path)
-    s = Store()
-    got = s.import_ordinance(rows)
-    assert set(got["budget"]) == {2569, 2570} and set(got["actual"]) == {2567, 2568}
-    plans = {r["key"][0]: r["budget"] for r in s.budget_summary(2570, "plan")}
-    assert round(sum(plans.values())) == 205000000
-    expect = {"แผนงานบริหารงานทั่วไป": 43090770, "แผนงานการรักษาความสงบภายใน": 12701580,
+def _maikhao(year):
+    return B.read_table(os.path.join(os.path.dirname(B.__file__), "data", f"maikhao_{year}.csv"))
+
+
+PLANS_2570 = {"แผนงานบริหารงานทั่วไป": 43090770, "แผนงานการรักษาความสงบภายใน": 12701580,
               "แผนงานการศึกษา": 27769330, "แผนงานสาธารณสุข": 7697460, "แผนงานสังคมสงเคราะห์": 3773160,
               "แผนงานเคหะและชุมชน": 19480040, "แผนงานสร้างความเข้มแข็งของชุมชน": 4422200,
               "แผนงานการศาสนา วัฒนธรรม และนันทนาการ": 8646280, "แผนงานอุตสาหกรรมและการโยธา": 40828020,
               "แผนงานการพาณิชย์": 7454460, "แผนงานงบกลาง": 29136700}
-    assert {k: round(v) for k, v in plans.items()} == expect
-    years, cmp = s.compare_years("plan")
-    assert years == [2567, 2568, 2569, 2570]
-    assert "จ่ายจริง 2567" in R.budget_compare(s, "category").html()
-    again = s.import_ordinance(rows, replace=True)
-    assert again == got and round(sum(r["budget"] for r in s.budget_summary(2570))) == 205000000
+
+
+def test_maikhao_each_year_its_own_ordinance():
+    """ข้อบัญญัติ อบต.ไม้ขาว: ปี 2570 = 205,000,000 (ตรงข้อ 4 ทุกแผนงาน), ปี 2569 = 198,806,800;
+    แต่ละปีใช้ข้อบัญญัติของปีนั้น มีคำชี้แจง และโครงสร้างต่างกันได้."""
+    from venitsupply import reports as R
+    s = Store()
+    got = s.import_ordinance(_maikhao(2570), agency="อบต.ไม้ขาว")
+    assert got["fy"] == 2570 and s.budget_years() == [2570]          # 2569 column is reference only
+    assert ("จ่ายจริง", 2567) in got["history"] and ("ประมาณการ", 2569) in got["history"]
+    plans = {r["key"][0]: round(r["budget"]) for r in s.budget_summary(2570, "plan")}
+    assert plans == PLANS_2570
+    assert s.ordinance(2570)["total"] == 205000000 and s.ordinance(2570)["agency"] == "อบต.ไม้ขาว"
+    with_detail = [b for b in s.budget_items(2570) if b["detail"]]
+    assert len(with_detail) >= 460
+    pc = next(b for b in s.budget_items(2570) if b["name"] == "วัสดุคอมพิวเตอร์" and b["task"] == "งานบริหารทั่วไป")
+    assert pc["detail"].startswith("เพื่อจ่ายเป็นเงินค่าวัสดุคอมพิวเตอร์") and "\uf70a" not in pc["detail"]
+    heads, _ = s.compare_years("plan")
+    assert heads == [(2567, "จ่ายจริง"), (2568, "จ่ายจริง"), (2569, "ประมาณการ"), (2570, "งบประมาณ")]
+    got69 = s.import_ordinance(_maikhao(2569))
+    assert got69["fy"] == 2569 and s.budget_years() == [2569, 2570]
+    assert round(sum(b["amount"] for b in s.budget_items(2569))) == 198806800
+    heads, _ = s.compare_years("plan")
+    assert heads[-2:] == [(2569, "งบประมาณ"), (2570, "งบประมาณ")]      # its own ordinance wins
+    assert "งบประมาณ 2569" in R.budget_compare(s, "category").html()
+    names69 = {b["name"] for b in s.budget_items(2569)}
+    names70 = {b["name"] for b in s.budget_items(2570)}
+    assert names69 != names70                                        # structures differ by year
+    again = s.import_ordinance(_maikhao(2570), replace=True)
+    assert again["budget"] == got["budget"] and round(s.ordinance(2570)["amount"]) == 205000000
+
+
+def test_procurement_uses_its_own_year():
+    s = Store()
+    a70 = item(s, "วัสดุสำนักงาน", 10000)
+    with pytest.raises(ValueError):
+        s.save_procurement(dict(kind="ซื้อ", title="ปีผิด", budget_item_id=a70, amount=100,
+                                date_request="2026-05-01"))        # fiscal 2569
+    assert s.save_procurement(dict(kind="ซื้อ", title="ปีถูก", budget_item_id=a70, amount=100,
+                                   date_request="2026-11-01"))
 
 
 def test_ordinance_tool_header():
-    rows = [["แผนงาน", "งาน", "งบ", "หมวด", "ประเภท", "รายการ", "ประมาณการ 2570", "หมายเหตุ"],
-            ["ก", "ข", "งบดำเนินงาน", "ค่าวัสดุ", "วัสดุสำนักงาน", "วัสดุสำนักงาน", "1,000.00", ""],
-            ["ก", "ข", "งบดำเนินงาน", "ค่าวัสดุ", "วัสดุอื่น", "วัสดุอื่น", "0", ""]]
+    rows = [["แผนงาน", "งาน", "งบ", "หมวด", "ประเภท", "รายการ", "ประมาณการ 2571", "หมายเหตุ", "คำชี้แจง"],
+            ["ก", "ข", "งบดำเนินงาน", "ค่าวัสดุ", "วัสดุสำนักงาน", "วัสดุสำนักงาน", "1,000.00", "", "เพื่อจ่าย"],
+            ["ก", "ข", "งบดำเนินงาน", "ค่าวัสดุ", "วัสดุอื่น", "วัสดุอื่น", "0", "", ""]]
     s = Store()
-    assert s.import_ordinance(rows) == {"budget": {2570: 1}, "actual": {}}
+    assert s.import_ordinance(rows) == {"fy": 2571, "budget": 1, "history": {}}
+    assert s.budget_items(2571)[0]["detail"] == "เพื่อจ่าย"
     with pytest.raises(ValueError):
         s.import_ordinance([["แผนงาน", "งาน"]])
+
+
+def test_reflow_and_thai_fix():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "ordinance_pdf", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                      "tools", "ordinance_pdf.py"))
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    assert tool.fix_thai("เพื่อจ\uf70aาย ตําบล") == "เพื่อจ่าย ตำบล"
+    assert tool.reflow(["เพื่อจ่ายเป็นค่า", "วัสดุ", "- เป็นไปตาม", "ระเบียบ"]) == \
+        "เพื่อจ่ายเป็นค่าวัสดุ\n- เป็นไปตามระเบียบ"

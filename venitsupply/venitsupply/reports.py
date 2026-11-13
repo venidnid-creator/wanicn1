@@ -300,7 +300,8 @@ def _budget_box(store, p) -> str:
     it = store.budget_item(p["budget_item_id"])
     rows = [("แผนงาน / งาน", f"{it['plan']} / {it['task']}"),
             ("งบ / หมวด / ประเภท", f"{it['grp']} / {it['category']} / {it['type']}"),
-            ("รายการตามข้อบัญญัติ", it["name"]),
+            ("รายการตามข้อบัญญัติ", f"{it['name']} (ข้อบัญญัติปี {it['fy']})"),
+            ("คำชี้แจงตามข้อบัญญัติ", (it["detail"] or "-").split("\n")[0][:300]),
             ("งบประมาณตามข้อบัญญัติ", money(b["approved"]) + " บาท"),
             ("โอนเพิ่ม/ลด และข้อบัญญัติเพิ่มเติม", money(b["changes"]) + " บาท"),
             ("ใช้ไปแล้ว/ผูกพัน/จองไว้ (รายการอื่น)", money(b["paid"] + b["committed"] + b["reserved"]) + " บาท"),
@@ -466,13 +467,13 @@ def stats_report(store, rows, title, subtitle) -> Report:
 def budget_compare(store, level="category") -> Report:
     """เปรียบเทียบงบประมาณ/รายจ่ายจริงหลายปี ตามระดับที่เลือก."""
     from .budget import LEVEL_NAMES, LEVELS
-    years, rows = store.compare_years(level)
-    actual = {r["fy"] for r in store.q("SELECT DISTINCT fy FROM budget_actuals")}
+    heads, rows = store.compare_years(level)
+    years = [y for y, _ in heads]
     r = Report(store, "เปรียบเทียบงบประมาณรายจ่ายหลายปี",
-               f"สรุปตาม{LEVEL_NAMES[LEVELS.index(level)]} · ปีที่มีรายจ่ายจริงแสดงรายจ่ายจริง "
-               "ปีอื่นแสดงงบประมาณหลังโอน", landscape=True)
+               f"สรุปตาม{LEVEL_NAMES[LEVELS.index(level)]} · «งบประมาณ» = ข้อบัญญัติของปีนั้น (หลังโอน) · "
+               "«จ่ายจริง/ประมาณการ» = ตัวเลขอ้างอิงจากข้อบัญญัติปีถัดไป", landscape=True)
     n = LEVELS.index(level) + 1
-    r.header = LEVEL_NAMES[:n] + [f"{'จ่ายจริง' if y in actual else 'งบประมาณ'} {y}" for y in years]
+    r.header = LEVEL_NAMES[:n] + [f"{k} {y}" for y, k in heads]
     r.align = ["left"] * n + ["right"] * len(years)
     tot = [0.0] * len(years)
     for x in rows:

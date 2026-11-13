@@ -80,6 +80,10 @@ EN = {
     "ถึง": "to", "จำนวนรายการขอ": "Requests", "วงเงินที่ขอ": "Requested",
     "เบิกจ่ายเงิน": "Pay", "ตามวิธี": "By method", "ตามประเภท": "By kind", "ตามหมวด": "By category",
     "ตามผู้ขาย/ผู้รับจ้าง": "By vendor", "แนะนำ": "Suggested",
+    "คำชี้แจง": "Explanation", "ไม่มีคำชี้แจง": "No explanation", "ข้อบัญญัติปี": "Ordinance",
+    "ข้อมูลข้อบัญญัติ…": "Ordinance info…", "ต้นฉบับ": "Source", "รวมตามข้อบัญญัติ": "Total",
+    "นำเข้าข้อบัญญัติ": "Import ordinance", "ในชุดโปรแกรม": "bundled", "ยังไม่มีในโปรแกรม": "not loaded",
+    "การจัดซื้อจัดจ้างที่ใช้รายการนี้": "Procurements using this item",
     "ทั้งหมด": "All",
 }
 

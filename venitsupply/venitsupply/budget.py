@@ -90,10 +90,14 @@ SQL = """
 CREATE TABLE IF NOT EXISTS budget_items(
   id INTEGER PRIMARY KEY, fy INTEGER NOT NULL, plan TEXT NOT NULL, task TEXT NOT NULL,
   grp TEXT NOT NULL, category TEXT NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL,
-  amount REAL NOT NULL DEFAULT 0, note TEXT DEFAULT '', seq INTEGER DEFAULT 0);
+  amount REAL NOT NULL DEFAULT 0, note TEXT DEFAULT '', seq INTEGER DEFAULT 0, detail TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS ordinances(
+  fy INTEGER PRIMARY KEY, title TEXT DEFAULT '', agency TEXT DEFAULT '', source TEXT DEFAULT '',
+  total REAL DEFAULT 0, imported TEXT DEFAULT '', note TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS budget_actuals(
   id INTEGER PRIMARY KEY, fy INTEGER NOT NULL, plan TEXT, task TEXT, grp TEXT, category TEXT,
-  type TEXT, name TEXT, amount REAL NOT NULL DEFAULT 0, source TEXT DEFAULT '');
+  type TEXT, name TEXT, amount REAL NOT NULL DEFAULT 0, source TEXT DEFAULT '',
+  kind TEXT DEFAULT 'จ่ายจริง');
 CREATE TABLE IF NOT EXISTS budget_changes(
   id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL REFERENCES budget_items(id),
   date TEXT NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL, doc_no TEXT DEFAULT '',
@@ -106,9 +110,35 @@ class BudgetMixin:
 
     def _budget_init(self):
         self.con.executescript(SQL)
+        for table, col, decl in (("budget_items", "detail", "TEXT DEFAULT ''"),
+                                 ("budget_actuals", "kind", "TEXT DEFAULT 'จ่ายจริง'")):
+            cols = [r[1] for r in self.con.execute(f"PRAGMA table_info({table})")]
+            if col not in cols:                 # a file made by an older version
+                self.con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        self.con.commit()
+
+    # ------------------------------------------------------- ordinances
+    def ordinance(self, fy) -> dict:
+        """ข้อบัญญัติของปีงบประมาณ *fy* (each year has its own — structures differ year to year)."""
+        r = self.one("SELECT * FROM ordinances WHERE fy=?", (fy,))
+        d = dict(r) if r else dict(fy=fy, title="", agency="", source="", total=0, imported="", note="")
+        d["items"] = self.one("SELECT COUNT(*) AS n FROM budget_items WHERE fy=?", (fy,))["n"]
+        d["amount"] = self.one("SELECT IFNULL(SUM(amount),0) AS s FROM budget_items WHERE fy=?", (fy,))["s"]
+        return d
+
+    def save_ordinance(self, fy, **kw):
+        cur = self.ordinance(fy)
+        cur.update({k: v for k, v in kw.items() if k in ("title", "agency", "source", "total", "imported", "note")})
+        self.run("INSERT OR REPLACE INTO ordinances(fy,title,agency,source,total,imported,note) "
+                 "VALUES(?,?,?,?,?,?,?)", (fy, cur["title"], cur["agency"], cur["source"], cur["total"],
+                                           cur["imported"], cur["note"]))
+
+    def ordinance_years(self) -> list[int]:
+        ys = {r["fy"] for r in self.q("SELECT fy FROM ordinances")} | set(self.budget_years())
+        return sorted(ys)
 
     # ------------------------------------------------------------ items
-    BUDGET_FIELDS = ("fy", "plan", "task", "grp", "category", "type", "name", "amount", "note")
+    BUDGET_FIELDS = ("fy", "plan", "task", "grp", "category", "type", "name", "amount", "note", "detail")
 
     def save_budget_item(self, data: dict, bid=None) -> int:
         d = {k: data[k] for k in self.BUDGET_FIELDS if k in data}
@@ -258,66 +288,93 @@ class BudgetMixin:
         return n
 
 
-    def import_ordinance(self, rows, skip_zero=True, replace=False) -> dict:
+    def import_ordinance(self, rows, skip_zero=True, replace=False, fy=None, **meta) -> dict:
         """นำเข้าตารางจาก «รายงานประมาณการรายจ่าย» ของข้อบัญญัติ (ดู tools/ordinance_pdf.py).
 
-        หัวตาราง: แผนงาน, งาน, งบ, หมวด, ประเภท, รายการ, แล้วคอลัมน์ «ประมาณการ ปปปป»
-        (นำเข้าเป็นงบประมาณของปีนั้น) และ «รายจ่ายจริง ปปปป» (เก็บไว้เปรียบเทียบหลายปี).
-        Returns {"budget": {fy: n}, "actual": {fy: n}}.
+        เฉพาะคอลัมน์ «ประมาณการ» ของปีข้อบัญญัติ (ปีล่าสุดในหัวตาราง หรือ *fy*) เป็นงบประมาณของปีนั้น —
+        งบประมาณแต่ละปีใช้ข้อบัญญัติของปีนั้นเอง; คอลัมน์ปีอื่น («รายจ่ายจริง», «ประมาณการ» ปีก่อน)
+        เก็บเป็นข้อมูลอ้างอิงสำหรับเปรียบเทียบหลายปี. คอลัมน์ «คำชี้แจง» เก็บกับแต่ละรายการ.
+        Returns {"fy": ปี, "budget": n, "history": {(kind, fy): n}}.
         """
         head = [str(h).strip() for h in rows[0]]
         cols = []
         for i, h in enumerate(head):
             m = re.match(r"(ประมาณการ|รายจ่ายจริง)\s*(25\d\d)", h)
             if m:
-                cols.append((i, "budget" if m.group(1) == "ประมาณการ" else "actual", int(m.group(2))))
-        if not cols:
-            raise ValueError("ไม่พบคอลัมน์ «ประมาณการ ปปปป» หรือ «รายจ่ายจริง ปปปป» ในหัวตาราง")
-        note_i = head.index("หมายเหตุ") if "หมายเหตุ" in head else None
-        out = {"budget": {}, "actual": {}}
+                cols.append((i, "จ่ายจริง" if m.group(1) == "รายจ่ายจริง" else "ประมาณการ", int(m.group(2))))
+        est = [c for c in cols if c[1] == "ประมาณการ"]
+        if not est:
+            raise ValueError("ไม่พบคอลัมน์ «ประมาณการ ปปปป» ในหัวตาราง")
+        target = fy or max(c[2] for c in est)
+        main = next((c for c in est if c[2] == target), None)
+        if main is None:
+            raise ValueError(f"ตารางนี้ไม่มีคอลัมน์ «ประมาณการ {target}»")
+        idx = {h: i for i, h in enumerate(head)}
+        note_i, detail_i = idx.get("หมายเหตุ"), idx.get("คำชี้แจง")
         if replace:
-            for i, kind, fy in cols:
-                if kind == "budget":
-                    for b in self.budget_items(fy):
-                        self.delete_budget_item(b["id"])
-                else:
-                    self.con.execute("DELETE FROM budget_actuals WHERE fy=?", (fy,))
+            for b in self.budget_items(target):
+                self.delete_budget_item(b["id"])
+            self.con.execute("DELETE FROM budget_actuals WHERE source=?", (f"ข้อบัญญัติ {target}",))
+        out = {"fy": target, "budget": 0, "history": {}}
+        total = 0.0
         for r in rows[1:]:
             r = [str(x).strip() for x in r] + [""] * len(head)
             if not r[5]:
                 continue
             key = dict(plan=r[0], task=r[1], grp=r[2], category=r[3], type=r[4], name=r[5])
-            for i, kind, fy in cols:
-                amt = _num(r[i]) or 0.0
-                if skip_zero and not amt:
+            amt = _num(r[main[0]]) or 0.0
+            if amt or not skip_zero:
+                self.save_budget_item(dict(key, fy=target, amount=amt,
+                                           note=r[note_i] if note_i is not None else "",
+                                           detail=r[detail_i] if detail_i is not None else ""))
+                out["budget"] += 1
+                total += amt
+            for i, kind, y in cols:
+                if (i, kind, y) == main:
                     continue
-                if kind == "budget":
-                    self.save_budget_item(dict(key, fy=fy, amount=amt,
-                                               note=r[note_i] if note_i is not None else ""))
-                else:
+                v = _num(r[i]) or 0.0
+                if v:
                     self.con.execute("INSERT INTO budget_actuals(fy,plan,task,grp,category,type,name,amount,"
-                                     "source) VALUES(?,?,?,?,?,?,?,?,?)",
-                                     (fy, *key.values(), amt, "ข้อบัญญัติ"))
-                out[kind][fy] = out[kind].get(fy, 0) + 1
+                                     "source,kind) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                     (y, *key.values(), v, f"ข้อบัญญัติ {target}", kind))
+                    out["history"][(kind, y)] = out["history"].get((kind, y), 0) + 1
         self.con.commit()
+        self.save_ordinance(target, total=total, imported=str(TD.today()),
+                            title=meta.get("title") or f"ข้อบัญญัติงบประมาณรายจ่ายประจำปีงบประมาณ พ.ศ. {target}",
+                            agency=meta.get("agency", ""), source=meta.get("source", ""))
         return out
 
-    def compare_years(self, level="category") -> tuple[list[int], list[dict]]:
-        """Amounts per year rolled up by *level*: รายจ่ายจริง where recorded, else งบหลังโอน."""
+    def history_value(self, fy):
+        """Reference amounts of a year that has no budget of its own: actual spending if known,
+        else the estimate quoted by a later ordinance."""
+        for kind in ("จ่ายจริง", "ประมาณการ"):
+            rows = self.q("SELECT * FROM budget_actuals WHERE fy=? AND kind=? ORDER BY source DESC", (fy, kind))
+            if rows:
+                src = rows[0]["source"]                       # the latest ordinance quoting it
+                return kind, [r for r in rows if r["source"] == src]
+        return None, []
+
+    def compare_years(self, level="category") -> tuple[list[tuple[int, str]], list[dict]]:
+        """Per year: the year's own budget (งบหลังโอน) when its ordinance is in the program,
+        otherwise the reference amounts (จ่ายจริง / ประมาณการ) quoted by a later ordinance."""
         keys = LEVELS[:LEVELS.index(level) + 1]
-        actual_years = {r["fy"] for r in self.q("SELECT DISTINCT fy FROM budget_actuals")}
-        years = sorted(actual_years | set(self.budget_years()))
+        own = set(self.budget_years())
+        years = sorted(own | {r["fy"] for r in self.q("SELECT DISTINCT fy FROM budget_actuals")})
         table: dict[tuple, dict] = {}
+        heads = []
         for fy in years:
-            if fy in actual_years:
-                for r in self.q("SELECT * FROM budget_actuals WHERE fy=?", (fy,)):
-                    k = tuple(r[x] for x in keys)
-                    table.setdefault(k, {})[fy] = table.get(k, {}).get(fy, 0) + r["amount"]
-            else:
+            if fy in own:
+                heads.append((fy, "งบประมาณ"))
                 for r in self.budget_summary(fy):
                     k = tuple(r["item"][x] for x in keys)
                     table.setdefault(k, {})[fy] = table.get(k, {}).get(fy, 0) + r["budget"]
-        return years, [dict(key=k, values=v) for k, v in table.items()]
+            else:
+                kind, rows = self.history_value(fy)
+                heads.append((fy, kind or "-"))
+                for r in rows:
+                    k = tuple(r[x] for x in keys)
+                    table.setdefault(k, {})[fy] = table.get(k, {}).get(fy, 0) + r["amount"]
+        return heads, [dict(key=k, values=v) for k, v in table.items()]
 
 
 def _num(s):

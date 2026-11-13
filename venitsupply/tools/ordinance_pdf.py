@@ -23,7 +23,32 @@ NUM = re.compile(r"^-?[\d,]+(\.\d+)?$")
 TITLE = "รายงานประมาณการรายจ่าย"
 
 
+# รหัสตำแหน่งพิเศษของฟอนต์ไทยรุ่นเก่า (Private Use Area) → อักษรไทยมาตรฐาน
+PUA = {0xF700: "ฐ", 0xF701: "ิ", 0xF702: "ี", 0xF703: "ึ", 0xF704: "ื", 0xF705: "่", 0xF706: "้",
+       0xF707: "๊", 0xF708: "๋", 0xF709: "์", 0xF70A: "่", 0xF70B: "้", 0xF70C: "๊", 0xF70D: "๋",
+       0xF70E: "์", 0xF70F: "ญ", 0xF710: "ั", 0xF711: "ํ", 0xF712: "็", 0xF713: "่", 0xF714: "้",
+       0xF715: "๊", 0xF716: "๋", 0xF717: "์", 0xF718: "ุ", 0xF719: "ู", 0xF71A: "ฺ"}
+
+
+def fix_thai(t: str) -> str:
+    t = t.translate(PUA).replace("\u0e4d\u0e32", "\u0e33").replace("\u0e4d\u0e48\u0e32", "\u0e48\u0e33")
+    return t.replace("\u0e4d\u0e49\u0e32", "\u0e49\u0e33")
+
+
+_CACHE: dict = {}
+
+
 def words(pdf: str, first=None, last=None):
+    key = (pdf, first, last)
+    if key in _CACHE:
+        yield from _CACHE[key]
+        return
+    pages = list(_words(pdf, first, last))
+    _CACHE[key] = pages
+    yield from pages
+
+
+def _words(pdf: str, first=None, last=None):
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "bb.html"
         cmd = ["pdftotext", "-bbox-layout"]
@@ -37,7 +62,8 @@ def words(pdf: str, first=None, last=None):
     for pi, page in enumerate(pages, first or 1):
         rows: dict[int, list] = {}
         for w in re.finditer(r'<word xMin="([\d.]+)" yMin="([\d.]+)"[^>]*>([^<]*)</word>', page):
-            rows.setdefault(round(float(w.group(2))), []).append((float(w.group(1)), html.unescape(w.group(3))))
+            rows.setdefault(round(float(w.group(2))), []).append(
+                (float(w.group(1)), fix_thai(html.unescape(w.group(3)))))
         yield pi, [(y, sorted(rows[y])) for y in sorted(rows)]
 
 
@@ -63,7 +89,7 @@ def parse(pdf: str, first=None, last=None) -> tuple[list[dict], dict]:
         flat = " ".join(t for _, ws in rows for _, t in ws)
         if TITLE in flat and "รายละเอียด" not in flat:
             in_section = True
-        elif "รายงานรายละเอียดประมาณการรายจ่าย" in flat:
+        elif "รายงานรายละเอียดประมาณการรายจ่าย" in flat and in_section:
             break
         if not in_section:
             continue
@@ -117,6 +143,10 @@ def parse(pdf: str, first=None, last=None) -> tuple[list[dict], dict]:
             if nums and 4 in nums:
                 if text:
                     lv, nm = lvl, name
+                    if pending and pending[0] == lvl and pend_y is not None and y - pend_y < 20:
+                        nm = pending[1] + name          # a name over three lines: numbers on the middle one
+                        if lvl == 5 and path[4] == pending[1]:
+                            path[4] = ""
                 elif pending:
                     lv, nm = pending
                 else:
@@ -148,21 +178,136 @@ def parse(pdf: str, first=None, last=None) -> tuple[list[dict], dict]:
     return items, dict(years=years or [])
 
 
+DETAIL_TITLE = "รายงานรายละเอียดประมาณการรายจ่าย"
+AMOUNT = re.compile(r"([\d,]+)\s*บาท")
+MARKS = re.compile(r"[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e\s]")
+
+
+def skeleton(t: str) -> str:
+    """Consonants and leading vowels only — survives broken tone marks and spacing."""
+    return MARKS.sub("", fix_thai(t)).replace("ำ", "า")
+
+
+def _clusters(rows, tol=4.0):
+    """Merge rows whose y differ by ≤ tol (amount and name sit 1–2 pt apart)."""
+    out = []
+    for y, ws in rows:
+        if out and y - out[-1][0] <= tol:
+            out[-1][1].extend(ws)
+        else:
+            out.append([y, list(ws)])
+    return [(y, sorted(ws)) for y, ws in out]
+
+
+def parse_details(pdf: str, first=None, last=None) -> list[dict]:
+    """คำชี้แจงจาก «รายงานรายละเอียดประมาณการรายจ่าย»: [{name, amount, text, page}]."""
+    entries: list[dict] = []
+    started = False
+    cur = None
+    name_open = False
+    for pi, rows in words(pdf, first, last):
+        rows = _clusters(rows)
+        top = " ".join(t for y, ws in rows if y < 110 for _, t in ws)
+        if DETAIL_TITLE in top and "สารบัญ" not in top:
+            started = True
+        if not started:
+            continue
+        for y, ws in rows:
+            if y < 40:                          # page number
+                continue
+            text_w = [(x, t) for x, t in ws if x < 400]
+            line = " ".join(t for _, t in ws)
+            x0 = ws[0][0]
+            right = " ".join(t for x, t in ws if x >= 400)     # the amount column of a header
+            m = AMOUNT.search(right)
+            if "จำนวน" in right and m:
+                name = " ".join(t for x, t in text_w if t != "จำนวน").strip()
+                cur = dict(name=name, amount=float(m.group(1).replace(",", "")), text=[], page=pi,
+                           x=text_w[0][0] if text_w else x0)
+                entries.append(cur)
+                name_open = True
+                continue
+            if re.search(r"รวม\s+[\d,]+\s*บาท", right) or (x0 > 200 and line.startswith("แผนงาน")) \
+                    or line.startswith("ประมาณการรายจ่ายรวมทั้งสิ้น"):
+                cur, name_open = None, False    # a sum line or a new plan: the item is over
+                continue
+            if cur is None:
+                continue
+            if name_open and abs(x0 - cur["x"]) < 3 and x0 < 150 and not cur["text"]:
+                cur["name"] += line            # the name wrapped onto a second line
+                continue
+            name_open = False
+            if x0 < 150:                        # a type header between items
+                cur = None
+                continue
+            cur["text"].append(line.strip())
+    for e in entries:
+        e["text"] = reflow(e["text"])
+        del e["x"]
+    return entries
+
+
+THAI = re.compile(r"[\u0e00-\u0e7f]")
+PARA = re.compile(r"^(-|\(\d+\)|•)")
+
+
+def reflow(lines: list[str]) -> str:
+    """Join the PDF's wrapped lines; keep a new line before «-», «(1)», «1.» items."""
+    out = ""
+    for ln in (x.strip() for x in lines):
+        if not ln:
+            continue
+        if not out:
+            out = ln
+        elif PARA.match(ln):
+            out += "\n" + ln
+        elif THAI.match(out[-1]) and THAI.match(ln[0]):
+            out += ln                       # Thai wraps inside a phrase: no space
+        else:
+            out += " " + ln
+    return out
+
+
+def attach_details(items: list[dict], details: list[dict]) -> int:
+    """Give each item its คำชี้แจง: same amount, same name skeleton, in document order."""
+    ptr = 0
+    n = 0
+    pool = [it for it in items if it["amount"] > 0]
+    for d in details:
+        dk = skeleton(d["name"])
+        for j in range(ptr, min(len(pool), ptr + 60)):
+            it = pool[j]
+            ik = skeleton(it["รายการ"])
+            if abs(it["amount"] - d["amount"]) < 0.5 and (ik.startswith(dk[:12]) or dk.startswith(ik[:12])):
+                text = d["text"]
+                # a detail block may repeat the item name on its first line
+                first = text.split("\n", 1)[0] if text else ""
+                if first and skeleton(first) and (ik.startswith(skeleton(first)) or skeleton(first) == ik):
+                    text = text.split("\n", 1)[1] if "\n" in text else ""
+                it["คำชี้แจง"] = text
+                ptr = j + 1
+                n += 1
+                break
+    return n
+
+
 def write_csv(items, meta, out):
     ys = meta["years"] or [0, 0, 0, 0]
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["แผนงาน", "งาน", "งบ", "หมวด", "ประเภท", "รายการ", f"ประมาณการ {ys[3]}",
-                    "หมายเหตุ", f"รายจ่ายจริง {ys[0]}", f"รายจ่ายจริง {ys[1]}", f"ประมาณการ {ys[2]}", "หน้า"])
+                    "หมายเหตุ", f"รายจ่ายจริง {ys[0]}", f"รายจ่ายจริง {ys[1]}", f"ประมาณการ {ys[2]}", "หน้า", "คำชี้แจง"])
         for it in items:
             w.writerow([it["แผนงาน"], it["งาน"], it["งบ"], it["หมวด"], it["ประเภท"], it["รายการ"],
                         f"{it['amount']:.2f}", it["หมายเหตุ"], f"{it['y0']:.2f}", f"{it['y1']:.2f}", f"{it['y2']:.2f}",
-                        it["หน้า"]])
+                        it["หน้า"], it.get("คำชี้แจง", "")])
 
 
 if __name__ == "__main__":
     a = sys.argv[1:]
     items, meta = parse(a[0], *(int(x) for x in a[2:4]))
+    got = attach_details(items, parse_details(a[0]))
+    print(f"คำชี้แจง {got} / {sum(1 for it in items if it['amount'] > 0)} รายการที่มีงบประมาณ")
     write_csv(items, meta, a[1])
     tot = {}
     for it in items:

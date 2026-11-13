@@ -45,6 +45,12 @@ def fill(s: Store) -> Store:
     return s
 
 
+ORDINANCE_SOURCES = {
+    2570: "https://www.maikhaow.go.th/ebook_banyad/detail/18/data.html",
+    2569: "https://www.maikhaow.go.th/ebook_banyad/detail/14/data.html",
+}
+
+
 def budget(s: Store):
     """ข้อบัญญัติงบประมาณรายจ่ายจริงของ อบต.ไม้ขาว ปี 2570 (พร้อมปี 2569 และรายจ่ายจริง 2567–2568)
     และรายการจัดซื้อจัดจ้างตัวอย่าง — รายการจัดซื้อจัดจ้างเป็นข้อมูลสมมติทั้งหมด."""
@@ -54,7 +60,10 @@ def budget(s: Store):
     from . import budget as B
     s.set_setting("org_name", "องค์การบริหารส่วนตำบลไม้ขาว (ทดลองใช้ — รายการจัดซื้อจัดจ้างเป็นข้อมูลสมมติ)")
     s.set_setting("org_address", "100 หมู่ที่ 5 ถนนเทพกระษัตรี ตำบลไม้ขาว อำเภอถลาง จังหวัดภูเก็ต 83110")
-    s.import_ordinance(B.read_table(Path(B.__file__).resolve().parent / "data" / "maikhao_2570.csv"))
+    data = Path(B.__file__).resolve().parent / "data"
+    for y in (2569, 2570):          # แต่ละปีใช้ข้อบัญญัติของปีนั้นเอง
+        s.import_ordinance(B.read_table(data / f"maikhao_{y}.csv"), agency="องค์การบริหารส่วนตำบลไม้ขาว",
+                           source=ORDINANCE_SOURCES.get(y, ""))
 
     def find(fy, name, task="งานบริหารทั่วไป", type_=None):
         for b in s.budget_items(fy):
@@ -90,11 +99,14 @@ def budget(s: Store):
     for mth in range(10, 22):
         yy, mm = 2025 + (mth - 1) // 12, (mth - 1) % 12 + 1
         d = _dt.date(yy, mm, 8).isoformat()
-        proc(fuel, "ซื้อ", "ซื้อน้ำมันเชื้อเพลิงประจำเดือน", d, amount=15000 + 900 * ((mth * 7) % 5),
+        proc(fuel, "ซื้อ", "ซื้อน้ำมันเชื้อเพลิงประจำเดือน", d,
+             amount=round(s.budget_item(fuel)["amount"] / 14 + 400 * ((mth * 7) % 5), -2),
              vendor="สหกรณ์การเกษตรตัวอย่าง")
         if mth % 3 == 0:
-            proc(office, "ซื้อ", "ซื้อวัสดุสำนักงาน", d, amount=21000 + 2500 * (mth % 4))
-    proc(hire, "จ้าง", "จ้างเหมาบริการทำความสะอาดอาคารสำนักงาน", "2025-10-01", amount=300000,
+            proc(office, "ซื้อ", "ซื้อวัสดุสำนักงาน", d,
+                 amount=round(s.budget_item(office)["amount"] / 6 + 1500 * (mth % 4), -2))
+    proc(hire, "จ้าง", "จ้างเหมาบริการทำความสะอาดอาคารสำนักงาน", "2025-10-01",
+         amount=round(s.budget_item(hire)["amount"] * 0.4, -2),
          vendor="นางสาวสะอาด ตัวอย่าง")
     # ปี 2570 (ปัจจุบัน)
     fuel, office, hire = (find(2570, n) for n in ("วัสดุเชื้อเพลิงและหล่อลื่น", "วัสดุสำนักงาน", "ค่าจ้างเหมาบริการ"))

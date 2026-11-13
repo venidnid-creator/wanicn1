@@ -6,12 +6,14 @@ import re
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from html import escape
+
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton, QSpinBox, QSplitter, QTableWidget,
-                               QTableWidgetItem, QTabWidget, QToolTip, QTreeWidget, QTreeWidgetItem,
+                               QTableWidgetItem, QTabWidget, QTextBrowser, QToolTip, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from . import PRODUCT_TH
@@ -88,12 +90,19 @@ class BudgetBox(QGroupBox):
         self.path.setObjectName("hint")
         self.path.setWordWrap(True)
         g.addWidget(self.path, len(self.ROWS) + 1, 0, 1, 2)
+        self.detail = QLabel("")
+        self.detail.setWordWrap(True)
+        self.detail.setTextFormat(Qt.RichText)
+        self.detail.setStyleSheet("font-size:12pt; color:#33415C; background:#F7F4EC; padding:4px;"
+                                  "border-radius:6px")
+        g.addWidget(self.detail, len(self.ROWS) + 2, 0, 1, 2)
 
     def show_for(self, store, bid, this, exclude=None):
         if not bid:
             for lab in self.v.values():
                 lab.setText("-")
             self.path.setText(T("ยังไม่ได้เลือกรายการงบประมาณ"))
+            self.detail.setText("")
             self.bar.setValue(0)
             return None
         b = store.balance(bid, exclude_proc=exclude)
@@ -107,7 +116,15 @@ class BudgetBox(QGroupBox):
         used = vals["used"] + this
         self.bar.setValue(int(min(100, used / b["budget"] * 100)) if b["budget"] else 0)
         self.bar.setFormat(f"{T('ใช้')} %p%")
-        self.path.setText(f"{it['plan']} › {it['task']} › {it['grp']} › {it['category']} › {it['type']}")
+        self.path.setText(f"ข้อบัญญัติปี {it['fy']}: {it['plan']} › {it['task']} › {it['grp']} › "
+                          f"{it['category']} › {it['type']}")
+        det = (it["detail"] or "").strip()
+        if det:
+            short = det if len(det) <= 420 else det[:420] + "…"
+            self.detail.setText(f"<b>{T('คำชี้แจง')}</b><br>" + escape(short).replace("\n", "<br>"))
+            self.detail.setToolTip(det)
+        else:
+            self.detail.setText(f"<i>{T('ไม่มีคำชี้แจง')}</i>")
         return after
 
 
@@ -127,20 +144,42 @@ class BudgetPage(QWidget):
         self.fy = fy_spin()
         self.fy.valueChanged.connect(self.refresh)
         top.addWidget(self.fy)
+        self.years = QComboBox()
+        self.years.setToolTip(T("ข้อบัญญัติที่มีในโปรแกรม"))
+        self.years.activated.connect(lambda i: self.fy.setValue(self.years.itemData(i)))
+        top.addWidget(self.years)
         self.cards = {}
         for k in ("งบประมาณหลังโอน", "จองเงิน + ก่อหนี้ผูกพัน", "เบิกจ่ายแล้ว", "คงเหลือ"):
             self.cards[k] = MoneyCard(k)
             top.addWidget(self.cards[k], 1)
         lay.addLayout(top)
+        orow = QHBoxLayout()
+        self.ord = QLabel("")
+        self.ord.setWordWrap(True)
+        self.ord.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.ord.setOpenExternalLinks(True)
+        orow.addWidget(self.ord, 1)
+        ob = QPushButton(T("ข้อมูลข้อบัญญัติ…"))
+        ob.clicked.connect(self.edit_ordinance)
+        orow.addWidget(ob)
+        lay.addLayout(orow)
+        split = QSplitter(Qt.Horizontal)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels([T(c) for c in self.COLS])
         self.tree.setAlternatingRowColors(True)
         h = self.tree.header()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        h.setSectionResizeMode(0, QHeaderView.Interactive)
         h.setStretchLastSection(False)
+        self.tree.setColumnWidth(0, 380)
         self.tree.itemDoubleClicked.connect(lambda *_: self.edit())
-        lay.addWidget(self.tree, 1)
+        self.tree.currentItemChanged.connect(lambda *_: self.show_detail())
+        split.addWidget(self.tree)
+        self.info = QTextBrowser()
+        self.info.setStyleSheet("background:white; border:1px solid #DCD6C8; border-radius:8px;")
+        split.addWidget(self.info)
+        split.setSizes([1100, 360])
+        lay.addWidget(split, 1)
         row, _ = _buttons(("เพิ่มรายการ", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete),
                           (None, None), ("โอนงบประมาณ", self.transfer), ("เพิ่ม/ลดงบประมาณ", self.change),
                           ("ประวัติการโอน", self.history), ("นำเข้าข้อบัญญัติ", self.import_),
@@ -150,7 +189,24 @@ class BudgetPage(QWidget):
     def refresh(self):
         s = self.win.store
         fy = self.fy.value()
+        self.years.blockSignals(True)
+        self.years.clear()
+        for y in s.ordinance_years():
+            self.years.addItem(f"{T('ข้อบัญญัติปี')} {y}", y)
+        self.years.setCurrentIndex(self.years.findData(fy))
+        self.years.blockSignals(False)
+        o = s.ordinance(fy)
+        if o["items"]:
+            src = f" · <a href='{escape(o['source'])}'>{T('ต้นฉบับ')}</a>" if o["source"] else ""
+            self.ord.setText(f"<b>{escape(o['title'] or T('ข้อบัญญัติปี') + ' ' + str(fy))}</b>"
+                             f"{' · ' + escape(o['agency']) if o['agency'] else ''} · {o['items']:,} "
+                             f"{T('รายการ')} · {T('รวมตามข้อบัญญัติ')} {m(o['amount'])} {T('บาท')}{src}")
+        else:
+            self.ord.setText(f"<span style='color:{RED}'>ยังไม่มีข้อบัญญัติปีงบประมาณ {fy} — "
+                             "กด «นำเข้าข้อบัญญัติ» หรือ «คัดลอกจากปีก่อน» แล้วแก้ไขให้ตรงข้อบัญญัติปีนี้ "
+                             "(แต่ละปีโครงสร้างไม่จำเป็นต้องเหมือนกัน)</span>")
         self.tree.clear()
+        self.info.setHtml("")
         rows = s.budget_summary(fy)
         tot = dict(budget=0, reserved=0, committed=0, paid=0, available=0)
         nodes = {}
@@ -224,7 +280,8 @@ class BudgetPage(QWidget):
             ("plan", "แผนงาน", "edit-combo", plans), ("task", "งาน", "edit-combo", B.TASKS),
             ("grp", "งบ", "edit-combo", B.GROUPS), ("category", "หมวด", "edit-combo", B.CATEGORIES),
             ("type", "ประเภท", "edit-combo", []), ("name", "รายการ/โครงการ", "multi"),
-            ("amount", "จำนวนเงินตามข้อบัญญัติ (บาท)", "money"), ("note", "หมายเหตุ", "text")], values)
+            ("amount", "จำนวนเงินตามข้อบัญญัติ (บาท)", "money"), ("detail", "คำชี้แจง", "multi"),
+            ("note", "หมายเหตุ", "text")], values)
         grp, cat, typ = dlg.w["grp"][1], dlg.w["category"][1], dlg.w["type"][1]
 
         def on_cat():
@@ -253,7 +310,7 @@ class BudgetPage(QWidget):
     def add(self):
         cur = self.current()
         base = dict(self.win.store.budget_item(cur)) if cur else {}
-        base.update(name="", amount=0, note="")
+        base.update(name="", amount=0, note="", detail="")
         dlg = self.dialog(T("เพิ่มรายการงบประมาณ"), base)
         if dlg.exec():
             try:
@@ -338,42 +395,88 @@ class BudgetPage(QWidget):
             self.win.store.delete_change(cid)
             t.removeRow(t.currentRow())
 
+    def show_detail(self):
+        bid = self.current()
+        it = self.tree.currentItem()
+        if not it:
+            return
+        if not bid:
+            self.info.setHtml(f"<h3>{escape(it.text(0))}</h3><p>{T('งบหลังโอน')} {it.text(3)} {T('บาท')}<br>"
+                              f"{T('คงเหลือ')} {it.text(7)} {T('บาท')}</p>")
+            return
+        s = self.win.store
+        b = s.budget_item(bid)
+        bal = s.balance(bid)
+        det = escape(b["detail"] or "").replace("\n", "<br>") or f"<i>{T('ไม่มีคำชี้แจง')}</i>"
+        procs = s.q("SELECT number, title, status, amount, contract_amount FROM procurements "
+                    "WHERE budget_item_id=? ORDER BY id", (bid,))
+        plist = "".join(f"<li>{escape(p['number'])} {escape(p['title'][:50])} — {escape(p['status'])} "
+                        f"{m(p['contract_amount'] or p['amount'])}</li>" for p in procs)
+        self.info.setHtml(
+            f"<p style='color:{MUTED}'>{T('ข้อบัญญัติปี')} {b['fy']} · {escape(b['plan'])} › {escape(b['task'])} › "
+            f"{escape(b['grp'])} › {escape(b['category'])} › {escape(b['type'])}</p>"
+            f"<h3>{escape(b['name'])}</h3>"
+            f"<p>{T('ตามข้อบัญญัติ')} <b>{m(b['amount'])}</b> · {T('งบหลังโอน')} <b>{m(bal['budget'])}</b> · "
+            f"{T('คงเหลือ')} <b style='color:{GREEN}'>{m(bal['available'])}</b> {T('บาท')}</p>"
+            f"<p><b>{T('คำชี้แจง')}</b><br>{det}</p>"
+            + (f"<p style='color:{MUTED}'>{escape(b['note'])}</p>" if b["note"] else "")
+            + (f"<p><b>{T('การจัดซื้อจัดจ้างที่ใช้รายการนี้')}</b></p><ul>{plist}</ul>" if plist else ""))
+
+    def edit_ordinance(self):
+        fy = self.fy.value()
+        o = self.win.store.ordinance(fy)
+        dlg = FormDialog(self, f"{T('ข้อมูลข้อบัญญัติ…')} {fy}", [
+            ("title", "ชื่อข้อบัญญัติ", "text"), ("agency", "หน่วยงาน", "text"),
+            ("source", "ที่มา (ลิงก์/เลขที่ประกาศ)", "text"), ("total", "งบประมาณรายจ่ายทั้งสิ้น (บาท)", "money"),
+            ("note", "หมายเหตุ", "multi")],
+            dict(o, title=o["title"] or f"ข้อบัญญัติงบประมาณรายจ่ายประจำปีงบประมาณ พ.ศ. {fy}"))
+        if dlg.exec():
+            self.win.store.save_ordinance(fy, **dlg.values())
+            self.refresh()
+
     def import_(self):
         menu = QMenu(self)
-        menu.addAction(T("ข้อบัญญัติ อบต.ไม้ขาว ปี 2570 (ในชุดโปรแกรม)"), self.import_maikhao)
+        for y in (2570, 2569):
+            menu.addAction(f"{T('ข้อบัญญัติ อบต.ไม้ขาว ปี')} {y} ({T('ในชุดโปรแกรม')})",
+                           lambda yy=y: self.import_maikhao(yy))
+        menu.addSeparator()
         menu.addAction(T("จากตารางรายงานประมาณการรายจ่าย (.csv/.xlsx)…"), self.import_ordinance_file)
         menu.addAction(T("จากตารางทั่วไป 7 คอลัมน์ (.csv/.xlsx)…"), self.import_simple)
         menu.exec(self.cursor().pos())
 
-    def _ordinance(self, rows, what):
+    def _ordinance(self, rows, what, **meta):
         s = self.win.store
-        years = [int(m) for h in rows[0] for m in re.findall(r"ประมาณการ\s*(25\d\d)", str(h))]
-        have = [y for y in years if s.budget_items(y)]
+        years = [int(m_) for h in rows[0] for m_ in re.findall(r"ประมาณการ\s*(25\d\d)", str(h))]
+        if not years:
+            return error(self, ValueError("ไม่พบคอลัมน์ «ประมาณการ ปปปป» ในหัวตาราง"))
+        fy = max(years)
         replace = False
-        if have:
+        if s.budget_items(fy):
             ans = QMessageBox.question(
-                self, PRODUCT_TH, f"มีงบประมาณปี {', '.join(map(str, have))} อยู่แล้ว\n"
-                "ใช่ = แทนที่ของเดิม (รายการที่มีการจัดซื้ออ้างอิงจะลบไม่ได้) · ไม่ใช่ = เพิ่มต่อท้าย",
+                self, PRODUCT_TH, f"มีงบประมาณปี {fy} อยู่แล้ว\n"
+                "ใช่ = แทนที่ข้อบัญญัติปีนี้ทั้งหมด (รายการที่มีการจัดซื้ออ้างอิงจะลบไม่ได้) · ไม่ใช่ = เพิ่มต่อท้าย",
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if ans == QMessageBox.Cancel:
                 return
             replace = ans == QMessageBox.Yes
         try:
-            got = s.import_ordinance(rows, replace=replace)
+            got = s.import_ordinance(rows, replace=replace, **meta)
         except Exception as exc:  # noqa: BLE001
             return error(self, exc)
-        lines = [f"งบประมาณปี {fy}: {n} รายการ" for fy, n in sorted(got["budget"].items())]
-        lines += [f"รายจ่ายจริงปี {fy}: {n} รายการ (ใช้เปรียบเทียบหลายปี)" for fy, n in sorted(got["actual"].items())]
-        QMessageBox.information(self, PRODUCT_TH, f"{what}\n\n" + "\n".join(lines))
-        if got["budget"]:
-            self.fy.setValue(max(got["budget"]))
+        hist = ", ".join(f"{k} {y}" for k, y in sorted(got["history"], key=lambda x: x[1]))
+        QMessageBox.information(self, PRODUCT_TH, f"{what}\n\nงบประมาณปี {got['fy']}: {got['budget']} รายการ "
+                                f"(ใช้เฉพาะปีนี้)\nตัวเลขอ้างอิงสำหรับเปรียบเทียบหลายปี: {hist or '-'}")
+        self.fy.setValue(got["fy"])
         self.refresh()
 
-    def import_maikhao(self):
+    def import_maikhao(self, year=2570):
         from pathlib import Path
-        path = Path(B.__file__).resolve().parent / "data" / "maikhao_2570.csv"
-        self._ordinance(B.read_table(path), "นำเข้าข้อบัญญัติงบประมาณรายจ่ายประจำปี 2570 "
-                        "องค์การบริหารส่วนตำบลไม้ขาว อ.ถลาง จ.ภูเก็ต (รวม 205,000,000 บาท)")
+
+        from .demo import ORDINANCE_SOURCES
+        path = Path(B.__file__).resolve().parent / "data" / f"maikhao_{year}.csv"
+        self._ordinance(B.read_table(path), f"นำเข้าข้อบัญญัติงบประมาณรายจ่ายประจำปี {year} "
+                        "องค์การบริหารส่วนตำบลไม้ขาว อ.ถลาง จ.ภูเก็ต",
+                        agency="องค์การบริหารส่วนตำบลไม้ขาว", source=ORDINANCE_SOURCES.get(year, ""))
 
     def import_ordinance_file(self):
         path, _ = QFileDialog.getOpenFileName(self, T("นำเข้าจากตาราง"), "", "ตาราง (*.xlsx *.csv)")
@@ -433,6 +536,9 @@ class LineTable(QTableWidget):
         h = self.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
         h.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c, wd in ((5, 130), (6, 190)):
+            h.setSectionResizeMode(c, QHeaderView.Fixed)
+            self.setColumnWidth(c, wd)
         self.verticalHeader().setVisible(False)
         self.itemChanged.connect(self._changed)
         self._busy = False
@@ -539,18 +645,19 @@ class ProcDialog(QDialog):
         self.reason.setFixedHeight(56)
         f.addRow(T("เหตุผลและความจำเป็น"), self.reason)
         fy = page.fy.value()
+        if not pid and TD.fiscal_year(self.date.iso()) != fy:      # a request for another year
+            start, end = TD.fiscal_range(fy)
+            self.date.set_iso(str(min(max(TD.today(), start), end)))
         self.bitem = QComboBox()
-        self.bitem.addItem(T("— เลือกรายการงบประมาณ —"), None)
-        for b in s.budget_items(fy, procurement_only=True):
-            self.bitem.addItem(f"{b['task']} › {b['type']} › {b['name'][:60]}", b["id"])
-        if p.get("budget_item_id"):
-            i = self.bitem.findData(p["budget_item_id"])
-            if i < 0:
-                b = s.budget_item(p["budget_item_id"])
-                self.bitem.addItem(f"{b['task']} › {b['type']} › {b['name'][:60]}", b["id"])
-                i = self.bitem.count() - 1
-            self.bitem.setCurrentIndex(i)
-        f.addRow(T("งบประมาณจากข้อบัญญัติ"), self.bitem)
+        self.bitem.setMinimumContentsLength(40)
+        self.fy_label = QLabel("")
+        self.fy_label.setObjectName("hint")
+        self._fill_items(p.get("budget_item_id"))
+        self.date.dateChanged.connect(lambda *_: self._fill_items(self.bitem.currentData(), keep_name=True))
+        br = QHBoxLayout()
+        br.addWidget(self.bitem, 1)
+        br.addWidget(self.fy_label)
+        f.addRow(T("งบประมาณจากข้อบัญญัติ"), br)
         self.lines = LineTable(s, self.update_box)
         left.addWidget(QLabel(f"<b>{T('รายละเอียดพัสดุ')}</b>"))
         left.addWidget(self.lines, 1)
@@ -638,6 +745,36 @@ class ProcDialog(QDialog):
                 wdg.setEnabled(False)
             self.warn.setText(T("ออกใบสั่ง/ทำสัญญาแล้ว — แก้ไขได้เฉพาะหมายเหตุ ผู้ตรวจรับ กำหนดส่ง และเลข e-GP"))
         self.update_box()
+
+    def _fill_items(self, current=None, keep_name=False):
+        """รายการงบประมาณของข้อบัญญัติปีเดียวกับวันที่ขอ (แต่ละปีใช้ข้อบัญญัติของปีนั้น)."""
+        s = self.store
+        fy = TD.fiscal_year(self.date.iso())
+        old = s.budget_item(current) if current else None
+        self.bitem.blockSignals(True)
+        self.bitem.clear()
+        self.bitem.addItem(T("— เลือกรายการงบประมาณ —"), None)
+        for b in s.budget_items(fy, procurement_only=True):
+            self.bitem.addItem(f"{b['task']} › {b['type']} › {b['name'][:60]}", b["id"])
+            self.bitem.setItemData(self.bitem.count() - 1, b["detail"][:400] if b["detail"] else "",
+                                   Qt.ToolTipRole)
+        i = 0
+        if old is not None:
+            i = self.bitem.findData(old["id"])
+            if i < 0 and keep_name:          # same item in the new year's ordinance, if it is there
+                for b in s.budget_items(fy, procurement_only=True):
+                    if (b["task"], b["type"], b["name"]) == (old["task"], old["type"], old["name"]):
+                        i = self.bitem.findData(b["id"])
+                        break
+            if i < 0 and not keep_name and old["fy"] == fy:
+                self.bitem.addItem(f"{old['task']} › {old['type']} › {old['name'][:60]}", old["id"])
+                i = self.bitem.count() - 1
+        self.bitem.setCurrentIndex(max(0, i))
+        self.bitem.blockSignals(False)
+        n = self.bitem.count() - 1
+        self.fy_label.setText(f"{T('ข้อบัญญัติปี')} {fy}" + ("" if n else f" — {T('ยังไม่มีในโปรแกรม')}"))
+        if hasattr(self, "box"):
+            self.update_box()
 
     def _del_line(self):
         r = self.lines.currentRow()

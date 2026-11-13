@@ -131,6 +131,12 @@ class ProcurementMixin:
             # after the order only notes and dates may change
             d = {k: v for k, v in d.items() if k in ("note", "committee", "due_date", "egp_no", "vendor_tax_id")}
             lines = None
+        if d.get("budget_item_id"):
+            b = self.budget_item(d["budget_item_id"])
+            fy = d.get("fy") or (cur["fy"] if cur else TD.fiscal_year(d.get("date_request") or TD.today()))
+            if b and b["fy"] != fy:
+                raise ValueError(f"รายการนี้เป็นงบประมาณปี {b['fy']} — การจัดซื้อจัดจ้างปี {fy} "
+                                 f"ต้องใช้ข้อบัญญัติปี {fy}")
         if d.get("budget_item_id") and "amount" in d:
             self.check_budget(d["budget_item_id"], d["amount"], exclude_proc=pid)
         if not pid and not d.get("method"):
