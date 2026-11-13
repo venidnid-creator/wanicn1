@@ -11,9 +11,11 @@ import sqlite3
 from pathlib import Path
 
 from . import depreciation as DEP
+from .budget import BudgetMixin
+from .procurement import ProcurementMixin
 from . import thaidate as TD
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # ประเภทครุภัณฑ์และอายุการใช้งาน (ปี) — ค่าเริ่มต้น แก้ไขได้ในหน้าตั้งค่า
 # ให้ตรวจกับหลักเกณฑ์อายุการใช้งานของกรมบัญชีกลางที่หน่วยงานใช้อยู่
@@ -50,6 +52,8 @@ DEFAULT_SETTINGS = {
     "number_format": "{org}-{type}-{seq:04d}/{fy}",
     "threshold": str(DEP.THRESHOLD), "salvage": str(DEP.SALVAGE),
     "lang": "th",
+    "specific_limit": "500000", "wht_rate": "1", "wht_min": "10000",
+    "fine_rate": "0.2", "fine_rate_hire": "0.1",
 }
 
 SQL = """
@@ -92,7 +96,7 @@ CREATE TABLE IF NOT EXISTS inspections(
 """
 
 
-class Store:
+class Store(BudgetMixin, ProcurementMixin):
     """All data of one agency in one file."""
 
     def __init__(self, path: str | Path = ":memory:"):
@@ -101,8 +105,14 @@ class Store:
         self.con.row_factory = sqlite3.Row
         self.con.execute("PRAGMA foreign_keys = ON")
         self.con.executescript(SQL)
+        self._budget_init()
+        self._proc_init()
         if self.setting("schema") is None:
             self._seed()
+        for k, v in DEFAULT_SETTINGS.items():     # settings added by newer versions
+            self.con.execute("INSERT OR IGNORE INTO settings VALUES(?,?)", (k, v))
+        self.con.execute("INSERT OR REPLACE INTO settings VALUES('schema',?)", (str(SCHEMA_VERSION),))
+        self.con.commit()
 
     # ------------------------------------------------------------- basics
     def _seed(self):
@@ -444,4 +454,14 @@ class Store:
             by_status=by_status,
             inspected=sum(1 for r in self.inspection(fy - 1) if r["result"]),
             to_inspect=len(self.inspection(fy - 1)), inspect_fy=fy - 1,
-        )
+        ) | self._budget_totals(fy)
+
+    def _budget_totals(self, fy) -> dict:
+        t = dict(b_budget=0.0, b_bound=0.0, b_paid=0.0, b_left=0.0)
+        for r in self.budget_summary(fy):
+            t["b_budget"] += r["budget"]
+            t["b_bound"] += r["reserved"] + r["committed"]
+            t["b_paid"] += r["paid"]
+            t["b_left"] += r["available"]
+        t["procs"] = len([p for p in self.procurements(fy) if p["status"] != "ยกเลิก"])
+        return t

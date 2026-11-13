@@ -289,3 +289,175 @@ def to_pdf(report: Report, path) -> None:
 def to_xlsx(report: Report, path) -> None:
     from . import xlsx
     xlsx.write(path, [(report.title, report.table())], header_rows=3)
+
+
+# ======================================================= budget & procurement
+def _budget_box(store, p) -> str:
+    if not p["budget_item_id"]:
+        return ""
+    b = store.balance(p["budget_item_id"], exclude_proc=p["id"])
+    this = p["contract_amount"] or p["amount"] or 0
+    it = store.budget_item(p["budget_item_id"])
+    rows = [("แผนงาน / งาน", f"{it['plan']} / {it['task']}"),
+            ("งบ / หมวด / ประเภท", f"{it['grp']} / {it['category']} / {it['type']}"),
+            ("รายการตามข้อบัญญัติ", it["name"]),
+            ("งบประมาณตามข้อบัญญัติ", money(b["approved"]) + " บาท"),
+            ("โอนเพิ่ม/ลด และข้อบัญญัติเพิ่มเติม", money(b["changes"]) + " บาท"),
+            ("ใช้ไปแล้ว/ผูกพัน/จองไว้ (รายการอื่น)", money(b["paid"] + b["committed"] + b["reserved"]) + " บาท"),
+            ("คงเหลือก่อนครั้งนี้", money(b["available"]) + " บาท"),
+            ("ครั้งนี้", money(this) + " บาท"),
+            ("คงเหลือหลังครั้งนี้", money(b["available"] - this) + " บาท")]
+    cells = "".join(f"<tr><td width='42%'>{_e(k)}</td><td><b>{_e(v)}</b></td></tr>" for k, v in rows)
+    return ("<p><b>ตรวจสอบงบประมาณ</b></p><table border=1 cellspacing=0 cellpadding=3 width='100%' "
+            f"style='border-collapse:collapse; font-size:12pt'>{cells}</table>")
+
+
+def _lines_table(r, store, pid):
+    r.header = ["ลำดับ", "รายการ", "จำนวน", "หน่วย", "ราคาต่อหน่วย", "จำนวนเงิน"]
+    r.align = ["center", "left", "right", "center", "right", "right"]
+    tot = 0.0
+    for i, ln in enumerate(store.lines(pid), 1):
+        amt = round((ln["qty"] or 0) * (ln["unit_price"] or 0), 2)
+        r.rows.append([i, ln["name"], qty(ln["qty"]), ln["unit"], float(ln["unit_price"] or 0), amt])
+        tot += amt
+    return tot
+
+
+def proc_request(store, pid) -> Report:
+    """รายงานขอซื้อ/ขอจ้าง/ขอเช่า/ขอแลกเปลี่ยน (ระเบียบฯ ข้อ 22)."""
+    p = store.procurement(pid)
+    r = Report(store, f"รายงานขอ{p['kind']}", f"เลขที่ {p['number']}  วันที่ {TD.thai(p['date_request'])}")
+    tot = _lines_table(r, store, pid)
+    amount = p["amount"] or tot
+    info = [("1. เหตุผลและความจำเป็น", p["reason"] or "-"),
+            ("2. รายละเอียดของพัสดุ", p["title"]),
+            ("3. ราคากลาง", (money(p["median_price"]) + " บาท") if p["median_price"] else "-"),
+            ("4. วงเงินที่จะ" + p["kind"], f"{money(amount)} บาท (รวมภาษีมูลค่าเพิ่ม)"),
+            ("5. กำหนดเวลาที่ต้องการใช้", TD.thai(p["due_date"]) or "-"),
+            ("6. วิธีจัดหาและเหตุผล", p["method"] or "-"),
+            ("7. หลักเกณฑ์การพิจารณาคัดเลือก", "เกณฑ์ราคา"),
+            ("8. ผู้ตรวจรับพัสดุ / คณะกรรมการ", p["committee"] or "-")]
+    if p["kind"] == "เช่า":
+        info.append(("ระยะเวลาเช่า", f"{TD.thai(p['rent_from'])} ถึง {TD.thai(p['rent_to'])}"))
+    if p["kind"] == "แลกเปลี่ยน" and p["exchange_asset_id"]:
+        a = store.asset(p["exchange_asset_id"])
+        info.append(("พัสดุที่นำไปแลกเปลี่ยน", f"{a['number']} {a['name']} (ราคาทุน {money(a['price'])} บาท)"))
+    cells = "".join(f"<tr><td width='38%' valign=top><b>{_e(k)}</b></td><td>{_e(v)}</td></tr>" for k, v in info)
+    r.before = (f"<p>เรียน {_e(store.setting('head_pos') or 'หัวหน้าหน่วยงานของรัฐ')}</p>"
+                f"<p>ด้วย {_e(p['requester'] or 'เจ้าหน้าที่')} มีความประสงค์จะ{_e(p['kind'])} "
+                f"{_e(p['title'])} เจ้าหน้าที่ได้ตรวจสอบแล้ว จึงขอรายงานตามระเบียบกระทรวงการคลังว่าด้วย"
+                "การจัดซื้อจัดจ้างและการบริหารพัสดุภาครัฐ พ.ศ. 2560 ข้อ 22 ดังนี้</p>"
+                f"<table cellpadding=2 width='100%'>{cells}</table><br>{_budget_box(store, p)}"
+                "<p><b>รายละเอียดพัสดุ</b></p>")
+    r.totals = ["", "รวมเป็นเงิน", "", "", "", tot]
+    return r
+
+
+def purchase_order(store, pid) -> Report:
+    p = store.procurement(pid)
+    title = {"ซื้อ": "ใบสั่งซื้อ", "จ้าง": "ใบสั่งจ้าง", "เช่า": "ใบสั่งเช่า"}.get(p["kind"], "ข้อตกลงแลกเปลี่ยน")
+    if p["contract_type"] == "สัญญา":
+        title = f"สัญญา{p['kind']} (สรุปสาระสำคัญ)"
+    r = Report(store, title, f"เลขที่ {p['order_no'] or p['number']}  วันที่ {TD.thai(p['order_date'])}")
+    tot = _lines_table(r, store, pid)
+    amount = p["contract_amount"] or tot
+    vat = round(amount * 7 / 107, 2) if p["vendor_vat"] else 0.0
+    r.before = (f"<p>ผู้ขาย/ผู้รับจ้าง: <b>{_e(p['vendor'])}</b> เลขประจำตัวผู้เสียภาษี {_e(p['vendor_tax_id'] or '-')}"
+                f"<br>อ้างอิง: รายงานขอ{_e(p['kind'])} เลขที่ {_e(p['number'])} · โครงการ e-GP {_e(p['egp_no'] or '-')}"
+                f" · {_e(p['method'])}<br>กำหนดส่งมอบภายในวันที่ <b>{_e(TD.thai(p['due_date']) or '-')}</b></p>")
+    r.totals = ["", f"รวมเป็นเงินทั้งสิ้น (ภาษีมูลค่าเพิ่ม {money(vat)})", "", "", "", float(amount)]
+    return r
+
+
+def inspection_doc(store, pid) -> Report:
+    p = store.procurement(pid)
+    r = Report(store, "ใบตรวจรับพัสดุ", f"ตามใบสั่ง/สัญญา เลขที่ {p['order_no'] or p['number']}")
+    _lines_table(r, store, pid)
+    late = ""
+    if p["fine"]:
+        late = f" ส่งมอบล่าช้า มีค่าปรับ {money(p['fine'])} บาท"
+    r.before = (f"<p>ผู้ตรวจรับพัสดุได้ตรวจรับพัสดุจาก {_e(p['vendor'])} เมื่อวันที่ {_e(TD.thai(p['inspect_date']))} "
+                f"(กำหนดส่งมอบ {_e(TD.thai(p['due_date']) or '-')}) ถูกต้องครบถ้วนตามใบสั่ง/สัญญา{_e(late)} "
+                f"{_e(p['inspect_note'] or '')}</p><p>ผู้ตรวจรับ: {_e(p['committee'] or '-')}</p>")
+    return r
+
+
+def proc_register(store, fy) -> Report:
+    r = Report(store, "ทะเบียนคุมการจัดซื้อจัดจ้าง", f"ปีงบประมาณ พ.ศ. {fy}", landscape=True)
+    r.header = ["เลขที่", "วันที่ขอ", "ประเภท", "รายการ", "วิธี", "วงเงิน", "ผู้ขาย/ผู้รับจ้าง",
+                "ตามใบสั่ง/สัญญา", "เบิกจ่ายแล้ว", "สถานะ"]
+    r.align = ["left", "center", "center", "left", "left", "right", "left", "right", "right", "center"]
+    t = [0.0, 0.0, 0.0]
+    for p in reversed(store.procurements(fy)):
+        paid = store.paid(p["id"])
+        r.rows.append([p["number"], TD.thai(p["date_request"]), p["kind"], p["title"],
+                       (p["method"] or "").replace("วิธี", ""), float(p["amount"] or 0), p["vendor"],
+                       float(p["contract_amount"] or 0), float(paid), p["status"]])
+        if p["status"] != "ยกเลิก":
+            t[0] += p["amount"] or 0
+            t[1] += p["contract_amount"] or 0
+            t[2] += paid
+    r.totals = ["", "", "", "รวม", "", t[0], "", t[1], t[2], ""]
+    return r
+
+
+def payment_register(store, fy) -> Report:
+    start, end = TD.fiscal_range(fy)
+    r = Report(store, "ทะเบียนคุมการเบิกจ่ายเงิน", f"ปีงบประมาณ พ.ศ. {fy}", landscape=True)
+    r.header = ["วันที่", "เลขที่ใบสำคัญ", "อ้างอิง", "รายการ", "ผู้รับเงิน", "จำนวนเงิน", "ภาษีหัก ณ ที่จ่าย",
+                "ค่าปรับ", "จ่ายสุทธิ"]
+    r.align = ["center", "left", "left", "left", "left", "right", "right", "right", "right"]
+    t = [0.0] * 4
+    for x in store.payments():
+        if not (str(start) <= x["date"] <= str(end)):
+            continue
+        r.rows.append([TD.thai(x["date"]), x["voucher_no"], x["number"], x["title"], x["vendor"],
+                       float(x["amount"]), float(x["wht"]), float(x["fine"]), float(x["net"])])
+        for i, k in enumerate(("amount", "wht", "fine", "net")):
+            t[i] += x[k]
+    r.totals = ["", "", "", "รวม", "", *t]
+    return r
+
+
+def budget_status(store, fy, level=None) -> Report:
+    """รายงานสถานะงบประมาณรายจ่าย (ตามข้อบัญญัติ / หลังโอน / ผูกพัน / เบิกจ่าย / คงเหลือ)."""
+    from .budget import LEVEL_NAMES, LEVELS
+    sub = f"ประจำปีงบประมาณ พ.ศ. {fy} · ณ วันที่ {TD.thai(TD.today())}"
+    r = Report(store, "รายงานสถานะการใช้จ่ายงบประมาณตามข้อบัญญัติ", sub, landscape=True)
+    cols = ["ตามข้อบัญญัติ", "โอน/เพิ่มเติม", "งบหลังโอน", "จองเงิน", "ก่อหนี้ผูกพัน", "เบิกจ่ายแล้ว",
+            "คงเหลือ", "% ใช้"]
+    if level:
+        n = LEVELS.index(level) + 1
+        r.header = LEVEL_NAMES[:n] + cols
+        rows = store.budget_summary(fy, level)
+        keyf = (lambda x: list(x["key"]))
+    else:
+        r.header = ["แผนงาน", "งาน", "หมวด", "ประเภท", "รายการ"] + cols
+        rows = store.budget_summary(fy)
+        keyf = (lambda x: [x["item"]["plan"], x["item"]["task"], x["item"]["category"], x["item"]["type"],
+                           x["item"]["name"]])
+    k = len(r.header) - len(cols)
+    r.align = ["left"] * k + ["right"] * len(cols)
+    t = [0.0] * 7
+    for x in rows:
+        used = x["reserved"] + x["committed"] + x["paid"]
+        pct = f"{used / x['budget'] * 100:.1f}" if x["budget"] else "-"
+        vals = [x["approved"], x["changes"], x["budget"], x["reserved"], x["committed"], x["paid"], x["available"]]
+        r.rows.append(keyf(x) + [float(v) for v in vals] + [pct])
+        t = [a + b for a, b in zip(t, vals)]
+    used = t[3] + t[4] + t[5]
+    r.totals = ["รวม"] + [""] * (k - 1) + t + [f"{used / t[2] * 100:.1f}" if t[2] else "-"]
+    return r
+
+
+def stats_report(store, rows, title, subtitle) -> Report:
+    r = Report(store, title, subtitle)
+    r.header = ["ช่วงเวลา", "จำนวนรายการขอ", "วงเงินที่ขอ", "ก่อหนี้ผูกพัน", "เบิกจ่าย"]
+    r.align = ["center", "right", "right", "right", "right"]
+    t = [0, 0.0, 0.0, 0.0]
+    for x in rows:
+        r.rows.append([x["label"], x["count"], float(x["requested"]), float(x["committed"]), float(x["paid"])])
+        t = [t[0] + x["count"], t[1] + x["requested"], t[2] + x["committed"], t[3] + x["paid"]]
+    r.totals = ["รวม", *t]
+    r.signers = ["officer", "head"]
+    return r

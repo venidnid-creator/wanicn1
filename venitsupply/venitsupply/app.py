@@ -113,7 +113,8 @@ class HomePage(QWidget):
         self.grid = QGridLayout()
         left.addLayout(self.grid)
         self.cards = {}
-        keys = ["ครุภัณฑ์ที่ใช้อยู่", "มูลค่าครุภัณฑ์", "มูลค่าสุทธิ", "ค่าเสื่อมปีนี้",
+        keys = ["งบประมาณปีนี้", "จองเงิน + ก่อหนี้ผูกพัน", "เบิกจ่ายแล้ว", "งบประมาณคงเหลือ",
+                "ครุภัณฑ์ที่ใช้อยู่", "มูลค่าครุภัณฑ์", "มูลค่าสุทธิ", "ค่าเสื่อมปีนี้",
                 "รายการวัสดุ", "มูลค่าวัสดุคงเหลือ", "ยืมอยู่", "ตรวจแล้ว"]
         self.cardlabels = {}
         for i, k in enumerate(keys):
@@ -197,7 +198,9 @@ class HomePage(QWidget):
         s = self.win.store.summary()
         self.sub.setText(f"{self.win.store.setting('org_name') or ''}   ·   "
                          f"{T('ปีงบประมาณ')} {s['fy']}   ·   {T('ไฟล์ฐานข้อมูล')}: {Path(self.win.store.path).name}")
-        vals = {"ครุภัณฑ์ที่ใช้อยู่": f"{s['assets']:,}", "มูลค่าครุภัณฑ์": f"{s['asset_value']:,.2f}",
+        vals = {"งบประมาณปีนี้": f"{s['b_budget']:,.2f}", "จองเงิน + ก่อหนี้ผูกพัน": f"{s['b_bound']:,.2f}",
+                "เบิกจ่ายแล้ว": f"{s['b_paid']:,.2f}", "งบประมาณคงเหลือ": f"{s['b_left']:,.2f}",
+                "ครุภัณฑ์ที่ใช้อยู่": f"{s['assets']:,}", "มูลค่าครุภัณฑ์": f"{s['asset_value']:,.2f}",
                 "มูลค่าสุทธิ": f"{s['book_value']:,.2f}", "ค่าเสื่อมปีนี้": f"{s['dep_year']:,.2f}",
                 "รายการวัสดุ": f"{s['materials']:,}", "มูลค่าวัสดุคงเหลือ": f"{s['material_value']:,.2f}",
                 "ยืมอยู่": f"{s['loans_open']:,}  ({T('เกินกำหนดคืน')} {s['overdue']})",
@@ -523,7 +526,7 @@ class LoanPage(QWidget):
             except Exception as exc:  # noqa: BLE001
                 return error(self, exc)
             self.win.refresh()
-            self.win.go(3)
+            self.win.go(self.win.pages.index(self))
 
     def back(self):
         lid = selected_id(self.t)
@@ -613,7 +616,11 @@ class ReportPage(QWidget):
                       ("รายงานวัสดุคงเหลือ", lambda s: R.material_balance(s)),
                       ("ทะเบียนการยืมพัสดุ", lambda s: R.loans_report(s)),
                       ("รายงานผลการตรวจสอบพัสดุประจำปี", lambda s: R.inspection_report(s, self.fy.value())),
-                      ("ทะเบียนการจำหน่ายพัสดุ", lambda s: R.disposal_report(s))]
+                      ("ทะเบียนการจำหน่ายพัสดุ", lambda s: R.disposal_report(s)),
+                      ("รายงานสถานะการใช้จ่ายงบประมาณ", lambda s: R.budget_status(s, self.fy.value())),
+                      ("สถานะงบประมาณตามหมวด", lambda s: R.budget_status(s, self.fy.value(), "category")),
+                      ("ทะเบียนคุมการจัดซื้อจัดจ้าง", lambda s: R.proc_register(s, self.fy.value())),
+                      ("ทะเบียนคุมการเบิกจ่ายเงิน", lambda s: R.payment_register(s, self.fy.value()))]
         for k, _ in self.kinds:
             self.list.addItem(T(k))
         self.list.currentRowChanged.connect(self.show)
@@ -704,6 +711,14 @@ class SettingsPage(QWidget):
         hint.setObjectName("hint")
         f.addRow(hint)
         left.addWidget(g)
+        g = QGroupBox(T("การจัดซื้อจัดจ้างและการเบิกจ่าย"))
+        f = QFormLayout(g)
+        for k, label in [("specific_limit", "วงเงินวิธีเฉพาะเจาะจง (บาท)"),
+                         ("wht_rate", "ภาษีหัก ณ ที่จ่าย (%)"), ("wht_min", "หักภาษีเมื่อจ่ายตั้งแต่ (บาท)"),
+                         ("fine_rate", "ค่าปรับซื้อ/เช่า (% ต่อวัน)"), ("fine_rate_hire", "ค่าปรับจ้าง (% ต่อวัน)")]:
+            self.e[k] = QLineEdit()
+            f.addRow(T(label), self.e[k])
+        left.addWidget(g)
         b = QPushButton(T("บันทึกการตั้งค่า"))
         b.setObjectName("primary")
         b.clicked.connect(self.save)
@@ -744,7 +759,7 @@ class SettingsPage(QWidget):
 
 
 # ============================================================ main window
-NAV = ["หน้าหลัก", "ครุภัณฑ์", "วัสดุ", "ยืม-คืน", "ตรวจสอบประจำปี", "รายงาน", "ตั้งค่า"]
+NAV = ["หน้าหลัก", "งบประมาณ", "จัดซื้อจัดจ้าง", "สถิติ", "ครุภัณฑ์", "วัสดุ", "ยืม-คืน", "ตรวจสอบประจำปี", "รายงาน", "ตั้งค่า"]
 
 
 class MainWindow(QMainWindow):
@@ -786,14 +801,18 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         h.addWidget(self.stack, 1)
         self.setCentralWidget(central)
+        from .pages_budget import BudgetPage, ProcPage, StatsPage
         self.home = HomePage(self)
+        self.budget = BudgetPage(self)
+        self.procs = ProcPage(self)
+        self.stats = StatsPage(self)
         self.assets = AssetPage(self)
         self.materials = MaterialPage(self)
         self.loans = LoanPage(self)
         self.inspect = InspectPage(self)
         self.reports = ReportPage(self)
         self.settings_page = SettingsPage(self)
-        self.pages = [self.home, self.assets, self.materials, self.loans, self.inspect, self.reports,
+        self.pages = [self.home, self.budget, self.procs, self.stats, self.assets, self.materials, self.loans, self.inspect, self.reports,
                       self.settings_page]
         for p in self.pages:
             self.stack.addWidget(p)
@@ -834,7 +853,7 @@ class MainWindow(QMainWindow):
         self.pages[self.stack.currentIndex()].refresh()
 
     def preview(self, rep):
-        self.go(5)
+        self.go(self.pages.index(self.reports))
         self.reports.open(rep)
 
     def switch_lang(self, code):
