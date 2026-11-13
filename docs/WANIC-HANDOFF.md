@@ -151,7 +151,8 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - แรงใช้งานลงฐานราก = Pu ÷ 1.4 (เดิม ÷ 1.55 ต่ำกว่าจริง ~5%) ใน wanic_calc และ calc_cards.footing_rows
      - หนาพื้นขั้นต่ำเข้า mark_fixes/advice («ต้องหนา ≥ N ซม.»); รูปเล่มตารางคานใช้ Mext ที่ปลายริม
      - tools/verify_hand_calc.py (สูตรตำราแยกจากโปรแกรม 27 รายการ ทุกรายการตรง ≤ 1%) + tests/test_wanic_hand_verify.py, tests/test_wanic_checks.py (ใน CI); รายงาน PDF «รายงานเทียบผลการคำนวณ» ส่งผู้ใช้แล้ว
-   + [x] (รออนุมัติภาพ) ปรับหน้าจอให้พอดีทุกเครื่อง (ผู้ใช้แจ้ง 13 พ.ย.: จอ 1920×1080 สเกล Windows 150 % มองไม่เห็นหลายปุ่ม):
+   + [ ] ตัวติดตั้ง 2026.11.13.2 (ผู้ใช้อนุมัติ 13 พ.ย.) — dispatch build-windows.yml ref claude/youthful-pascal-ctgtr0 {version 2026.11.13.2, release false} · ห้ามเผยแพร่จนกว่าผู้ใช้สั่ง
+   + [x] (อนุมัติแล้ว) ปรับหน้าจอให้พอดีทุกเครื่อง (ผู้ใช้แจ้ง 13 พ.ย.: จอ 1920×1080 สเกล Windows 150 % มองไม่เห็นหลายปุ่ม):
      - core/ui_fit.py: reflow_rows (แถว QHBoxLayout ที่มีปุ่ม → FlowLayout ห่อบรรทัด, ใช้ views.tray.FlowLayout), relax_combos (AdjustToMinimumContentsLengthWithIcon 12 ตัวอักษร), wrap_labels, wrap_forms (QFormLayout WrapLongRows), fit(widget) → ห่อใน QScrollArea; fit_dialog + install(app) (event filter: ทุก QDialog ตอนแสดงครั้งแรก จำกัดขนาดไม่เกินจอ 96 %/92 % และย้ายเข้าในจอ); widen_docks (แผงขวาอย่างน้อย ~42 % ของหน้าต่าง)
      - views/extension_api.add_panel: แผงที่ key มี "wanic" ผ่าน fit() อัตโนมัติ; plugins/wanic_rc.setup เรียก ui_fit.install + widen_docks; แถวปุ่มของแผง คสล. ใช้ FlowLayout เอง
      - ทดสอบด้วย QT_SCALE_FACTOR=1.5 บน xvfb 1920×1080 (= 1280×720 logical) และ 1366×768: ทุกแผงไม่มีปุ่มถูกตัด, หน้าต่างหลักย่อได้ถึง 943×579, dialog ทั้งหมดอยู่ในจอ · tests/test_ui_fit.py (ใน CI)
