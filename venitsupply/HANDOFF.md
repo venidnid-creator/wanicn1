@@ -70,6 +70,7 @@
 - `FormDialog`: > 9 ช่องแบ่ง 2 คอลัมน์, อยู่ใน QScrollArea, ปุ่มอยู่นอก; `fit_to_screen` ไม่ให้เกิน 95 %×92 % ของจอ
 - ทุกหน้าในหน้าต่างหลัก + ProcDialog + OrdinanceDialog อยู่ใน `scrolled()`; จอเล็กกว่า 1600×950 เปิดเต็มจอ
 - ทดสอบที่ 1280×720 และ 1366×768: ปุ่มเห็นครบทุกหน้าต่าง
+- ตัวติดตั้ง 2026.11.13.4 สร้างสำเร็จ: run 43438200110, artifact 14044686182 — ส่งให้เจ้าของทดสอบ รอผล
 
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
