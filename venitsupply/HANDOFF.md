@@ -78,6 +78,7 @@
   (ค่าครุภัณฑ์→asset, ค่าวัสดุ→material, เฉพาะ ซื้อ/แลกเปลี่ยน, ไม่รวมค่าบำรุง/ซ่อม), `auto_lines`
 - «ลงย้อนหลังอัตโนมัติ» เมื่อเปิดไฟล์ — `register_missing()` แจ้งจำนวนที่ลงให้
 - เมนูบนใหญ่ขึ้น; ใต้โลโก้ «โปรแกรมบริหารพัสดุภาคเวนิช FC»
+- ตัวติดตั้ง 2026.11.13.5 สร้างสำเร็จ: run 43457058784, artifact 14052874536 — ส่งให้เจ้าของทดสอบ รอผล
 
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
