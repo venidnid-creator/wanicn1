@@ -868,11 +868,14 @@ def analyse(data) -> dict:
         P += w_ * l_ * t_ * conc
         piles = int(spec.get("piles") or 0)
         if piles:
-            cap = piles * b_["pile_cap"] * 1000
-            out.append(Member("footing", f"{f['mark']} ที่ ({f['x']:.2f}, {f['y']:.2f}) · เข็ม {piles} ต้น",
+            from core import wanic_pile as PL
+            pc = PL.cap_of(spec, data, b_)
+            pt = PL.type_of_spec(spec)
+            cap = piles * pc * 1000
+            out.append(Member("footing", f"{f['mark']} ที่ ({f['x']:.2f}, {f['y']:.2f}) · เข็ม {piles} ต้น ({pt})",
                               f"P = {P / 1000:,.2f} ตัน (ใช้งาน)",
-                              f"เข็ม {piles} × {b_['pile_cap']:g} = {cap / 1000:,.2f} ตัน", P / cap if cap else 9.9,
-                              f"ต้องใช้เข็มอย่างน้อย {max(1, math.ceil(P / (b_['pile_cap'] * 1000)))} ต้น",
+                              f"เข็ม {pt} {piles} × {pc:,.2f} = {cap / 1000:,.2f} ตัน", P / cap if cap else 9.9,
+                              f"ต้องใช้เข็มอย่างน้อย {max(1, math.ceil(P / (pc * 1000))) if pc else '-'} ต้น",
                               qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
         else:
             q = P / (w_ * l_) / 1000 if w_ * l_ else 99.0

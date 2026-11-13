@@ -203,16 +203,18 @@ def footing_advice(row, b_) -> list:
     out = []
     load = row["P"] * 1.10                                     # + the footing and soil (about 10 %)
     if row["piles"]:
-        n = math.ceil(load / (b_["pile_cap"] * 1000))
+        pc = row.get("pcap", b_["pile_cap"])
+        n = math.ceil(load / (pc * 1000))
         if n > row["piles"]:
-            out.append(f"{mark} (ขั้น 2 ฐานราก): เพิ่มเสาเข็มเป็น {n} ต้น ({b_['pile_cap']:g} ตัน/ต้น) "
+            out.append(f"{mark} (ขั้น 2 ฐานราก): เพิ่มเสาเข็มเป็น {n} ต้น ({pc:,.2f} ตัน/ต้น) "
                        "และขยายฐานให้วางเข็มได้")
     else:
         if row["q"] > row["soil"] + 1e-6:
             side = math.ceil(math.sqrt(load / (b_["soil"] * 1000)) * 10) / 10
-            n = math.ceil(load / (b_["pile_cap"] * 1000))
+            pc = row.get("pcap", b_["pile_cap"])
+            n = math.ceil(load / (pc * 1000))
             out.append(f"{mark} (ขั้น 2 ฐานราก): ขยายฐานเป็น {side:.2f}×{side:.2f} ม. "
-                       f"หรือใช้เสาเข็ม {n} ต้น ({b_['pile_cap']:g} ตัน/ต้น)")
+                       f"หรือใช้เสาเข็ม {n} ต้น ({pc:,.2f} ตัน/ต้น)")
     if row["V2"] > row["Vc2"] or row["V1"] > row["Vc1"]:
         t_new = row["t"] + 0.05
         out.append(f"{mark} (ขั้น 2 ฐานราก): เพิ่มความหนาฐานเป็น {t_new * 100:.0f} ซม. (แรงเฉือนทะลุ/ทางเดียวเกิน)")
@@ -454,7 +456,7 @@ def mark_fixes(res_all, data) -> list:
         load = r["P"] * 1.10
         ch = {}
         if r["piles"]:
-            ch["piles"] = max(r["piles"], math.ceil(load / (b_["pile_cap"] * 1000)))
+            ch["piles"] = max(r["piles"], math.ceil(load / (r.get("pcap", b_["pile_cap"]) * 1000)))
         elif r["q"] > r["soil"]:
             side = math.ceil(math.sqrt(load / (b_["soil"] * 1000)) * 10) / 10
             ch["w"] = ch["l"] = side
@@ -557,7 +559,7 @@ def _footing_change(r, b_) -> dict:
     load = r["P"] * 1.10
     ch = {}
     if r["piles"]:
-        n = math.ceil(load / (b_["pile_cap"] * 1000))
+        n = math.ceil(load / (r.get("pcap", b_["pile_cap"]) * 1000))
         if n > r["piles"]:
             ch["piles"] = n
     elif r["q"] > r["soil"]:

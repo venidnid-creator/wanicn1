@@ -106,8 +106,10 @@ def footing_rows(res_all, data, critical=False) -> list:
         V2 = qu * max(A - (c + d) ** 2, 0.0)
         Vc2 = phi * 2 * vf * math.sqrt(fc) * b0 * 100 * d * 100
         piles = int(sp.get("piles") or 0)
-        cap = piles * b_["pile_cap"] * 1000 if piles else b_["soil"] * 1000 * A
-        out.append({"mark": f["mark"], "x": f["x"], "y": f["y"], "w": w, "l": l, "t": t, "depth": depth,
+        from core import wanic_pile as PL
+        pcap = PL.cap_of(sp, data, b_)
+        cap = piles * pcap * 1000 if piles else b_["soil"] * 1000 * A
+        out.append({"pcap": pcap, "ptype": PL.type_of_spec(sp), "mark": f["mark"], "x": f["x"], "y": f["y"], "w": w, "l": l, "t": t, "depth": depth,
                     "P": P, "q": q, "soil": b_["soil"] * 1000, "cap": cap, "piles": piles, "stump": stumps.get(k, "-"),
                     "c": c, "Mu": Mu, "As": As, "bar": bar, "nbar": nbar, "V1": V1, "Vc1": Vc1, "V2": V2, "Vc2": Vc2,
                     "ok": (P + self_w) <= cap and V1 <= Vc1 and V2 <= Vc2})

@@ -359,6 +359,16 @@ def library_of(data) -> dict:
         base.update(spec)
         if base.get("kind") in LIB_KINDS:
             lib[str(mark)] = base
+    if (data or {}).get("piles"):
+        # เสาเข็ม 2 ขนาด: a footing on piles takes its pile's size and length from its type
+        from core import wanic_pile as PL
+        types = PL.types_of(data)
+        for mark, spec in lib.items():
+            if spec.get("kind") == "footing" and int(spec.get("piles") or 0) > 0:
+                t = types[PL.type_of_spec(spec)]
+                sec = PL.SECTIONS.get(t.get("section"), PL.SECTIONS["I18"])
+                spec.update(pile_b=sec[2], pile_len=float(t.get("len") or 6.0), pile_name=sec[0],
+                            pile_shape=sec[1], pile=PL.type_of_spec(spec))
     return lib
 
 
@@ -1094,11 +1104,12 @@ def structure_members(data) -> tuple[list, dict]:
         for px, py in pile_points(f, e["x"], e["y"]):
             pb = _mm(f.get("pile_b") or 0.18)
             pl = float(f.get("pile_len") or 6.0)
-            add(_member("structure", "pile", "เสาเข็ม", "rect",
-                        dict(b=pb, h=pb),
+            rnd = f.get("pile_shape") == "round"
+            add(_member("structure", "pile", "เสาเข็ม", "pile" if rnd else "rect",
+                        dict(D=pb) if rnd else dict(b=pb, h=pb),
                         [(px, py, e["z0"] - pl), (px, py, e["z0"])],
                         ifc="IfcPile",
-                        name=f"เสาเข็ม {pb / 10:g}×{pb / 10:g} ซม. ยาว {pl:g} ม. · "
+                        name=f"{f.get('pile_name') or f'เสาเข็ม {pb / 10:g}×{pb / 10:g} ซม.'} ยาว {pl:g} ม. · "
                              f"ฐาน {e['mark']} {G.point(e['x'], e['y'])}",
                         info=[("ชนิด", "เสาเข็ม"), ("ขนาด", f"{pb / 10:g}×{pb / 10:g} ซม."),
                               ("ความยาว", f"{pl:g} ม."),

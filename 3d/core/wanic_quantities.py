@@ -315,8 +315,9 @@ def compute(data) -> dict:
                  note="ค่าแรงรวมใน ว480 1.3 (ขุดหลุมฐานรากและถมคืน)")
     for mark, cnt in pile_n.items():
         f = lib[mark]
-        bill.add(g, f"เสาเข็ม {float(f['pile_b']):g}×{float(f['pile_b']):g}×"
-                    f"{float(f['pile_len']):g} ม. ({mark})", cnt, "ต้น",
+        nm = f.get("pile_name") or f"เสาเข็ม {float(f['pile_b']):g}×{float(f['pile_b']):g}"
+        bill.add(g, f"{nm} ยาว {float(f['pile_len']):g} ม. ({mark}{' · ' + f['pile'] if f.get('pile') else ''})",
+                 cnt, "ต้น",
                  basis=f"{f['piles']} ต้น/ฐาน", ref="หลักเกณฑ์ 4.1 ข้อ 1",
                  note="ค่าแรงตอกเข็มตาม ว480 1.1–1.2 (ขึ้นกับจำนวน/พื้นที่)")
     bill.add(g, "ทรายรองก้นหลุม (บดอัดด้วยแรงคน)", sand, "ลบ.ม.",

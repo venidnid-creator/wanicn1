@@ -290,6 +290,7 @@ class DiagramWidget(QWidget):
 def report_pdf(res, data, path) -> None:
     """รายการคำนวณโครงสร้าง: the basis, every member's check, and the
     diagrams of every beam and roof member, on A4 pages."""
+    from core import wanic_pile as PL
     from PySide6.QtCore import QMarginsF
     from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter
     w = QPdfWriter(str(path))
@@ -323,7 +324,8 @@ def report_pdf(res, data, path) -> None:
     text(f"วิธีออกแบบ {b_['method']} (คอนกรีต) · ASD (โครงหลังคาเหล็ก/ไม้) · fc′ {b_['fc']:g} กก./ตร.ซม. · "
          f"SD40 / SR24 · SS400 Fy {b_['fy_steel']:g}")
     text(f"น้ำหนักบรรทุกจร พื้น {b_['ll_floor']:g} · หลังคา {b_['ll_roof']:g} กก./ตร.ม. · ผนัง {b_['wall_kg_m2']:g} "
-         f"กก./ตร.ม. · ดินรับได้ {b_['soil']:g} ตัน/ตร.ม. · เข็ม {b_['pile_cap']:g} ตัน/ต้น")
+         f"กก./ตร.ม. · ดินรับได้ {b_['soil']:g} ตัน/ตร.ม. · "
+         f"{PL.pile_text(data, b_)}")
     text("U = 1.4D + 1.7L (SDM) · คานต่อเนื่อง: วิธี stiffness · พื้น: วิธีสัมประสิทธิ์ วสท. (Method 2) · "
          "เสา: แรงอัดร่วมโมเมนต์ (แผนภาพ P-M, emin = 15 มม. + 0.03h) · หลังคา: D+L และ D+W (Cp 0.7, × 4/3)")
     text("เอกสารนี้เป็นเครื่องมือช่วยคำนวณ ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจสอบและลงนามรับรองก่อนก่อสร้าง",

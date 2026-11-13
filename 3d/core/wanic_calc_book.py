@@ -449,6 +449,38 @@ def reserve_page(bk: Book, members):
             "(น้ำหนักจร) · เสา/ฐานราก = น้ำหนักลงต่อต้น/ฐาน", 5.0)
 
 
+def pile_page(bk: Book, data, b_):
+    """เสาเข็ม: each type used by a footing mark — section, length, how the
+    safe load was found, the numbers, and the marks on it."""
+    from core import wanic_building as B2
+    from core import wanic_pile as PL
+    lib = B2.library_of(data)
+    used = {}
+    for m, sp in lib.items():
+        if sp.get("kind") == "footing" and int(sp.get("piles") or 0) > 0:
+            used.setdefault(PL.type_of_spec(sp), []).append(f"{m} ({int(sp['piles'])} ต้น)")
+    if not used:
+        return
+    bk.page("เสาเข็ม (กำลังรับน้ำหนักต่อต้น)", "Pile")
+    types = PL.types_of(data, b_)
+    y = 34
+    for k in ("P1", "P2"):
+        if k not in used:
+            continue
+        t = types[k]
+        c = PL.capacity(t)
+        bk.text(12, y, 380, 8, f"เสาเข็ม {k} — {c['name']} ยาว {c['len']:.2f} ม. · {PL.METHODS[t.get('method', 'given')]}",
+                7.0, BLUE, bold=True)
+        y += 9
+        for ln in c["lines"]:
+            bk.text(16, y, 380, 6.5, ln, 5.8)
+            y += 6.8
+        bk.text(16, y, 380, 7, f"ใช้กับฐานราก: {', '.join(used[k])}", 5.8, GREEN, bold=True)
+        y += 13
+    bk.text(12, 244, 380, 6, "Qa = Qult / FS (สถิต 2.0 · พลวัต 2.5 · สูตรการตอก 3.0 · ข้อมูลดิน 2.5) และไม่เกินกำลังตัวเข็ม "
+            "0.25 fc′ Ac · ผลทดสอบต้องมาจากเข็มทดสอบในพื้นที่จริง รับรองโดยวิศวกร", 5.0)
+
+
 def stair_page(bk: Book, dz: dict, b_: dict):
     """บันได คสล.: the developed section along the walking line (steps,
     waist, landing, bars, supports), the step checks and every span."""
@@ -630,6 +662,7 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
     beam_pages(bk, res_all, b_, fc)
     column_pages(bk, res_all, b_, fc)
     CC.footing_pages(bk, res_all, data, critical)
+    pile_page(bk, data, b_)
     for dz in res_all.get("stairs") or []:
         if not critical or not all(m.ok for m in dz["members"]):
             stair_page(bk, dz, b_)

@@ -2067,8 +2067,8 @@ def s_schedules(sh, E):
         piles = int(sp.get("piles") or 0)
         rows.append((m, f"{float(sp['w']):.2f}×{float(sp['l']):.2f}",
                      f"{float(sp['t']):.2f}", f"{float(sp['depth']):.2f}",
-                     sp.get("bars", ""), (f"{piles} ต้น {float(sp['pile_b']):.2f}×"
-                                          f"{float(sp['pile_len']):.0f} ม.")
+                     sp.get("bars", ""), (f"{piles} ต้น {sp.get('pile') + ' ' if sp.get('pile') else ''}"
+                                          f"{float(sp['pile_b']):.2f}×{float(sp['pile_len']):.0f} ม.")
                      if piles else "ฐานแผ่", str(n)))
     y = table(sh, x0, y - 3, [("เบอร์", 18, "center"), ("กว้าง×ยาว (ม.)", 32,
                                                        "center"),
@@ -3700,7 +3700,9 @@ def s_rebar_details(sh, E):
                 sh.rect(px_ - pb * k / 2, base - 0.6 * k, px_ + pb * k / 2, fb + 0.05 * k,
                         "cut", 0.35, dash=True)
             sh.text((x + w * k / 2, base - 0.6 * k - 4),
-                    f"เสาเข็ม {piles} ต้น {pb:.2f}×{pb:.2f}×{float(f.get('pile_len') or 6):.0f} ม.",
+                    (f"{f['pile_name']} {piles} ต้น ยาว {float(f.get('pile_len') or 6):.0f} ม."
+                     if f.get("pile_name") else
+                     f"เสาเข็ม {piles} ต้น {pb:.2f}×{pb:.2f}×{float(f.get('pile_len') or 6):.0f} ม."),
                     2.0, "center")
         sh.line((x - 0.4 * k, gy), (x + (w + 0.4) * k, gy), "cut", 0.35)
         sh.text((x + (w + 0.4) * k, gy + 1), "ระดับดินเดิม", 1.8, "right")

@@ -80,6 +80,7 @@ changes are filtered out — keep it that way; it fixed the slow-selection bug).
 | `wanic_calc_cards.py` | Booklet cards: footing, slab, roof pages; `attach_lateral_moments` (Me row); `critical_members` (print only the critical ones). |
 | `wanic_advice.py` / `wanic_fix_view.py` | Advice for failing members (what to add, where), `apply_fixes` (all marks, iterates until pass incl. detailing minimums), `member_fix` + `FixDialog` (one row), `balance_spec(keep_shape)` = symmetric/balanced edits (square columns, bars ÷ 4, equal top/bottom bar size, square footings), `fit_in_row` (clear spacing ≥ max(25 mm, bar)). |
 | `wanic_stair.py` / `wanic_stair_view.py` | RC stairs straight / L / U: `designs(data)` (step checks กฎกระทรวง 55, waist slab one-way along the flight incl. landing, L/20, steel minimums, landing beam BS1), `suggest`, `apply_all`, `advice_for`; `StairDialog`. Geometry in `wanic_building.stair_layout/stair_plan/stair_members`. |
+| `wanic_pile.py` / `wanic_pile_view.py` | Two pile types P1/P2 (`data["piles"]`, footing spec `pile`), capacity from given / static / dynamic test / Hiley / soil boring with FS, capped by 0.25 fc′ Ac; `cap_of`, `pile_text`; `PileDialog`; booklet `pile_page`. |
 | `wanic_sanitary.py` | Users → septic tank / grease trap / screen pit (`users_of`, `septic_pick`, `grease_pick`, `design`, `design_lines`); used by the SN sheets (`sn_plan`, `sn_index`, `septic_table`, `sn_traps`) and the BOQ (`wanic_mep.bill`). |
 | `wanic_beamload_view.py` | น้ำหนักเพิ่มบนคาน (`BeamLoadDialog`, presets: walls, water tanks, A/C, balcony), คานยื่น (`CantileverDialog`), `CheckloadDialog`; `beam_lines(data)`; row⇄dict helpers. |
 | `wanic_road*.py`, `wanic_pavement.py`, `wanic_sitemap.py` | Road design, AI 1970 / Road Note 29 pavement, sheets G PP ST VT SD DR TS QS, site map. |
@@ -177,11 +178,11 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - Since then, on branch `claude/youthful-pascal-ctgtr0`, committed `[skip ci]` (no installer yet), each approved by
   screenshots: struct sheets, steel sheets, booklet cards, advice + per-member fix + symmetric/balanced edits, SFD/BMD with
   capacity lines, «รับเพิ่มได้อีก» reserve, plan item 4 (beam loads, cantilevers, Checkload — approved) and plan item 5
-  (RC stairs — approved) and plan item 6 (A/SN/EE sheet additions — awaiting approval).
+  (RC stairs — approved) and plan item 6 (A/SN/EE — approved) and plan item 7 (two pile sizes, capacity from tests — awaiting approval).
 - The QD study plan (approved): 1 struct sheets ✓ · 2 steel sheets ✓ · 3 booklet cards ✓ · 4 beam point/uniform loads,
   cantilever, Checkload (Wcol / Wcol-Area / Wfloor) ✓ · 5 RC stair (straight / L / two-flight) ✓ ·
-  6 ✓ awaiting approval: A-01 symbols + finish codes, room tags, ABCD markers, door/window schedule, grease trap / screen pit, septic tank by
-  users, EE/SN specifications · 7 two pile sizes, pile capacity from test results · 8 free drafting (columns/beams from
+  6 ✓ A-01 symbols + finish codes, room tags, ABCD markers, door/window schedule, grease trap / screen pit, septic tank by
+  users, EE/SN specifications · 7 ✓ awaiting approval: two pile sizes, pile capacity from test results · 8 free drafting (columns/beams from
   sketch lines, curved/inclined beams, curved walls). QD is studied for workflow only — never copy its code/UI/files.
 - Next installer only when the owner asks; it will contain all of the above.
 

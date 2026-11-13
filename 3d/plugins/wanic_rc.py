@@ -136,6 +136,10 @@ class RCPanel(QWidget):
         self.stair_btn.setToolTip("บันไดช่วงตรง / ตัว L / สองช่วง — ขนาดขั้นตามกฎกระทรวง 55 · ท้องบันได · เหล็ก · คานชานพัก")
         self.stair_btn.clicked.connect(self.edit_stairs)
         row.addWidget(self.stair_btn)
+        self.pile_btn = QPushButton("เสาเข็ม 2 ขนาด / กำลังเข็ม…")
+        self.pile_btn.setToolTip("เสาเข็ม P1/P2 · กำลังจากผลทดสอบสถิต/พลวัต · บันทึกการตอก (Hiley) · ข้อมูลเจาะดิน")
+        self.pile_btn.clicked.connect(self.edit_piles)
+        row.addWidget(self.pile_btn)
         self.check_btn = QPushButton("Checkload (ตรวจน้ำหนักลงเสา)…")
         self.check_btn.setToolTip("Wcol · Wcol-Area · Wfloor ทุกเสา เทียบค่าเฉลี่ยทั้งอาคารและช่วงปกติ")
         self.check_btn.clicked.connect(self.show_checkload)
@@ -260,6 +264,7 @@ class RCPanel(QWidget):
         self.cant_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.check_btn.setVisible(calc)
         self.stair_btn.setVisible(calc or self.step == "slab")
+        self.pile_btn.setVisible(calc or self.step == "footing")
         self.select_btn.setVisible(not calc and self.step != "rebar")
         self._loading = True
         try:
@@ -376,6 +381,7 @@ class RCPanel(QWidget):
                           + (f"⚠ เบอร์ที่ยังไม่ผ่านการตรวจ: {', '.join(bad)}" if bad else "✓ ทุกเบอร์ผ่านการตรวจ"))
 
     def _calc_step(self):
+        from core import wanic_pile as PL
         from core import wanic_calc as C
         try:
             self._calc = C.analyse(self.data())
@@ -407,7 +413,7 @@ class RCPanel(QWidget):
         bad = sum(1 for m in ms if not m.ok)
         self.note.setText(
             f"{b_['method']} · fc′ {b_['fc']:g} · LL พื้น {b_['ll_floor']:g} / หลังคา {b_['ll_roof']:g} กก./ตร.ม. · "
-            f"ดิน {b_['soil']:g} ตัน/ตร.ม. · เข็ม {b_['pile_cap']:g} ตัน/ต้น — "
+            f"ดิน {b_['soil']:g} ตัน/ตร.ม. · {PL.pile_text(self.data(), b_)} — "
             + (f"✗ ไม่ผ่าน {bad} รายการ: แก้ขนาด/เหล็กในขั้น 2–6 แล้วคำนวณใหม่" if bad else "✓ ผ่านทุกรายการ")
             + "\n" + "\n".join(("✓ " if ok else "✗ ") + t for _g, t, ok in C.reserve_summary(ms))
             + "\nเครื่องมือช่วยคำนวณ — ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจและลงนามก่อนก่อสร้าง")
@@ -749,6 +755,19 @@ class RCPanel(QWidget):
         d["cantilevers"] = dlg.cantilevers()
         bp._write(d)
         self._rebuild_after_fix(f"บันทึกคานยื่น {len(d['cantilevers'])} ตัว")
+
+    def edit_piles(self):
+        from core.wanic_pile_view import PileDialog
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        dlg = PileDialog(self, d)
+        if dlg.exec() != PileDialog.Accepted:
+            return
+        dlg.apply(d)
+        bp._write(d)
+        self._rebuild_after_fix("บันทึกเสาเข็ม P1/P2 แล้ว")
 
     def edit_stairs(self):
         from core.wanic_stair_view import StairDialog

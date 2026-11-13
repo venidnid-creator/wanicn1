@@ -130,7 +130,13 @@ Truss 6 แบบหรือเขียนเอง → Matrix หาแรง
      - EE_NOTES 10 ข้อ (ขนาดสาย/เบรกเกอร์ สายดิน ≤ 5 โอห์ม RCD 30 mA ท่อร้อยสาย การยื่นขอมิเตอร์)
      - A: room_codes (พ / ผ2 ทาสี / ผ3 กระเบื้อง / ฝ ตาม ceiling_type) ในป้ายห้อง; elev_marker A B C D ในห้องน้ำบนแปลน (อ้างเลขแผ่นรูปด้านภายใน); A-13 ใช้ชื่อ A–D และปรับมาตราส่วน/ระยะให้พอดีกรอบ; A-01 แก้ข้อความทับตาราง + ตารางวัสดุผิวห้อง room_schedule + สัญลักษณ์รูปด้านภายใน
      - ห้ามใช้อักษรที่ cp874 ไม่มี (เช่น ✓) ในแผ่นแบบ — DXF จะเป็น «?» (test_dxf_holds_every_sheet_in_thai)
-     - tests/test_wanic_sanitary.py (ใน CI) · ถัดไปหลังอนุมัติ: แผนข้อ 7 (เสาเข็ม 2 ขนาด · กำลังเข็มตามผลทดสอบ)
+     - tests/test_wanic_sanitary.py (ใน CI) · อนุมัติแล้ว (13 พ.ย.)
+   + [x] (รออนุมัติภาพ) แผนข้อ 7 — เสาเข็ม 2 ขนาด · กำลังเข็มจากผลทดสอบ:
+     - core/wanic_pile.py: SECTIONS (I18–I30, สี่เหลี่ยม 0.25–0.40, สปัน Ø0.30–0.50, เข็มเจาะ Ø0.35–0.60: ชื่อ รูปทรง ขนาด A P fc′ — ค่าประมาณ), METHODS given/static/dynamic/hiley/soil, FS_DEFAULT 1/2.0/2.5/3.0/2.5, DEFAULT_TYPES P1 (I18 6 ม. given = basis pile_cap) P2; types_of(data,b_), capacity(t) (Hiley Qu = e·W·H/(S+C/2) หน่วย ตัน·มม./มม.; ดิน Σfs·P·t + qb·A; กำลังตัวเข็ม 0.25fc′Ac; Qa = min), type_of_spec, cap_of, pile_text
+     - data["piles"] = {"P1": {...}, "P2": {...}}; footing spec "pile": "P1"/"P2"; B.library_of เมื่อมี data["piles"] ตั้ง pile_b/pile_len/pile_name/pile_shape ตามชนิด (เอกสารเก่าไม่เปลี่ยน); 3D เข็มกลมใช้ family "pile"; BOQ ชื่อเข็มตามชนิด
+     - wanic_calc footing ใช้ cap ต่อเบอร์ ชื่อ «เข็ม n ต้น (P1)»; calc_cards rows มี pcap/ptype; advice ใช้ pcap; บรรทัดหัวขั้น 9 และ PDF ใช้ pile_text
+     - UI core/wanic_pile_view.py PileDialog (P1/P2 คู่กัน ผลสด, ตารางฐานราก จำนวนเข็ม + เลือก P1/P2) ปุ่ม «เสาเข็ม 2 ขนาด / กำลังเข็ม…» ขั้น 2 และ 9; รูปเล่ม pile_page
+     - tests/test_wanic_pile.py (ใน CI; ต้อง deleteLater dialog กัน segfault ตอนปิด) · ถัดไปหลังอนุมัติ: แผนข้อ 8 (เขียนแบบอิสระ: เสา/คานตามเส้นร่าง คานโค้ง/เอียง ผนังโค้ง)
      - (เดิม) แผนข้อ 6 (A-01 สัญลักษณ์/รหัสวัสดุ ป้ายห้อง ABCD ตารางประตูหน้าต่าง บ่อดักไขมัน/บ่อตะแกรง ถังบำบัดตามจำนวนคน รายการ EE/SN)
 4. [ ] ออกแบบคาน: น้ำหนักจุด/แผ่เพิ่มเอง · คานยื่น · Checkload (Wcol / Wcol-Area / Wfloor)
 5. [ ] บันได คสล. ช่วงตรง / L / 2 ช่วง + คานชานพัก + รูปตัด
