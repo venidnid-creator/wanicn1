@@ -33,7 +33,7 @@
 ## รันจากซอร์ส
 
 ```bash
-pip install PySide6
+pip install -r requirements.txt
 ```
 
 ```bash

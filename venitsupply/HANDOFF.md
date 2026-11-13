@@ -45,6 +45,16 @@
 - ข้อมูลในชุด: `data/maikhao_2569.csv`, `data/maikhao_2570.csv` (มีคำชี้แจง) — tools/ordinance_pdf.py
   หาหน้าเองอัตโนมัติ: `python tools/ordinance_pdf.py ข้อบัญญัติ.pdf ออก.csv`
 
+## อ่านข้อบัญญัติ PDF ในโปรแกรม (13 พ.ย. 2569) — รออนุมัติ
+- ปุ่ม «อ่านข้อบัญญัติ (PDF)…» หน้างบประมาณ → `pages_ordinance.OrdinanceDialog`:
+  1) เลือกปีงบประมาณ (ปุ่มปีปัจจุบัน/ปีถัดไป) 2) เลือกไฟล์ PDF/ตาราง หรือข้อบัญญัติในชุด
+  3) แสดงยอดรวม เทียบ «งบประมาณรายจ่ายทั้งสิ้น» ในเล่ม, รายการแบบต้นไม้ + คำชี้แจง → «บันทึกเป็นข้อบัญญัติปี X»
+  ปีของเล่มไม่ตรงกับปีที่เลือก → เตือนสีแดงและถามยืนยัน
+- `venitsupply/ordinance_pdf.py` (ย้ายจาก tools/) อ่านด้วย pdfminer.six (pure Python, ใส่ในตัวติดตั้งได้)
+  ถ้าไม่มี pdfminer ใช้ pdftotext; ผลลัพธ์รายการตรงกับ pdftotext ทุกบรรทัด, คำชี้แจงสะอาดกว่า
+  เล่ม 2570 (292 หน้า) อ่านประมาณ 10 วินาที; แก้วรรณยุกต์ท้ายบรรทัดที่หลุด (เส้นอักษรเดี่ยว)
+- ตัวติดตั้ง (ขั้นต่อไป) ต้องรวม pdfminer.six (requirements.txt)
+
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
 - `venitsupply/depreciation.py` ค่าเสื่อมเส้นตรง · `thaidate.py` วันที่ พ.ศ./ปีงบประมาณ

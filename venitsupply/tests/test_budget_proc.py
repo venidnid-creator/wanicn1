@@ -216,12 +216,29 @@ def test_ordinance_tool_header():
 
 
 def test_reflow_and_thai_fix():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "ordinance_pdf", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                      "tools", "ordinance_pdf.py"))
-    tool = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tool)
+    from venitsupply import ordinance_pdf as tool
     assert tool.fix_thai("เพื่อจ\uf70aาย ตําบล") == "เพื่อจ่าย ตำบล"
     assert tool.reflow(["เพื่อจ่ายเป็นค่า", "วัสดุ", "- เป็นไปตาม", "ระเบียบ"]) == \
         "เพื่อจ่ายเป็นค่าวัสดุ\n- เป็นไปตามระเบียบ"
+    assert tool.HEADER.search("ค่าเช่าบ้าน จำนวน 550,000 บาท")
+    assert tool.HEADER.search("ค่าเช่าบ้าน 550,000 จำนวน บาท")
+    assert not tool.HEADER.search("อัตราเดือนละ 45,000 บาท จำนวน 12 เดือน")
+
+
+def test_dialog_table_reader():
+    from venitsupply.pages_ordinance import rows_to_items
+    items, meta = rows_to_items(_maikhao(2570))
+    assert meta["fy"] == 2570 and round(meta["total"]) == 205000000 and meta["details"] >= 460
+
+
+def test_read_pdf_if_available():
+    """อ่านไฟล์ PDF จริง (ถ้ามีในเครื่อง: ตั้ง VENIT_ORDINANCE_PDF=ไฟล์.pdf)."""
+    pdf = os.environ.get("VENIT_ORDINANCE_PDF")
+    if not pdf or not os.path.exists(pdf):
+        pytest.skip("ไม่มีไฟล์ PDF ข้อบัญญัติในเครื่องทดสอบ")
+    from venitsupply import ordinance_pdf as O
+    items, meta = O.read_ordinance(pdf)
+    assert meta["total_stated"] and abs(meta["total"] - meta["total_stated"]) < 1
+    s = Store()
+    got = s.import_ordinance(O.to_rows(items, meta))
+    assert got["fy"] == meta["fy"]

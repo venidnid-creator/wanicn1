@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""แปลง «รายงานประมาณการรายจ่าย» ในข้อบัญญัติงบประมาณ (PDF จากระบบ e-LAAS) เป็นตาราง CSV.
+"""อ่านข้อบัญญัติงบประมาณรายจ่าย (PDF จากระบบ e-LAAS) — ใช้ในโปรแกรมและจากบรรทัดคำสั่ง.
 
-ใช้กับเครื่องพัฒนา (ต้องมี ``pdftotext`` ของ poppler)::
+ในโปรแกรม: หน้า งบประมาณ › «อ่านข้อบัญญัติ (PDF)…» (อ่านด้วย pypdf ไม่ต้องติดตั้งอะไรเพิ่ม)
+บรรทัดคำสั่ง::
 
-    python tools/ordinance_pdf.py ข้อบัญญัติ.pdf ออก.csv [หน้าเริ่ม หน้าสุดท้าย]
+    python -m venitsupply.ordinance_pdf ข้อบัญญัติ.pdf ออก.csv
 
 ระดับรายการดูจากระยะย่อหน้าของบรรทัดในรายงาน:
 แผนงาน › งาน › งบ › หมวด › ประเภท › รายการ — บรรทัด «รวม…» ข้ามไป
@@ -36,19 +37,135 @@ def fix_thai(t: str) -> str:
 
 
 _CACHE: dict = {}
+SPLIT_A = re.compile(r"(\d,\d{3})([\u0e01-\u0e5b(])")       # "1,133,280จำนวน" → "1,133,280 จำนวน"
+SPLIT_B = re.compile(r"([\u0e01-\u0e5b])(\d{1,3},\d)")        # "บาท27,984,910" → "บาท 27,984,910"
 
 
-def words(pdf: str, first=None, last=None):
+def words(pdf: str, first=None, last=None, progress=None):
     key = (pdf, first, last)
     if key in _CACHE:
         yield from _CACHE[key]
         return
-    pages = list(_words(pdf, first, last))
+    pages = list(_words(pdf, first, last, progress))
     _CACHE[key] = pages
     yield from pages
 
 
-def _words(pdf: str, first=None, last=None):
+def _words(pdf: str, first=None, last=None, progress=None):
+    """Rows of words per page: [(y, [(x, text), …])] in visual top-left coordinates."""
+    try:
+        import pdfminer
+        del pdfminer
+    except ImportError:
+        yield from _words_pdftotext(pdf, first, last)
+        return
+    yield from _words_pdfminer(pdf, first, last, progress)
+
+
+COMBINING = re.compile("^[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e\uf700-\uf71f]")
+THAI_BASE = re.compile("[\u0e01-\u0e30\u0e32\u0e33\u0e3f-\u0e46\u0e4f-\u0e5b]")
+
+
+def _words_pdfminer(pdf: str, first=None, last=None, progress=None):
+    """pdfminer.six (pure Python, bundled with the program) — page rotation already applied."""
+    from pdfminer.high_level import extract_pages
+    from pdfminer.layout import LAParams, LTTextContainer, LTTextLine
+    from pdfminer.pdfpage import PDFPage
+    with open(pdf, "rb") as fh:
+        total = sum(1 for _ in PDFPage.get_pages(fh))
+    lo, hi = (first or 1), (last or total)
+    params = LAParams(line_margin=0.1, char_margin=1.0)
+    for pi, page in enumerate(extract_pages(pdf, page_numbers=range(lo - 1, hi), laparams=params), lo):
+        H = page.height
+        pieces = []
+        for el in page:
+            if not isinstance(el, LTTextContainer):
+                continue
+            for line in ([el] if isinstance(el, LTTextLine) else el):   # a lone mark can be a bare line
+                if isinstance(line, LTTextLine) and line.get_text().strip():
+                    pieces.append((round(H - line.y1), line.x0, line.get_text().replace("\n", " ")))
+        rows: list[list] = []
+        marks = []
+        for y, x, t in sorted(pieces):
+            if COMBINING.match(t.strip()) and not THAI_BASE.search(t.strip()[:1]):
+                marks.append((y, x, t.strip()))           # a lone tone mark, set a little higher
+                continue
+            if rows and y - rows[-1][0] <= 2:
+                rows[-1][1].append((x, t))
+            else:
+                rows.append([y, [(x, t)]])
+        for y, x, t in marks:                             # put each back on its own line
+            near = min(rows, key=lambda r: abs(r[0] - y), default=None)
+            if near is not None and abs(near[0] - y) <= 12:
+                near[1].append((x, t))
+        out = []
+        for y, ps in rows:
+            ps.sort()
+            glued: list[list] = []
+            for x, t in ps:
+                if glued and COMBINING.match(t.lstrip()):  # a tone mark split off its consonant
+                    glued[-1][1] = glued[-1][1].rstrip() + t.lstrip()
+                else:
+                    glued.append([x, t])
+            ws = []
+            for x, t in glued:
+                for k, word in enumerate(fix_thai(t).split()):
+                    ws.append((x + k * 0.01, word))
+            out.append((y, ws))
+        if progress:
+            progress(pi, hi)
+        yield pi, out
+
+
+def _words_pypdf(pdf: str, first=None, last=None, progress=None):
+    from pypdf import PdfReader
+    reader = PdfReader(pdf)
+    n = len(reader.pages)
+    lo, hi = (first or 1), (last or n)
+    for pi in range(lo, hi + 1):
+        page = reader.pages[pi - 1]
+        box = page.mediabox
+        W, H = float(box.width), float(box.height)
+        rot = (page.rotation or 0) % 360
+        rows: dict[int, list] = {}
+
+        def visit(text, cm, tm, fd, fs, rows=rows, W=W, H=H, rot=rot):
+            t = text.strip()
+            if not t:
+                return
+            x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+            y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+            if x == 0 and y == 0:
+                return
+            if rot == 90:
+                vx, vy = y, x
+            elif rot == 270:
+                vx, vy = H - y, W - x
+            elif rot == 180:
+                vx, vy = W - x, y
+            else:
+                vx, vy = x, H - y
+            t = SPLIT_A.sub(r"\1 \2", SPLIT_B.sub(r"\1 \2", fix_thai(t)))
+            for k, word in enumerate(t.split()):
+                rows.setdefault(round(vy), []).append((vx + k * 0.01, word))
+
+        try:
+            page.extract_text(visitor_text=visit)
+        except Exception:  # noqa: BLE001 — a broken page should not stop the whole book
+            pass
+        if progress:
+            progress(pi, hi)
+        # merge rows 1–2 pt apart (baseline jitter)
+        merged: list[list] = []
+        for y in sorted(rows):
+            if merged and y - merged[-1][0] <= 2:
+                merged[-1][1].extend(rows[y])
+            else:
+                merged.append([y, list(rows[y])])
+        yield pi, [(y, sorted(ws)) for y, ws in merged]
+
+
+def _words_pdftotext(pdf: str, first=None, last=None):
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "bb.html"
         cmd = ["pdftotext", "-bbox-layout"]
@@ -94,9 +211,9 @@ def parse(pdf: str, first=None, last=None) -> tuple[list[dict], dict]:
         if not in_section:
             continue
         if years is None:
-            ys = re.findall(r"ปี (25\d\d)", flat)
-            if len(ys) >= 4:
-                years = [int(y) for y in ys[:4]]
+            ys = sorted({int(y) for y in re.findall(r"ปี\s*(25\d\d)", flat)})
+            if len(ys) >= 3 and ys[-1] - ys[0] == 3:      # one header cell may be unreadable
+                years = list(range(ys[0], ys[-1] + 1))
         pending, pend_y, last_item, last_num_y = [], None, None, None
         for y, ws in rows:
             text = [(x, t) for x, t in ws if x < 395]
@@ -180,6 +297,8 @@ def parse(pdf: str, first=None, last=None) -> tuple[list[dict], dict]:
 
 DETAIL_TITLE = "รายงานรายละเอียดประมาณการรายจ่าย"
 AMOUNT = re.compile(r"([\d,]+)\s*บาท")
+# an item header ends with its amount: «… จำนวน 1,133,280 บาท» (or «1,133,280 จำนวน บาท» from pypdf)
+HEADER = re.compile(r"(?:จำนวน\s*([\d,]{2,})\s*บาท|([\d,]{2,})\s*จำนวน\s*บาท)\s*$")
 MARKS = re.compile(r"[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e\s]")
 
 
@@ -219,15 +338,16 @@ def parse_details(pdf: str, first=None, last=None) -> list[dict]:
             line = " ".join(t for _, t in ws)
             x0 = ws[0][0]
             right = " ".join(t for x, t in ws if x >= 400)     # the amount column of a header
-            m = AMOUNT.search(right)
-            if "จำนวน" in right and m:
-                name = " ".join(t for x, t in text_w if t != "จำนวน").strip()
-                cur = dict(name=name, amount=float(m.group(1).replace(",", "")), text=[], page=pi,
+            hm = HEADER.search(line)
+            if hm and not re.search(r"รวม\s*$", line[:hm.start()].strip()[-4:] + " "):
+                amount = float((hm.group(1) or hm.group(2)).replace(",", ""))
+                name = line[:hm.start()].strip()
+                cur = dict(name=name, amount=amount, text=[], page=pi,
                            x=text_w[0][0] if text_w else x0)
                 entries.append(cur)
                 name_open = True
                 continue
-            if re.search(r"รวม\s+[\d,]+\s*บาท", right) or (x0 > 200 and line.startswith("แผนงาน")) \
+            if re.search(r"รวม\s+[\d,]+\s*บาท|รวม\s*บาท\s*[\d,]+|^รวม", right or line) or (x0 > 200 and line.startswith("แผนงาน")) \
                     or line.startswith("ประมาณการรายจ่ายรวมทั้งสิ้น"):
                 cur, name_open = None, False    # a sum line or a new plan: the item is over
                 continue
@@ -303,15 +423,55 @@ def write_csv(items, meta, out):
                         it["หน้า"], it.get("คำชี้แจง", "")])
 
 
+def read_ordinance(pdf: str, progress=None) -> tuple[list[dict], dict]:
+    """Read a whole ordinance PDF once: items with คำชี้แจง, and facts for checking it.
+
+    meta: years, fy (ปีของข้อบัญญัติ), agency, total_stated (งบประมาณรายจ่ายทั้งสิ้นที่พิมพ์ไว้),
+    total (ผลรวมที่อ่านได้), plans {แผนงาน: ยอด}, details (จำนวนรายการที่มีคำชี้แจง)
+    """
+    pages = list(words(pdf, progress=progress))
+    items, meta = parse(pdf)
+    meta["details"] = attach_details(items, parse_details(pdf))
+    meta["fy"] = meta["years"][-1] if meta.get("years") else None
+    stated = None
+    agency = ""
+    for pi, rows in pages[:40]:
+        for _, ws in rows:
+            line = " ".join(t for _, t in ws)
+            if not agency:
+                m = re.search(r"(องค์การบริหารส่วนตำบล\S+|องค์การบริหารส่วนจังหวัด\S+|เทศบาล\S+\s*\S*)", line)
+                if m:
+                    agency = m.group(1)
+            m = re.search(r"งบประมาณรายจ่ายทั้งสิ้น\s*([\d,]+)", line)
+            if m and stated is None:
+                stated = float(m.group(1).replace(",", ""))
+    meta["agency"] = agency
+    meta["total_stated"] = stated
+    meta["total"] = round(sum(it["amount"] for it in items), 2)
+    plans: dict[str, float] = {}
+    for it in items:
+        plans[it["แผนงาน"]] = plans.get(it["แผนงาน"], 0) + it["amount"]
+    meta["plans"] = plans
+    return items, meta
+
+
+def to_rows(items, meta) -> list[list]:
+    """The same table as write_csv, as rows for Store.import_ordinance."""
+    ys = meta["years"] or [0, 0, 0, 0]
+    rows = [["แผนงาน", "งาน", "งบ", "หมวด", "ประเภท", "รายการ", f"ประมาณการ {ys[3]}", "หมายเหตุ",
+             f"รายจ่ายจริง {ys[0]}", f"รายจ่ายจริง {ys[1]}", f"ประมาณการ {ys[2]}", "หน้า", "คำชี้แจง"]]
+    for it in items:
+        rows.append([it["แผนงาน"], it["งาน"], it["งบ"], it["หมวด"], it["ประเภท"], it["รายการ"],
+                     it["amount"], it["หมายเหตุ"], it["y0"], it["y1"], it["y2"], it["หน้า"],
+                     it.get("คำชี้แจง", "")])
+    return rows
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
-    items, meta = parse(a[0], *(int(x) for x in a[2:4]))
-    got = attach_details(items, parse_details(a[0]))
-    print(f"คำชี้แจง {got} / {sum(1 for it in items if it['amount'] > 0)} รายการที่มีงบประมาณ")
+    items, meta = read_ordinance(a[0])
     write_csv(items, meta, a[1])
-    tot = {}
-    for it in items:
-        tot[it["แผนงาน"]] = tot.get(it["แผนงาน"], 0) + it["amount"]
-    for k, v in tot.items():
+    print(f"{meta['agency']} ข้อบัญญัติปี {meta['fy']} · คำชี้แจง {meta['details']} รายการ")
+    for k, v in meta["plans"].items():
         print(f"{k:45s} {v:16,.2f}")
-    print(f"{'รวม ' + str(len(items)) + ' รายการ':45s} {sum(tot.values()):16,.2f}  ปี {meta['years']}")
+    print(f"{'รวม ' + str(len(items)) + ' รายการ':45s} {meta['total']:16,.2f}  (ในเล่มพิมพ์ {meta['total_stated']})")

@@ -2,14 +2,13 @@
 """หน้าจองบประมาณ (ข้อบัญญัติ), จัดซื้อจัดจ้าง และสถิติ."""
 from __future__ import annotations
 
-import re
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from html import escape
 
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
-                               QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+                               QDialogButtonBox, QDoubleSpinBox, QFormLayout,
                                QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton, QSpinBox, QSplitter, QTableWidget,
@@ -145,6 +144,7 @@ class BudgetPage(QWidget):
         self.fy.valueChanged.connect(self.refresh)
         top.addWidget(self.fy)
         self.years = QComboBox()
+        self.years.setMinimumWidth(190)
         self.years.setToolTip(T("ข้อบัญญัติที่มีในโปรแกรม"))
         self.years.activated.connect(lambda i: self.fy.setValue(self.years.itemData(i)))
         top.addWidget(self.years)
@@ -182,7 +182,7 @@ class BudgetPage(QWidget):
         lay.addWidget(split, 1)
         row, _ = _buttons(("เพิ่มรายการ", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete),
                           (None, None), ("โอนงบประมาณ", self.transfer), ("เพิ่ม/ลดงบประมาณ", self.change),
-                          ("ประวัติการโอน", self.history), ("นำเข้าข้อบัญญัติ", self.import_),
+                          ("ประวัติการโอน", self.history), ("อ่านข้อบัญญัติ (PDF)…", self.import_),
                           ("คัดลอกจากปีก่อน", self.copy), ("รายงาน", self.report))
         lay.addLayout(row)
 
@@ -203,7 +203,7 @@ class BudgetPage(QWidget):
                              f"{T('รายการ')} · {T('รวมตามข้อบัญญัติ')} {m(o['amount'])} {T('บาท')}{src}")
         else:
             self.ord.setText(f"<span style='color:{RED}'>ยังไม่มีข้อบัญญัติปีงบประมาณ {fy} — "
-                             "กด «นำเข้าข้อบัญญัติ» หรือ «คัดลอกจากปีก่อน» แล้วแก้ไขให้ตรงข้อบัญญัติปีนี้ "
+                             "กด «อ่านข้อบัญญัติ (PDF)…» หรือ «คัดลอกจากปีก่อน» แล้วแก้ไขให้ตรงข้อบัญญัติปีนี้ "
                              "(แต่ละปีโครงสร้างไม่จำเป็นต้องเหมือนกัน)</span>")
         self.tree.clear()
         self.info.setHtml("")
@@ -435,70 +435,12 @@ class BudgetPage(QWidget):
             self.refresh()
 
     def import_(self):
-        menu = QMenu(self)
-        for y in (2570, 2569):
-            menu.addAction(f"{T('ข้อบัญญัติ อบต.ไม้ขาว ปี')} {y} ({T('ในชุดโปรแกรม')})",
-                           lambda yy=y: self.import_maikhao(yy))
-        menu.addSeparator()
-        menu.addAction(T("จากตารางรายงานประมาณการรายจ่าย (.csv/.xlsx)…"), self.import_ordinance_file)
-        menu.addAction(T("จากตารางทั่วไป 7 คอลัมน์ (.csv/.xlsx)…"), self.import_simple)
-        menu.exec(self.cursor().pos())
-
-    def _ordinance(self, rows, what, **meta):
-        s = self.win.store
-        years = [int(m_) for h in rows[0] for m_ in re.findall(r"ประมาณการ\s*(25\d\d)", str(h))]
-        if not years:
-            return error(self, ValueError("ไม่พบคอลัมน์ «ประมาณการ ปปปป» ในหัวตาราง"))
-        fy = max(years)
-        replace = False
-        if s.budget_items(fy):
-            ans = QMessageBox.question(
-                self, PRODUCT_TH, f"มีงบประมาณปี {fy} อยู่แล้ว\n"
-                "ใช่ = แทนที่ข้อบัญญัติปีนี้ทั้งหมด (รายการที่มีการจัดซื้ออ้างอิงจะลบไม่ได้) · ไม่ใช่ = เพิ่มต่อท้าย",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-            if ans == QMessageBox.Cancel:
-                return
-            replace = ans == QMessageBox.Yes
-        try:
-            got = s.import_ordinance(rows, replace=replace, **meta)
-        except Exception as exc:  # noqa: BLE001
-            return error(self, exc)
-        hist = ", ".join(f"{k} {y}" for k, y in sorted(got["history"], key=lambda x: x[1]))
-        QMessageBox.information(self, PRODUCT_TH, f"{what}\n\nงบประมาณปี {got['fy']}: {got['budget']} รายการ "
-                                f"(ใช้เฉพาะปีนี้)\nตัวเลขอ้างอิงสำหรับเปรียบเทียบหลายปี: {hist or '-'}")
-        self.fy.setValue(got["fy"])
-        self.refresh()
-
-    def import_maikhao(self, year=2570):
-        from pathlib import Path
-
-        from .demo import ORDINANCE_SOURCES
-        path = Path(B.__file__).resolve().parent / "data" / f"maikhao_{year}.csv"
-        self._ordinance(B.read_table(path), f"นำเข้าข้อบัญญัติงบประมาณรายจ่ายประจำปี {year} "
-                        "องค์การบริหารส่วนตำบลไม้ขาว อ.ถลาง จ.ภูเก็ต",
-                        agency="องค์การบริหารส่วนตำบลไม้ขาว", source=ORDINANCE_SOURCES.get(year, ""))
-
-    def import_ordinance_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, T("นำเข้าจากตาราง"), "", "ตาราง (*.xlsx *.csv)")
-        if path:
-            try:
-                rows = B.read_table(path)
-            except Exception as exc:  # noqa: BLE001
-                return error(self, exc)
-            self._ordinance(rows, T("นำเข้าแล้ว"))
-
-    def import_simple(self):
-        path, _ = QFileDialog.getOpenFileName(self, T("นำเข้าจากตาราง"), "",
-                                              "ตาราง (*.xlsx *.csv)")
-        if not path:
-            return
-        try:
-            n = self.win.store.import_budget(self.fy.value(), B.read_table(path))
-        except Exception as exc:  # noqa: BLE001
-            return error(self, exc)
-        QMessageBox.information(self, PRODUCT_TH, f"{T('นำเข้าแล้ว')} {n} {T('รายการ')}\n"
-                                "(คอลัมน์: แผนงาน, งาน, งบ, หมวด, ประเภท, รายการ, จำนวนเงิน, หมายเหตุ)")
-        self.refresh()
+        """อ่านข้อบัญญัติ (PDF หรือตาราง) ของปีงบประมาณที่เลือก แสดงรายการให้ตรวจ แล้วจึงบันทึก."""
+        from .pages_ordinance import OrdinanceDialog
+        dlg = OrdinanceDialog(self, self.fy.value())
+        if dlg.exec():
+            self.fy.setValue(dlg.fy.value())
+            self.refresh()
 
     def copy(self):
         fy = self.fy.value()
