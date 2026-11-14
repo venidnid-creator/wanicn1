@@ -38,6 +38,16 @@ def selftest(out: str) -> int:
     pr.setOutputFormat(QPrinter.PdfFormat)
     pr.setOutputFileName(os.path.join(tmp, "p.pdf"))
     printing.paint_pdf(pr, pymupdf.open(r.pdf))
+    # ปรับลดราคา ว651 · ว124 · ว78: read a bill (.xls needs xlrd) and write the three reports
+    import xlrd  # noqa: F401
+    from readwanicn import procure, procure_report, procure_view  # noqa: F401
+    bill = procure.Project(items=[procure.Item("1 งานทดสอบ", header=True, code="1"),
+                                  procure.Item("1.1 คอนกรีต", "ลบ.ม.", 10, cost=30000, code="1.1", level=2),
+                                  procure.Item("1.2 เหล็ก DB 12 มม.", "กก.", 500, cost=12000, code="1.2", level=2)],
+                           mid_price=55000, offer=50000, months=2, days=60)
+    procure.auto_plan(bill, 2)
+    for kind in ("651", "124", "78"):
+        procure_report.write(kind, bill, os.path.join(tmp, f"r{kind}.pdf"), "Laksaman")
     open(out, "w", encoding="utf-8").write(f"ok 1:{r.ratio}")
     del app
     return 0
