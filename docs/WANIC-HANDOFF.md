@@ -1,13 +1,13 @@
 # บันทึกส่งต่องาน (Handoff) — WANICNSURVEY / ReadWanicn2027
 
 ไฟล์นี้เก็บสถานะงานทั้งหมด เพื่อให้ทำต่อได้ทันทีในรอบใหม่ (เมื่อโทเคนหมดหรือเริ่มเซสชันใหม่)
-อัปเดตล่าสุด: 2026-11-11 · สาขา `claude/youthful-pascal-ctgtr0` · repo `venidnid-creator/wanicn1`
+อัปเดตล่าสุด: 2026-11-14 · สาขาที่ทำงานตอนนี้ `claude/zen-feynman-ptcfng` (นำงานทั้งหมดจาก `claude/youthful-pascal-ctgtr0` ถึง 3c9d27b มาแล้ว — ReadWanicn2027 ทดสอบผ่าน 19/19) · repo `venidnid-creator/wanicn1`
 
 ## กฎที่ผู้ใช้กำหนด (ต้องทำทุกครั้ง)
 - ทุกส่วนใหม่ต้อง **ส่งภาพหน้าจอให้อนุมัติก่อน** สร้าง .exe — commit งานที่ยังไม่อนุมัติด้วย `[skip ci]`
 - เมนูและข้อความทั้งหมดเป็น **ภาษาไทย** (ไม่ใช้ชื่อยี่ห้อ Word/Excel) · ใช้ **ฟอนต์ไทย**
 - หากสงสัยให้ **ถามก่อน** · ตอบผู้ใช้เป็นภาษาไทย
-- ก่อน push: `git fetch origin claude/youthful-pascal-ctgtr0 && git rebase origin/claude/youthful-pascal-ctgtr0`
+- ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
 ## ReadWanicn2027 (โฟลเดอร์ `readwanicn2027/`)
