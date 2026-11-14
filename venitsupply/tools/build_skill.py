@@ -6,7 +6,7 @@
     python3 venitsupply/tools/build_skill.py --check    # exit 1 when SKILL.md is out of date
 
 Fills the blocks between ``<!-- AUTO:name -->`` and ``<!-- /AUTO:name -->``: version, builds, modules,
-data, tests and history. Hand-written text outside the blocks is never touched. Runs from the Stop hook in
+data, tests and release notes. Hand-written text outside the blocks is never touched. Runs from the Stop hook in
 .claude/settings.json and in CI, so the skill follows every update automatically.
 """
 from __future__ import annotations
@@ -14,7 +14,6 @@ from __future__ import annotations
 import ast
 import csv
 import re
-import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -114,17 +113,12 @@ def block_tests() -> str:
 
 
 def block_history() -> str:
-    try:
-        log = subprocess.run(["git", "-C", str(ROOT), "log", "--date=short", "--format=%ad %h %s", "--",
-                              "venitsupply", ".claude/skills/venit-supply"],
-                             capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
-    except (OSError, subprocess.SubprocessError):
-        log = []
+    """Release notes only — a commit log would always be one commit behind the commit that adds it
+    (read it with: git log -- venitsupply)."""
     notes = (APP / "installer" / "release-notes.md").read_text(encoding="utf-8").strip()
-    out = ["## 7. Commit history of venitsupply/ (newest first)", ""]
-    out += [f"- {ln}" for ln in log] if log else ["- (git history not available here)"]
-    out += ["", "## 8. Release notes (venitsupply/installer/release-notes.md)", "", notes]
-    return "\n".join(out)
+    return ("## 7. Release notes (venitsupply/installer/release-notes.md)\n\n"
+            "Commit history: `git log --date=short --format='%ad %h %s' -- venitsupply .claude/skills/venit-supply`"
+            "\n\n" + notes)
 
 
 BLOCKS = {"version": block_version, "builds": block_builds, "modules": block_modules, "data": block_data,

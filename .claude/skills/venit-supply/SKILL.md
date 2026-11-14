@@ -82,7 +82,7 @@ Single-file data: SQLite `.vsdb` (default `Documents\VenitSupply\พัสดุ
 | `venitsupply/venitsupply/widgets.py` | 316 | Shared widgets: Buddhist-era date edit, form dialog, tables, style. | ui_metrics, make_style, pt, px, scrolled, fit_to_screen, ThaiDateEdit(5), FormDialog(3), table, fill, selected_id, need_selection |
 | `venitsupply/venitsupply/xlsx.py` | 70 | Minimal .xlsx writer (no outside library): sheets of text/number rows. | write |
 | `venitsupply/main.py` | 8 | พัสดุเวนิช (VENIT SUPPLY) — start the program. |  |
-| `venitsupply/tools/build_skill.py` | 173 | Regenerate the automatic parts of the «venit-supply» skill and package it. | block_version, block_builds, block_modules, block_data, block_tests, block_history, render, package, main |
+| `venitsupply/tools/build_skill.py` | 167 | Regenerate the automatic parts of the «venit-supply» skill and package it. | block_version, block_builds, block_modules, block_data, block_tests, block_history, render, package, main |
 
 Other files: `venitsupply/packaging/venitsupply.spec`, `venitsupply/installer/venitsupply.iss`, `venitsupply/installer/release-notes.md`, `venitsupply/requirements.txt`, `venitsupply/HANDOFF.md`, `.github/workflows/venitsupply-windows.yml`, assets in `venitsupply/assets/`.
 <!-- /AUTO:modules -->
@@ -197,23 +197,9 @@ Tests (`venitsupply/tests/`):
 5. Optional: a card for VENIT SUPPLY on the WANICNSURVEY 2027 start screen.
 
 <!-- AUTO:history -->
-## 7. Commit history of venitsupply/ (newest first)
+## 7. Release notes (venitsupply/installer/release-notes.md)
 
-- 2026-11-14 4596a8a VENIT SUPPLY: the venit-supply skill, regenerated automatically
-- 2026-11-13 1bee9e7 VENIT SUPPLY: record the 2026.11.13.5 installer build [skip ci]
-- 2026-11-13 890b48d VENIT SUPPLY 2026.11.13.5: budget colour bands, automatic asset/stock registration
-- 2026-11-13 8c4084a VENIT SUPPLY: record the 2026.11.13.4 installer build [skip ci]
-- 2026-11-13 48352fc VENIT SUPPLY 2026.11.13.4: fit every screen; bigger text and year boxes
-- 2026-11-13 79ce5c1 VENIT SUPPLY: record the first installer build [skip ci]
-- 2026-11-13 68b3232 VENIT SUPPLY: Windows installer build (test artifact, no release)
-- 2026-11-13 8c81fdb VENIT SUPPLY: name the ordinance button นำเข้าข้อบัญญัติ [skip ci]
-- 2026-11-13 f85e8e7 VENIT SUPPLY: read an ordinance PDF inside the program and review before saving [skip ci]
-- 2026-11-13 e832821 VENIT SUPPLY: each fiscal year uses its own ordinance; show explanations [skip ci]
-- 2026-11-13 bd11c3b VENIT SUPPLY: Mai Khao SAO 2570 budget ordinance bundled and importable [skip ci]
-- 2026-11-13 4d3fbc5 VENIT SUPPLY: budget by local ordinance, procurement linked to budget, statistics [skip ci]
-- 2026-11-13 54bd58c VENIT SUPPLY: new government supply management program [skip ci]
-
-## 8. Release notes (venitsupply/installer/release-notes.md)
+Commit history: `git log --date=short --format='%ad %h %s' -- venitsupply .claude/skills/venit-supply`
 
 # พัสดุเวนิช (VENIT SUPPLY) 2026.11.13.5 (ทดสอบ)
 
