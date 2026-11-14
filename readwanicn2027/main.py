@@ -60,6 +60,8 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(QIcon(asset("logo.ico")))
     app.setStyleSheet(themes.stylesheet(themes.DEFAULT))
+    from readwanicn import fit
+    fit.install(app)                         # every window fits the screen it opens on
     WelcomeScreen().show_for(2200)
     login = LoginDialog()
     if login.exec() != QDialog.Accepted:

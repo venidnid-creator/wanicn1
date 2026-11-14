@@ -938,6 +938,8 @@ class Plan124:
     acc_actual: list = field(default_factory=list)
     diff: list = field(default_factory=list)         # % ACC ACTUAL − % ACC PLAN
     labels: list = field(default_factory=list)       # calendar month of each plan month
+    forecast: list = field(default_factory=list)     # % ACC ACTUAL as entered, then on to 100 % by the plan
+    last_actual: int = -1                            # index of the last month with an actual
 
 
 def compute_124(p: Project) -> Plan124:
@@ -977,9 +979,25 @@ def compute_124(p: Project) -> Plan124:
             s_ += v
             acc_act.append(s_)
             diff.append(s_ - accp[m])
+    # the second line of the chart: the work done so far, then the rest finished as planned
+    last = max((m for m, v in enumerate(act) if v is not None), default=-1)
+    fc = list(accp)
+    if last >= 0:
+        done, planned = acc_act[last], accp[last]
+        left, plan_left = 100.0 - done, 100.0 - planned
+        run = done
+        fc = [acc_act[m] if acc_act[m] is not None else None for m in range(last + 1)]
+        rest = months - last - 1
+        for m in range(last + 1, months):
+            share = pct[m] / plan_left if plan_left > 1e-9 else 1.0 / rest
+            run += left * share
+            fc.append(run)
+        for m in range(last + 1):                   # a month left blank inside the entered ones
+            if fc[m] is None:
+                fc[m] = fc[m - 1] if m else 0.0
     return Plan124(months=months, days=days, lines=lines, money=money, acc_money=acc, pct_plan=pct,
                    acc_plan=accp, total=total, bad_lines=bad, checks=checks, actual=act, acc_actual=acc_act,
-                   diff=diff, labels=month_labels(p.start, months))
+                   diff=diff, labels=month_labels(p.start, months), forecast=fc, last_actual=last)
 
 
 # -- ว78 ------------------------------------------------------------------------------------------

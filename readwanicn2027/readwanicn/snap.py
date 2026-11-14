@@ -47,6 +47,9 @@ class Snapper:
     def __init__(self, page: pymupdf.Page):
         m = page.rotation_matrix
         self.segs: list[tuple[float, float, float, float]] = []
+        self.straight: list[bool] = []                 # False for the pieces of curves
+        #: closed shapes of the drawing for «อ่านรูปทรง»: ("circle", (cx, cy, r)) or ("poly", [pts])
+        self.shapes: list = []
         self.ends: list[tuple[float, float]] = []     # true end points (not the inner points of curves)
         self.centres: list[tuple[float, float]] = []
 
@@ -61,6 +64,7 @@ class Snapper:
             if path.get("type") == "f" and path.get("rect") is not None and \
                     pymupdf.Rect(path["rect"]).height < 40:
                 continue                         # filled shapes this small are letters, not lines
+            self._closed_shape(path, P, m)
             for item in path["items"]:
                 op = item[0]
                 if op == "l":
@@ -79,7 +83,7 @@ class Snapper:
                 elif op == "c":
                     pts = [P(p) for p in _bezier(*item[1:5])]
                     for a, b in zip(pts, pts[1:]):
-                        self._add(a, b, False)
+                        self._add(a, b, False, straight=False)
                     self.ends += [pts[0], pts[-1]]
                 if len(self.segs) > MAX_SEGMENTS:
                     break
@@ -100,10 +104,87 @@ class Snapper:
             for p in pts:
                 self.points[(int(p[0] // CELL), int(p[1] // CELL))].append((p, kind))
 
-    def _add(self, a, b, ends):
+    def _closed_shape(self, path, P, m):
+        items = path.get("items") or []
+        if not items:
+            return
+        if all(it[0] == "c" for it in items) and path.get("rect") is not None:
+            r = pymupdf.Rect(path["rect"]) * m
+            if r.width > 1 and abs(r.width - r.height) < 0.08 * max(r.width, r.height):
+                self.shapes.append(("circle", ((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2, (r.width + r.height) / 4)))
+            return
+        for it in items:
+            if it[0] == "re":
+                rr = it[1]
+                self.shapes.append(("poly", [P(rr.tl), P(rr.tr), P(rr.br), P(rr.bl)]))
+            elif it[0] == "qu":
+                q = it[1]
+                self.shapes.append(("poly", [P(q.ul), P(q.ur), P(q.lr), P(q.ll)]))
+        lines = [it for it in items if it[0] == "l"]
+        if len(lines) >= 3 and len(lines) == len(items):
+            pts = [P(lines[0][1])] + [P(it[2]) for it in lines]
+            closed = path.get("closePath") or math.dist(pts[0], pts[-1]) < 0.5
+            joined = all(math.dist(P(a[2]), P(b[1])) < 0.5 for a, b in zip(lines, lines[1:]))
+            if closed and joined:
+                if math.dist(pts[0], pts[-1]) < 0.5:
+                    pts = pts[:-1]
+                self.shapes.append(("poly", pts))
+
+    def shape_at(self, pt):
+        """The smallest closed shape of the drawing around ``pt``: ("circle", [centre, edge]) or
+        ("rect"/"tri"/"poly", [corners]). Without a closed path, the rectangle bounded by the
+        nearest horizontal and vertical lines around the point (separate lines drawn by CAD)."""
+        x, y = pt
+        best = None
+        for kind, data in self.shapes:
+            if kind == "circle":
+                cx, cy, r = data
+                if math.hypot(x - cx, y - cy) <= r:
+                    area = math.pi * r * r
+                    cand = ("circle", [(cx, cy), (cx + r, cy)], area)
+                else:
+                    continue
+            else:
+                if not _inside(data, x, y):
+                    continue
+                area = abs(_area(data))
+                cand = (_name(data), list(data), area)
+            if area > 0.5 and (best is None or area < best[2]):
+                best = cand
+        ray = self._ray_rect(x, y)
+        if ray and (best is None or ray[2] < best[2] * 0.98):
+            best = ray
+        return (best[0], best[1]) if best else None
+
+    def _ray_rect(self, x, y, reach=4000.0):
+        """Nearest vertical line left and right, horizontal line above and below (diagonal hatching
+        and the pieces of circles are ignored)."""
+        left = right = up = down = None
+        for i, (x0, y0, x1, y1) in enumerate(self.segs):
+            if not self.straight[i]:
+                continue
+            if abs(x0 - x1) < 0.3 and min(y0, y1) - 0.3 <= y <= max(y0, y1) + 0.3:
+                d = x0 - x
+                if 0.3 < d < reach and (right is None or d < right):
+                    right = d
+                elif -reach < d < -0.3 and (left is None or -d < left):
+                    left = -d
+            elif abs(y0 - y1) < 0.3 and min(x0, x1) - 0.3 <= x <= max(x0, x1) + 0.3:
+                d = y0 - y
+                if 0.3 < d < reach and (down is None or d < down):
+                    down = d
+                elif -reach < d < -0.3 and (up is None or -d < up):
+                    up = -d
+        if None in (left, right, up, down):
+            return None
+        x0, x1, y0, y1 = x - left, x + right, y - up, y + down
+        return ("rect", [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], (x1 - x0) * (y1 - y0))
+
+    def _add(self, a, b, ends, straight=True):
         if a == b:
             return
         self.segs.append((a[0], a[1], b[0], b[1]))
+        self.straight.append(straight)
         if ends:
             self.ends += [a, b]
 
@@ -157,6 +238,30 @@ class Snapper:
         pool = best_pt or cands
         pool.sort(key=lambda c: (c[1] > tol * 0.6, c[0], c[1]))
         return pool[0][2]
+
+
+def _area(pts) -> float:
+    return sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2.0
+
+
+def _inside(pts, x, y) -> bool:
+    inside = False
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def _name(pts) -> str:
+    if len(pts) == 3:
+        return "tri"
+    if len(pts) == 4:
+        (ax, ay), (bx, by), (cx, cy), (dx, dy) = pts
+        v = [(bx - ax, by - ay), (cx - bx, cy - by), (dx - cx, dy - cy), (ax - dx, ay - dy)]
+        if all(abs(v[i][0] * v[i + 1][0] + v[i][1] * v[i + 1][1]) < 1e-3 *
+               (math.hypot(*v[i]) * math.hypot(*v[i + 1]) or 1) for i in range(3)):
+            return "rect"
+    return "poly"
 
 
 def _cross(s, t):

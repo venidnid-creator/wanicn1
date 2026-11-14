@@ -428,11 +428,12 @@ class SheetEditor(QWidget):
         return b
 
     def _ribbon(self):
+        from .fit import FlowLayout
         bar = QFrame()
         bar.setObjectName("ToolRow")
         col = QVBoxLayout(bar)
         col.setContentsMargins(6, 4, 6, 4)
-        row = QHBoxLayout()
+        row = FlowLayout(None, 0, 2, 2)
         for text, tip, fn in (("📄 ใหม่", "ตารางเปล่า", self.new),
                               ("📂 เปิด", "เปิดตารางคำนวณ (.xlsx) หรือตารางข้อมูล (.csv)", self.open),
                               ("💾 บันทึก", "บันทึกเป็นตารางคำนวณ (.xlsx)", self.save),
@@ -450,7 +451,7 @@ class SheetEditor(QWidget):
         row.addWidget(self.reg)
         row.addStretch(1)
         col.addLayout(row)
-        row = QHBoxLayout()
+        row = FlowLayout(None, 0, 2, 2)
         b = self._tool("ห", "ตัวหนา", lambda on: self._style(bold=on), True)
         b.setStyleSheet("font-weight:bold;")
         row.addWidget(b)

@@ -303,10 +303,23 @@ class CombineDialog(QDialog):
 
 
 class CompressDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, pages: int = 0, selected: int = 0, files: int = 1, on_all_pages=None):
         super().__init__(parent)
         self.setWindowTitle("บีบอัดไฟล์ PDF")
         lay = QVBoxLayout(self)
+        from PySide6.QtWidgets import QCheckBox
+        self.all_pages = QCheckBox(f"เลือกทุกแผ่น (ทั้ง {pages:,} หน้า)")
+        self.all_pages.setChecked(True)
+        self.all_pages.setToolTip("ติ๊กไว้ = บีบอัดทุกแผ่นของไฟล์ (โปรแกรมเลือกทุกหน้าให้)\n"
+                                  f"ไม่ติ๊ก = บีบอัดเฉพาะหน้าที่เลือกในแผง «หน้า» ({selected:,} หน้า) เป็นไฟล์ใหม่")
+        if on_all_pages:
+            self.all_pages.toggled.connect(on_all_pages)
+            on_all_pages(True)
+        lay.addWidget(self.all_pages)
+        self.all_files = QCheckBox(f"บีบอัดทุกไฟล์ที่เปิดอยู่ ({files:,} ไฟล์) — บันทึกลงโฟลเดอร์เดียวกัน")
+        self.all_files.setVisible(files > 1)
+        self.all_files.toggled.connect(lambda on: self.all_pages.setEnabled(not on))
+        lay.addWidget(self.all_files)
         lay.addWidget(QLabel("เลือกระดับคุณภาพ:"))
         self.group = QButtonGroup(self)
         for key, (label, dpi, q) in pdfops.QUALITIES.items():
@@ -561,9 +574,10 @@ class MainWindow(QMainWindow):
 
     # -- building
     def _top_bar(self):
+        from .fit import FlowLayout
         bar = QFrame()
         bar.setObjectName("TopBar")
-        lay = QHBoxLayout(bar)
+        lay = FlowLayout(bar, 0, 6, 4)
         lay.setContentsMargins(10, 6, 10, 6)
         self.menu_btn = QPushButton("☰ เมนู")
         self.menu_btn.setToolTip("ซ่อน/แสดงแถบเครื่องมือ")
@@ -572,7 +586,10 @@ class MainWindow(QMainWindow):
         logo = QLabel()
         logo.setPixmap(logo_pixmap(44))
         lay.addWidget(logo)
-        col = QVBoxLayout()
+        titles = QWidget()
+        titles.setStyleSheet("background:transparent;")
+        col = QVBoxLayout(titles)
+        col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
         t = QLabel(APP_NAME)
         t.setObjectName("Title")
@@ -580,8 +597,7 @@ class MainWindow(QMainWindow):
         self.subtitle = QLabel("ยังไม่ได้เปิดไฟล์")
         self.subtitle.setObjectName("Subtitle")
         col.addWidget(self.subtitle)
-        lay.addLayout(col)
-        lay.addStretch(1)
+        lay.addWidget(titles)
         self.stats = QLabel("📊 ดาวน์โหลดสะสม — ")
         self.stats.setToolTip("จำนวนครั้งที่ดาวน์โหลดตัวติดตั้งจากหน้า Releases")
         lay.addWidget(self.stats)
@@ -614,19 +630,20 @@ class MainWindow(QMainWindow):
         return bar
 
     def _row(self, buttons):
+        """A tool row that wraps onto a second line when the window is narrow (never past its edge)."""
+        from .fit import FlowLayout
         row = QFrame()
         row.setObjectName("ToolRow")
-        lay = QHBoxLayout(row)
+        lay = FlowLayout(row, 0, 2, 2)
         lay.setContentsMargins(8, 2, 8, 2)
-        lay.setSpacing(2)
         for b in buttons:
             if b is None:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.VLine)
+                sep.setFixedHeight(40)
                 lay.addWidget(sep)
             else:
                 lay.addWidget(b)
-        lay.addStretch(1)
         return row
 
     def _file_row(self):
@@ -668,6 +685,19 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self.set_tool(k))
             self.tool_buttons[key] = b
             buttons.append(b)
+        from PySide6.QtWidgets import QMenu
+        self.shape_btn = _button("รูปทรง ▾", "⬚", "เมนูรูปทรงยึดตามเส้นแบบ: สี่เหลี่ยม · วงกลม · สามเหลี่ยม · "
+                                 "อ่านรูปทรงจากแบบ (คลิกในรูปแล้วอ่านขนาดให้ทันที)", checkable=True)
+        menu = QMenu(self.shape_btn)
+        self.shape_names = {"auto": ("อ่านรูปทรงจากแบบ (คลิกในรูป)", "🎯"), "rect": ("สี่เหลี่ยม", "▭"),
+                            "circle": ("วงกลม", "◯"), "tri": ("สามเหลี่ยม", "△")}
+        for key, (name, icon) in self.shape_names.items():
+            act = menu.addAction(f"{icon}  {name}")
+            act.setToolTip(TOOLS[key])
+            act.triggered.connect(lambda _=False, k=key: self.set_tool(k))
+        self.shape_btn.setMenu(menu)
+        self.shape_btn.setPopupMode(QToolButton.InstantPopup)
+        buttons.append(self.shape_btn)
         self.snap_btn = _button("ยึดจุด", "🧲", "ยึดจุดปลาย จุดกึ่งกลาง จุดตัด จุดศูนย์กลาง และบนเส้นของแบบ\n"
                                 "เปิด/ปิด: F3 · กด Shift ค้างไว้ = คลิกอิสระชั่วคราว", checkable=True)
         self.snap_btn.setChecked(True)
@@ -752,6 +782,9 @@ class MainWindow(QMainWindow):
         self.scroll.setAlignment(Qt.AlignCenter)
         self.canvas = PdfCanvas()
         self.canvas.finished.connect(self.add_measurement)
+        self.canvas.shapeFinished.connect(self.add_shape)
+        self.canvas.shapeMissed.connect(lambda: self.status.showMessage(
+            "ไม่พบรูปปิดรอบจุดที่คลิก — ลองคลิกให้อยู่ภายในเส้นขอบ หรือใช้ สี่เหลี่ยม/วงกลม/สามเหลี่ยม", 6000))
         self.canvas.calibrate.connect(self.calibrate)
         self.canvas.zoomRequested.connect(self.zoom_by)
         self.canvas.panBy.connect(self._pan)
@@ -766,7 +799,8 @@ class MainWindow(QMainWindow):
         w3 = QWidget()
         l3 = QVBoxLayout(w3)
         l3.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
+        from .fit import FlowLayout
+        row = FlowLayout(None, 0, 4, 4)
         for text, fn in (("📂 เปิดโมเดล (.stl .obj)", self.open_model), ("⟲ หมุนซ้าย", lambda: self.model.rotate(-15)),
                          ("⟳ หมุนขวา", lambda: self.model.rotate(15)), ("⏯ หมุนอัตโนมัติ", self.toggle_spin),
                          ("⌂ มุมมองเริ่มต้น", lambda: self.model.reset_view())):
@@ -783,9 +817,15 @@ class MainWindow(QMainWindow):
         from .docedit import DocEditor
         from .sheet import SheetEditor
         self.doc_editor = DocEditor(asset, self.usage.record)
-        self.tabs.addTab(self.doc_editor, "สร้างเอกสาร")
         self.sheet = SheetEditor(self.doc_editor.family, self.usage.record)
-        self.tabs.addTab(self.sheet, "ตารางคำนวณ")
+        self.office_tabs = []
+        for widget, name in ((self.doc_editor, "สร้างเอกสาร"), (self.sheet, "ตารางคำนวณ")):
+            wrap = QScrollArea()                    # a small screen scrolls the tab, not past the window
+            wrap.setWidgetResizable(True)
+            wrap.setFrameShape(QFrame.NoFrame)
+            wrap.setWidget(widget)
+            self.office_tabs.append(wrap)
+            self.tabs.addTab(wrap, name)
         self.tabs.currentChanged.connect(self._tab_changed)
         return self.tabs
 
@@ -795,7 +835,7 @@ class MainWindow(QMainWindow):
         outer = QScrollArea()
         outer.setWidgetResizable(True)
         outer.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        outer.setMinimumWidth(320)
+        outer.setMinimumWidth(240)
         outer.setWidget(w)
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 6, 8, 6)
@@ -857,7 +897,7 @@ class MainWindow(QMainWindow):
     def _tab_changed(self, i):
         """The office tabs want the width: the file and measuring panels and the PDF tool rows go away there."""
         self.usage.record(f"เปิดแท็บ {self.tabs.tabText(i)}")
-        office = self.tabs.widget(i) in (getattr(self, "doc_editor", None), getattr(self, "sheet", None))
+        office = self.tabs.widget(i) in getattr(self, "office_tabs", [])
         for w in (self.left, self.right, self.tool_rows):
             w.setVisible(not office)
 
@@ -1042,23 +1082,63 @@ class MainWindow(QMainWindow):
         f = self._need()
         if not f:
             return
-        dlg = CompressDialog(self)
+        pdfs = [x for x in self.files if x.doc is not None]
+        selected = sorted({i.row() for i in self.page_list.selectedIndexes()}) or [f.page]
+
+        def all_pages(on):                          # the «หน้า» panel shows what will be compressed
+            self.page_list.clearSelection()
+            if on:
+                self.page_list.selectAll()
+            else:
+                for r in selected:
+                    it = self.page_list.item(r)
+                    if it:
+                        it.setSelected(True)
+        dlg = CompressDialog(self, f.doc.page_count, len(selected), len(pdfs), all_pages)
         if dlg.exec() != QDialog.Accepted:
             return
         level = dlg.level()
         name = {"high": "สูง", "medium": "กลาง", "low": "ต่ำ"}[level]
-        path = self._save_path("บันทึกไฟล์ที่บีบอัด", f"{Path(f.path).stem}-บีบอัด{name}.pdf", "PDF (*.pdf)")
+        if dlg.all_files.isChecked():
+            folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์สำหรับไฟล์ที่บีบอัด", self._dir())
+            if not folder:
+                return
+            lines, before, after = [], 0, 0
+            for x in pdfs:
+                out = str(Path(folder) / f"{Path(x.path).stem}-บีบอัด{name}.pdf")
+                r = self._compress_one(x, out, level, None)
+                before, after = before + r.before, after + r.after
+                lines.append(f"{Path(out).name}: {r.before / 1024:,.0f} → {r.after / 1024:,.0f} KB")
+            saved = (1 - after / before) * 100 if before else 0
+            QMessageBox.information(self, "บีบอัดไฟล์", f"บีบอัด {len(pdfs)} ไฟล์ · รวม {before / 1024:,.0f} KB → "
+                                    f"{after / 1024:,.0f} KB (เล็กลง {saved:.1f}%)\n\n" + "\n".join(lines))
+            return
+        pages = None if dlg.all_pages.isChecked() else selected
+        suffix = "" if pages is None else f"-{len(pages)}หน้า"
+        path = self._save_path("บันทึกไฟล์ที่บีบอัด", f"{Path(f.path).stem}-บีบอัด{name}{suffix}.pdf", "PDF (*.pdf)")
         if not path:
             return
+        r = self._compress_one(f, path, level, pages)
+        QMessageBox.information(self, "บีบอัดไฟล์", f"ก่อน {r.before / 1024:,.0f} KB → หลัง {r.after / 1024:,.0f} KB "
+                                f"(เล็กลง {r.saved_percent:.1f}%)\n{path}")
+
+    def _compress_one(self, f, path, level, pages):
         src = f.path
-        if f.dirty:
+        if f.dirty or pages is not None or not str(f.path).lower().endswith(".pdf"):
             src = path + ".src.pdf"
-            f.doc.save(src)
+            if pages is None:
+                f.doc.save(src)
+            else:                                   # only the pages chosen in the «หน้า» panel
+                import pymupdf
+                part = pymupdf.open()
+                for p in pages:
+                    part.insert_pdf(f.doc, from_page=p, to_page=p)
+                part.save(src)
+                part.close()
         r = pdfops.compress(src, path, level)
         if src != f.path:
             os.remove(src)
-        QMessageBox.information(self, "บีบอัดไฟล์", f"ก่อน {r.before / 1024:,.0f} KB → หลัง {r.after / 1024:,.0f} KB "
-                                f"(เล็กลง {r.saved_percent:.1f}%)\n{path}")
+        return r
 
     def delete_pages(self):
         f = self._need()
@@ -1146,9 +1226,15 @@ class MainWindow(QMainWindow):
     def set_tool(self, key):
         if key != getattr(self.canvas, "tool", None) and hasattr(self, "usage") and key != "pan":
             self.usage.record({"scale": "ตั้งสเกล", "length": "วัดความยาว", "area": "คิดพื้นที่",
-                               "count": "นับจำนวน", "edit": "แก้ไขข้อความและรูปภาพ"}.get(key, key))
+                               "count": "นับจำนวน", "edit": "แก้ไขข้อความและรูปภาพ", "rect": "รูปทรงสี่เหลี่ยม",
+                               "circle": "รูปทรงวงกลม", "tri": "รูปทรงสามเหลี่ยม",
+                               "auto": "อ่านรูปทรงจากแบบ"}.get(key, key))
         for k, b in self.tool_buttons.items():
             b.setChecked(k == key)
+        if hasattr(self, "shape_btn"):
+            self.shape_btn.setChecked(key in self.shape_names)
+            name, icon = self.shape_names.get(key, ("รูปทรง", "⬚"))
+            self.shape_btn.setText(f"{icon}\n{name.split(' (')[0]} ▾" if key in self.shape_names else "⬚\nรูปทรง ▾")
         self.canvas.set_tool(key)
         self.status.showMessage(TOOLS[key])
         self.canvas.setFocus()
@@ -1179,6 +1265,17 @@ class MainWindow(QMainWindow):
         self.refresh_table()
         self.status.showMessage(f"{measure.KINDS[kind]}: {m.text()}", 6000)
 
+    def add_shape(self, shape, points):
+        """A shape from the «รูปทรง» menu: an area with its size (กว้าง × ยาว, Ø, sides)."""
+        if not self.current:
+            return
+        m = measure.Measurement("area", self.current.page, [tuple(p) for p in points], self.scale,
+                                self.item_name.text().strip(), self.current.name, shape=shape)
+        self.current.measurements.append(m)
+        self.canvas.update()
+        self.refresh_table()
+        self.status.showMessage(f"{measure.SHAPES.get(shape, 'รูปทรง')}: {m.text()}", 10000)
+
     def all_measurements(self):
         return [m for f in self.files for m in f.measurements]
 
@@ -1186,7 +1283,8 @@ class MainWindow(QMainWindow):
         items = self.current.measurements if self.current else []
         self.table.setRowCount(len(items))
         for r, m in enumerate(items):
-            for c, v in enumerate((str(m.page + 1), measure.KINDS[m.kind], m.name or "-", m.text())):
+            kind = measure.SHAPES.get(m.shape, measure.KINDS[m.kind])
+            for c, v in enumerate((str(m.page + 1), kind, m.name or "-", m.text())):
                 self.table.setItem(r, c, QTableWidgetItem(v))
         t = measure.totals(self.all_measurements())
         if any(t.values()):
@@ -1237,7 +1335,7 @@ class MainWindow(QMainWindow):
             return
         data = {"app": APP_NAME, "version": VERSION, "files": [
             {"path": f.path, "measurements": [
-                {"kind": m.kind, "page": m.page, "points": m.points, "name": m.name,
+                {"kind": m.kind, "page": m.page, "points": m.points, "name": m.name, "shape": m.shape,
                  "m_per_pt": m.scale.m_per_pt, "scale": m.scale.label} for m in f.measurements]}
             for f in self.files if f.measurements]}
         Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1253,7 +1351,7 @@ class MainWindow(QMainWindow):
             for m in entry["measurements"]:
                 f.measurements.append(measure.Measurement(
                     m["kind"], m["page"], [tuple(p) for p in m["points"]],
-                    measure.Scale(m["m_per_pt"], m["scale"]), m.get("name", ""), f.name))
+                    measure.Scale(m["m_per_pt"], m["scale"]), m.get("name", ""), f.name, m.get("shape", "")))
         self.select_file(self.file_list.currentRow())
 
     # -- snapping, drawings from CAD, printing

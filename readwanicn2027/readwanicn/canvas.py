@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 from .measure import Measurement
-from .snap import KINDS as SNAP_KINDS, Snapper
+from .snap import KINDS as SNAP_KINDS, Snapper, _area
 
 #: Screen pixels per PDF point at 100 % (a PDF point is 1/72 inch, a screen 96 dpi).
 PX_PER_PT = 96.0 / 72.0
@@ -20,11 +20,23 @@ TOOLS = {
     "length": "วัดความยาว: คลิกทีละจุด · ดับเบิลคลิกหรือ Enter = จบเส้น · Esc = ยกเลิก",
     "area": "คิดพื้นที่: คลิกรอบรูป · ดับเบิลคลิกหรือ Enter = ปิดรูป · Esc = ยกเลิก",
     "count": "นับจำนวน: คลิกทุกจุดที่ต้องการนับ · Enter = จบชุด · Esc = ยกเลิก",
+    "rect": "รูปทรงสี่เหลี่ยม: คลิกมุมหนึ่ง แล้วคลิกมุมตรงข้าม (ยึดจุดตามเส้นแบบ) → กว้าง × ยาว · พื้นที่ · รอบรูป",
+    "circle": "รูปทรงวงกลม: คลิกจุดศูนย์กลาง แล้วคลิกบนเส้นรอบวง → เส้นผ่านศูนย์กลาง · พื้นที่ · รอบรูป",
+    "tri": "รูปทรงสามเหลี่ยม: คลิก 3 มุม → ความยาวด้าน · พื้นที่ · รอบรูป",
+    "auto": "อ่านรูปทรงจากแบบ: คลิกภายในรูป (สี่เหลี่ยม วงกลม สามเหลี่ยม หรือรูปปิด) "
+            "โปรแกรมหาขอบตามเส้นในแบบและอ่านขนาดให้ทันที",
     "edit": "แก้ไขข้อความและรูปภาพ: คลิกที่ข้อความเพื่อแก้ · คลิกที่รูปเพื่อเปลี่ยน/ลบ · "
             "คลิกที่ว่างเพื่อเพิ่มข้อความหรือรูป",
 }
 COLORS = {"length": QColor("#F59E0B"), "area": QColor("#22C55E"), "count": QColor("#EF4444"),
-          "scale": QColor("#38BDF8")}
+          "scale": QColor("#38BDF8"), "rect": QColor("#A855F7"), "circle": QColor("#A855F7"),
+          "tri": QColor("#A855F7"), "auto": QColor("#A855F7")}
+SHAPE_TOOLS = ("rect", "circle", "tri", "auto")
+MEASURE_TOOLS = ("scale", "length", "area", "count") + SHAPE_TOOLS
+
+
+def rect_corners(a, b) -> list:
+    return [a, (b[0], a[1]), b, (a[0], b[1])]
 
 
 class PdfCanvas(QWidget):
@@ -33,6 +45,8 @@ class PdfCanvas(QWidget):
     zoomRequested = Signal(float)         # factor
     panBy = Signal(float, float)
     editAt = Signal(float, float)         # a click of the edit tool (PDF points, displayed page)
+    shapeFinished = Signal(str, list)     # rect / circle / tri / poly, points (circle: centre, edge)
+    shapeMissed = Signal()                # «อ่านรูปทรง» found no shape around the click
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -80,7 +94,7 @@ class PdfCanvas(QWidget):
     def _snap(self, pt, modifiers):
         """The clicked/hovered point after snapping, and remember what it snapped to."""
         self.snap_hit = None
-        if not self.snap_on or self.tool not in ("scale", "length", "area", "count") \
+        if not self.snap_on or self.tool not in MEASURE_TOOLS or self.tool == "auto" \
                 or modifiers & Qt.ShiftModifier or self.doc is None:
             return pt
         sn = self.snapper()
@@ -143,7 +157,25 @@ class PdfCanvas(QWidget):
         if self.tool == "edit":
             self.editAt.emit(*pt)
             return
+        if self.tool == "auto":
+            sn = self.snapper()
+            found = sn.shape_at(pt) if sn else None
+            if found:
+                self.shapeFinished.emit(found[0], found[1])
+            else:
+                self.shapeMissed.emit()
+            self.update()
+            return
         self.points.append(pt)
+        need = {"rect": 2, "circle": 2, "tri": 3}.get(self.tool)
+        if need and len(self.points) == need:
+            pts = rect_corners(*self.points) if self.tool == "rect" else list(self.points)
+            self.points = []
+            if (self.tool == "circle" and math.dist(*pts) > 0.2) or \
+                    (self.tool != "circle" and abs(_area(pts)) > 0.2):
+                self.shapeFinished.emit(self.tool, pts)
+            self.update()
+            return
         if self.tool == "scale" and len(self.points) == 2:
             d = math.dist(*self.points)
             self.points = []
@@ -228,14 +260,22 @@ class PdfCanvas(QWidget):
         p.setFont(f)
         for m in self.measurements:
             if m.page == self.page_no:
-                self._draw(p, m.kind, m.points, m.text(), m.name)
+                if getattr(m, "shape", ""):
+                    self._draw_shape(p, m.shape, m.points, m.text(), m.name)
+                else:
+                    self._draw(p, m.kind, m.points, m.text(), m.name)
         if self.tool == "edit" and self._hover:
             x0, y0, x1, y1 = self._hover
             a, b = self.to_px((x0, y0)), self.to_px((x1, y1))
             p.setPen(QPen(QColor("#1F6FEB"), 1.6, Qt.DashLine))
             p.setBrush(QColor(31, 111, 235, 40))
             p.drawRect(QRectF(a, b).normalized().adjusted(-2, -2, 2, 2))
-        if self.points:
+        if self.points and self.tool in ("rect", "circle", "tri"):
+            pts = list(self.points) + ([self.cursor_pt] if self.cursor_pt is not None else [])
+            if self.tool == "rect" and len(pts) == 2:
+                pts = rect_corners(*pts)
+            self._draw_shape(p, self.tool if len(pts) > 1 else "poly", pts, "", "", live=True)
+        elif self.points:
             pts = list(self.points)
             if self.cursor_pt is not None and self.tool != "count":
                 pts.append(self.cursor_pt)
@@ -273,6 +313,36 @@ class PdfCanvas(QWidget):
         p.drawRoundedRect(box, 3, 3)
         p.setPen(QColor("white"))
         p.drawText(box, Qt.AlignCenter, label)
+
+    def _draw_shape(self, p, shape, pts, label, name, live=False):
+        color = QColor("#A855F7")
+        p.setPen(QPen(color, 2.4, Qt.DashLine if live else Qt.SolidLine))
+        fill = QColor(color)
+        fill.setAlpha(50)
+        p.setBrush(fill)
+        if shape == "circle" and len(pts) >= 2:
+            c = self.to_px(pts[0])
+            r = math.dist(pts[0], pts[1]) * PX_PER_PT * self.zoom
+            p.drawEllipse(c, r, r)
+            p.setPen(QPen(color, 1.4, Qt.DashLine))
+            p.drawLine(c, self.to_px(pts[1]))
+            anchor = self.to_px(pts[1])
+        else:
+            px = [self.to_px(q) for q in pts]
+            if len(px) >= 3:
+                p.drawPolygon(QPolygonF(px))
+            elif len(px) == 2:
+                p.drawLine(px[0], px[1])
+            anchor = max(px, key=lambda q: (q.x(), -q.y())) if px else None
+        if anchor is not None and label:
+            text = f"{name}: {label}" if name else label
+            r = p.fontMetrics().boundingRect(text)
+            box = QRectF(anchor.x() + 8, anchor.y() - r.height() - 10, r.width() + 12, r.height() + 6)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(88, 28, 135, 230))
+            p.drawRoundedRect(box, 4, 4)
+            p.setPen(QColor("white"))
+            p.drawText(box, Qt.AlignCenter, text)
 
     def _draw(self, p, kind, pts, label, name, live=False):
         color = COLORS.get(kind, QColor("#F59E0B"))

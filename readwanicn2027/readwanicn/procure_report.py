@@ -168,7 +168,7 @@ def to_pdf(rep: Report, path, family: str) -> None:
     writer.setTitle(rep.title)
     writer.setCreator("ReadWanicn2027")
     orient = QPageLayout.Landscape if rep.landscape else QPageLayout.Portrait
-    writer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), orient, QMarginsF(12, 12, 10, 12),
+    writer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), orient, QMarginsF(12, 12, 10, MARGIN_BOTTOM_MM),
                                      QPageLayout.Millimeter))
     doc = QTextDocument()
     doc.setDefaultFont(QFont(family, 13))
@@ -189,13 +189,47 @@ def font_file() -> str:
     return str(f) if f.exists() else ""
 
 
+def close_tables(page) -> None:
+    """A table that runs on to the next page ends here without a bottom line: draw it
+    (เส้นปิดท้ายทุกแผ่น)."""
+    import pymupdf
+    vert, horiz = [], []
+    for d in page.get_drawings():
+        for it in d["items"]:
+            if it[0] == "l":
+                a, b = it[1], it[2]
+                if abs(a.x - b.x) < 0.3 and abs(a.y - b.y) > 2:
+                    vert.append((a.x, min(a.y, b.y), max(a.y, b.y)))
+                elif abs(a.y - b.y) < 0.3:
+                    horiz.append((min(a.x, b.x), max(a.x, b.x), a.y))
+            elif it[0] == "re":
+                r = it[1]
+                if r.width < 1.2 and r.height > 2:
+                    vert.append((r.x0, r.y0, r.y1))
+                elif r.height < 1.2:
+                    horiz.append((r.x0, r.x1, r.y0))
+    if not vert:
+        return
+    clip = page.rect.height - MARGIN_BOTTOM_MM * 72 / 25.4      # Qt cuts a split row at the margin
+    bottom = max(v[2] for v in vert)
+    xs = [v[0] for v in vert if abs(v[2] - bottom) < 1.0]
+    bottom = min(bottom, clip)
+    if len(xs) < 2:
+        return
+    x0, x1 = min(xs), max(xs)
+    if any(abs(h[2] - bottom) < 1.0 and h[0] <= x0 + 2 and h[1] >= x1 - 2 for h in horiz):
+        return
+    page.draw_line(pymupdf.Point(x0, bottom), pymupdf.Point(x1, bottom), color=(0.27, 0.27, 0.27), width=0.6)
+
+
 def number_pages(path, footer: bool = True) -> None:
-    """หน้า n/N at the foot of each page, and the developer line."""
+    """หน้า n/N at the foot of each page, the developer line, and the closing line of cut tables."""
     import pymupdf
     doc = pymupdf.open(str(path))
     n = doc.page_count
     f = font_file()
     for i, page in enumerate(doc):
+        close_tables(page)
         r = page.rect
         kw = dict(fontsize=7.5, color=(0.35, 0.35, 0.35))
         if f:
@@ -359,6 +393,7 @@ def _name_cell(it: P.Item, bold=None) -> Cell:
 # -- ว651 -------------------------------------------------------------------------------------------
 
 GREY = "#d9d9d9"
+MARGIN_BOTTOM_MM = 12
 
 
 def _bill_events(rows, totals: bool):
@@ -586,19 +621,23 @@ def s_curve(plan: "P.Plan124", w=1800, h=760):
         g.drawText(QRectF(x - 140, y + 4, 280, 26), Qt.AlignCenter, f"ขั้นต่ำ {need:.0f}%")
     del tot
     g.setPen(QColor("#1f4e79"))
-    # second line: % ACC ACTUAL for the months entered
-    act = [(x, v) for x, v in zip(xs, plan.acc_actual) if v is not None]
-    if act:
-        apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in act]
-        g.setPen(QPen(QColor("#c55a11"), 4))
-        for a_, b_ in zip(apts, apts[1:]):
-            g.drawLine(a_, b_)
-        g.setBrush(QColor("#c55a11"))
-        for p_, (_x, v) in zip(apts[1:], act):
-            g.drawEllipse(p_, 6, 6)
+    # second line: % ACC ACTUAL — the months reported, then the estimate that the work ends as
+    # planned (dashed) all the way to the last month
+    fc = plan.forecast or plan.acc_plan
+    apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, fc)]
+    for k_, (a_, b_) in enumerate(zip(apts, apts[1:])):
+        g.setPen(QPen(QColor("#c55a11"), 4, Qt.SolidLine if k_ <= plan.last_actual else Qt.DashLine))
+        g.drawLine(a_, b_)
+    g.setBrush(QColor("#c55a11"))
+    g.setPen(QColor("#c55a11"))
+    for k_, (p_, v) in enumerate(zip(apts[1:], fc)):
+        g.drawEllipse(p_, 5, 5)
+        if k_ <= plan.last_actual or abs(v - plan.acc_plan[k_]) > 0.5:
             g.drawText(QRectF(p_.x() - 70, p_.y() + 8, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
     # legend
-    for k_, (col, name) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)"), ("#c55a11", "% ACC ACTUAL (ผลงานจริงสะสม)"))):
+    act_name = "% ACC ACTUAL (ผลงานจริง + คาดการณ์ตามแผน)" if plan.last_actual >= 0 \
+        else "% ACC ACTUAL (คาดการณ์ว่าเสร็จตามแผน)"
+    for k_, (col, name) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)"), ("#c55a11", act_name))):
         x0 = L + pw / 2 - 380 + k_ * 400
         g.setPen(QPen(QColor(col), 5))
         g.drawLine(QPointF(x0, 26), QPointF(x0 + 50, 26))

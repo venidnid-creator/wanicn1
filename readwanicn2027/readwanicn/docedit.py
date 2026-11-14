@@ -345,11 +345,12 @@ class DocEditor(QWidget):
         return b
 
     def _ribbon(self):
+        from .fit import FlowLayout
         bar = QFrame()
         bar.setObjectName("ToolRow")
         col = QVBoxLayout(bar)
         col.setContentsMargins(6, 4, 6, 4)
-        row1 = QHBoxLayout()
+        row1 = FlowLayout(None, 0, 2, 2)
         for text, tip, fn in (("📄 ใหม่", "เอกสารเปล่า", self.new),
                               ("📂 เปิด", "เปิดไฟล์เอกสาร (.docx) หรือหน้าเว็บ (.html)", self.open),
                               ("💾 บันทึก", "บันทึกเป็นไฟล์เอกสาร (.docx)", self.save),
@@ -361,7 +362,7 @@ class DocEditor(QWidget):
             row1.addWidget(self._tool(text, tip, fn))
         row1.addStretch(1)
         col.addLayout(row1)
-        row2 = QHBoxLayout()
+        row2 = FlowLayout(None, 0, 2, 2)
         self.font_box = QFontComboBox()
         self.font_box.setCurrentFont(QFont(self.family))
         self.font_box.currentFontChanged.connect(lambda f: self._merge(family=f.family()))

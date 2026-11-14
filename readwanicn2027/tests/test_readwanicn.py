@@ -120,6 +120,25 @@ def test_the_window_opens_measures_and_switches_themes(sample, tmp_path):
     assert w.zoom_label.text() == "200%"
     w.model.rotate(30)
     w.grab()
+    # รูปทรง: a shape becomes an area with its size; the menu button shows the chosen shape
+    w.set_tool("rect")
+    assert w.shape_btn.isChecked() and "สี่เหลี่ยม" in w.shape_btn.text()
+    w.add_shape("circle", [(0, 0), (plan_pt(1), 0)])
+    assert "Ø 2.000" in w.table.item(1, 3).text() and w.table.item(1, 1).text() == "วงกลม"
+    # compress: every page, or only the pages chosen
+    f = w.current
+    r_all = w._compress_one(f, str(tmp_path / "all.pdf"), "low", None)
+    r_one = w._compress_one(f, str(tmp_path / "one.pdf"), "low", [0])
+    import pymupdf
+    assert pymupdf.open(str(tmp_path / "all.pdf")).page_count == 3
+    assert pymupdf.open(str(tmp_path / "one.pdf")).page_count == 1 and r_one.after <= r_all.after
+    # the tool rows wrap on a narrow window instead of running past its edge
+    w.resize(900, 700)
+    w.show()
+    QApplication.processEvents()
+    for row in w.tool_rows.findChildren(type(w.tool_rows))[:0] or [w.tool_rows]:
+        assert row.width() <= w.width()
+    w.close()
 
 
 def test_a_year_of_use_then_a_renewal_code(tmp_path):
