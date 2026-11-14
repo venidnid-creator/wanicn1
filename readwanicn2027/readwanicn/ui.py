@@ -590,6 +590,11 @@ class MainWindow(QMainWindow):
         self.update_btn.hide()
         self.update_btn.clicked.connect(self.open_update)
         lay.addWidget(self.update_btn)
+        pb = QPushButton("🏗 ปรับลดราคา ว651 · ว124 · ว78")
+        pb.setToolTip("รับใบแจ้งปริมาณงาน (ตารางคำนวณ / เอกสาร / PDF) → ราคากลาง ราคาเสนอ → "
+                      "รายงาน ว651 ปรับลดราคา · ว124 แผนการทำงาน · ว78 แผนการใช้พัสดุในประเทศ")
+        pb.clicked.connect(lambda: self._safe(self.open_procure, "ปรับลดราคา ว651/ว124/ว78"))
+        lay.addWidget(pb)
         ub = QPushButton("📊 สถิติการใช้งาน")
         ub.setToolTip("สถิติการใช้งานทุกเมนู รายวัน รายสัปดาห์ รายเดือน รายปี และออกรายงาน")
         ub.clicked.connect(lambda: self._safe(lambda: UsageDialog(self, self.usage).exec()))
@@ -866,6 +871,11 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, APP_NAME, f"ทำงานไม่สำเร็จ:\n{type(e).__name__}: {e}")
+
+    def open_procure(self):
+        from .procure_view import ProcureDialog
+        dlg = ProcureDialog(self.doc_editor.family, self.usage.record, self)
+        dlg.exec()
 
     def _pan(self, dx, dy):
         h, v = self.scroll.horizontalScrollBar(), self.scroll.verticalScrollBar()

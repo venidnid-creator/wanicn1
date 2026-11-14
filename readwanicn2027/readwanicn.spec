@@ -7,7 +7,7 @@ a = Analysis(
     ['main.py'],
     pathex=['.'],
     datas=[('assets/*', 'assets')] + collect_data_files('docx') + collect_data_files('ezdxf'),
-    hiddenimports=['readwanicn._license_key', 'pymupdf', 'openpyxl', 'docx', 'PySide6.QtPrintSupport']
+    hiddenimports=['readwanicn._license_key', 'pymupdf', 'openpyxl', 'xlrd', 'docx', 'PySide6.QtPrintSupport']
                   + collect_submodules('ezdxf.addons.drawing') + collect_submodules('ezdxf.fonts')
                   + ['ezdxf.addons.odafc'],
     excludes=['tkinter', 'matplotlib', 'numpy.tests', 'PySide6.QtWebEngineCore',
