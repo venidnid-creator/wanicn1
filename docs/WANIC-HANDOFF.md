@@ -22,7 +22,8 @@
 - readwanicn/procure_report.py: รายงาน PDF (QTextDocument→QPdfWriter, เลขหน้า + บรรทัดผู้พัฒนา) และ .xlsx คู่กัน — ว651 (สรุปราคากลาง + ตาราง 5 บรรทัด + รายการ + แนบท้ายสัญญา), ว124 (แนวนอน + กราฟ S-curve + เกณฑ์), ว78 (ภาคผนวก 1–3)
 - readwanicn/procure_view.py: ProcureDialog (ปุ่ม «🏗 ปรับลดราคา ว651 · ว124 · ว78» แถบบน ui.py), PriceDialog สีตามไฟล์ผู้ใช้
 - tests/test_procure.py (ใช้ตัวเลขตัวอย่างใน ว651; ไฟล์สังเคราะห์ xlsx/docx/pdf) · ทดสอบกับไฟล์ผู้ใช้: 140 รายการ ต้นทุน 3,712,416.36 F 1.3015 ราคากลาง 4,831,709.89 เสนอ 4,790,000 → 0.86 % / 99.14 % ตรง Excel
-- requirements/spec/workflow เพิ่ม xlrd · ยังไม่สร้างตัวติดตั้ง — รออนุมัติภาพ
+- requirements/spec/workflow เพิ่ม xlrd · main.py --selftest ออกรายงานทั้ง 3 แบบ (จับไลบรารีที่ขาดในตัวติดตั้ง)
+- ผู้ใช้อนุมัติ 14 พ.ย. («ยืนยัน ดำเนินการต่อ» — ว78 ภาคผนวก 1 คงแบบตาม Excel) → VERSION 2027.4.0 · dispatch readwanicn-windows.yml ref claude/zen-feynman-ptcfng {version 2027.4.0, release false} → run 43604137885 · ห้ามเผยแพร่จนกว่าผู้ใช้สั่ง (dispatch เดิม release=true) · รอผลทดสอบจากผู้ใช้
 - ข้อสังเกตที่แจ้งผู้ใช้: ไฟล์ Excel ภาคผนวก 2 ใส่ปริมาณ ท่อน/ตัว เป็น กก.; รายการ RB 9 มม. 1.3.1.6 หน่วยเป็น ลบ.ม.; หัว ว651_3 ค้างค่าจากงานเก่า (2,185,793.71 / 2,127,000)
 
 ## ReadWanicn2027 (โฟลเดอร์ `readwanicn2027/`)
