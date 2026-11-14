@@ -199,6 +199,7 @@ Tests (`venitsupply/tests/`):
 <!-- AUTO:history -->
 ## 7. Commit history of venitsupply/ (newest first)
 
+- 2026-11-14 4596a8a VENIT SUPPLY: the venit-supply skill, regenerated automatically
 - 2026-11-13 1bee9e7 VENIT SUPPLY: record the 2026.11.13.5 installer build [skip ci]
 - 2026-11-13 890b48d VENIT SUPPLY 2026.11.13.5: budget colour bands, automatic asset/stock registration
 - 2026-11-13 8c4084a VENIT SUPPLY: record the 2026.11.13.4 installer build [skip ci]
