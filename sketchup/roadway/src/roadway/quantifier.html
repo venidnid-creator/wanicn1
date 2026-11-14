@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>RoadWay — ถอดปริมาณและราคา</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --ink: #1d2433; --muted: #667085; --line: #d9dde5;
+    --brand: #1f5fae; --brand-ink: #fff; --accent: #e8f0fb; --total: #eef2f7; --warn: #8a5a00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px "Leelawadee UI", "Sarabun", "TH Sarabun New", Tahoma, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+           background: var(--brand); color: var(--brand-ink); }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header .meta { margin-left: auto; font-size: 12px; opacity: .85; }
+  nav { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  nav button { border: 1px solid transparent; border-bottom: none; background: none; padding: 8px 14px;
+               font: inherit; color: var(--muted); cursor: pointer; border-radius: 6px 6px 0 0; }
+  nav button.on { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 600; margin-bottom: -1px; }
+  .bar { display: flex; gap: 8px; padding: 10px 16px; align-items: center; }
+  .bar .sp { flex: 1; }
+  .btn { border: 1px solid var(--line); background: var(--panel); padding: 6px 12px; border-radius: 6px;
+         font: inherit; cursor: pointer; color: var(--ink); }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+  main { padding: 0 16px 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: calc(100vh - 210px); }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--accent); text-align: left; font-weight: 600; font-size: 13px; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: #f7f9fc; cursor: pointer; }
+  tr.total td { background: var(--total); font-weight: 700; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .kpi b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .kpi span { color: var(--muted); font-size: 12px; }
+  input, select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+  input.num { width: 110px; text-align: right; }
+  .hint { color: var(--muted); font-size: 12px; padding: 8px 2px; }
+  footer { padding: 6px 16px 10px; font-size: 12px; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap; }
+  footer .warn { color: var(--warn); }
+  .empty { padding: 30px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>RoadWay — ถอดปริมาณและราคา</h1>
+  <div class="meta" id="meta"></div>
+</header>
+<nav id="tabs"></nav>
+<div class="bar">
+  <span id="tabhint" class="hint"></span>
+  <span class="sp"></span>
+  <button class="btn" onclick="call('refresh')">รีเฟรช</button>
+  <button class="btn primary" id="csv" onclick="call('export_csv', state.tab)">ส่งออกตาราง (CSV)</button>
+</div>
+<main id="main"></main>
+<footer>
+  <span class="warn">เครื่องมือช่วยคำนวณ — ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจและลงนามก่อนก่อสร้าง</span>
+  <span>ผู้พัฒนา นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ</span>
+</footer>
+<script>
+// ใช้ JS ที่ Chromium ของ SketchUp 2017 รองรับ (ไม่ใช้ ?? หรือ Object.entries)
+const entries = o => Object.keys(o).map(k => [k, o[k]]);
+const TABS = [
+  ['label', 'ตามชิ้นส่วน', 'คลิกแถวเพื่อเลือกวัตถุในโมเดล'],
+  ['material', 'ตามวัสดุ', 'รวมปริมาณตามวัสดุที่ทาสี'],
+  ['tag', 'ตาม Tag', 'รวมปริมาณตาม Tag (เลเยอร์)'],
+  ['cut', 'ตารางตัดเหล็ก', 'น้ำหนัก 0.00617 d² กก./ม. · เผื่อเศษ 5 % · ลวดผูก 20 กก./ตัน'],
+  ['rules', 'ราคา', 'กรอกราคาต่อหน่วยเอง ระบบไม่ใส่ราคาให้ · ค้นกฎตามลำดับ ชิ้นส่วน → วัสดุ → Tag']
+];
+const BY_TH = { label: 'ชิ้นส่วน', material: 'วัสดุ', tag: 'Tag' };
+const state = { tab: 'label', data: null };
+
+function call(name, ...args) {
+  if (window.sketchup && sketchup[name]) sketchup[name](...args);
+}
+const f = (v, d = 2) => Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: d, maximumFractionDigits: d });
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function render(data) { state.data = data; draw(); }
+
+function draw() {
+  const d = state.data;
+  document.getElementById('meta').textContent = d ? `${d.model || 'โมเดล'} · ${d.date} · RoadWay ${d.version}` : '';
+  document.getElementById('tabs').innerHTML = TABS.map(([k, t]) =>
+    `<button class="${k === state.tab ? 'on' : ''}" onclick="state.tab='${k}';draw()">${t}</button>`).join('');
+  document.getElementById('tabhint').textContent = TABS.find(t => t[0] === state.tab)[2];
+  document.getElementById('csv').style.display = state.tab === 'rules' ? 'none' : '';
+  const m = document.getElementById('main');
+  if (!d) { m.innerHTML = '<div class="empty">กำลังอ่านโมเดล…</div>'; return; }
+  m.innerHTML = state.tab === 'cut' ? cutView(d) : state.tab === 'rules' ? rulesView(d) : qtyView(d, state.tab);
+}
+
+function kpis(t) {
+  return `<div class="kpis">
+    <div class="kpi"><span>ปริมาตร</span><b>${f(t.volume, 3)} ลบ.ม.</b></div>
+    <div class="kpi"><span>พื้นที่</span><b>${f(t.area)} ตร.ม.</b></div>
+    <div class="kpi"><span>ความยาว</span><b>${f(t.length)} ม.</b></div>
+    <div class="kpi"><span>น้ำหนักเหล็ก</span><b>${f(t.kg)} กก.</b></div>
+    <div class="kpi"><span>ราคารวม</span><b>${f(t.cost)} บาท</b></div></div>`;
+}
+
+function qtyView(d, tab) {
+  const t = d.tabs[tab];
+  if (!t.rows.length) return '<div class="card"><div class="empty">ยังไม่มีกลุ่ม/คอมโพเนนต์ในโมเดล</div></div>';
+  const row = (r, cls = '') => `<tr class="${cls}" ${cls ? '' : `onclick="call('select','${tab}',${esc(JSON.stringify(r.name))})"`}>
+    <td>${esc(r.name)}</td><td class="n">${f(r.count, 0)}</td><td class="n">${f(r.length)}</td>
+    <td class="n">${f(r.area)}</td><td class="n">${f(r.volume, 3)}</td><td class="n">${f(r.kg)}</td><td class="n">${f(r.cost)}</td></tr>`;
+  return kpis(t.total) + `<div class="card"><table><thead><tr><th>${BY_TH[tab]}</th><th class="n">จำนวน</th>
+    <th class="n">ยาว (ม.)</th><th class="n">พื้นที่ (ตร.ม.)</th><th class="n">ปริมาตร (ลบ.ม.)</th>
+    <th class="n">น้ำหนัก (กก.)</th><th class="n">ราคา (บาท)</th></tr></thead>
+    <tbody>${t.rows.map(r => row(r)).join('')}${row(t.total, 'total')}</tbody></table></div>`;
+}
+
+function cutView(d) {
+  if (!d.cut.length) return '<div class="card"><div class="empty">ยังไม่มีเหล็กเสริมที่สร้างด้วย RoadWay</div></div>';
+  const s = d.cutsum;
+  return `<div class="kpis">${s.rows.map(r => `<div class="kpi"><span>${esc(r.bar)} (${esc(r.grade)}) เผื่อเศษ</span><b>${f(r.kg_waste)} กก.</b></div>`).join('')}
+    <div class="kpi"><span>รวมเหล็กเผื่อเศษ</span><b>${f(s.kg)} กก.</b></div>
+    <div class="kpi"><span>ลวดผูกเหล็ก</span><b>${f(s.tie_wire_kg)} กก.</b></div></div>
+    <div class="card"><table><thead><tr><th>รหัส</th><th>เหล็ก</th><th>รูปแบบ</th><th class="n">ยาวตัด (ม.)</th>
+    <th class="n">จำนวน (เส้น)</th><th class="n">ยาวรวม (ม.)</th><th class="n">น้ำหนัก (กก.)</th></tr></thead><tbody>
+    ${d.cut.map(r => `<tr><td>${esc(r.mark)}</td><td>${esc(r.bar)}</td><td>${esc(r.shape)}</td><td class="n">${f(r.length)}</td>
+      <td class="n">${f(r.count, 0)}</td><td class="n">${f(r.total_m)}</td><td class="n">${f(r.kg)}</td></tr>`).join('')}
+    ${s.rows.map(r => `<tr class="total"><td colspan="5">รวม ${esc(r.bar)} ${esc(r.grade)}</td><td class="n">${f(r.total_m)}</td><td class="n">${f(r.kg)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function rulesView(d) {
+  const units = entries(d.units);
+  const opts = (list, v) => list.map(([k, t]) => `<option value="${esc(k)}" ${k === v ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  const lists = entries(d.keys).map(([by, ks]) =>
+    `<datalist id="dl-${by}">${ks.map(k => `<option value="${esc(k)}">`).join('')}</datalist>`).join('');
+  const rows = d.rules.map((r, i) => `<tr>
+    <td><select onchange="setRule(${i},'by',this.value)">${opts(entries(BY_TH), r.by)}</select></td>
+    <td><input list="dl-${esc(r.by)}" value="${esc(r.key)}" onchange="setRule(${i},'key',this.value)" style="width:240px"></td>
+    <td><select onchange="setRule(${i},'unit',this.value)">${opts(units, r.unit)}</select></td>
+    <td><input class="num" type="number" step="0.01" value="${esc(r.price)}" onchange="setRule(${i},'price',+this.value)"></td>
+    <td><input class="num" type="number" step="0.5" value="${esc(r.waste)}" onchange="setRule(${i},'waste',+this.value)"></td>
+    <td><button class="btn" onclick="delRule(${i})">ลบ</button></td></tr>`).join('');
+  return `${lists}<div class="card"><table><thead><tr><th>ใช้กับ</th><th>ชื่อ</th><th>หน่วย</th>
+    <th class="n">ราคา/หน่วย (บาท)</th><th class="n">เผื่อเศษ (%)</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="6" class="empty">ยังไม่มีราคา — กด «เพิ่มรายการ»</td></tr>'}</tbody></table></div>
+    <div class="bar" style="padding-left:0"><button class="btn" onclick="addRule()">เพิ่มรายการ</button>
+    <button class="btn primary" onclick="call('save_rules', JSON.stringify(state.data.rules))">บันทึกราคาลงไฟล์โมเดล</button></div>
+    <div class="hint">ราคาที่บันทึกจะเก็บไว้ในไฟล์ .skp นี้ ใช้ราคาจากแหล่งอ้างอิงของหน่วยงาน (เช่น ราคากลาง/ราคาพาณิชย์จังหวัด) ที่ตรวจสอบแล้ว</div>`;
+}
+function setRule(i, k, v) { state.data.rules[i][k] = v; if (k === 'by') draw(); }
+function delRule(i) { state.data.rules.splice(i, 1); draw(); }
+function addRule() { state.data.rules.push({ by: 'material', key: '', unit: 'm3', price: 0, waste: 0 }); draw(); }
+
+draw();
+window.addEventListener('load', () => call('ready'));
+</script>
+</body>
+</html>
