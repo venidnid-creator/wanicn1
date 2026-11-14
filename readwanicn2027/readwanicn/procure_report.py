@@ -37,6 +37,8 @@ class Table:
     body: list                     # rows of Cells
     widths: list                   # relative widths
     font_pt: float = 11.0
+    border: int = 1                # 0 = no lines (the boxes of the ว651 summary)
+    width_pct: int = 100
 
 
 @dataclass
@@ -59,16 +61,17 @@ class Report:
     title: str                     # sheet / window title
     landscape: bool = False
     blocks: list = field(default_factory=list)
+    footer: bool = True            # the developer line at the foot of each page
 
     def p(self, text, **kw):
-        self.blocks.append(Para(text, **kw))
+        self.blocks.append(Para(P.arabic(text), **kw))
 
     def br(self):
         self.blocks.append("pagebreak")
 
 
 def C(text="", **kw) -> Cell:
-    return Cell(text=str(text), **kw)
+    return Cell(text=P.arabic(text), **kw)
 
 
 def N(x, **kw) -> Cell:
@@ -137,12 +140,24 @@ def to_html(rep: Report, family: str) -> str:
         elif isinstance(b, Table):
             tot = sum(b.widths) or 1
             pct = [w * 100.0 / tot for w in b.widths]
-            out.append(f'<table width="100%" border="1" cellspacing="0" cellpadding="1" '
+            out.append(f'<table width="{b.width_pct}%" border="{b.border}" cellspacing="0" cellpadding="1" '
                        f'style="border-collapse:collapse; font-size:{b.font_pt}pt; border-color:#444;">'
                        f'<thead>{_rows_html(b.head, pct, "th")}</thead>'
                        f'<tbody>{_rows_html(b.body, pct, "td")}</tbody></table>')
     return (f'<html><body style="font-family:\'{family}\'; font-size:13pt;">'
             + "".join(out) + "</body></html>")
+
+
+def report_family(family: str = "") -> str:
+    """The bundled Laksaman for the reports: its regular and bold faces both have Arabic digits
+    (a TH Sarabun IT๙ bold face on the computer printed Thai digits in the bold cells)."""
+    from PySide6.QtGui import QFontDatabase
+    ok = False
+    for name in ("Laksaman.ttf", "Laksaman-Bold.ttf"):
+        f = Path(__file__).resolve().parent.parent / "assets" / name
+        if f.exists() and QFontDatabase.addApplicationFont(str(f)) >= 0:
+            ok = True
+    return "Laksaman" if ok else (family or "Laksaman")
 
 
 def to_pdf(rep: Report, path, family: str) -> None:
@@ -174,7 +189,7 @@ def font_file() -> str:
     return str(f) if f.exists() else ""
 
 
-def number_pages(path) -> None:
+def number_pages(path, footer: bool = True) -> None:
     """หน้า n/N at the foot of each page, and the developer line."""
     import pymupdf
     doc = pymupdf.open(str(path))
@@ -186,7 +201,8 @@ def number_pages(path) -> None:
         if f:
             kw.update(fontfile=f, fontname="th")
         page.insert_text((r.width - 70, r.height - 14), f"หน้า {i + 1}/{n}", **kw)
-        page.insert_text((34, r.height - 14), DEVELOPER_LINE, **kw)
+        if footer:
+            page.insert_text((34, r.height - 14), DEVELOPER_LINE, **kw)
     tmp = str(path) + ".tmp"
     doc.save(tmp, garbage=3, deflate=True)
     doc.close()
@@ -265,8 +281,60 @@ def to_xlsx(reports: list, path, family: str = "TH SarabunPSK") -> None:
                         col += cell.colspan
                     r += 1
             r += 1
-        ws.cell(r + 1, 1, DEVELOPER_LINE).font = Font(name=family, size=10, color="777777")
+        if rep.footer:
+            ws.cell(r + 1, 1, DEVELOPER_LINE).font = Font(name=family, size=10, color="777777")
     wb.save(str(path))
+
+
+# -- CSV ------------------------------------------------------------------------------------------
+
+def _csv_rows(rep: Report) -> list:
+    out = []
+    for b in rep.blocks:
+        if isinstance(b, Para):
+            if b.text.strip():
+                out.append([b.text])
+        elif isinstance(b, Table):
+            n = len(b.widths)
+            for kind, rows in (("head", b.head), ("body", b.body)):
+                taken = set()
+                for r, row in enumerate(rows):
+                    line, col = [""] * n, 0
+                    for c in row:
+                        while (r, col) in taken:
+                            col += 1
+                        if col >= n:
+                            break
+                        t = c.text
+                        if c.value is not None and isinstance(c.value, (int, float)):
+                            t = t.replace(",", "")           # numbers stay numbers for editing
+                        elif c.indent:
+                            t = "  " * c.indent + t
+                        line[col] = t
+                        for rr in range(r, r + c.rowspan):
+                            for cc in range(col, col + c.colspan):
+                                taken.add((rr, cc))
+                        col += c.colspan
+                    out.append(line)
+            out.append([])
+    return out
+
+
+def to_csv(reports: list, path) -> list:
+    """One .csv per part (UTF-8 with BOM so the spreadsheet program reads Thai)."""
+    import csv
+    path = Path(path)
+    written = []
+    for rep in reports:
+        f = path if len(reports) == 1 else path.with_name(f"{path.stem} - {rep.title}.csv")
+        with open(f, "w", newline="", encoding="utf-8-sig") as fh:
+            csv.writer(fh).writerows(_csv_rows(rep))
+        written.append(f)
+    return written
+
+
+def write_csv(kind: str, p: P.Project, csv_path) -> list:
+    return to_csv(REPORTS[kind](p), csv_path)
 
 
 # -- common pieces ---------------------------------------------------------------------------------
@@ -290,155 +358,189 @@ def _name_cell(it: P.Item, bold=None) -> Cell:
 
 # -- ว651 -------------------------------------------------------------------------------------------
 
+GREY = "#d9d9d9"
+
+
+def _bill_events(rows, totals: bool):
+    """('head'|'line', index) for each row, and ('total', header index) after each group of
+    level 1–2 closes (the «รวม …» lines of the building examples in ว651)."""
+    out, open_ = [], []
+    for i, r in enumerate(rows):
+        lvl = r.item.level
+        if totals and r.item.code:
+            while open_ and rows[open_[-1]].item.level >= lvl:
+                out.append(("total", open_.pop()))
+        out.append(("head" if r.item.header else "line", i))
+        if totals and r.item.header and lvl <= 2 and r.item.code:
+            open_.append(i)
+    while totals and open_:
+        out.append(("total", open_.pop()))
+    return out
+
+
+def _group_name(it: P.Item) -> str:
+    name = it.label
+    if it.code and name.startswith(it.code):
+        name = name[len(it.code):].lstrip(". ")
+    return name
+
+
 def report_651(p: P.Project) -> list:
-    """สิ่งที่ส่งมาด้วย 1 (แบบสรุปราคากลาง + ราคาที่ปรับลดทุกรายการ) and
-    สิ่งที่ส่งมาด้วย 2 (เอกสารแนบท้ายสัญญา) for the chosen one of the four kinds of work."""
+    """สิ่งที่ส่งมาด้วย 1 (แบบสรุปราคากลาง with every line reduced) and สิ่งที่ส่งมาด้วย 2
+    (เอกสารแนบท้ายสัญญา), laid out as the examples of ว651 for the chosen kind of work."""
     res = P.compute_651(p)
     red = res.red
     south = res.uplift > 1.0
     work = _work_name(p)
     qty_word = p.work[1]
-    a = Report("ว651 สรุปราคากลาง")
-    a.p(f"แบบสรุปราคากลาง{work}", align="center", bold=True, size=15)
+    building = p.work_type in ("building", "building_south")
+    title = P.arabic(p.title) or "..........................."
+    head_line = f"โครงการ{work} {title}"
+    if p.budget:
+        head_line += f"  งบประมาณ {p.budget:,.2f} บาท"
+    if p.project_no:
+        head_line += f"  เลขที่โครงการ {p.project_no}"
+
+    a = Report("ว651 สรุปราคากลาง", footer=False)
+    a.p(f"แบบสรุปราคากลาง{work}", align="center", bold=True, size=14)
     if south:
-        a.p(P.SOUTH_NOTE, align="center", size=12)
-    a.p(_project_line(p), align="center", size=12)
-    if p.agency:
-        a.p(f"หน่วยงานเจ้าของโครงการ/งานก่อสร้าง {p.agency}", align="center", size=12)
-    # ตาราง: สรุปราคากลางโครงการ
-    a.p(f"ตาราง : สรุปราคากลางโครงการ{work}", bold=True, size=12)
+        a.p(P.SOUTH_NOTE, align="center", size=11)
+    a.p(head_line, align="center", size=11)
+    # ตาราง : สรุปราคากลางโครงการ
+    a.p(f"ตาราง : สรุปราคากลางโครงการ{work}", size=11)
     head = [[C("ลำดับที่", align="center"), C("รายการ", align="center"), C("หน่วย", align="center"),
              C("ค่างานต้นทุน", align="center"), C("Factor F / Vat", align="center"), C("ราคากลาง", align="center")]
-            + ([C("ราคากลาง บวกเพิ่มร้อยละ 5", align="center")] if south else [])]
+            + ([C("ราคากลาง\nบวกเพิ่มร้อยละ 5", align="center")] if south else [])]
+    names = [f"{work} (ค่าวัสดุและค่าแรง)" if building else work, "งานครุภัณฑ์จัดซื้อ (ถ้ามี)",
+             "ค่าใช้จ่ายพิเศษตามข้อกำหนด (ถ้ามี)"]
     body = []
-    names = [f"{work} (ค่าวัสดุและค่าแรง)", "งานครุภัณฑ์จัดซื้อ (ถ้ามี)", "ค่าใช้จ่ายพิเศษตามข้อกำหนด (ถ้ามี)"]
     for i, (g, nm) in enumerate(zip(res.groups, names)):
         _n, cost, fac, mid, mid_up, _red = g
-        row = [C(i + 1, align="center"), C(nm), C("บาท", align="center"), N(cost if cost else None),
-               Q(fac, 4, align="center"), N(mid if cost else None)]
-        if south:
-            row.append(N(mid_up if cost else None))
-        body.append(row)
-    body.append([C("รวม", align="right", bold=True, colspan=5), N(res.mid_total, bold=True)]
-                + ([N(res.mid_up_total, bold=True)] if south else []))
-    a.blocks.append(Table(head, body, [7, 45, 8, 16, 11, 16] + ([18] if south else []), 11))
-    a.p("ตาราง : ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง", bold=True, size=12)
+        body.append([C(i + 1, align="center"), C(nm), C("บาท", align="center"), N(cost), Q(fac, 4, align="right"),
+                     N(mid)] + ([N(mid_up)] if south else []))
+    body.append([C("", colspan=4 if not south else 4), C("รวม", align="right"), N(res.mid_total, bold=True, bg=GREY)]
+                + ([N(res.mid_up_total, bold=True, bg=GREY)] if south else []))
+    a.blocks.append(Table(head, body, [9, 40, 8, 16, 12, 16] + ([17] if south else []), 9.5,
+                          width_pct=90 if south else 82))
+    a.p("ตาราง : ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง", size=11)
     a.blocks.append(Table([[C("ลำดับที่", align="center"), C("รายการ", align="center"), C("หน่วย", align="center"),
                             C("ราคาที่เสนอ", align="center")]],
                           [[C(1, align="center"), C("ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง"),
-                            C("บาท", align="center"), N(p.offer, bold=True, bg="#fff2cc")]], [7, 60, 10, 23], 11))
+                            C("บาท", align="center"), N(p.offer, bg=GREY)]], [9, 52, 9, 20], 9.5, width_pct=62))
+    a.p(" ", size=4)
     sp = P.r2(P.special_total(p) * res.uplift)
     mid_label = "ราคากลางบวกเพิ่มร้อยละ 5" if south else "ราคากลาง"
-    a.blocks.append(Table(
-        [[C("วิธีการคำนวณราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด", colspan=2, align="left"),
-          C("วิธีการคำนวณราคาตามคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด", colspan=2, align="left")]],
-        [[C(mid_label), N(P.r2(p.mid_price * res.uplift)), C("ราคาที่เสนอของผู้ชนะการจัดซื้อจัดจ้าง"), N(p.offer)],
-         [C("หัก ค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(sp), C("หัก ค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(sp)],
-         [C("ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด", bold=True), N(red.mid_net, bold=True),
-          C("ผลต่างระหว่างราคาตามคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด", bold=True), N(red.offer_net, bold=True)]],
-        [33, 17, 33, 17], 9.5))
-    a.blocks.append(Table(
-        [[C("ผลต่างระหว่างราคากลางกับราคาคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด", colspan=3)]],
-        [[C("ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.mid_net), C("(1)", align="center")],
-         [C("หัก ผลต่างระหว่างราคาที่เสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.offer_net), C("(2)", align="center")],
-         [C("ผลต่างระหว่างราคากลางกับราคาคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด", bold=True), N(red.diff, bold=True),
-          C("(3)", align="center")],
-         [C("ผลต่างตาม (3) เทียบกับราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด (1) คิดเป็นร้อยละ", bold=True),
-          Q(red.pct_down, 2, bold=True, bg="#fff2cc"), C("")]],
-        [70, 20, 10], 9.5))
-    a.blocks.append(Table(
-        [[C("การคำนวณร้อยละวัสดุในการจ้าง", colspan=2, align="center")]],
-        [[C("ราคากลาง", bg="#c6d9f1"), N(P.r2(p.mid_price * res.uplift), bg="#c6d9f1")],
-         [C("ราคาเสนอ", bg="#ffff00"), N(p.offer, bg="#ffff00")],
-         [C("ลดลง", bg="#00b050", align="right"), N(red.diff, bg="#00b050")],
-         [C("ค่างานลดลง (ร้อยละ)", bg="#ffff00"), Q(red.pct_down, 2, bg="#ffff00")],
-         [C("ค่างานคงเหลือ (ร้อยละ)", bg="#e6b9b8"), Q(red.pct_left, 2, bg="#e6b9b8")]],
-        [60, 40], 10))
-    # รายการทั้งหมด
-    a.br()
-    a.p(f"แบบสรุปราคากลาง{work} — รายการ", align="center", bold=True, size=14)
-    a.p(_project_line(p), align="center", size=11)
+    mid_val = P.r2(p.mid_price * res.uplift)
+    a.blocks.append(Table([], [
+        [C("วิธีการคำนวณราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด", bold=True), C(""), C(""),
+         C("วิธีการคำนวณราคาตามคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด", bold=True), C("")],
+        [C(mid_label), N(mid_val), C(""), C("ราคาที่เสนอของผู้ชนะการจัดซื้อจัดจ้าง"), N(p.offer)],
+        [C("หัก ค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(sp), C(""), C("หัก ค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(sp)],
+        [C("ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.mid_net, bg=GREY), C(""),
+         C("ผลต่างระหว่างราคาตามคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.offer_net, bg=GREY)]],
+        [33, 14, 4, 35, 14], 8.5, border=0))
+    a.p(" ", size=4)
+    a.p("ผลต่างระหว่างราคากลางกับราคาตามคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด", bold=True, size=9.5)
+    a.blocks.append(Table([], [
+        [C("ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.mid_net), C("(1)", align="center"),
+         C(""), C(""), C("")],
+        [C("หัก ผลต่างระหว่างราคาที่เสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.offer_net), C("(2)", align="center"),
+         C(""), C("ผลต่างตาม (3) เทียบกับราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด (1)", align="right", bg=GREY),
+         C("", bg=GREY)],
+        [C("ผลต่างระหว่างราคากลางกับราคาตามคำเสนอ ฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด"), N(red.diff, bg=GREY),
+         C("(3)", align="center"), C(""), C("คิดเป็นร้อยละ", align="right", bg=GREY),
+         Q(red.pct_down, 2, bold=True, bg=GREY, align="center")]],
+        [33, 13, 5, 3, 37, 9], 8.5, border=0))
+    a.p(" ", size=4)
+    # รายการ
     mid_cols = [C("ค่างานต้นทุน", align="center"), C("Factor F / Vat", align="center"), C("ราคากลาง", align="center")]
     if south:
-        mid_cols.append(C("ราคากลาง บวกเพิ่มร้อยละ 5", align="center"))
+        mid_cols.append(C("ราคากลาง\nบวกเพิ่มร้อยละ 5", align="center"))
     head = [[C("ลำดับที่", align="center", rowspan=2), C("รายการ", align="center", rowspan=2),
              C("หน่วย", align="center", rowspan=2), C(qty_word, align="center", rowspan=2),
              C("ราคากลางงานก่อสร้าง (บาท)", align="center", colspan=len(mid_cols)),
              C("ราคาที่ปรับลดตามคำเสนอ (บาท)", align="center", colspan=2)],
             mid_cols + [C("ราคาที่ปรับลด", align="center"), C("ราคาต่อหน่วย", align="center")]]
-    sub_mid = P.subtotals(res.rows, "mid")
-    sub_up = P.subtotals(res.rows, "mid_up")
-    sub_red = P.subtotals(res.rows, "reduced")
+    sub = {k: P.subtotals(res.rows, k) for k in ("cost", "mid", "mid_up", "reduced")}
     body = []
-    for i, r in enumerate(res.rows):
+    for kind, i in _bill_events(res.rows, building):
+        r = res.rows[i]
         it = r.item
-        if it.header:
-            row = [C(it.no or "", align="center"), _name_cell(it), C(""), C(""), C(""), C(""),
-                   N(sub_mid.get(i), bold=True)]
-            if south:
-                row.append(N(sub_up.get(i), bold=True))
-            row += [N(sub_red.get(i), bold=True), C("")]
-        else:
-            mark = " (*)" if i == res.adjust_row else ""
-            row = [C(it.no or "", align="center"), C(it.label + mark, indent=max(0, it.level - 1)),
+        if kind == "head":
+            row = [C(it.no or it.code, align="center"), _name_cell(it), C(""), C("")]
+            if building:
+                row += [C("")] * (len(mid_cols) + 2)
+            else:
+                row += [C(""), C(""), N(sub["mid"].get(i))] + ([N(sub["mid_up"].get(i))] if south else []) \
+                    + [N(sub["reduced"].get(i)), C("")]
+        elif kind == "line":
+            row = [C(it.no or "", align="center"), C(it.label, indent=max(0, it.level - 1)),
                    C(it.unit, align="center"), Q(it.qty), N(r.cost), Q(r.factor, 4, align="center"), N(r.mid)]
             if south:
                 row.append(N(r.mid_up))
             row += [N(r.reduced), N(r.unit_price)]
+        else:
+            name = f"รวม {_group_name(it)}" if it.level == 1 else f"รวม{_group_name(it)}"
+            row = [C(""), C(name, bold=True, align="right" if it.level == 1 else "left",
+                            indent=max(0, it.level - 1)), C(""), C(""),
+                   N(sub["cost"].get(i), bold=True), C(""), N(sub["mid"].get(i), bold=True)]
+            if south:
+                row.append(N(sub["mid_up"].get(i), bold=True))
+            row += [N(sub["reduced"].get(i), bold=True), C("")]
         body.append(row)
-    body.append([C("วงเงินรวม", align="right", bold=True, colspan=6), N(res.mid_total, bold=True)]
-                + ([N(res.mid_up_total, bold=True)] if south else [])
-                + [N(res.reduced_total, bold=True, bg="#fff2cc"), C("(*)", align="center")])
-    a.blocks.append(Table(head, body, [6, 40, 7, 9, 12, 8, 12] + ([12] if south else []) + [12, 10], 9.5))
-    a.p("หมายเหตุ (*) ส่วนต่างนี้ให้ปรับเพิ่ม / ลด ในรายการใดรายการหนึ่งได้ตามความเหมาะสม ยกเว้น "
-        "รายการค่าใช้จ่ายพิเศษตามข้อกำหนด ทั้งนี้ วงเงินรวมของการปรับลดราคาจะต้องเท่ากับ"
-        "ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง", size=10.5)
-    if res.adjust_row >= 0:
-        adj = res.rows[res.adjust_row]
-        a.p(f"โปรแกรมปรับเศษ {adj.adjusted:+,.2f} บาท ในรายการ «{adj.item.label}» "
-            f"(รายการที่มีมูลค่ามากที่สุด) วงเงินรวมเท่ากับราคาเสนอ {p.offer:,.2f} บาท", size=10.5)
-    a.p("แบบฟอร์มตามหนังสือด่วนที่สุด ที่ กค (กวจ) 0405.3/ว651 ลงวันที่ 26 กันยายน 2568", size=10.5)
+    ncol = 4 + len(mid_cols)
+    body.append([C("วงเงินรวม", align="right", colspan=ncol - 1)]
+                + [N(res.mid_up_total if south else res.mid_total)]
+                + [N(res.reduced_total, bold=True, bg=GREY), C("(*)", align="left")])
+    a.blocks.append(Table(head, body, [6, 38, 7, 8, 12, 8, 12] + ([12] if south else []) + [12, 10], 8.5))
+    a.p("หมายเหตุ  (*) ส่วนต่างนี้ให้ปรับเพิ่ม/ลด ในรายการใดรายการหนึ่งได้ตามความเหมาะสม ยกเว้น "
+        "รายการค่าใช้จ่ายพิเศษตามข้อกำหนด\n             ทั้งนี้ วงเงินรวมของการปรับลดราคาจะต้องเท่ากับ"
+        "ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง", size=9.5)
 
     # สิ่งที่ส่งมาด้วย 2: เอกสารแนบท้ายสัญญา
-    b = Report("ว651 แนบท้ายสัญญา")
-    b.p("แบบแสดงรายการ ปริมาณงาน และราคา", align="center", bold=True, size=15)
-    b.p(f"เอกสารแนบท้ายสัญญาจ้างก่อสร้าง : {work}", align="center", bold=True, size=13)
+    b = Report("ว651 แนบท้ายสัญญา", footer=False)
+    b.p("แบบแสดงรายการ ปริมาณงาน และราคา", align="center", bold=True, size=13)
+    b.p(f"เอกสารแนบท้ายสัญญาจ้างก่อสร้าง : {work}", align="center", bold=True, size=12)
     if south:
-        b.p(P.SOUTH_NOTE, align="center", size=11.5)
-    b.p(f"เลขที่ {p.contract_no or '................'}  ลงวันที่ {p.contract_date or '................'}",
-        align="center", size=12)
-    b.p(_project_line(p), align="center", size=12)
-    info = [("หน่วยงานเจ้าของโครงการ", p.agency or ""),
-            ("วงเงินงบประมาณ", f"{p.budget:,.2f} บาท" if p.budget else ""),
-            ("ราคากลางงานก่อสร้าง", f"{res.mid_up_total:,.2f} บาท"),
-            ("วงเงินตามสัญญา", f"{p.offer:,.2f} บาท"),
-            ("ชื่อผู้รับจ้าง", p.contractor or "")]
-    b.blocks.append(Table([], [[C(k, bold=True), C(v)] for k, v in info], [30, 70], 11.5))
+        b.p(P.SOUTH_NOTE, align="center", size=11)
+    b.p(f"เลขที่ {P.arabic(p.contract_no) or '................'}  ลงวันที่ "
+        f"{P.thai_date(p.contract_date) or '................'}", align="center", size=12)
+    b.p(head_line, align="center", size=11.5)
+    info = [("หน่วยงานเจ้าของโครงการ", P.arabic(p.agency)),
+            ("วงเงินงบประมาณ", f"{p.budget:,.2f}  บาท" if p.budget else ""),
+            ("ราคากลางงานก่อสร้าง", f"{(res.mid_up_total if south else res.mid_total):,.2f}  บาท"),
+            ("วงเงินตามสัญญา", f"{p.offer:,.2f}  บาท"),
+            ("ชื่อผู้รับจ้าง", P.arabic(p.contractor))]
+    b.blocks.append(Table([], [[C(k), C(v)] for k, v in info], [32, 68], 10.5, border=0, width_pct=70))
+    b.p(" ", size=4)
     head = [[C("ลำดับที่", align="center", rowspan=2), C("รายการ", align="center", rowspan=2),
              C("หน่วย", align="center", rowspan=2), C(qty_word, align="center", rowspan=2),
              C("ราคาที่ปรับลดตามคำเสนอ (บาท)", align="center", colspan=2)],
-            [C("ราคา", align="center"), C("ราคาต่อหน่วย", align="center")]]
+            [C("ราคา" if building else "ราคาที่ปรับลด", align="center"), C("ราคาต่อหน่วย", align="center")]]
     body = []
-    for i, r in enumerate(res.rows):
+    for kind, i in _bill_events(res.rows, building):
+        r = res.rows[i]
         it = r.item
-        if it.header:
-            body.append([C(it.no or "", align="center"), _name_cell(it), C(""), C(""),
-                         N(sub_red.get(i), bold=True), C("")])
-        else:
+        if kind == "head":
+            body.append([C(it.no or it.code, align="center"), _name_cell(it), C(""), C(""),
+                         C("") if building else N(sub["reduced"].get(i)), C("")])
+        elif kind == "line":
             body.append([C(it.no or "", align="center"), C(it.label, indent=max(0, it.level - 1)),
                          C(it.unit, align="center"), Q(it.qty), N(r.reduced), N(r.unit_price)])
-    body.append([C("วงเงินตามสัญญา", align="right", bold=True, colspan=4), N(res.reduced_total, bold=True,
-                                                                              bg="#fff2cc"), C("")])
-    b.blocks.append(Table(head, body, [7, 52, 9, 10, 13, 11], 10))
-    b.p(f"({P.baht_text(res.reduced_total)})", align="right", size=11)
-    b.p("แบบฟอร์มตามหนังสือด่วนที่สุด ที่ กค (กวจ) 0405.3/ว651 ลงวันที่ 26 กันยายน 2568", size=10.5)
+        else:
+            name = f"รวม {_group_name(it)}" if it.level == 1 else f"รวม{_group_name(it)}"
+            body.append([C(""), C(name, bold=True, align="right" if it.level == 1 else "left",
+                                  indent=max(0, it.level - 1)), C(""), C(""),
+                         N(sub["reduced"].get(i), bold=True), C("")])
+    body.append([C("วงเงินตามสัญญา", align="right", colspan=4), N(res.reduced_total, bold=True, bg=GREY), C("")])
+    b.blocks.append(Table(head, body, [7, 55, 8, 10, 12, 10], 9))
     return [a, b]
 
 
 # -- ว124 -------------------------------------------------------------------------------------------
 
 def s_curve(plan: "P.Plan124", w=1800, h=760):
-    """%ACC PLAN (and the ว124 thresholds) as a picture."""
+    """% ACC PLAN and % ACC ACTUAL (as the ว124 example) with the thresholds, as a picture."""
     from PySide6.QtCore import QPointF, QRectF, Qt
     from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
     img = QImage(w, h, QImage.Format_RGB32)
@@ -459,7 +561,8 @@ def s_curve(plan: "P.Plan124", w=1800, h=760):
     xs = [L + pw * (m + 1) / n for m in range(n)]
     g.setPen(QColor("#333333"))
     for m, x in enumerate(xs):
-        g.drawText(QRectF(x - 60, T + ph + 8, 120, 30), Qt.AlignCenter, f"เดือน {m + 1}")
+        g.drawText(QRectF(x - 70, T + ph + 8, 140, 30), Qt.AlignCenter,
+                   plan.labels[m] if plan.labels else f"เดือน {m + 1}")
     g.setPen(QPen(QColor("#333333"), 2))
     g.drawLine(L, T + ph, L + pw, T + ph)
     g.drawLine(L, T, L, T + ph)
@@ -483,7 +586,24 @@ def s_curve(plan: "P.Plan124", w=1800, h=760):
         g.drawText(QRectF(x - 140, y + 4, 280, 26), Qt.AlignCenter, f"ขั้นต่ำ {need:.0f}%")
     del tot
     g.setPen(QColor("#1f4e79"))
-    g.drawText(QRectF(L, 6, pw, 36), Qt.AlignCenter, "% ACC PLAN — ร้อยละของแผนดำเนินงานสะสม")
+    # second line: % ACC ACTUAL for the months entered
+    act = [(x, v) for x, v in zip(xs, plan.acc_actual) if v is not None]
+    if act:
+        apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in act]
+        g.setPen(QPen(QColor("#c55a11"), 4))
+        for a_, b_ in zip(apts, apts[1:]):
+            g.drawLine(a_, b_)
+        g.setBrush(QColor("#c55a11"))
+        for p_, (_x, v) in zip(apts[1:], act):
+            g.drawEllipse(p_, 6, 6)
+            g.drawText(QRectF(p_.x() - 70, p_.y() + 8, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
+    # legend
+    for k_, (col, name) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)"), ("#c55a11", "% ACC ACTUAL (ผลงานจริงสะสม)"))):
+        x0 = L + pw / 2 - 380 + k_ * 400
+        g.setPen(QPen(QColor(col), 5))
+        g.drawLine(QPointF(x0, 26), QPointF(x0 + 50, 26))
+        g.setPen(QColor("#222222"))
+        g.drawText(QRectF(x0 + 60, 8, 330, 36), Qt.AlignLeft | Qt.AlignVCenter, name)
     g.end()
     return img
 
@@ -495,13 +615,13 @@ def report_124(p: P.Project) -> list:
     rep.p("แผนการทำงาน", align="center", bold=True, size=15)
     rep.p(_project_line(p), align="center", size=11.5)
     rep.p(f"ระยะเวลาก่อสร้างตามแผนดำเนินงานทั้งสัญญา {n} เดือน ({sum(plan.days)} วัน)"
-          + (f" เริ่ม {p.start}" if p.start else ""), align="center", size=11.5)
+          + (f" เริ่ม {P.thai_date(p.start)}" if p.start else ""), align="center", size=11.5)
     fs = 9.5 if n <= 8 else 8.5 if n <= 12 else 7.0
     head = [[C("ที่", align="center", rowspan=2), C("รายการ", align="center", rowspan=2),
              C("หน่วย", align="center", rowspan=2), C("ปริมาณงาน", align="center", rowspan=2),
              C("ราคาต่อหน่วย", align="center", rowspan=2), C("เป็นเงิน", align="center", rowspan=2),
              C("%", align="center", rowspan=2)] + [C(f"เดือนที่ {m + 1}", align="center") for m in range(n)],
-            [C(f"{d} วัน", align="center") for d in plan.days]]
+            [C(plan.labels[m] if plan.labels else f"{d} วัน", align="center") for m, d in enumerate(plan.days)]]
     lines = {id(it): (a, pc, pl) for it, a, pc, pl in plan.lines}
     res = P.compute_651(p)
     body = []
@@ -525,11 +645,12 @@ def report_124(p: P.Project) -> list:
     def line(name, vals, money_=False, bold=False):
         return [C(name, align="right", bold=True, colspan=7)] + [
             (Q(v, 0, bold=bold) if money_ else Q(v, 2, bold=bold)) if v is not None else C("") for v in vals]
-    blank = [None] * n
+    half = [v / 2 for v in plan.pct_plan]
+    half_diff = [(a_ - h) if a_ is not None else None for a_, h in zip(plan.actual, half)]
     body += [line("Money", plan.money, True), line("AccMoney", plan.acc_money, True),
              line("% PLAN", plan.pct_plan), line("% ACC PLAN", plan.acc_plan, bold=True),
-             line("% ACTUAL", blank), line("% ACC ACTUAL", blank), line("% ACC DIFF", blank),
-             line("% PLAN/2", [v / 2 for v in plan.pct_plan]), line("% PLAN/2 DIFF", blank)]
+             line("% ACTUAL", plan.actual), line("% ACC ACTUAL", plan.acc_actual, bold=True),
+             line("% ACC DIFF", plan.diff), line("% PLAN/2", half), line("% PLAN/2 DIFF", half_diff)]
     widths = [3, 26, 4.5, 6, 7, 9.5, 5.5] + [max(4.5, 48.0 / n)] * n
     rep.blocks.append(Table(head, body, widths, fs))
     rep.blocks.append(Chart(s_curve(plan), "scurve.png", 80))
@@ -676,11 +797,13 @@ def write(kind: str, p: P.Project, pdf_path, family: str, xlsx: bool = True) -> 
     """Write the reports of `kind` (651 / 124 / 78): one PDF (parts merged) and one .xlsx.
     Returns the paths written."""
     reps = REPORTS[kind](p)
+    family = report_family(family)
     pdf_path = Path(pdf_path)
     written = []
+    footer = all(r.footer for r in reps)
     if len(reps) == 1:
         to_pdf(reps[0], pdf_path, family)
-        number_pages(pdf_path)
+        number_pages(pdf_path, footer)
     else:
         import pymupdf
         parts = []
@@ -696,7 +819,7 @@ def write(kind: str, p: P.Project, pdf_path, family: str, xlsx: bool = True) -> 
         out.close()
         for part in parts:
             part.unlink(missing_ok=True)
-        number_pages(pdf_path)
+        number_pages(pdf_path, footer)
     written.append(pdf_path)
     if xlsx:
         xp = pdf_path.with_suffix(".xlsx")

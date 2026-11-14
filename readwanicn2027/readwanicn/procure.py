@@ -71,11 +71,51 @@ def num(v):
 
 
 def text(v) -> str:
+    """Cell text, with Thai digits written as Arabic digits (๓ → 3)."""
     if v is None:
         return ""
     if isinstance(v, float):
         return f"{v:g}"
-    return str(v).replace("\r", " ").replace("\n", " ").strip()
+    return str(v).translate(THAI_DIGITS).replace("\r", " ").replace("\n", " ").strip()
+
+
+def arabic(s) -> str:
+    return str(s or "").translate(THAI_DIGITS)
+
+
+THAI_MONTHS = ("มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม",
+               "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม")
+THAI_MONTHS_SHORT = ("ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.")
+
+
+def iso_date(s):
+    """datetime.date from 'YYYY-MM-DD', or None (old files kept free text)."""
+    import datetime as dt
+    try:
+        return dt.date.fromisoformat(str(s)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def thai_date(s) -> str:
+    """'2026-11-14' → '14 พฤศจิกายน 2569' (Arabic digits, Buddhist year); other text unchanged."""
+    d = iso_date(s)
+    if d is None:
+        return arabic(s)
+    return f"{d.day} {THAI_MONTHS[d.month - 1]} {d.year + 543}"
+
+
+def month_labels(start, n: int) -> list:
+    """Calendar month of each plan month from the start date: ['พ.ย. 69', 'ธ.ค. 69', …] or [] without a date."""
+    d = iso_date(start)
+    if d is None:
+        return []
+    out = []
+    for k in range(n):
+        m = d.month - 1 + k
+        y, m = d.year + m // 12, m % 12
+        out.append(f"{THAI_MONTHS_SHORT[m]} {(y + 543) % 100:02d}")
+    return out
 
 
 def r2(x: float) -> float:
@@ -182,7 +222,8 @@ class Project:
     special: float = 0.0            # ค่าใช้จ่ายพิเศษตามข้อกำหนด
     months: int = 0                 # ว124
     days: int = 0
-    start: str = ""                 # เดือนเริ่ม (ข้อความ) ไม่ใส่ก็ได้
+    start: str = ""                 # วันเริ่มงาน YYYY-MM-DD (ค.ศ.) ไม่ใส่ก็ได้
+    actual: list = field(default_factory=list)   # ว124: ผลงานจริงรายเดือน (% ของทั้งโครงการ)
     source: str = ""                # ไฟล์ที่นำเข้า
     signer: str = ""                # ผู้จัดทำ/ผู้รับจ้าง (ลงชื่อท้ายแผน)
     items: list = field(default_factory=list)
@@ -199,6 +240,11 @@ class Project:
         d.pop("format", None)
         items = [Item(**{k: v for k, v in it.items() if k in Item.__dataclass_fields__})
                  for it in d.pop("items", [])]
+        for it in items:                              # older files kept Thai digits
+            it.name, it.unit = arabic(it.name), arabic(it.unit)
+        for k in ("title", "agency", "place", "contractor", "contract_no", "project_no"):
+            if isinstance(d.get(k), str):
+                d[k] = arabic(d[k])
         p = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
         p.items = items
         return p
@@ -706,7 +752,7 @@ def compute_651(p: Project) -> Result651:
     if p.budget and p.offer > p.budget:
         warn.append("ราคาเสนอสูงกว่าวงเงินงบประมาณ — ว651 ข้อ (2.3) ให้ยกเลิกการจัดซื้อจัดจ้าง")
     return Result651(rows=rows, red=red, factor=f, uplift=up, groups=groups, mid_total=mid_total,
-                     mid_up_total=r2(sum(r.mid_up for r in rows)),
+                     mid_up_total=r2(r2(mid_total) * up),
                      reduced_total=r2(sum(r.reduced for r in rows)), adjust_row=adj, warnings=warn)
 
 
@@ -737,31 +783,140 @@ def month_days(months: int, days: int) -> list:
     return base
 
 
+# ว124: ลำดับงานก่อสร้าง — ช่วงเวลาของแต่ละหมวดเป็นสัดส่วนของระยะเวลาทั้งสัญญา (เริ่ม, สิ้นสุด)
+PHASES = (
+    ("prep", "งานเตรียมการ", (0.0, 0.10),
+     ("วางผัง", "สำรวจ", "ปรับพื้นที่", "รื้อ", "ถางป่า", "ขุดตอ", "เตรียมพื้นที่", "ป้ายโครงการ", "บ้านพักคนงาน",
+      "สำนักงานสนาม", "ที่พักคนงาน")),
+    ("found", "งานดินและฐานราก", (0.0, 0.30),
+     ("ขุดดิน", "ฐานราก", "เสาเข็ม", "ตอม่อ", "ทรายรอง", "ทรายหยาบ", "คอนกรีตหยาบ", "ถมดิน", "ดินถม", "บดอัด",
+      "ถมทราย", "คานคอดิน", "งานดิน")),
+    ("struct", "งานโครงสร้าง", (0.10, 0.55),
+     ("เสา", "คาน", "พื้น", "บันได", "โครงสร้าง", "คสล", "ค.ส.ล", "กันสาด", "แผ่นพื้น")),
+    ("roof", "งานหลังคา", (0.35, 0.65),
+     ("หลังคา", "จันทัน", "แป", "อะเส", "ครอบ", "เมทัลชีท", "รางน้ำ", "เชิงชาย", "ปั้นลม", "truss", "ทรัส")),
+    ("wall", "งานผนัง", (0.35, 0.65), ("ก่อ", "อิฐ", "บล็อก", "ผนัง", "เอ็น", "ทับหลัง")),
+    ("mep", "งานระบบ", (0.40, 0.90),
+     ("ไฟฟ้า", "สายไฟ", "ปลั๊ก", "สวิตช์", "โคม", "หลอด", "ประปา", "สุขาภิบาล", "ท่อ", "pvc", "ระบบ", "มิเตอร์",
+      "ปั๊ม", "ถังบำบัด", "บ่อเกรอะ", "บ่อซึม", "พัดลม", "ปรับอากาศ", "ดับเพลิง")),
+    ("finish", "งานตกแต่ง", (0.55, 0.92),
+     ("ฉาบ", "ฝ้า", "กระเบื้อง", "ปู", "ทาสี", "สี", "บัว", "ขัดมัน", "หินขัด", "แกรนิต", "ลามิเนต", "ยาแนว", "กันซึม")),
+    ("door", "งานประตูหน้าต่างและสุขภัณฑ์", (0.70, 0.96),
+     ("ประตู", "หน้าต่าง", "บานกระทุ้ง", "บานเลื่อน", "วงกบ", "ช่องแสง", "มุ้งลวด", "เหล็กดัด", "สุขภัณฑ์",
+      "โถส้วม", "อ่างล้าง", "ก๊อก", "กระจก")),
+)
+EXTERNAL = ("ext", "งานภายนอก", (0.50, 0.96),
+            ("รั้ว", "ถนน", "ลาน", "ทางเดิน", "รางระบาย", "ระบายน้ำ", "บ่อพัก", "คูระบาย", "ท่อระบาย", "ปลูก",
+             "สนาม", "ไม้ประดับ", "ที่จอด", "เขื่อนกันดิน"))
+HANDOVER = ("handover", "ป้าย ครุภัณฑ์ และส่งมอบงาน (เดือนสุดท้าย)", (1.0, 1.0),
+            ("ป้าย", "ครุภัณฑ์", "ทำความสะอาด", "ส่งมอบ", "เก็บกวาด", "เฟอร์นิเจอร์", "โต๊ะ", "เก้าอี้",
+             "ตู้เก็บเอกสาร", "อุปกรณ์สำนักงาน"))
+
+
+def _words(s: str) -> str:
+    # «ก่อสร้าง» is not masonry; «ป้ายโครงการ» is a site sign put up first
+    return _norm(s).replace("ก่อสร้าง", "").replace("ป้ายโครงการ", "เตรียมพื้นที่")
+
+
+def _match(s: str, phase) -> bool:
+    return any(w in s for w in phase[3])
+
+
+def phase_of(path: list):
+    """(override phase or None, building phase) for a line; `path` = its name then its headings,
+    nearest first. A heading wins over the line's own words (คอนกรีต under «ฐานราก» is foundation)."""
+    words = [_words(x) for x in path]
+    override = None
+    for w in words[1:] + words[:1]:
+        if _match(w, EXTERNAL):
+            override = EXTERNAL
+            break
+        if _match(w, HANDOVER):
+            override = HANDOVER
+            break
+    base = None
+    for w in words[1:] + words[:1]:
+        base = next((ph for ph in PHASES if _match(w, ph)), None)
+        if base:
+            break
+    return override, base
+
+
+def plan_phases(p: Project) -> list:
+    """[(item, override, phase)] for the lines of the bill (a line nobody can place follows the one before)."""
+    out, stack, last = [], [], (None, PHASES[2])
+    for it in p.items:
+        while stack and it.code and stack[-1].code and stack[-1].level >= it.level:
+            stack.pop()
+        if it.header:
+            stack.append(it)
+            continue
+        path = [it.name] + [h.name for h in reversed(stack)]
+        ov, base = phase_of(path)
+        if base is None and ov is None:
+            ov, base = last
+        base = base or last[1]
+        last = (ov, base)
+        out.append((it, ov, base))
+    return out
+
+
+def _spread(lo: float, hi: float, months: int) -> list:
+    """Per cent of a line in each month for the window [lo, hi] (in months)."""
+    plan = [0.0] * months
+    lo, hi = max(0.0, min(lo, months)), max(0.0, min(hi, months))
+    if hi - lo < 1e-9:
+        plan[min(months - 1, int(lo))] = 100.0
+    else:
+        for m in range(int(lo), min(months, int(math.ceil(hi - 1e-9)))):
+            ov = min(hi, m + 1) - max(lo, m)
+            if ov > 0:
+                plan[m] = ov / (hi - lo) * 100.0
+    plan = [round(x, 2) for x in plan]
+    k = max(range(months), key=lambda m: plan[m])
+    plan[k] = round(plan[k] + 100.0 - sum(plan), 2)            # each line sums to exactly 100
+    return plan
+
+
 def auto_plan(p: Project, months: int) -> None:
-    """Spread the lines over the months in the order of the bill by their value,
-    so the money each month is about the same; a large line spans several months.
+    """Spread the lines over the months in the order of construction: preparation, earthwork and
+    foundations, structure, roof and walls, services, finishes, doors/windows and sanitary ware,
+    external works; signs, equipment (ครุภัณฑ์) and handing over in the last month. Inside a
+    group the lines follow the bill, each over its share of the group's window.
     The owner edits the per-cent afterwards."""
     months = max(1, int(months))
     res = compute_651(p)
-    amounts = [(r.item, r.reduced) for r in res.rows if not r.item.header]
-    total = sum(a for _i, a in amounts) or 1.0
-    acc = 0.0
-    for it, a in amounts:
-        lo, hi = acc / total * months, (acc + a) / total * months
-        acc += a
-        plan = [0.0] * months
-        if hi - lo < 1e-12:
-            plan[min(months - 1, int(lo))] = 100.0
-        else:
-            for m in range(int(lo), min(months, int(math.ceil(hi)))):
-                ov = min(hi, m + 1) - max(lo, m)
-                if ov > 0:
-                    plan[m] = ov / (hi - lo) * 100.0
-        plan = [round(x, 2) for x in plan]
-        if plan:                                     # each line sums to exactly 100
-            k = max(range(months), key=lambda m: plan[m])
-            plan[k] = round(plan[k] + 100.0 - sum(plan), 2)
-        it.plan = plan
+    value = {id(r.item): r.reduced for r in res.rows}
+    groups = {}
+    phases = plan_phases(p)
+    for it, ov, base in phases:
+        groups.setdefault((ov[0] if ov else "", base[0]), []).append((it, ov, base))
+    building = sum(value.get(id(it), 0.0) for it, ov, _b in phases if ov is None)
+    whole = sum(value.get(id(it), 0.0) for it, _o, _b in phases) or 1.0
+    # external works wait for the building only when there is a building to wait for
+    ext_window = EXTERNAL[2] if building >= 0.25 * whole else (0.0, 0.96)
+    for (_ok, _bk), lines in groups.items():
+        ov, base = lines[0][1], lines[0][2]
+        a, b = base[2]
+        if ov is HANDOVER:
+            for it, _o, _b in lines:
+                it.plan = [0.0] * (months - 1) + [100.0]
+            continue
+        if ov is EXTERNAL:                     # the building order, squeezed into the external window
+            A, B = ext_window
+            a, b = A + a * (B - A), A + b * (B - A)
+        total = sum(value.get(id(it), 0.0) for it, _o, _b in lines) or 1.0
+        acc = 0.0
+        span = (b - a) * months
+        for it, _o, _b in lines:
+            v = value.get(id(it), 0.0)
+            c0, c1 = acc / total, (acc + v) / total
+            acc += v
+            lo, hi = a * months + c0 * span, a * months + c1 * span
+            if hi - lo < 1.0 and span >= 1.0:     # a line takes at least a month where the window allows
+                mid = (lo + hi) / 2
+                lo, hi = max(a * months, mid - 0.5), min(b * months, mid + 0.5)
+            it.plan = _spread(lo, hi, months)
     p.months = months
     if not p.days:
         p.days = 30 * months
@@ -779,6 +934,10 @@ class Plan124:
     total: float
     bad_lines: list                # lines whose months do not add to 100
     checks: list                   # [(text, month index, planned acc %, required %)]
+    actual: list = field(default_factory=list)       # % ACTUAL per month (None = not yet)
+    acc_actual: list = field(default_factory=list)
+    diff: list = field(default_factory=list)         # % ACC ACTUAL − % ACC PLAN
+    labels: list = field(default_factory=list)       # calendar month of each plan month
 
 
 def compute_124(p: Project) -> Plan124:
@@ -808,8 +967,19 @@ def compute_124(p: Project) -> Plan124:
         day = frac * tot_days
         k = next((i for i, c in enumerate(cum) if c >= day - 1e-9), months - 1)
         checks.append((words, k, accp[k], need))
+    act = [(p.actual[m] if m < len(p.actual) else None) for m in range(months)]
+    acc_act, diff, s_ = [], [], 0.0
+    for m, v in enumerate(act):
+        if v is None:
+            acc_act.append(None)
+            diff.append(None)
+        else:
+            s_ += v
+            acc_act.append(s_)
+            diff.append(s_ - accp[m])
     return Plan124(months=months, days=days, lines=lines, money=money, acc_money=acc, pct_plan=pct,
-                   acc_plan=accp, total=total, bad_lines=bad, checks=checks)
+                   acc_plan=accp, total=total, bad_lines=bad, checks=checks, actual=act, acc_actual=acc_act,
+                   diff=diff, labels=month_labels(p.start, months))
 
 
 # -- ว78 ------------------------------------------------------------------------------------------

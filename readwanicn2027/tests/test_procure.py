@@ -280,3 +280,82 @@ def test_window_fills_and_edits(app, tmp_path, monkeypatch):
     assert p.mid_price == 150_000 and p.offer == 140_000
     for w in (pd, dlg):
         w.deleteLater()
+
+
+# -- 2027.4.1: dates, construction order, actual progress, CSV, Arabic digits -----------------------
+
+def test_thai_dates_and_month_labels():
+    assert P.thai_date("2026-11-14") == "14 พฤศจิกายน 2569"
+    assert P.thai_date("๑๔ พย.๒๕๖๙") == "14 พย.2569"            # free text kept, digits made Arabic
+    assert P.month_labels("2026-11-14", 3) == ["พ.ย. 69", "ธ.ค. 69", "ม.ค. 70"]
+    assert P.month_labels("", 3) == []
+
+
+def _house() -> P.Project:
+    L = lambda code, name, unit="งาน", qty=1, cost=0.0, **kw: P.Item(  # noqa: E731
+        f"{code} {name}", unit, qty, cost=cost, code=code, level=code.count(".") + 1, **kw)
+    H = lambda code, name: P.Item(f"{code} {name}", header=True, code=code, level=code.count(".") + 1)  # noqa
+    items = [H("1", "งานก่อสร้างอาคาร"), L("1.1", "งานวางผัง สำรวจ ปรับพื้นที่", "ตร.ม.", 100, 5_000),
+             H("1.2", "งานฐานราก"), L("1.2.1", "งานขุดดิน", "ลบ.ม.", 50, 20_000),
+             L("1.2.2", "คอนกรีตโครงสร้าง", "ลบ.ม.", 10, 40_000),
+             H("1.3", "งานเสาและคาน"), L("1.3.1", "คอนกรีตโครงสร้าง", "ลบ.ม.", 20, 120_000),
+             H("1.4", "งานหลังคา"), L("1.4.1", "กระเบื้องหลังคา", "ตร.ม.", 200, 80_000),
+             H("1.5", "งานผนัง"), L("1.5.1", "ผนังก่ออิฐมอญ", "ตร.ม.", 300, 90_000),
+             H("1.6", "งานระบบไฟฟ้า"), L("1.6.1", "เดินสายไฟ", "จุด", 40, 60_000),
+             H("1.7", "งานตกแต่ง"), L("1.7.1", "ทาสีภายนอก", "ตร.ม.", 600, 50_000),
+             L("1.8", "ประตูหน้าต่าง", "ชุด", 10, 70_000),
+             H("2", "งานรั้วและลาน"), L("2.1", "รั้วคอนกรีต", "ม.", 100, 100_000),
+             H("3", "งานป้ายชื่อและครุภัณฑ์"), L("3.1", "ป้ายชื่ออาคาร", "ป้าย", 1, 30_000),
+             L("3.2", "โต๊ะเก้าอี้", "ชุด", 10, 40_000, equip=True)]
+    return P.Project(items=items, factor=1.3, mid_price=0, offer=0)
+
+
+def test_plan_follows_the_order_of_construction():
+    p = _house()
+    p.mid_price = P.r2(p.cost_total * 1.3) + P.r2(p.equip_total * P.VAT_FACTOR)
+    p.offer = P.r2(p.mid_price * 0.98)
+    P.auto_plan(p, 8)
+
+    def first(code):
+        it = next(i for i in p.items if i.code == code)
+        assert abs(sum(it.plan) - 100) < 0.01
+        return next(m for m, v in enumerate(it.plan) if v > 0)
+    assert first("1.1") == 0 and first("1.2.1") <= 1
+    assert first("1.2.1") <= first("1.3.1") <= first("1.4.1")
+    assert first("1.3.1") < first("1.7.1") and first("1.5.1") < first("1.7.1")
+    assert first("1.7.1") <= first("1.8")
+    assert first("2.1") > first("1.2.1")                         # external works after the start
+    for code in ("3.1", "3.2"):                                  # sign and equipment: last month
+        it = next(i for i in p.items if i.code == code)
+        assert it.plan == [0.0] * 7 + [100.0]
+    plan = P.compute_124(p)
+    assert not plan.bad_lines and abs(plan.acc_plan[-1] - 100) < 1e-6
+    assert all(b >= a for a, b in zip(plan.acc_plan, plan.acc_plan[1:]))
+
+
+def test_actual_progress_line():
+    p = _house()
+    p.mid_price, p.offer = 1_000_000, 950_000
+    P.auto_plan(p, 4)
+    p.actual = [10.0, 20.5]
+    plan = P.compute_124(p)
+    assert plan.acc_actual[:2] == [10.0, 30.5] and plan.acc_actual[2:] == [None, None]
+    assert plan.diff[1] == pytest.approx(30.5 - plan.acc_plan[1])
+
+
+def test_csv_and_arabic_digits(app, tmp_path):
+    import csv
+
+    from readwanicn import procure_report as R
+    p = _building_example()
+    p.title = "อาคาร ระยะที่ ๓"
+    P.auto_plan(p, 4)
+    files = R.write_csv("651", p, tmp_path / "w651.csv")
+    assert len(files) == 2 and all(f.exists() for f in files)
+    rows = list(csv.reader(open(files[0], encoding="utf-8-sig")))
+    flat = " ".join(" ".join(r) for r in rows)
+    assert "ระยะที่ 3" in flat and "๓" not in flat
+    assert any("24800000.00" in c for r in rows for c in r)      # numbers without commas, ready to edit
+    for kind, n in (("124", 1), ("78", 3)):
+        assert len(R.write_csv(kind, p, tmp_path / f"w{kind}.csv")) == n
+    assert "๓" not in R.to_html(R.report_651(p)[0], "Laksaman")

@@ -7,12 +7,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QStandardPaths, Qt
+import datetime as dt
+
+from PySide6.QtCore import QDate, QLocale, QSettings, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout,
-    QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QCalendarWidget, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import procure as P
@@ -50,6 +52,72 @@ class MoneyEdit(QLineEdit):
 
     def set_value(self, v):
         self.setText(P.money(v) if v else "")
+
+
+class ThaiDateEdit(QWidget):
+    """A date shown as «14 พฤศจิกายน 2569», chosen from a calendar; today when nothing is set."""
+
+    changed = Signal(str)                 # 'YYYY-MM-DD'
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        self.view = QLineEdit()
+        self.view.setReadOnly(True)
+        self.view.setPlaceholderText("กด 📅 เพื่อเลือกวันที่")
+        h.addWidget(self.view, 1)
+        pick = QToolButton()
+        pick.setText("📅")
+        pick.setToolTip("เลือกวันที่จากปฏิทิน")
+        pick.clicked.connect(self.choose)
+        h.addWidget(pick)
+        today = QToolButton()
+        today.setText("วันนี้")
+        today.clicked.connect(lambda: self.set_iso(dt.date.today().isoformat(), emit=True))
+        h.addWidget(today)
+        self._iso = ""
+        self.view.mousePressEvent = lambda _e: self.choose()
+
+    def iso(self) -> str:
+        return self._iso
+
+    def set_iso(self, iso: str, emit=False):
+        self._iso = iso or ""
+        self.view.setText(P.thai_date(self._iso) if self._iso else "")
+        if emit:
+            self.changed.emit(self._iso)
+
+    def choose(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("เลือกวันที่")
+        v = QVBoxLayout(dlg)
+        cal = QCalendarWidget()
+        cal.setGridVisible(True)
+        cal.setLocale(QLocale(QLocale.Thai, QLocale.Thailand))
+        cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        cal.setStyleSheet("QCalendarWidget QAbstractItemView { color:#111; background:#ffffff;"
+                          " selection-background-color:#1f78c8; selection-color:white; }"
+                          " QCalendarWidget QWidget#qt_calendar_navigationbar { background:#1f4e79; }"
+                          " QCalendarWidget QToolButton { color:white; font-weight:bold; }")
+        d = P.iso_date(self._iso) or dt.date.today()
+        cal.setSelectedDate(QDate(d.year, d.month, d.day))
+        v.addWidget(cal)
+        note = QLabel()
+        v.addWidget(note)
+        show = lambda: note.setText("วันที่เลือก: " + P.thai_date(cal.selectedDate().toString("yyyy-MM-dd")))  # noqa
+        cal.selectionChanged.connect(show)
+        show()
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("ตกลง")
+        bb.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        cal.activated.connect(lambda _d: dlg.accept())
+        v.addWidget(bb)
+        if dlg.exec() == QDialog.Accepted:
+            self.set_iso(cal.selectedDate().toString("yyyy-MM-dd"), emit=True)
 
 
 # -- the popup: การคำนวณร้อยละวัสดุในการจ้าง ------------------------------------------------------
@@ -183,8 +251,19 @@ class ProcureDialog(QDialog):
         self.path: Path | None = None
         self._filling = False
         self.setWindowTitle("ปรับลดราคา ว651 · แผนการทำงาน ว124 · แผนการใช้พัสดุ ว78")
-        self.resize(1280, 860)
-        lay = QVBoxLayout(self)
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(640, 420)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        # everything but the report buttons scrolls, so the buttons stay in view on any screen
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 4, 0)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
 
         # 1. รับข้อมูล
         g1 = QGroupBox("1. รับข้อมูลใบแจ้งปริมาณงาน (ปร.4) — ตารางคำนวณ, เอกสาร หรือ PDF")
@@ -219,9 +298,14 @@ class ProcureDialog(QDialog):
                 ("project_no", "เลขที่โครงการ"), ("contractor", "ชื่อผู้รับจ้าง"), ("contract_no", "สัญญาเลขที่"),
                 ("contract_date", "ลงวันที่"), ("signer", "ผู้ลงนามแผน (ผู้รับจ้าง)"))
         for i, (key, label) in enumerate(spec):
-            e = QLineEdit()
-            e.editingFinished.connect(lambda k=key, w=e: self._set_field(k, w.text()))
-            self.fields[key] = e
+            if key == "contract_date":
+                e = ThaiDateEdit()
+                e.changed.connect(lambda iso: self._set_field("contract_date", iso))
+                self.contract_date = e
+            else:
+                e = QLineEdit()
+                e.editingFinished.connect(lambda k=key, w=e: self._set_field(k, w.text()))
+                self.fields[key] = e
             r, c = 1 + i // 2, (i % 2) * 2
             f.addWidget(QLabel(label + ":"), r, c)
             f.addWidget(e, r, c + 1)
@@ -250,23 +334,38 @@ class ProcureDialog(QDialog):
         self.tabs.addTab(self._tab_651(), "รายการปรับลดราคา ว651")
         self.tabs.addTab(self._tab_124(), "แผนการทำงาน ว124")
         self.tabs.addTab(self._tab_78(), "แผนการใช้พัสดุในประเทศ ว78")
+        self.tabs.setMinimumHeight(300)
         lay.addWidget(self.tabs, 1)
 
-        # reports
-        row = QHBoxLayout()
-        for kind, text, tip in (("651", "📄 รายงาน ว651", "แบบสรุปราคากลาง + ราคาที่ปรับลดทุกรายการ + เอกสารแนบท้ายสัญญา"),
-                                ("124", "📄 รายงาน ว124", "แผนการทำงานรายเดือน + กราฟแผนงานสะสม + เกณฑ์ประเมิน"),
-                                ("78", "📄 รายงาน ว78", "ภาคผนวก 1 พัสดุในประเทศ · ภาคผนวก 2 เหล็ก · ภาคผนวก 3 รายงานผล")):
-            b = QPushButton(text)
+        # reports: always visible under the scrolling part
+        bar = QFrame()
+        bar.setObjectName("ReportBar")
+        row = QGridLayout(bar)
+        row.setContentsMargins(0, 6, 0, 0)
+        row.setHorizontalSpacing(8)
+        row.setVerticalSpacing(4)
+        self.report_buttons = {}
+        for col, (kind, tip) in enumerate((("651", "แบบสรุปราคากลาง + ราคาที่ปรับลดทุกรายการ + เอกสารแนบท้ายสัญญา"),
+                                           ("124", "แผนการทำงานรายเดือน + กราฟแผนงานสะสม + เกณฑ์ประเมิน"),
+                                           ("78", "ภาคผนวก 1 พัสดุในประเทศ · ภาคผนวก 2 เหล็ก · ภาคผนวก 3 รายงานผล"))):
+            b = QPushButton(f"📄 รายงาน ว{kind}")
             b.setObjectName("Primary")
+            b.setMinimumHeight(38)
             b.setToolTip(tip + " — บันทึกเป็น PDF และตารางคำนวณ (.xlsx)")
             b.clicked.connect(lambda _=False, k=kind: self.write_report(k))
-            row.addWidget(b)
-        row.addStretch(1)
+            c = QPushButton(f"🧾 CSV ว{kind}")
+            c.setMinimumHeight(34)
+            c.setToolTip(tip + " — บันทึกเป็นไฟล์ข้อมูล .csv เพื่อนำไปแก้ไข")
+            c.clicked.connect(lambda _=False, k=kind: self.write_csv(k))
+            row.addWidget(b, 0, col)
+            row.addWidget(c, 1, col)
+            self.report_buttons[kind] = (b, c)
         close = QPushButton("ปิด")
+        close.setMinimumHeight(38)
         close.clicked.connect(self.accept)
-        row.addWidget(close)
-        lay.addLayout(row)
+        row.addWidget(close, 0, 4, 2, 1)
+        row.setColumnStretch(3, 1)
+        outer.addWidget(bar)
         if project is None:
             self._open_last()
         self.fill()
@@ -304,10 +403,10 @@ class ProcureDialog(QDialog):
         h.addWidget(self.days)
         self.months.valueChanged.connect(self._months_changed)
         self.days.valueChanged.connect(self._days_changed)
-        h.addWidget(QLabel("เริ่มเดือน (ไม่ใส่ก็ได้):"))
-        self.start = QLineEdit()
-        self.start.setPlaceholderText("เช่น ตุลาคม 2569")
-        self.start.editingFinished.connect(lambda: self._set_field("start", self.start.text()))
+        h.addWidget(QLabel("วันเริ่มงาน:"))
+        self.start = ThaiDateEdit()
+        self.start.setMinimumWidth(260)
+        self.start.changed.connect(self._start_changed)
         h.addWidget(self.start)
         b = QPushButton("⚙ สร้างแผนงาน")
         b.setObjectName("Primary")
@@ -425,6 +524,10 @@ class ProcureDialog(QDialog):
         else:
             self.fill_124()
 
+    def _start_changed(self, iso):
+        self.p.start = iso
+        self.fill_124()
+
     def build_plan(self):
         if not self.p.items:
             return
@@ -442,11 +545,16 @@ class ProcureDialog(QDialog):
             i = self.kind.findData(p.work_type)
             self.kind.setCurrentIndex(max(0, i))
             for k, e in self.fields.items():
-                e.setText(getattr(p, k) or "")
+                e.setText(P.arabic(getattr(p, k)) or "")
+            if p.items and not p.contract_date:          # ลงวันที่: today unless chosen
+                p.contract_date = dt.date.today().isoformat()
+            self.contract_date.set_iso(p.contract_date if P.iso_date(p.contract_date) else "")
+            if not P.iso_date(p.contract_date) and p.contract_date:
+                self.contract_date.view.setText(P.arabic(p.contract_date))
             self.budget.set_value(p.budget)
             self.months.setValue(p.months or 4)
             self.days.setValue(p.days or 30 * (p.months or 4))
-            self.start.setText(p.start)
+            self.start.set_iso(p.start if P.iso_date(p.start) else "")
             if p.items:
                 src = Path(p.source).name if p.source else "—"
                 self.src.setText(f"ไฟล์: {src} · {len(p.leaves):,} รายการ · ค่างานต้นทุน {p.cost_total:,.2f} บาท"
@@ -537,10 +645,11 @@ class ProcureDialog(QDialog):
             n = plan.months
             t.setColumnCount(5 + n)
             t.setHorizontalHeaderLabels(["รายการ", "หน่วย", "เป็นเงิน", "%", "รวม %"]
-                                        + [f"เดือน {m + 1}\n{d} วัน" for m, d in enumerate(plan.days)])
+                                        + [f"เดือน {m + 1}\n{plan.labels[m] if plan.labels else f'{d} วัน'}"
+                                           for m, d in enumerate(plan.days)])
             t.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
             self._lines = plan.lines
-            t.setRowCount(len(plan.lines) + 2)
+            t.setRowCount(len(plan.lines) + 4)
             for i, (it, a, pc, pl) in enumerate(plan.lines):
                 tot = sum(pl)
                 t.setItem(i, 0, _item(it.label))
@@ -557,9 +666,16 @@ class ProcureDialog(QDialog):
             for c in range(1, 5):
                 t.setItem(k, c, _item(""))
                 t.setItem(k + 1, c, _item(""))
+            t.setItem(k + 2, 0, _item("% ACTUAL ผลงานจริง (กรอกได้)", bold=True))
+            t.setItem(k + 3, 0, _item("% ACC ACTUAL ผลงานจริงสะสม", bold=True))
+            for c in range(1, 5):
+                t.setItem(k + 2, c, _item(""))
+                t.setItem(k + 3, c, _item(""))
             for m in range(n):
                 t.setItem(k, 5 + m, _num_item(plan.pct_plan[m], bold=True, bg="#ddebf7"))
                 t.setItem(k + 1, 5 + m, _num_item(plan.acc_plan[m], bold=True, bg="#ddebf7"))
+                t.setItem(k + 2, 5 + m, _num_item(plan.actual[m], editable=True, bg="#fce4d6"))
+                t.setItem(k + 3, 5 + m, _num_item(plan.acc_actual[m], bold=True, bg="#fce4d6"))
             chk = " · ".join(f"{w}: แผนสะสม {v:.2f} % (ขั้นต่ำ {need:.0f} %)" for w, _k, v, need in plan.checks)
             bad = f" · <b style='color:#c00000'>{len(plan.bad_lines)} รายการรวมไม่เท่ากับ 100 %</b>" \
                 if plan.bad_lines else ""
@@ -569,7 +685,19 @@ class ProcureDialog(QDialog):
             self._filling = False
 
     def _t124_changed(self, cell):
-        if self._filling or cell.column() < 5 or cell.row() >= len(getattr(self, "_lines", [])):
+        if self._filling or cell.column() < 5:
+            return
+        lines = getattr(self, "_lines", [])
+        if cell.row() == len(lines) + 2:                  # % ACTUAL of a month
+            m = cell.column() - 5
+            act = list(self.p.actual) + [None] * max(0, self.p.months - len(self.p.actual))
+            act[m] = P.num(cell.text())
+            while act and act[-1] is None:
+                act.pop()
+            self.p.actual = act
+            self.fill_124()
+            return
+        if cell.row() >= len(lines):
             return
         it = self._lines[cell.row()][0]
         m = cell.column() - 5
@@ -700,6 +828,48 @@ class ProcureDialog(QDialog):
             from PySide6.QtCore import QUrl
             from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(files[0])))
+
+    def write_csv(self, kind: str):
+        p = self.p
+        if not p.items:
+            QMessageBox.information(self, self.windowTitle(), "กรุณารับข้อมูลใบแจ้งปริมาณงานก่อน")
+            return
+        if not p.offer or not p.mid_price:
+            self.ask_prices()
+            if not p.offer:
+                return
+        if kind == "124" and not any(it.plan for it in p.leaves):
+            self.build_plan()
+        names = {"651": "ว651 ปรับลดราคา", "124": "ว124 แผนการทำงาน", "78": "ว78 แผนการใช้พัสดุในประเทศ"}
+        start = self.settings.value("procure/out", str(Path.home() / "Documents"))
+        default = Path(start) / f"{names[kind]} {safe_name(P.arabic(p.title))[:40]}.csv"
+        path, _ = QFileDialog.getSaveFileName(self, f"บันทึก CSV {names[kind]}", str(default),
+                                              "ไฟล์ข้อมูลคั่นด้วยจุลภาค (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        self.settings.setValue("procure/out", str(Path(path).parent))
+        files = R.write_csv(kind, p, path)
+        self.record(f"CSV {names[kind]}")
+        self.save_project(quiet=True)
+        QMessageBox.information(self, self.windowTitle(), "บันทึกไฟล์ CSV แล้ว:\n" + "\n".join(str(f) for f in files))
+
+    def showEvent(self, e):
+        """Fit the screen it opens on (laptops, 125–175 % scaling): never larger than the
+        available area, centred, the report buttons always on screen."""
+        super().showEvent(e)
+        if getattr(self, "_fitted", False):
+            return
+        self._fitted = True
+        scr = self.screen() or (self.parent().screen() if self.parent() else None)
+        if scr is None:
+            return
+        av = scr.availableGeometry()
+        w = min(1300, int(av.width() * 0.96))
+        h = min(900, int(av.height() * 0.92))
+        self.resize(w, h)
+        self.move(av.x() + (av.width() - w) // 2, av.y() + (av.height() - h) // 2)
 
     def closeEvent(self, e):
         if self.p.items:
