@@ -50,6 +50,11 @@ QStatusBar {{ background: {bar}; color: {bar_text}; }}
 QToolTip {{ background: {panel}; color: {text}; border: 1px solid {border}; }}
 QMenu {{ background: {panel}; border: 1px solid {border}; }}
 QMenu::item:selected {{ background: {accent}; color: {accent_text}; }}
+#TopBar QPushButton#pill {{ background: transparent; color: {bar_text}; border: 1px solid {border};
+    border-radius: 16px; padding: 5px 14px; min-height: 22px; }}
+#TopBar QPushButton#pill:hover {{ border-color: {accent}; }}
+#TopBar QPushButton#pill[on="true"] {{ background: {accent}; color: {accent_text}; border-color: {accent};
+    font-weight: bold; }}
 """
 
 

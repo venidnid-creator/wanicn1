@@ -208,3 +208,28 @@ def test_remember_password_signs_in_without_typing(tmp_path):
     again.try_login()
     third = LoginDialog(users_path=users, settings=settings, fetch=False)
     assert third.password.text() == "" and not third.remember.isChecked()
+
+
+def test_theme_pills_and_language(tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from readwanicn import lang, themes
+    from readwanicn.ui import MainWindow
+    QApplication.instance() or QApplication([])
+    w = MainWindow("Wanicn")
+    assert list(w.theme_pills) == list(themes.THEMES) and set(w.lang_pills) == {"th", "en"}
+    w.theme_pills["เขียวสำรวจ"].click()
+    assert w.theme_pills["เขียวสำรวจ"].property("on") and not w.theme_pills["บลูพริ้นท์"].property("on")
+    open_btn = w.tool_rows.findChildren(type(w.snap_btn))[0]
+    w.set_lang("en")
+    try:
+        assert w.lang_pills["en"].property("on")
+        assert open_btn.text().endswith("Open") and w.tabs.tabText(0) == "PDF"
+        assert w.theme_pills["มืด"].text() == "Dark" and w.lang_pills["th"].text() == "ไทย"
+        w.set_tool("circle")
+        assert "Circle" in w.shape_btn.text()
+    finally:
+        w.set_lang("th")
+    assert open_btn.text().endswith("เปิดไฟล์") and w.tabs.tabText(0) == "เอกสาร PDF"
+    assert w.theme_pills["มืด"].text() == "มืด" and lang.current() == "th"
+    w.apply_theme(themes.DEFAULT)

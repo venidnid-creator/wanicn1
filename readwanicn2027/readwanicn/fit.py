@@ -99,6 +99,9 @@ class ScreenFit(QObject):
                 and not obj.property("_fitted"):
             obj.setProperty("_fitted", True)
             fit_to_screen(obj, centre=isinstance(obj, QMainWindow))
+            from . import lang
+            if lang.current() == "en" and isinstance(obj, QDialog):
+                lang.apply(obj)
         return False
 
 

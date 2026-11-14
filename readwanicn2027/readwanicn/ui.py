@@ -518,6 +518,27 @@ class OpenFile:
         return Path(self.path).name
 
 
+def _swatch(color: str) -> QIcon:
+    """A round dot of the theme's colour for its button."""
+    from PySide6.QtGui import QColor, QPainter
+    pm = QPixmap(28, 28)
+    pm.fill(Qt.transparent)
+    g = QPainter(pm)
+    g.setRenderHint(QPainter.Antialiasing)
+    g.setPen(QColor("#ffffff"))
+    g.setBrush(QColor(color))
+    g.drawEllipse(3, 3, 22, 22)
+    g.end()
+    return QIcon(pm)
+
+
+def _pills(pills: dict, on: str) -> None:
+    for key, b in pills.items():
+        b.setProperty("on", key == on)
+        b.style().unpolish(b)
+        b.style().polish(b)
+
+
 def _button(text: str, icon: str, tip: str, checkable=False) -> QToolButton:
     b = QToolButton()
     b.setText(f"{icon}\n{text}")
@@ -567,6 +588,8 @@ class MainWindow(QMainWindow):
         self.status = self.statusBar()
         self.set_tool("pan")
         self.apply_theme(self.settings.value("theme", themes.DEFAULT))
+        from . import lang
+        self.set_lang(lang.current())
         self.status.showMessage(f"ยินดีต้อนรับ คุณ {user} · {TOOLS['pan']}")
         QTimer.singleShot(400, self.check_updates)
         from PySide6.QtGui import QKeySequence, QShortcut
@@ -620,11 +643,27 @@ class MainWindow(QMainWindow):
             b = QPushButton(text)
             b.clicked.connect(fn)
             lay.addWidget(b)
-        lay.addWidget(QLabel("ธีม:"))
-        self.theme = QComboBox()
-        self.theme.addItems(list(themes.THEMES))
-        self.theme.currentTextChanged.connect(self.apply_theme)
-        lay.addWidget(self.theme)
+        # ธีม 5 แบบ และ ไทย/EN เป็นปุ่มกลม แบบหน้าเริ่มต้น WANICNSURVEY
+        lay.addWidget(QLabel("ธีม"))
+        self.theme_pills = {}
+        for name, c in themes.THEMES.items():
+            b = QPushButton(name)
+            b.setObjectName("pill")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setIcon(_swatch(c["accent"]))
+            b.clicked.connect(lambda _=False, n=name: self.apply_theme(n))
+            self.theme_pills[name] = b
+            lay.addWidget(b)
+        self.lang_pills = {}
+        for code, label in (("th", "ไทย"), ("en", "EN")):
+            b = QPushButton(label)
+            b.setObjectName("pill")
+            b.setProperty("_th_text", label)             # never translated
+            b.setMinimumWidth(54)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=code: self.set_lang(k))
+            self.lang_pills[code] = b
+            lay.addWidget(b)
         who = QLabel(f"👤 {self.user}")
         lay.addWidget(who)
         return bar
@@ -937,11 +976,17 @@ class MainWindow(QMainWindow):
         self.zoom_label.setStyleSheet(f"font-weight:bold;font-size:11pt;background:transparent;"
                                       f"color:{c['bar_text']};")
         self.model.set_colors(c["canvas"], "#D8E2EC" if name != "ทองเวนิช" else "#E9DDBF", c["border"])
-        if self.theme.currentText() != name:
-            self.theme.blockSignals(True)
-            self.theme.setCurrentText(name)
-            self.theme.blockSignals(False)
+        _pills(self.theme_pills, name)
         self.settings.setValue("theme", name)
+
+    def set_lang(self, code: str):
+        """ไทย / EN for the program's screens (the official forms and reports stay in Thai)."""
+        from . import lang
+        lang.set_current(code)
+        _pills(self.lang_pills, code)
+        lang.apply(self)
+        self._show_scale()
+        self.status.showMessage(lang.tr(TOOLS[self.canvas.tool]))
 
     # -- files
     def open_files(self, paths=None):
@@ -1236,11 +1281,17 @@ class MainWindow(QMainWindow):
             name, icon = self.shape_names.get(key, ("รูปทรง", "⬚"))
             self.shape_btn.setText(f"{icon}\n{name.split(' (')[0]} ▾" if key in self.shape_names else "⬚\nรูปทรง ▾")
         self.canvas.set_tool(key)
-        self.status.showMessage(TOOLS[key])
+        from . import lang
+        if getattr(self, "lang_pills", None) and lang.current() == "en":
+            lang.apply(self.shape_btn) if hasattr(self, "shape_btn") else None
+        self.status.showMessage(lang.tr(TOOLS[key]))
         self.canvas.setFocus()
 
     def _show_scale(self):
-        self.scale_label.setText(f"สเกลที่ใช้: <b>{self.scale.label}</b>")
+        from . import lang
+        word = "Scale in use" if lang.current() == "en" else "สเกลที่ใช้"
+        self.scale_label.setText(f"{word}: <b>{self.scale.label}</b>")
+        self.scale_label.setProperty("_th_text", None)
 
     def use_scale(self):
         n = self.scale_combo.currentData()
