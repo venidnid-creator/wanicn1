@@ -601,6 +601,22 @@ def s_curve(plan: "P.Plan124", w=1800, h=760):
     g.setPen(QPen(QColor("#333333"), 2))
     g.drawLine(L, T + ph, L + pw, T + ph)
     g.drawLine(L, T, L, T + ph)
+    # second line: % ACC ACTUAL — the months reported, then the estimate that the work ends as
+    # planned (dashed) all the way to the last month
+    fc = plan.forecast or plan.acc_plan
+    apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, fc)]
+    for k_, (a_, b_) in enumerate(zip(apts, apts[1:])):
+        g.setPen(QPen(QColor("#f4a261"), 10, Qt.SolidLine, Qt.RoundCap))
+        if k_ <= plan.last_actual:
+            g.setPen(QPen(QColor("#c55a11"), 5))
+        g.drawLine(a_, b_)
+    g.setBrush(QColor("#c55a11"))
+    g.setPen(QColor("#c55a11"))
+    for k_, (p_, v) in enumerate(zip(apts[1:], fc)):
+        g.drawEllipse(p_, 7, 7)
+        if k_ <= plan.last_actual or abs(v - plan.acc_plan[k_]) > 0.5:
+            g.drawText(QRectF(p_.x() - 70, p_.y() + 8, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
+    # legend
     pts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, plan.acc_plan)]
     g.setPen(QPen(QColor("#1f4e79"), 4))
     for a, b in zip(pts, pts[1:]):
@@ -618,31 +634,18 @@ def s_curve(plan: "P.Plan124", w=1800, h=760):
         x = L + pw * frac
         y = T + ph - ph * need / 100
         g.drawLine(QPointF(x - 30, y), QPointF(x + 30, y))
-        g.drawText(QRectF(x - 140, y + 4, 280, 26), Qt.AlignCenter, f"ขั้นต่ำ {need:.0f}%")
+        g.drawText(QRectF(min(x - 140, L + pw - 200), y + 4, 200 if x - 140 > L + pw - 200 else 280, 26),
+                   Qt.AlignCenter, f"ขั้นต่ำ {need:.0f}%")
     del tot
     g.setPen(QColor("#1f4e79"))
-    # second line: % ACC ACTUAL — the months reported, then the estimate that the work ends as
-    # planned (dashed) all the way to the last month
-    fc = plan.forecast or plan.acc_plan
-    apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, fc)]
-    for k_, (a_, b_) in enumerate(zip(apts, apts[1:])):
-        g.setPen(QPen(QColor("#c55a11"), 4, Qt.SolidLine if k_ <= plan.last_actual else Qt.DashLine))
-        g.drawLine(a_, b_)
-    g.setBrush(QColor("#c55a11"))
-    g.setPen(QColor("#c55a11"))
-    for k_, (p_, v) in enumerate(zip(apts[1:], fc)):
-        g.drawEllipse(p_, 5, 5)
-        if k_ <= plan.last_actual or abs(v - plan.acc_plan[k_]) > 0.5:
-            g.drawText(QRectF(p_.x() - 70, p_.y() + 8, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
-    # legend
     act_name = "% ACC ACTUAL (ผลงานจริง + คาดการณ์ตามแผน)" if plan.last_actual >= 0 \
         else "% ACC ACTUAL (คาดการณ์ว่าเสร็จตามแผน)"
-    for k_, (col, name) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)"), ("#c55a11", act_name))):
-        x0 = L + pw / 2 - 380 + k_ * 400
+    for k_, (col, name) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)"), ("#f4a261", act_name))):
+        x0 = L + pw / 2 - 560 + k_ * 520
         g.setPen(QPen(QColor(col), 5))
         g.drawLine(QPointF(x0, 26), QPointF(x0 + 50, 26))
         g.setPen(QColor("#222222"))
-        g.drawText(QRectF(x0 + 60, 8, 330, 36), Qt.AlignLeft | Qt.AlignVCenter, name)
+        g.drawText(QRectF(x0 + 60, 8, 520, 36), Qt.AlignLeft | Qt.AlignVCenter, name)
     g.end()
     return img
 
