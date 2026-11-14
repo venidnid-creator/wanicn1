@@ -8,7 +8,7 @@ name: venitsupply-windows
 on:
   push:
     branches: ["claude/**"]
-    paths: ["venitsupply/**", ".github/workflows/venitsupply-windows.yml"]
+    paths: ["venitsupply/**", ".claude/skills/venit-supply/**", ".github/workflows/venitsupply-windows.yml"]
     tags: ["venitsupply-v*"]
   workflow_dispatch:
     inputs:
@@ -34,6 +34,8 @@ jobs:
         working-directory: venitsupply
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the skill's history section reads the git log
 
       - uses: actions/setup-python@v5
         with:
@@ -50,6 +52,19 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q -p no:cacheprovider tests
+
+      - name: Skill «venit-supply» (regenerated from this commit)
+        shell: bash
+        run: |
+          python venitsupply/tools/build_skill.py --zip dist
+          git diff --quiet -- .claude/skills/venit-supply/SKILL.md || echo "::warning::SKILL.md in the commit was older than the code; the artifact carries the regenerated one — run venitsupply/tools/build_skill.py and commit"
+        working-directory: .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: venit-supply-skill
+          path: dist/venit-supply-skill.zip
+          if-no-files-found: error
 
       - name: Version
         id: ver

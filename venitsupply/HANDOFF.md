@@ -80,6 +80,13 @@
 - เมนูบนใหญ่ขึ้น; ใต้โลโก้ «โปรแกรมบริหารพัสดุภาคเวนิช FC»
 - ตัวติดตั้ง 2026.11.13.5 สร้างสำเร็จ: run 43457058784, artifact 14052874536 — ส่งให้เจ้าของทดสอบ รอผล
 
+## Skill «venit-supply» (เจ้าของสั่ง 14 พ.ย. 2569: สร้างสกิวตั้งแต่ต้นจนจบ + อัปเดตออโต้)
+- `.claude/skills/venit-supply/SKILL.md` — กฎเจ้าของ, ประวัติทุกคำสั่ง, สถาปัตยกรรม, กติกางาน, วิธีทำงาน, roadmap
+- ส่วน AUTO (รุ่น, ลิงก์ตัวติดตั้ง, ตารางไฟล์, ข้อมูลข้อบัญญัติ, รายการทดสอบ, ประวัติ commit, release notes)
+  สร้างโดย `venitsupply/tools/build_skill.py`; รันอัตโนมัติจาก Stop hook (`.claude/settings.json`) และใน CI
+  (artifact `venit-supply-skill` = zip สำหรับอัปโหลดเป็น skill ใน claude.ai)
+- ทุกครั้งที่เจ้าของสั่งงานใหม่: เพิ่มแถวในตาราง §2 ของ SKILL.md ด้วยมือ (ส่วนที่ไม่ใช่ AUTO)
+
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
 - `venitsupply/depreciation.py` ค่าเสื่อมเส้นตรง · `thaidate.py` วันที่ พ.ศ./ปีงบประมาณ
