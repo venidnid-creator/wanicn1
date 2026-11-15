@@ -471,17 +471,27 @@ class ProfilePanel(QWidget):
     def _refresh_if_shown(self) -> None:
         """Measuring the model takes seconds on a large house: only while
         the panel is on screen; a hidden one catches up when it is shown."""
-        if not self.isVisible():
+        if not (self.isVisible() and not self.visibleRegion().isEmpty()):
+            # a tab behind another tab still says «visible» to Qt
             self._stale = True
             return
         self._stale = False
         self.refresh()
 
-    def showEvent(self, e) -> None:
-        super().showEvent(e)
+    def catch_up(self) -> None:
+        """Brought to the front: measure what changed while it was hidden."""
         if getattr(self, "_stale", False):
             self._stale = False
             self._timer.start()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self.catch_up()
+
+    def paintEvent(self, e) -> None:                  # noqa: N802 - Qt override
+        super().paintEvent(e)
+        if getattr(self, "_stale", False):
+            QTimer.singleShot(0, self, self.catch_up)
 
     def refresh(self):
         self._fill_layers()
@@ -520,6 +530,7 @@ def setup(app) -> None:
     panel = ProfilePanel(app)
     dock = app.add_panel(TITLE, panel)
     app.window._wanic_profiles = panel
+    dock.visibilityChanged.connect(lambda shown: shown and QTimer.singleShot(0, panel, panel.catch_up))
     app.on_document_changed(panel.schedule)
 
     def show():
@@ -551,4 +562,4 @@ def setup(app) -> None:
 
     app.add_context_menu(context)
     QTimer.singleShot(0, lambda: _join_tray(app.window, dock))
-    QTimer.singleShot(0, panel.refresh)
+    QTimer.singleShot(0, panel._refresh_if_shown)

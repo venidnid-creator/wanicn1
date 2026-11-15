@@ -516,20 +516,35 @@ class TakeoffPanel(QWidget):
         if not self._loading:
             self._timer.start()
 
+    def on_screen(self) -> bool:
+        """The panel is really in view: a tab behind another tab of the side
+        tray still says «visible» to Qt, but has nothing on screen."""
+        return self.isVisible() and not self.visibleRegion().isEmpty()
+
     def _refresh_if_shown(self) -> None:
         """Measuring the model takes seconds on a large house: only while
         the panel is on screen; a hidden one catches up when it is shown."""
-        if not self.isVisible():
+        if not self.on_screen():
             self._stale = True
             return
         self._stale = False
         self.refresh()
 
-    def showEvent(self, e) -> None:
-        super().showEvent(e)
+    def catch_up(self) -> None:
+        """Brought to the front (its tab clicked, the window restored): measure
+        what changed while it was hidden."""
         if getattr(self, "_stale", False):
             self._stale = False
             self._timer.start()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self.catch_up()
+
+    def paintEvent(self, e) -> None:                  # noqa: N802 - Qt override
+        super().paintEvent(e)
+        if getattr(self, "_stale", False):            # first painted since it went stale
+            QTimer.singleShot(0, self, self.catch_up)
 
     def refresh(self) -> None:
         try:
@@ -729,6 +744,7 @@ def setup(app) -> None:
     panel = TakeoffPanel(app)
     dock = app.add_panel(TITLE, panel)
     app.window._wanic_takeoff = panel
+    dock.visibilityChanged.connect(lambda shown: shown and QTimer.singleShot(0, panel, panel.catch_up))
     app.on_document_changed(panel.schedule)
     app.add_overlay(panel.paint)
 
@@ -753,4 +769,4 @@ def setup(app) -> None:
 
     app.add_context_menu(context)
     QTimer.singleShot(0, lambda: _join_tray(app.window, dock))
-    QTimer.singleShot(0, panel.refresh)
+    QTimer.singleShot(0, panel._refresh_if_shown)

@@ -213,16 +213,27 @@ class RCPanel(QWidget):
             self._timer.start()
 
     def _refresh_if_shown(self):
-        if not self.isVisible():
+        if not (self.isVisible() and not self.visibleRegion().isEmpty()):
+            # a tab behind another tab still says «visible» to Qt
             self._stale = True
             return
+        self._stale = False
         self.refresh()
 
-    def showEvent(self, e):
-        super().showEvent(e)
+    def catch_up(self):
+        """Brought to the front: show what changed while it was hidden."""
         if self._stale:
             self._stale = False
             self.refresh()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.catch_up()
+
+    def paintEvent(self, e):                          # noqa: N802 - Qt override
+        super().paintEvent(e)
+        if self._stale:
+            QTimer.singleShot(0, self, self.catch_up)
 
     def _pick(self, row):
         if row < 0:
@@ -964,6 +975,7 @@ def setup(app) -> None:
     panel = RCPanel(app)
     dock = app.add_panel(TITLE, panel)
     app.window._wanic_rc = panel
+    dock.visibilityChanged.connect(lambda shown: shown and _QT.singleShot(0, panel, panel.catch_up))
     app.on_document_changed(panel.schedule)
 
     def show():
