@@ -9,7 +9,7 @@ import copy
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
 from core import wanic_building as B
@@ -85,7 +85,7 @@ class StairDialog(QDialog):
                       "สูงช่วงละ ≤ 3.00 ม. · ท้องบันไดออกแบบเป็นพื้นทางเดียวพาดตามแนวบันได (ชานพักพาดไปกับช่วงบันได "
                       "มีคานรับชานพัก) · น้ำหนักจรบันได 300 กก./ตร.ม.")
         info.setWordWrap(True)
-        info.setStyleSheet("background:#EEF6FF;padding:8px;border-radius:6px")
+        info.setStyleSheet("background:#EEF6FF;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(info)
         self.table = QTableWidget(0, len(HEADS))
         self.table.setHorizontalHeaderLabels(HEADS)
@@ -137,6 +137,27 @@ class StairDialog(QDialog):
         self.beam.editingFinished.connect(self.update_view)
         form.addRow("น้ำหนักจรบันได (กก./ตร.ม.)", self.ll)
         form.addRow("คานรับชานพัก BS1 (กว้างxลึก เหล็กล่าง/บน ปลอก)", self.beam)
+        # the defaults of a stair placed on the plan (were in «ออกแบบอาคาร»)
+        self.defaults = {}
+        drow = QHBoxLayout()
+        for key, label, lo, hi, step in (("stair_w", "กว้าง", 0.0, 5.0, 0.05),
+                                         ("riser_max", "ลูกตั้งไม่เกิน", 0.10, 0.25, 0.01),
+                                         ("going", "ลูกนอน", 0.20, 0.40, 0.01),
+                                         ("stair_t", "ท้องบันไดหนา", 0.08, 0.40, 0.01)):
+            sp = QDoubleSpinBox()
+            sp.setRange(lo, hi)
+            sp.setSingleStep(step)
+            sp.setDecimals(2)
+            sp.setSuffix(" ม.")
+            sp.setValue(float(s.get(key, B.DEFAULT_SETTINGS.get(key, lo)) or 0))
+            if key == "stair_w":
+                sp.setSpecialValueText("อัตโนมัติ")
+                sp.setToolTip("0 = อัตโนมัติ (1 ชั้น = ไม่มีบันได · 2 ชั้นขึ้นไป = 1.00 ม.)")
+            self.defaults[key] = sp
+            drow.addWidget(QLabel(label))
+            drow.addWidget(sp)
+        drow.addStretch(1)
+        form.addRow("ค่าเริ่มต้นของบันไดที่วางใหม่", drow)
         lay.addLayout(form)
         b = QHBoxLayout()
         self.fix_btn = QPushButton("ปรับให้ผ่าน (บันไดที่เลือก)")
@@ -190,6 +211,8 @@ class StairDialog(QDialog):
             pass
         if self.beam.text().strip():
             s["stair_beam"] = self.beam.text().strip()
+        for key, sp in getattr(self, "defaults", {}).items():
+            s[key] = round(sp.value(), 3)
         return s
 
     def update_view(self, *_a):
@@ -250,7 +273,7 @@ class StairDialog(QDialog):
                     stp.update(vals[stp["id"]])
         s = dict(data.get("settings") or {})
         new = self.settings()
-        for k in ("stair_ll", "stair_beam"):
+        for k in ("stair_ll", "stair_beam", "stair_w", "riser_max", "going", "stair_t"):
             if k in new:
                 s[k] = new[k]
         data["settings"] = s

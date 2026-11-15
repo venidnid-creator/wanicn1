@@ -1885,7 +1885,8 @@ def setup(app) -> None:
     scroll.setWidget(panel)
     scroll.setWidgetResizable(True)
     from core import wanic_tabs
-    dock = app.add_panel(TITLE, scroll, icon=wanic_tabs.icon_key(TITLE))
+    # opened from the start screen's «ออกแบบถนน» card, or Window ▸ Panels
+    dock = app.add_panel(TITLE, scroll, icon=wanic_tabs.icon_key(TITLE), start_hidden=True)
     app.window._wanic_road = panel
     app.on_document_changed(lambda: QTimer.singleShot(0, lambda: _safe(panel, panel.load)))
 

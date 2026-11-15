@@ -29,7 +29,7 @@ class FreeConvertDialog(QDialog):
         info = QLabel(f"เลือกไว้ {len(chains)} สายเส้น · เส้นดิ่ง {nv} · เส้นโค้ง {ncur} · เส้นเอียง {nslope}<br>"
                       "คานวางให้หลังคานอยู่ที่ระดับเส้น · ผนังตั้งบนระดับเส้น · เสาจากปลายล่างถึงปลายบนของเส้นดิ่ง")
         info.setWordWrap(True)
-        info.setStyleSheet("background:#EEF6FF;padding:8px;border-radius:6px")
+        info.setStyleSheet("background:#EEF6FF;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(info)
         form = QFormLayout()
         self.kind = QComboBox()
@@ -109,7 +109,7 @@ class FreeListDialog(QDialog):
         info = QLabel("วาดเส้นในโมเดล (เส้นตรง เส้นโค้ง เส้นเอียง หรือเส้นดิ่ง) → เลือกเส้น → คลิกขวา "
                       "«แปลงเส้นที่เลือกเป็น คาน/เสา/ผนัง…» · ที่นี่แก้เบอร์ น้ำหนักเพิ่ม หรือลบได้")
         info.setWordWrap(True)
-        info.setStyleSheet("background:#EEF6FF;padding:8px;border-radius:6px")
+        info.setStyleSheet("background:#EEF6FF;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(info)
         self.rows = [("beams", i) for i in range(len(self.free["beams"]))] + \
             [("columns", i) for i in range(len(self.free["columns"]))] + \

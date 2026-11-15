@@ -2255,9 +2255,13 @@ class BuildingPanel(QWidget):
                       "ดับเบิลคลิก = แก้ขนาด · R = หมุน · Delete = ลบ · "
                       "ดับเบิลคลิกขวา/Esc = ยกเลิกคำสั่ง · ล้อเมาส์ = ซูม · "
                       "ปุ่มกลาง = เลื่อน")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: palette(mid);")
-        lay.addWidget(hint)
+        # the keys and mouse, on request: the panel stays short (no scrolling)
+        help_btn = QPushButton("❓ วิธีใช้ผัง (เมาส์ · คีย์ลัด)")
+        help_btn.setToolTip(hint.text().replace(" · ", "\n"))
+        help_btn.clicked.connect(lambda _=False, t=hint.text(): QMessageBox.information(
+            self, TITLE, "• " + t.replace(" · ", "\n• ")))
+        hint.deleteLater()
+        rp.addWidget(help_btn, 3, 0, 1, 4)
 
         tl = QHBoxLayout()
         tl.addWidget(QLabel("เครื่องมือ"))
@@ -2360,69 +2364,46 @@ class BuildingPanel(QWidget):
         cb.addStretch(1)
         lay.addLayout(cb)
 
-        # Build buttons.
+        # Build buttons — one per job; the less used ones on its ▾ menu.
         bb = QGridLayout()
 
-        def btn(text, tip, fn, r, c, color):
+        def btn(text, tip, fn, r, c, color, menu=None):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.setStyleSheet(f"QPushButton{{background:{color};color:white;"
                             "font-weight:bold;padding:6px;border-radius:6px}}")
-            b.clicked.connect(lambda _=False: _safe(self, fn))
+            if menu:
+                m = QMenu(b)
+                for label, f in menu:
+                    m.addAction(label, lambda f=f: _safe(self, f))
+                b.setMenu(m)                          # a click opens the menu
+            else:
+                b.clicked.connect(lambda _=False: _safe(self, fn))
             bb.addWidget(b, r, c)
-        btn("🏗 สร้าง/อัปเดตโครงสร้าง", "ฐานราก ตอม่อ เสา คาน พื้น ผนัง ทุกชั้น",
-            lambda: self.build(("structure",)), 0, 0, "#2E7D4F")
-        btn("🏠 สร้าง/อัปเดตหลังคา", "โครงหลังคาเหล็กและแผ่นหลังคา",
-            lambda: self.build(("roof",)), 0, 1, "#C46420")
-        btn("🙈 ซ่อนวัตถุที่เลือก",
-            "เลือกวัตถุในโมเดลก่อน แล้วกดปุ่มนี้ — วัตถุที่เลือกจะหายไป "
-            "(ไม่ได้ลบ กด «แสดงวัตถุที่ซ่อนกลับคืน» เพื่อให้กลับมาที่เดิม)",
-            self.hide_selected, 1, 0, "#1F7A8C")
-        btn("👁 แสดงวัตถุที่ซ่อนกลับคืน",
-            "ทุกวัตถุที่ซ่อนไว้กลับมาที่เดิม (รวมชิ้นที่ซ้อนอยู่ในกลุ่ม) "
-            "เปิดทุกเลเยอร์ และออกจากมุมมองเฉพาะโครงสร้าง",
-            self.show_everything, 1, 1, "#2E6E7E")
-        # Model opacity 0–100 % (ความโปร่งใส): see the frame through walls
-        # and roof without hiding anything
-        ob = QWidget()
-        ol = QHBoxLayout(ob)
-        ol.setContentsMargins(4, 0, 4, 0)
-        ol.addWidget(QLabel("🪟 กระจก/โปร่งใส"))
-        self.opacity_slider = QSlider(Qt.Horizontal)
-        self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setSingleStep(5)
-        self.opacity_slider.setPageStep(10)
-        self.opacity_slider.setValue(0)
-        self.opacity_slider.setToolTip(
-            "เลื่อนความโปร่งใสของวัตถุในโมเดล 0–100 % ผิวเป็นสีกระจกใส (0 = ทึบปกติ, 100 = กระจกใสที่สุด) "
-            "— ไม่ได้แก้ไขวัตถุ แค่การแสดงผล")
-        self.opacity_label = QLabel("0 %")
-        self.opacity_label.setMinimumWidth(42)
-        self.opacity_slider.valueChanged.connect(
-            lambda v: _safe(self, lambda: self.set_transparency(v)))
-        ol.addWidget(self.opacity_slider, 1)
-        ol.addWidget(self.opacity_label)
-        bb.addWidget(ob, 2, 0, 1, 2)
-        btn("✅ สร้างทั้งหมด", "โครงสร้าง + หลังคา",
-            lambda: self.build(("structure", "roof")), 3, 0, "#0F2A44")
+            return b
+        self.build_btn = btn("✅ สร้าง/อัปเดตโมเดล", "ฐานราก ตอม่อ เสา คาน พื้น ผนัง ทุกชั้น + หลังคา "
+                             "— เฉพาะโครงสร้าง / เฉพาะหลังคา: คลิกขวาที่ปุ่มนี้",
+                             lambda: self.build(("structure", "roof")), 0, 0, "#2E7D4F")
+        self.build_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+
+        def _build_menu(at):
+            m = QMenu(self.build_btn)
+            m.addAction("🏗 เฉพาะโครงสร้าง", lambda: _safe(self, lambda: self.build(("structure",))))
+            m.addAction("🏠 เฉพาะหลังคา", lambda: _safe(self, lambda: self.build(("roof",))))
+            m.exec(self.build_btn.mapToGlobal(at))
+        self.build_btn.customContextMenuRequested.connect(_build_menu)
+        btn("▦ สร้างผังจากกริด…", "กำหนดระยะแกน 1-2-3 / A-B-C และจำนวนชั้น — ห้องทุกช่อง เสาทุกจุดตัด "
+            "คานตามแนวกริด (เหมือนปุ่ม «โหมดกริด» ในแท็บ คสล.)", self.open_grid, 0, 1, "#2E6E7E")
         btn("📊 BOQ ตามหลักเกณฑ์ 2569…",
             "ถอดปริมาณตามหลักเกณฑ์กรมบัญชีกลาง (เผื่อตามมาตรฐาน ค่าแรง ว480) "
-            "แล้วส่งเข้า ปร.1–ปร.4", self.open_boq, 3, 1, "#7B3FA0")
-        btn("📐 ส่งออกแบบ 2D (A · S · SN · EE · M)…",
-            "แบบก่อสร้างครบชุดจากโมเดล: แปลน รูปด้าน รูปตัด ตาราง โครงสร้าง "
-            "สุขาภิบาล ไฟฟ้า เครื่องกล — กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)",
-            self.open_drawings, 4, 0, "#8A5A00")
-        btn("✂ รูปตัดอาคาร (แนว X / แนว Y)…",
-            "รูปตัดอาคารชั้นละ 1 ชุด (2 รูป แนว X และแนว Y — รูปแรกตัดผ่านห้องน้ำ) "
-            "แสดงฐานราก คาน พื้น ผนังตัด ฝ้า โครงหลังคา ระดับ และเส้นบอกระยะ — PDF / DXF",
-            self.export_sections, 5, 0, "#5B6B78")
-        btn("🖼 ส่งออก PDF แบบ 2D + ภาพ 3D…",
-            "แบบก่อสร้างชุดเดียวกับ «ส่งออกแบบ 2D» เป็น PDF: แปลน รูปด้าน รูปตัด "
-            "แต่ละแผ่นมีแบบ 2 มิติทางซ้าย และภาพ 3 มิติ (ตัดที่ระดับ/ตัดตามแนว) "
-            "พร้อมเส้นระยะทางขวา", self.open_drawings_3d, 5, 1, "#2E7D5B")
-        btn("💰 รายการราคาผูกชิ้นส่วนโมเดล",
-            "เพิ่มรายการราคา (ราคาเริ่ม 0) ผูกตามชื่อชิ้นส่วน ในแท็บ ถอดปริมาณ "
-            "(วัดจากโมเดล 3D)", self.send_rates, 4, 1, "#3B6FB6")
+            "แล้วส่งเข้า ปร.1–ปร.4 · ประมาณราคาเอกชน 8 หมวด อยู่ในหน้าต่างนี้", None, 1, 0, "#7B3FA0",
+            menu=(("📊 BOQ ตามหลักเกณฑ์ 2569 (ปร.1–ปร.4 · ราคาเอกชน 8 หมวด)…", self.open_boq),
+                  ("💰 ผูกรายการราคากับชิ้นส่วนโมเดล (แท็บ ถอดปริมาณ)", self.send_rates)))
+        btn("📐 ส่งออกแบบ…",
+            "แบบก่อสร้างจากโมเดล กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)", None, 1, 1, "#8A5A00",
+            menu=(("📐 แบบก่อสร้างครบชุด 2D (A · S · SN · EE · M)…", self.open_drawings),
+                  ("✂ รูปตัดอาคาร (แนว X / แนว Y)…", self.export_sections),
+                  ("🖼 PDF แบบ 2D + ภาพ 3D…", self.open_drawings_3d)))
         lay.addLayout(bb)
         # The structure on its own, coloured by kind (as engineers check a
         # frame), and the standard looks at it: 3D, plan, four elevations.
@@ -2447,6 +2428,32 @@ class BuildingPanel(QWidget):
             b.setToolTip("มุมมองมาตรฐาน — รูปด้านเป็นภาพขนาน (ไม่มีทัศนมิติ)")
             b.clicked.connect(lambda _=False, k=key: _safe(self, lambda: self.look(k)))
             vl.addWidget(b, 1 + i // 3, i % 3)
+        # see through the walls and roof (0–100 %), and everything back —
+        # hiding one object is Edit ▸ Hide of the program itself
+        ol = QHBoxLayout()
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.addWidget(QLabel("🪟 โปร่งใส"))
+        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setSingleStep(5)
+        self.opacity_slider.setPageStep(10)
+        self.opacity_slider.setValue(0)
+        self.opacity_slider.setToolTip(
+            "เลื่อนความโปร่งใสของวัตถุในโมเดล 0–100 % ผิวเป็นสีกระจกใส (0 = ทึบปกติ, 100 = กระจกใสที่สุด) "
+            "— ไม่ได้แก้ไขวัตถุ แค่การแสดงผล")
+        self.opacity_label = QLabel("0 %")
+        self.opacity_label.setMinimumWidth(42)
+        self.opacity_slider.valueChanged.connect(
+            lambda v: _safe(self, lambda: self.set_transparency(v)))
+        ol.addWidget(self.opacity_slider, 1)
+        ol.addWidget(self.opacity_label)
+        show_all = QPushButton("👁 แสดงทั้งหมด")
+        show_all.setToolTip("ทุกวัตถุที่ซ่อนไว้กลับมาที่เดิม (รวมชิ้นที่ซ้อนอยู่ในกลุ่ม) เปิดทุกเลเยอร์ "
+                            "ความโปร่งใสกลับเป็น 0 และออกจากมุมมองเฉพาะโครงสร้าง · "
+                            "ซ่อนวัตถุที่เลือก: เมนู Edit ▸ Hide")
+        show_all.clicked.connect(lambda _=False: _safe(self, self.show_everything))
+        ol.addWidget(show_all)
+        vl.addLayout(ol, 3, 0, 1, 3)
         lay.addWidget(vb)
         rm = QPushButton("ลบสิ่งที่สร้างโดย ออกแบบอาคาร")
         rm.clicked.connect(lambda _=False: _safe(self, self.remove_built))
@@ -2558,15 +2565,7 @@ class BuildingPanel(QWidget):
         self.library = LibraryBox(self)
         lay.addWidget(self.library)
 
-        ow = QGroupBox("บันได (ค่าเริ่มต้น)")
-        sf = QFormLayout(ow)
-        num("stair_w", "บันได กว้าง", 0.0, 5.0)
-        # 0 = auto: no stairs on one storey, 1.00 m from two storeys up
-        self.fields["stair_w"].setSpecialValueText("อัตโนมัติ (1 ชั้น = 0 · 2 ชั้นขึ้นไป = 1.00 ม.)")
-        num("riser_max", "ลูกตั้งสูงไม่เกิน", 0.10, 0.25, 0.01)
-        num("going", "ลูกนอน", 0.20, 0.40, 0.01)
-        num("stair_t", "ท้องบันไดหนา", 0.08, 0.40, 0.01)
-        lay.addWidget(ow)
+        # the stairs' defaults (width, riser, going, waist) are set in «บันได คสล.…» (แท็บ คสล.)
 
         rf = QGroupBox("หลังคา")
         rff = QFormLayout(rf)
@@ -3320,6 +3319,14 @@ class BuildingPanel(QWidget):
         self.open_drawings(with_3d=True)
 
     # ---- standard BOQ -------------------------------------------------------------
+    def open_grid(self):
+        """โหมดกริด of the RC panel, from here: a new user starts on one panel."""
+        rc = getattr(self.app.window, "_wanic_rc", None)
+        if rc is None:
+            QMessageBox.information(self, TITLE, "ไม่พบแผง «ออกแบบโครงสร้าง คสล.»")
+            return
+        rc.edit_grid()
+
     def open_boq(self):
         d = self.data()
         if not any(f.get("rooms") for f in d["floors"]):

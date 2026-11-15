@@ -66,6 +66,7 @@ def test_a_tab_behind_another_waits_and_catches_up():
         assert tk._stale and pf._stale
         # the take-off tab is brought to the front: it measures once
         tkd = _dock_of(tk)
+        win.set_tray_shown(tkd, True)                    # it starts hidden (Window ▸ Panels)
         tkd.raise_()
         _settle()
         QTest.qWait(600)                                 # its 0.3 s timer

@@ -14,7 +14,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-                               QListWidgetItem, QMessageBox, QPushButton, QTableWidget,
+                               QListWidgetItem, QMenu, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
 from core import wanic_building as B
@@ -82,11 +82,7 @@ class RCPanel(QWidget):
         from views.tray import FlowLayout
         self.btn_box = QWidget()
         row = FlowLayout(self.btn_box, spacing=4)
-        self.fix = QPushButton("ปรับเหล็กให้ผ่านขั้นต่ำ")
-        self.fix.setToolTip("เพิ่มจำนวนเหล็ก / ลดระยะเรียง / เพิ่มขนาดเหล็ก ให้เบอร์ที่เลือกผ่านการตรวจ "
-                            "(ไม่เปลี่ยนขนาดหน้าตัด)")
-        self.fix.clicked.connect(self.fix_selected)
-        row.addWidget(self.fix)
+        # «ปรับเหล็กให้ผ่านขั้นต่ำ» is part of «แก้ตามคำแนะนำ» (fix_selected stays for the code)
         self.advice_btn = QPushButton("แก้ตามคำแนะนำ (ทุกเบอร์)")
         self.advice_btn.setToolTip("ปรับขนาด/เหล็กของทุกเบอร์ที่ไม่ผ่าน ตามคำแนะนำ แล้วคำนวณซ้ำจนผ่าน "
                                    "(รวมข้อกำหนดเหล็กขั้นต่ำ) — ถามยืนยันก่อน")
@@ -101,32 +97,31 @@ class RCPanel(QWidget):
         self.select_btn = QPushButton("เลือกชิ้นส่วนในโมเดล")
         self.select_btn.clicked.connect(self.select_in_model)
         row.addWidget(self.select_btn)
-        self.build_btn = QPushButton("สร้าง/อัปเดตโครงสร้างในโมเดล")
+        self.build_btn = QPushButton("✅ สร้าง/อัปเดตโมเดล")
         self.build_btn.setStyleSheet("font-weight: 700;")
         self.build_btn.clicked.connect(self.build_model)
         row.addWidget(self.build_btn)
-        self.export_btn = QPushButton("รายงานโครงสร้าง (.xlsx)")
-        self.export_btn.clicked.connect(self.export)
-        row.addWidget(self.export_btn)
         self.basis_btn = QPushButton("ค่าที่ใช้ออกแบบ…")
         self.basis_btn.setToolTip("วิธีออกแบบ SDM/WSD · fc′ · fy · น้ำหนักบรรทุกจร · ดิน · เสาเข็ม")
         self.basis_btn.clicked.connect(self.edit_basis)
         row.addWidget(self.basis_btn)
-        self.pdf_btn = QPushButton("รายการคำนวณ (.pdf)")
-        self.pdf_btn.clicked.connect(self.export_pdf)
-        row.addWidget(self.pdf_btn)
-        self.book_btn = QPushButton("รูปเล่มรายการคำนวณ A4 (.pdf)")
-        self.book_btn.setToolTip("ปก · ข้อกำหนด · คานทุกแนวพร้อม Load/Shear/Moment Diagram และตาราง · "
-                                 "การ์ดเสาทุกชั้น · ฐานราก · หลังคา · สรุป — พร้อมช่องลงนามผู้คำนวณ")
-        self.book_btn.clicked.connect(self.export_book)
+        # one button for every print-out: the A4 book first (recommended)
+        self.book_btn = QPushButton("🖨 พิมพ์รายการคำนวณ…")
+        self.book_btn.setStyleSheet("font-weight: 700;")
+        self.book_btn.setToolTip("รูปเล่ม A4: ปก · ข้อกำหนด · คานทุกแนวพร้อม Load/Shear/Moment Diagram และตาราง · "
+                                 "การ์ดเสาทุกชั้น · ฐานราก · หลังคา · สรุป — พร้อมช่องลงนามผู้คำนวณ "
+                                 "· หรือแบบย่อ (.pdf) / รายงาน Excel")
+        pm = QMenu(self.book_btn)
+        pm.addAction("📘 รูปเล่มรายการคำนวณ A4 (.pdf) — แนะนำ", self.export_book)
+        pm.addAction("📄 รายการคำนวณแบบย่อ (.pdf)", self.export_pdf)
+        pm.addAction("📊 รายงานโครงสร้าง (.xlsx)", self.export)
+        self.book_btn.setMenu(pm)
         self.lat_btn = QPushButton("แรงด้านข้าง (แผ่นดินไหว/ลม)…")
         self.lat_btn.setToolTip("มยผ. 1301/1302-61 · มยผ. 1311-50 หรือสูตรเดิม · แรงแต่ละชั้น · ตรวจเสา P-M")
         self.lat_btn.clicked.connect(self.edit_lateral)
         row.addWidget(self.book_btn)
         row.addWidget(self.lat_btn)
-        self.est_btn = QPushButton("ประมาณราคาเอกชน 8 หมวด…")
-        self.est_btn.clicked.connect(self.edit_estimate)
-        row.addWidget(self.est_btn)
+        # ประมาณราคาเอกชน 8 หมวด: in «ออกแบบอาคาร» ▸ BOQ (edit_estimate stays for the code)
         self.loads_btn = QPushButton("น้ำหนักเพิ่มบนคาน…")
         self.loads_btn.setToolTip("น้ำหนักจุด (ถังน้ำ แอร์) / น้ำหนักแผ่ (ผนังบนคาน ระเบียง) ที่ไม่มีในผัง")
         self.loads_btn.clicked.connect(self.edit_beam_loads)
@@ -265,15 +260,12 @@ class RCPanel(QWidget):
         self.roof_row.setVisible(self.step == "roof")
         self.grid_btn.setVisible(self.step == "grid")
         self.flat_btn.setVisible(self.step == "slab")
-        self.fix.setVisible(self.step in STEP_MARKS)
-        self.advice_btn.setVisible(self.step == "calc")
+        self.advice_btn.setVisible(self.step == "calc" or self.step in STEP_MARKS)
         self.fix_one_btn.setVisible(self.step == "calc")
         calc = self.step == "calc"
         self.diagram.setVisible(calc)
         self.checks.setVisible(not calc)
         self.basis_btn.setVisible(calc)
-        self.pdf_btn.setVisible(calc)
-        self.book_btn.setVisible(calc)
         self.loads_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.cant_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.check_btn.setVisible(calc)
@@ -702,14 +694,10 @@ class RCPanel(QWidget):
         bp._write(d)
         self._rebuild_after_fix(f"ปรับตามคำแนะนำแล้ว {len(done)} เบอร์")
 
-    def _rebuild_after_fix(self, what: str):
-        """The model follows the new sizes; then the calculation again."""
-        bp = self.building()
-        try:
-            bp.build(("structure", "roof"))
-            built = " · อัปเดตโมเดลแล้ว"
-        except Exception as e:                       # noqa: BLE001 - shown, never a crash
-            built = f" · อัปเดตโมเดลไม่ได้: {e}"
+    def _rebuild_after_fix(self, what: str, defer: bool = True):
+        """The calculation again at once (a fraction of a second) — the
+        table and the verdict show — then the 3D model follows the new
+        sizes (seconds on a big house) once that is on screen."""
         self.refresh()
         if self.step != "calc":                      # the table shows another step: a fresh calculation
             from core import wanic_calc as C
@@ -718,7 +706,21 @@ class RCPanel(QWidget):
             except Exception:                        # noqa: BLE001 - the status only
                 self._calc = None
         bad = sum(1 for m in (self._calc or {}).get("members") or [] if not m.ok)
-        self.status.setText(what + built + (" · ✓ ผ่านทุกรายการ" if not bad else f" · ยังไม่ผ่าน {bad} รายการ"))
+        verdict = " · ✓ ผ่านทุกรายการ" if not bad else f" · ยังไม่ผ่าน {bad} รายการ"
+        bp = self.building()
+
+        def rebuild():
+            try:
+                bp.build(("structure", "roof"))
+                built = " · อัปเดตโมเดลแล้ว"
+            except Exception as e:                   # noqa: BLE001 - shown, never a crash
+                built = f" · อัปเดตโมเดลไม่ได้: {e}"
+            self.status.setText(what + verdict + built)
+        if not defer:
+            rebuild()
+            return
+        self.status.setText(what + verdict + " · กำลังอัปเดตโมเดล 3 มิติ…")
+        QTimer.singleShot(60, self, rebuild)          # after the panel has painted the result
 
     def fix_member(self):
         """แก้ชิ้นที่เลือก: the advice and the passing values of the selected

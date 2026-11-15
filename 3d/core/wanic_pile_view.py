@@ -70,7 +70,7 @@ class PileBox(QGroupBox):
         lay.addLayout(self.form)
         self.res = QLabel()
         self.res.setWordWrap(True)
-        self.res.setStyleSheet("background:#F1F5F9;padding:6px;border-radius:6px")
+        self.res.setStyleSheet("background:#F1F5F9;color:#1F2937;padding:6px;border-radius:6px")
         lay.addWidget(self.res)
         self.edits = {}
         self.cur = t.get("method", "given")         # the method the FS in self.t belongs to
@@ -132,7 +132,7 @@ class PileDialog(QDialog):
                       "(สถิต/พลวัต) บันทึกการตอก (Hiley) หรือข้อมูลเจาะสำรวจดิน หารด้วยอัตราส่วนปลอดภัย และไม่เกิน"
                       "กำลังตัวเข็ม 0.25 fc′ Ac · คุณสมบัติหน้าตัดเป็นค่าโดยประมาณ ตรวจกับผู้ผลิต")
         info.setWordWrap(True)
-        info.setStyleSheet("background:#EEF6FF;padding:8px;border-radius:6px")
+        info.setStyleSheet("background:#EEF6FF;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(info)
         row = QHBoxLayout()
         self.boxes = {k: PileBox(k, types[k], self.refresh) for k in ("P1", "P2")}

@@ -3143,6 +3143,11 @@ class MainWindow(QMainWindow):
         vertical = bar.shape() in _VERTICAL_TABS
         own = (bar.iconSize().height() if vertical
                else bar.iconSize().width()) + 2 * _IconTabStyle.PAD
+        if not vertical:                              # WANICNSURVEY: a tab with its short name
+            from core.wanic_tabs import short_name
+            short = short_name(bar.tabText(index))
+            if short:
+                own += _IconTabStyle._GAP + bar.fontMetrics().horizontalAdvance(short)
         return _cut_to_own_size(rect, own, bar.shape(), bar.isRightToLeft())
 
     def _measure_tabs_again(self, bar) -> None:

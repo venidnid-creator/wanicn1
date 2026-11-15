@@ -159,7 +159,7 @@ class BeamLoadDialog(_TableDialog):
                       "<b>น้ำหนักแผ่</b> = ของยาวตามคาน (กก./ม.) จาก «เริ่ม» ถึง «ถึง» · "
                       "ตำแหน่งวัดตามแกนเดียวกับผัง (ม.) · โปรแกรมคูณตัวคูณน้ำหนักให้เอง (คงที่ 1.4 / จร 1.7)")
         info.setWordWrap(True)
-        info.setStyleSheet("background:#EEF6FF;padding:8px;border-radius:6px")
+        info.setStyleSheet("background:#EEF6FF;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(info)
         pick = QHBoxLayout()
         pick.addWidget(QLabel("คาน:"))
@@ -212,7 +212,7 @@ class CantileverDialog(_TableDialog):
                       "โมเดล 3D แบบ และ BOQ เพิ่มคานให้อัตโนมัติ · น้ำหนักบนคานยื่น (พื้นระเบียง ราว) "
                       "ใส่เพิ่มที่ «น้ำหนักเพิ่มบนคาน…» · คานยื่นควรลึกอย่างน้อย L/8 (ACI)")
         info.setWordWrap(True)
-        info.setStyleSheet("background:#EEF6FF;padding:8px;border-radius:6px")
+        info.setStyleSheet("background:#EEF6FF;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(info)
         pick = QHBoxLayout()
         pick.addWidget(QLabel("เสา:"))

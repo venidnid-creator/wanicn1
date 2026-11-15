@@ -197,6 +197,13 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   `wanicnsurvey-setup-2026.11.13.2`) adding the code checks (wL²/16, slender columns, deflection, stumps, ÷1.4) and the
   screen fitting (ui_fit). Neither released — waiting for the owner's test results.
 
+- 2026-11-15: synced with upstream IngeTrazo 0.6.2.1 / IngeCAD 0.8.0 (3-way merge against the upstream tags our fork
+  was taken from; in files both sides ADDED — e.g. the Thai i18n — keep ours key by key and fill from upstream, never
+  take theirs whole). Hidden tray tabs no longer remeasure the model (Qt calls a tab behind another «visible»: use
+  `visibleRegion().isEmpty()`). WANIC tabs: `core/wanic_tabs.py` (icons + short Thai names). Panels simplified: one build
+  button with a right-click menu, BOQ / drawings / print-outs as button menus, road/takeoff/profiles start hidden.
+  Screenshots must apply the theme (`views.theme.apply_theme(app)`), or every icon draws in the pale dark-theme ink.
+
 ## 7. Future development (agreed or proposed — confirm with the owner before starting)
 
 1. Fix whatever the owner finds in the 2026.11.12.1 / 2026.11.11.1 tests; then release on order.

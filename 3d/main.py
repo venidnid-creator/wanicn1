@@ -836,6 +836,9 @@ def _open_start_panel(window) -> None:
     while w is not None and not isinstance(w, QDockWidget):
         w = w.parentWidget()
     if w is not None:
+        shown = getattr(window, "set_tray_shown", None)
+        if callable(shown):                           # a panel that starts hidden comes back in its tray
+            shown(w, True)
         w.show()
         w.raise_()
 

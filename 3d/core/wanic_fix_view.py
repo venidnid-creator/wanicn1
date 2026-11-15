@@ -38,7 +38,7 @@ class FixDialog(QDialog):
         tips = QLabel("<b>คำแนะนำ — เพิ่มอะไร จุดไหน:</b><br>" + "<br>".join(f"→ {t}" for t in fix["advice"])
                       if fix["advice"] else "<b>คำแนะนำ:</b> ปรับค่าด้านล่างแล้วคำนวณใหม่")
         tips.setWordWrap(True)
-        tips.setStyleSheet("background:#FFF7D6;padding:8px;border-radius:6px")
+        tips.setStyleSheet("background:#FFF7D6;color:#1F2937;padding:8px;border-radius:6px")
         lay.addWidget(tips)
         form = QFormLayout()
         self.edits = {}
