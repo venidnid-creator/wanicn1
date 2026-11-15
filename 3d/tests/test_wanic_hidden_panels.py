@@ -14,6 +14,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget
 
 _app = QApplication.instance() or QApplication([])
+#: the window lives to the end of the run, as the other tests' windows do
+#: (conftest leaves with os._exit instead of tearing them down)
+_KEEP: list = []
 
 
 def _dock_of(w):
@@ -31,6 +34,7 @@ def test_a_tab_behind_another_waits_and_catches_up():
     from core import wanic_rc as R
     from views.main_window import MainWindow
     win = MainWindow(defer_extensions=True)
+    _KEEP.append(win)
     win.resize(1400, 900)
     win.show()
     _settle()
