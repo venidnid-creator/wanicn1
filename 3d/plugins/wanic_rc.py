@@ -973,7 +973,8 @@ def setup(app) -> None:
     ui_fit.install(QApplication.instance())
     _QT.singleShot(800, lambda: ui_fit.widen_docks(app.window))
     panel = RCPanel(app)
-    dock = app.add_panel(TITLE, panel)
+    from core import wanic_tabs
+    dock = app.add_panel(TITLE, panel, icon=wanic_tabs.icon_key(TITLE))
     app.window._wanic_rc = panel
     dock.visibilityChanged.connect(lambda shown: shown and _QT.singleShot(0, panel, panel.catch_up))
     app.on_document_changed(panel.schedule)

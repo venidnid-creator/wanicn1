@@ -207,6 +207,18 @@ def _keep_on_top(bar, *ours) -> None:
         w.raise_()
 
 
+def _wanic_short(option) -> str | None:
+    """WANICNSURVEY: the short Thai name a WANIC panel's tab writes beside
+    its icon (core.wanic_tabs) — on a bar that runs across only."""
+    if option.shape in _VERTICAL_TABS:
+        return None
+    try:
+        from core.wanic_tabs import short_name
+    except Exception:                                 # noqa: BLE001
+        return None
+    return short_name(option.text)
+
+
 class _IconTabStyle(QProxyStyle):
     """The side trays' tabs show only their icon, so many fit on the bar
     without scrolling. The name stays the tab's text — Qt writes it there
@@ -222,6 +234,9 @@ class _IconTabStyle(QProxyStyle):
         vertical = option.shape in _VERTICAL_TABS
         own = (option.iconSize.height() if vertical
                else option.iconSize.width()) + 2 * self.PAD
+        short = _wanic_short(option)
+        if short:
+            own += self._GAP + option.fontMetrics.horizontalAdvance(short)
         option = QStyleOptionTab(option)
         option.rect = _cut_to_own_size(option.rect, own, option.shape,
                                        option.direction == Qt.RightToLeft)
@@ -238,6 +253,13 @@ class _IconTabStyle(QProxyStyle):
             # with a vertical bar.
             rect = QRect(QPoint(0, 0), option.iconSize)
             rect.moveCenter(option.rect.center())
+            short = _wanic_short(option)
+            if short:
+                # WANICNSURVEY: the icon, then its short Thai name
+                room = self.PAD + option.iconSize.width() + self._GAP \
+                    + option.fontMetrics.horizontalAdvance(short) + self.PAD
+                rect.moveLeft(option.rect.left()
+                              + (option.rect.width() - room) // 2 + self.PAD)
             if option.shape not in _VERTICAL_TABS \
                     and not option.state & QStyle.State_Selected:
                 rect.translate(0, self.pixelMetric(
@@ -245,6 +267,17 @@ class _IconTabStyle(QProxyStyle):
             mode = (QIcon.Normal if option.state & QStyle.State_Enabled
                     else QIcon.Disabled)
             option.icon.paint(painter, rect, Qt.AlignCenter, mode)
+            if short:
+                text = QRect(rect.right() + 1 + self._GAP, option.rect.top(),
+                             option.fontMetrics.horizontalAdvance(short) + 2,
+                             option.rect.height())
+                if not option.state & QStyle.State_Selected:
+                    text.translate(0, rect.top() - (option.rect.center().y()
+                                                    - option.iconSize.height() // 2))
+                painter.save()
+                painter.setPen(option.palette.windowText().color())
+                painter.drawText(text, Qt.AlignLeft | Qt.AlignVCenter, short)
+                painter.restore()
             return
         super().drawControl(element, option, painter, widget)
 
@@ -261,13 +294,19 @@ class _IconTabStyle(QProxyStyle):
             if option.position in (QStyleOptionTab.End,
                                    QStyleOptionTab.OnlyOneTab):
                 room = _tab_end_room(widget)
+            short = _wanic_short(option)
             if option.shape in _VERTICAL_TABS:
                 size = QSize(size.width(),
                              option.iconSize.height() + 2 * self.PAD + room)
             else:
-                size = QSize(option.iconSize.width() + 2 * self.PAD + room,
+                size = QSize(option.iconSize.width() + 2 * self.PAD + room
+                             + (self._GAP + option.fontMetrics.horizontalAdvance(short)
+                                if short else 0),
                              size.height())
         return size
+
+    #: WANICNSURVEY: between a tab's icon and its short name
+    _GAP = 4
 
 
 #: The icon of a side tray's tab: the toolbars' Small size, a touch above

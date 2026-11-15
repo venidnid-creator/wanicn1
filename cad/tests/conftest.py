@@ -189,3 +189,13 @@ def clean_settings():
     for key, value in saved.items():
         settings.setValue(key, value)
     settings.sync()
+
+
+@pytest.fixture(autouse=True)
+def _upstream_plugins_all_on(request, monkeypatch):
+    """WANICNSURVEY starts upstream's Roads plugin switched off
+    (core.plugins.OFF_BY_DEFAULT); upstream's own tests expect every bundled
+    plugin on. Our tests (test_wanic_*) see the shipped default."""
+    if not request.node.module.__name__.rpartition(".")[2].startswith("test_wanic"):
+        import core.plugins as _plugins
+        monkeypatch.setattr(_plugins, "OFF_BY_DEFAULT", frozenset())

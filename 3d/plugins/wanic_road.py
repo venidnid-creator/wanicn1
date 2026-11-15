@@ -1884,7 +1884,8 @@ def setup(app) -> None:
     scroll = QScrollArea()
     scroll.setWidget(panel)
     scroll.setWidgetResizable(True)
-    dock = app.add_panel(TITLE, scroll)
+    from core import wanic_tabs
+    dock = app.add_panel(TITLE, scroll, icon=wanic_tabs.icon_key(TITLE))
     app.window._wanic_road = panel
     app.on_document_changed(lambda: QTimer.singleShot(0, lambda: _safe(panel, panel.load)))
 

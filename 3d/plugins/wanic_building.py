@@ -3723,7 +3723,8 @@ def _join_tray(window, dock) -> None:
 
 def setup(app) -> None:
     panel = BuildingPanel(app)
-    dock = app.add_panel(TITLE, panel)
+    from core import wanic_tabs
+    dock = app.add_panel(TITLE, panel, icon=wanic_tabs.icon_key(TITLE))
     app.window._wanic_building = panel
     app.on_document_changed(panel.schedule)
 

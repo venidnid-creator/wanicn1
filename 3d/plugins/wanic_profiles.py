@@ -528,7 +528,8 @@ def _join_tray(window, dock) -> None:
 
 def setup(app) -> None:
     panel = ProfilePanel(app)
-    dock = app.add_panel(TITLE, panel)
+    from core import wanic_tabs
+    dock = app.add_panel(TITLE, panel, icon=wanic_tabs.icon_key(TITLE))
     app.window._wanic_profiles = panel
     dock.visibilityChanged.connect(lambda shown: shown and QTimer.singleShot(0, panel, panel.catch_up))
     app.on_document_changed(panel.schedule)

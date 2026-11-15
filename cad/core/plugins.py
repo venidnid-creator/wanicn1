@@ -335,6 +335,12 @@ class _Activation:
 
 # -- where plugins live --------------------------------------------------------
 
+#: WANICNSURVEY: bundled plugins that start switched off (the extension
+#: manager turns them on) — upstream's Roads (Peruvian DG-2018) would sit
+#: beside our own Thai road design (topografia: แนวทาง สถานี ปริมาณดิน).
+OFF_BY_DEFAULT = frozenset({"carreteras"})
+
+
 def bundled_plugins_dir() -> Path:
     return app_root() / "plugins"
 
@@ -514,7 +520,7 @@ class PluginManager:
     def enabled(self, plugin_id: str) -> bool:
         """Wanted on? Bundled plugins default to on, user ones to off."""
         loaded = self.loaded.get(plugin_id)
-        default = bool(loaded and loaded.bundled)
+        default = bool(loaded and loaded.bundled) and plugin_id not in OFF_BY_DEFAULT
         try:
             from PySide6.QtCore import QSettings
 

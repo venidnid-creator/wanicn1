@@ -20,10 +20,10 @@ Copyright © 2569 (2026) **นายเวนิช ธัมมะวงษ์*
 - การแก้ไขซอร์สต้นฉบับ (ชื่อ ไอคอน เมนู 2D ⇄ 3D และอื่น ๆ) — ทำเมื่อเดือนตุลาคม 2569
 
 ## ส่วนที่มาจากซอฟต์แวร์เสรีต้นฉบับ (คงลิขสิทธิ์เดิมไว้ตามเงื่อนไข GPL)
-- `cad/` — **IngeCAD** 0.6.7
+- `cad/` — **IngeCAD** 0.8.0 (ปรับตามต้นฉบับล่าสุด 15 พ.ย. 2569)
   Copyright © 2026 Marco Sumari Tellez และผู้ร่วมพัฒนา IngeCAD
   https://github.com/ingelibre/ingecad
-- `3d/` — **IngeTrazo** 0.5.8
+- `3d/` — **IngeTrazo** 0.6.2.1 (ปรับตามต้นฉบับล่าสุด 15 พ.ย. 2569)
   Copyright © 2026 Marco Sumari Tellez และผู้ร่วมพัฒนา IngeTrazo
   https://github.com/ingelibre/ingetrazo
 
