@@ -629,7 +629,8 @@ def _section(title: str) -> QLabel:
 
 def _nav_button(arrow, tip: str) -> QToolButton:
     btn = QToolButton()
-    btn.setArrowType(arrow)
+    from views.rtl import set_arrow
+    set_arrow(btn, arrow)
     btn.setToolTip(tip)
     btn.setAutoRaise(True)
     btn.setFixedSize(30, 28)
@@ -661,9 +662,16 @@ class SolidInspectorPanel(QWidget):
     #: Below this width the list shows only Object and Status.
     WIDE = 560
 
+    @property
+    def _viewport(self):
+        """The viewport of the project in front (projects in tabs, #1066):
+        the one handed in at setup may be a tab in the back, or closed."""
+        return self._live_viewport()
+
     def __init__(self, viewport, parent=None) -> None:
         super().__init__(parent)
-        self._viewport = viewport
+        from views.documents import live_viewport
+        self._live_viewport = live_viewport(viewport)
         self._rows: list = []          # payload per table row
         #: The problem on screen: {"name", "index", "count", "item",
         #: "mesh", "matrix"} — or None.
@@ -691,7 +699,23 @@ class SolidInspectorPanel(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 — Qt override
         # The tab brought forward: the model may have changed meanwhile.
         super().showEvent(event)
-        self.refresh()
+        # Only when it did: folding the sidebar away and back (or leaving
+        # clean screen) re-inspected every object of a large model, ~4 s.
+        if self._inspected_key() != getattr(self, "_last_key", None):
+            self.refresh()
+
+    def _inspected_key(self):
+        """What the last inspection read: the model's geometry version (a
+        camera move or a section plane does not count), the open context,
+        and the loose mesh's size (a script or extension may edit it
+        without bumping the version)."""
+        scene = self._viewport.scene
+        mesh = scene.mesh
+        version = getattr(scene, "geometry_version",
+                          getattr(scene, "version", None))
+        return (id(scene), version, id(scene.edit_group), id(mesh),
+                len(mesh.faces), len(mesh.edges),
+                len(getattr(scene, "groups", ()) or ()))
 
     def hideEvent(self, event) -> None:  # noqa: N802 — Qt override
         # Another tab in front: the colours of a panel nobody sees would
@@ -903,8 +927,18 @@ class SolidInspectorPanel(QWidget):
             row["report"] = inspect_mesh(row["mesh"])
             self._rows.append(row)
 
+        self._last_key = self._inspected_key()
         table = self._table
         self._filling = True
+        # A column sized to its contents re-measures every row on each
+        # setItem: thousands of rows took ~30 s. Fixed while filling, then
+        # one measuring pass at the end.
+        header = table.horizontalHeader()
+        fitted = [c for c in range(table.columnCount())
+                  if header.sectionResizeMode(c) == QHeaderView.ResizeToContents]
+        for c in fitted:
+            header.setSectionResizeMode(c, QHeaderView.Interactive)
+        table.setUpdatesEnabled(False)
         table.setRowCount(len(self._rows))
         ok, bad = _OK, _BAD
         solids = problems = 0
@@ -930,6 +964,9 @@ class SolidInspectorPanel(QWidget):
             vol = (fmt_volume(rep['volume'])
                    if rep["volume"] is not None else "—")
             table.setItem(i, 4, QTableWidgetItem(vol))
+        for c in fitted:
+            header.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        table.setUpdatesEnabled(True)
         names = [r["name"] for r in self._rows]
         if current_name in names:
             table.setCurrentCell(names.index(current_name), 0)
@@ -1325,7 +1362,8 @@ def setup(app) -> None:
     brings the tab forward."""
     from PySide6.QtCore import QTimer
     panel = SolidInspectorPanel(app.viewport)
-    dock = app.add_panel(tr("Solid Inspector"), panel)
+    dock = app.add_panel(tr("Solid Inspector"), panel,
+                         icon="panel_solid_inspector")
     app.window._solid_inspector = panel
     app.window._solid_inspector_dock = dock
     # Once the window has restored the saved layout (after every setup).

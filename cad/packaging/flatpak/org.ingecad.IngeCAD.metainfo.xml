@@ -24,14 +24,18 @@
       lleva y que IngeCAD no entiende se conserva intacto al guardar.
     </p>
     <p>
-      The Terrain plugin can fetch ground elevations from a public global
-      DEM (AWS Terrain Tiles) when you ask for them; that is the only use
-      IngeCAD makes of the network.
+      IngeCAD uses the network only when you ask it to: the Terrain plugin
+      fetches ground elevations from a public global DEM (AWS Terrain
+      Tiles), and the optional AI assistant, off until you turn it on,
+      sends your requests to the provider you choose (or to a model running
+      on your own computer).
     </p>
     <p xml:lang="es">
-      El complemento Terreno puede obtener cotas del terreno de un DEM
-      global público (AWS Terrain Tiles) cuando se le pide; es el único uso
-      que IngeCAD hace de la red.
+      IngeCAD usa la red sólo cuando se le pide: el complemento Terreno
+      obtiene cotas de un DEM global público (AWS Terrain Tiles), y el
+      asistente de IA opcional, apagado hasta que usted lo active, envía sus
+      pedidos al proveedor que elija (o a un modelo que corre en su propia
+      computadora).
     </p>
     <p>
       Draw and edit with AutoCAD's muscle memory, blocks with a full Block
@@ -82,6 +86,24 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.0" date="2026-11-10">
+      <description>
+        <p>What users reported, fixed one by one. Pattern hatches: dense ones are refused instead of freezing, they are found inside rooms closed by blocks, their pattern follows them when moved or placed in a block, and EXPLODE breaks one into lines. Construction lines and rays can be trimmed, filleted and offset. New: ARRAYPATH, COPY Array, a block list with thumbnails in the Palette, -BLOCK and -INSERT at the prompt, the spacebar as Enter. A drawing saved as DWG opens elsewhere without being recovered. Panning inside a viewport is fluid on sheets whose viewports use different annotation scales. Dimension text follows the style's unit format, with arc symbols, framed text and twenty arrowheads. A wider contract for extensions, and Lao and Thai translations.</p>
+        <p xml:lang="es">Lo que reportaron los usuarios, arreglado uno por uno. Sombreados con patrón: uno demasiado denso se rechaza en vez de congelar la ventana, se encuentran dentro de recintos cerrados por bloques, el patrón los acompaña al moverlos o al ir dentro de un bloque, y DESCOMPONER los convierte en líneas. Las líneas auxiliares y los rayos se recortan, empalman y desfasan. Nuevo: matriz por trayectoria, COPIA con Matriz, lista de bloques con miniaturas en la Paleta, -BLOQUE y -INSERT desde el teclado, la barra espaciadora como Enter. Un dibujo guardado como DWG se abre en otros programas sin pedir recuperación. El encuadre dentro de una ventana gráfica va fluido en láminas cuyas ventanas usan escalas de anotación distintas. El texto de cota sigue el formato de unidades del estilo, con símbolo de arco, texto enmarcado y veinte extremos de cota. Un contrato más amplio para las extensiones, y traducciones al lao y al tailandés.</p>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-10-29">
+      <description>
+        <p>Extensions: a manager window to install, update and remove them from a catalog with one click, each download verified, and a bundled Roads extension (road axis, stationing, horizontal curves and their tables). Drawing and editing commands polished prompt by prompt: arcs, ellipses, AREA with arcs, polygon and fence selection, TRIM along polylines and on ellipses, ROTATE, SCALE, FILLET, CHAMFER, OFFSET and ZOOM options, defaults at the drawing's precision, and sheets in metres plotted at their scale.</p>
+        <p xml:lang="es">Extensiones: una ventana para instalarlas, actualizarlas y quitarlas desde un catálogo con un clic, cada descarga verificada, y la extensión Carreteras incluida (eje, estacado, curvas horizontales y sus cuadros). Las órdenes de dibujo y edición pulidas pregunta por pregunta: arcos, elipses, ÁREA con arcos, selección por polígono y borde, RECORTA en polilíneas y elipses, opciones de GIRA, ESCALA, EMPALME, CHAFLÁN, DESFASE y ZOOM, valores por defecto con la precisión del dibujo, y láminas en metros trazadas a su escala.</p>
+      </description>
+    </release>
+    <release version="0.6.9" date="2026-10-29">
+      <description>
+        <p>An AI assistant, off by default, that draws and edits through the same commands you type, and an MCP bridge for desktop assistants. Layer groups in the Layers tab, kept in Save as DWG. Arithmetic in typed numbers and coordinates. Dimensions to the drafting norm: narrow ones take their arrows outside, radii start at the centre, jogged radii point at the true centre. Object snap takes the point under the cursor, TRIM ignores hidden layers, endless construction lines, and Portuguese and Korean translations.</p>
+        <p xml:lang="es">Un asistente de IA, apagado por defecto, que dibuja y edita con las mismas órdenes que se teclean, y un puente MCP para asistentes de escritorio. Grupos de capas en la pestaña Capas, conservados al guardar como DWG. Aritmética en los números y coordenadas tecleados. Cotas según la norma: las angostas sacan las flechas, los radios arrancan en el centro, el radio con recodo apunta al centro verdadero. La referencia a objetos toma el punto bajo el cursor, RECORTA ignora las capas ocultas, líneas auxiliares sin fin, y traducciones al portugués y al coreano.</p>
+      </description>
+    </release>
     <release version="0.6.8.2" date="2026-10-21">
       <description>
         <p>Plot opens again in a layout whose page setup uses a scale outside the list.</p>

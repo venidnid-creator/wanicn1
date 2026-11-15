@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QMatrix4x4,
@@ -40,7 +40,8 @@ from PySide6.QtWidgets import QRubberBand
 
 from core.paths import app_root
 from core.prefs import int_pref
-from render.batches import THICK_DTYPE, VERTEX_DTYPE, Batch, Scene
+from render.batches import (THICK_DTYPE, VERTEX_DTYPE, Batch, Scene,
+                            construction_extensions)
 from render.view import ViewTransform2D
 from views.apertures import PICKBOX_DEFAULT, pickbox
 
@@ -320,6 +321,7 @@ class Viewport(QOpenGLWidget):
         self.grid_on = False
         self.lwt_on = True
         self._grid_buf = None    # (vao, vbo, count, key) — rebuilt on view change
+        self._xline_buf = None   # (vao, vbo, count, key, origin) — see _draw_construction
         # Interactive tool hook (ToolController): hover/click/preview/markers.
         self.tool_delegate = None
         # MSPACE-active viewport rect (paper world coords) — drawn with the
@@ -447,19 +449,19 @@ class Viewport(QOpenGLWidget):
         """Draw the sheet's viewports from a model scene, live.
 
         ``live`` is a list of ``{"scene", "rect", "base", "factor",
-        "offset"}`` — one per viewport, all sharing the one tessellation —
-        or None. Panning or zooming inside a floating viewport then costs a
-        matrix per viewport instead of a re-tessellation of the whole sheet,
-        whose baked copy of that content is hidden while this is on.
+        "offset"}`` — one per viewport — or None. The viewports share one
+        tessellation of the model, except those that show annotations at
+        another scale: each such scale has its own. Panning or zooming
+        inside a floating viewport then costs a matrix per viewport instead
+        of a re-tessellation of the whole sheet, whose baked copy of that
+        content is hidden while this is on.
+
+        The buffers are uploaded once per scene and kept across ticks AND
+        across gestures (each pan used to start with 150-220 ms of
+        re-upload); _draw_live_viewport drops those of a scene that no
+        placement uses any more.
         """
         self._live_vp = live
-        # The buffers hold the model scene the placements share: uploaded
-        # once per scene, kept across ticks AND across gestures (each pan
-        # used to start with 150-220 ms of re-upload), dropped when a
-        # different scene comes.
-        scene_id = id(live[0]["scene"]) if live else None
-        if scene_id is not None and scene_id != getattr(self, "_live_vp_scene_id", None):
-            self._live_vp_dirty = True
         self.update()
 
     def hide_handles(self, handles) -> None:
@@ -663,14 +665,31 @@ class Viewport(QOpenGLWidget):
         vbo.release()
         return vao, vbo, len(data)
 
+    def release_gl(self) -> None:
+        """Release the GL objects now, while the widget and its context are
+        alive: the window calls it on close. ``aboutToBeDestroyed`` alone
+        came too late -- the context dies with the widget, the slot found
+        the Viewport already deleted, and the textures of raster images
+        were left for the GC, whose destructor then asked a dead context
+        "are we sharing?" (SIGSEGV in QOpenGLContext::shareGroup on CI)."""
+        context = self.context()
+        if context is None or not context.isValid() or self._program is None:
+            return                       # GL never started: nothing to release
+        self._release_gl()
+
     def _release_gl(self) -> None:
         """Destroy every GL object while the context can still say goodbye."""
+        from shiboken6 import isValid
+
+        if not isValid(self):
+            return                       # the widget went first: nothing to do
         self.makeCurrent()
         try:
             holders = [self._scene_bufs, self._paper_bufs,
                        self._overlay_bufs, self._preview_bufs,
                        self._ghost_bufs,
-                       getattr(self, "_live_vp_bufs", None) or {}]
+                       *(bufs for _scene, bufs in
+                         getattr(self, "_live_vp_sets", {}).values())]
             for bufs in holders:
                 for vao, vbo, *_ in bufs.values():
                     vbo.destroy()
@@ -1147,6 +1166,8 @@ class Viewport(QOpenGLWidget):
             if scissored:
                 gl.glDisable(GL_SCISSOR_TEST)
 
+        self._draw_construction(gl)
+
         if self._preview_scene is not None and self._preview_bufs:
             scissored = self.space_scissor(gl)
             preview_mvp = self._mvp(*self._preview_scene.origin, space=True)
@@ -1213,31 +1234,36 @@ class Viewport(QOpenGLWidget):
         placements = self._live_vp
         if not placements:
             return
-        scene = placements[0]["scene"]
-        if getattr(self, "_live_vp_dirty", False) or not getattr(
-                self, "_live_vp_bufs", None):
-            for vao, vbo, _c in (getattr(self, "_live_vp_bufs", None) or {}).values():
+        # one set of buffers per scene in use; the scene rides along so
+        # its id cannot be handed to another one while the set lives
+        sets = getattr(self, "_live_vp_sets", None)
+        if sets is None:
+            sets = self._live_vp_sets = {}
+        wanted = {id(live["scene"]): live["scene"] for live in placements}
+        for key in [k for k in sets if k not in wanted]:
+            for vao, vbo, _c in sets.pop(key)[1].values():
                 vbo.destroy()
                 vao.destroy()
-            self._live_vp_bufs = {}
+        for key, scene in wanted.items():
+            if key in sets:
+                continue
+            bufs = {}
             for name in ("triangles", "lines", "points"):
                 batch = getattr(scene, name)
                 if batch.vertex_count:
-                    self._live_vp_bufs[name] = self._make_vao(batch.data)
+                    bufs[name] = self._make_vao(batch.data)
             if scene.thick.vertex_count:
-                self._live_vp_bufs["thick"] = self._make_thick_vao(
-                    scene.thick.data)
-            self._live_vp_dirty = False
-            self._live_vp_scene_id = id(scene)
-        if not self._live_vp_bufs:
-            return
+                bufs["thick"] = self._make_thick_vao(scene.thick.data)
+            sets[key] = (scene, bufs)
 
         gl.glEnable(GL_SCISSOR_TEST)
         for live in placements:
-            self._draw_one_live_viewport(gl, live, scene)
+            scene, bufs = sets[id(live["scene"])]
+            if bufs:
+                self._draw_one_live_viewport(gl, live, scene, bufs)
         gl.glDisable(GL_SCISSOR_TEST)
 
-    def _draw_one_live_viewport(self, gl, live, scene) -> None:
+    def _draw_one_live_viewport(self, gl, live, scene, bufs) -> None:
         # Clip to the viewport's frame, in device pixels with y flipped —
         # GL counts scissor rows from the bottom.
         x0, y0, x1, y1 = live["rect"]
@@ -1276,7 +1302,7 @@ class Viewport(QOpenGLWidget):
         self._program.setUniformValue(self._loc_mvp, mvp)
         for name, mode in (("triangles", GL_TRIANGLES), ("lines", GL_LINES),
                            ("points", GL_POINTS)):
-            buf = self._live_vp_bufs.get(name)
+            buf = bufs.get(name)
             if buf is None:
                 continue
             vao, _vbo, _count = buf
@@ -1287,7 +1313,7 @@ class Viewport(QOpenGLWidget):
                 gl.glDrawArrays(mode, first, count)
             vao.release()
         self._program.release()
-        self._draw_thick(gl, mvp, model_rect, self._live_vp_bufs.get("thick"),
+        self._draw_thick(gl, mvp, model_rect, bufs.get("thick"),
                          scene.thick, px_per_unit=px_per_unit)
 
     def _upload_overlay(self) -> None:
@@ -1449,6 +1475,49 @@ class Viewport(QOpenGLWidget):
         gl.glDrawArrays(GL_LINES, 0, count)
         vao.release()
 
+    def _draw_construction(self, gl) -> None:
+        """XLINEs and RAYs past their baked ends, to the edge of the view.
+
+        The baked segment is long but finite, and zooming out far enough
+        showed where it ended (#104). The rest is clipped to the view each
+        frame in float64 and stored relative to the view centre, so float32
+        holds it at any zoom. A dashed line goes on solid out there, where
+        its dashes are long below a pixel."""
+        x0, y0, x1, y1 = self._view_world_rect()
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        # a circle around the view: whatever the UCS turn of the screen
+        r = math.hypot(x1 - x0, y1 - y0) / 2.0 * 1.05
+        rect = (cx - r, cy - r, cx + r, cy + r)
+        pieces = []
+        if self._scene is not None and self._scene.construction:
+            pieces += construction_extensions(
+                self._scene.construction, rect, self._hidden_rgba)
+        overlay = self._overlay_scene
+        if (overlay is not None and overlay.construction
+                and not self.space_placement):
+            pieces += construction_extensions(overlay.construction, rect)
+        if not pieces:
+            return
+        key = (rect, tuple(pieces))
+        if self._xline_buf is None or self._xline_buf[3] != key:
+            if self._xline_buf is not None:
+                self._xline_buf[0].destroy()
+                self._xline_buf[1].destroy()
+            data = np.zeros(2 * len(pieces), dtype=VERTEX_DTYPE)
+            for k, (ax, ay, bx, by, rgba) in enumerate(pieces):
+                data["pos"][2 * k] = (ax - cx, ay - cy)
+                data["pos"][2 * k + 1] = (bx - cx, by - cy)
+                data["rgba"][2 * k:2 * k + 2] = rgba
+            vao, vbo, count = self._make_vao(data)
+            self._xline_buf = (vao, vbo, count, key, (cx, cy))
+        vao, _vbo, count, _key, origin = self._xline_buf
+        self._program.bind()
+        self._program.setUniformValue(self._loc_mvp, self._mvp(*origin))
+        vao.bind()
+        gl.glDrawArrays(GL_LINES, 0, count)
+        vao.release()
+        self._program.release()
+
     def _view_world_rect(self) -> tuple[float, float, float, float]:
         x0, y1 = self.view.screen_to_world(0.0, 0.0)          # top-left
         x1, y0 = self.view.screen_to_world(self.width(), self.height())
@@ -1550,8 +1619,7 @@ class Viewport(QOpenGLWidget):
         if self.tool_delegate is not None:
             self._draw_selection(p)
             self._draw_grips(p)
-            if self.tool_delegate.active():
-                self._draw_tool_preview(p)
+            self._draw_tool_feedback(p)
             grip_marker = getattr(self.tool_delegate,
                                   "grip_align_marker", None)
             if grip_marker is not None:
@@ -1746,8 +1814,10 @@ class Viewport(QOpenGLWidget):
                     # highlight the ARC's real sweep, not its full circle
                     a0 = _math.degrees(c[4])
                     span = _math.degrees(c[5] - c[4])
-                    p.drawArc(int(x - r), int(y - r), int(2 * r), int(2 * r),
-                              int(a0 * 16), int(span * 16))
+                    # in floats: whole pixels set the highlight up to one
+                    # off the circle drawn under it, a second line zoomed in
+                    p.drawArc(QRectF(x - r, y - r, 2 * r, 2 * r),
+                              int(round(a0 * 16)), int(round(span * 16)))
                 else:
                     p.drawEllipse(QPointF(x, y), r, r)
             rects = []
@@ -1769,6 +1839,23 @@ class Viewport(QOpenGLWidget):
             p.fillRect(sx1, sy1, sx2 - sx1, sy2 - sy1, fill)
             p.setPen(QPen(border, 1, Qt.DashLine if crossing else Qt.SolidLine))
             p.drawRect(sx1, sy1, sx2 - sx1, sy2 - sy1)
+        poly_info = getattr(delegate, "selection_polygon", lambda: None)()
+        if poly_info is not None:
+            # WPolygon solid in the window colours, CPolygon dashed in the
+            # crossing ones, closed at all times (SELECT); Fence an open
+            # dashed line
+            mode, points = poly_info
+            shape = QPolygonF([QPointF(*self._space_to_screen(x, y))
+                               for x, y in points])
+            crossing = mode != "WP"
+            border = self.CROSSING_BORDER if crossing else self.WINDOW_BORDER
+            p.setPen(QPen(border, 1, Qt.DashLine if crossing else Qt.SolidLine))
+            if mode == "F":
+                p.drawPolyline(shape)
+            else:
+                p.setBrush(self.CROSSING_FILL if crossing else self.WINDOW_FILL)
+                p.drawPolygon(shape)
+                p.setBrush(Qt.NoBrush)
 
     def _renders_previews(self) -> bool:
         """Does the active tool hand over rendered previews? Then the
@@ -1803,6 +1890,49 @@ class Viewport(QOpenGLWidget):
                 x1, y1 = self._space_to_screen(ax, ay)
                 x2, y2 = self._space_to_screen(bx, by)
                 p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        overlay = getattr(delegate, "tool_overlay", lambda: {})()
+        if overlay:
+            self._draw_tool_overlay(p, overlay, pen)
+        self._draw_snap_feedback(p, delegate)
+
+    def _draw_tool_overlay(self, p: QPainter, overlay: dict, preview_pen) -> None:
+        """A tool's :meth:`Tool.overlay`, role by role."""
+        ghost = QColor(140, 140, 140, 140)
+        pens = {"preview": preview_pen,
+                "chosen": QPen(self.HIGHLIGHT_COLOR, 2),
+                "ghost": QPen(ghost, 1)}
+        p.save()
+        for role, pen in pens.items():
+            segments = overlay.get(role) or ()
+            if not segments:
+                continue
+            p.setPen(pen)
+            for (ax, ay), (bx, by) in segments:
+                x1, y1 = self._space_to_screen(ax, ay)
+                x2, y2 = self._space_to_screen(bx, by)
+                p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        points = overlay.get("points") or ()
+        if points:
+            p.setPen(QPen(self.HIGHLIGHT_COLOR, 1))
+            half = self.MARKER_SIZE / 3.0
+            for x, y in points:
+                sx, sy = self._space_to_screen(x, y)
+                p.drawLine(QPointF(sx - half, sy), QPointF(sx + half, sy))
+                p.drawLine(QPointF(sx, sy - half), QPointF(sx, sy + half))
+        p.restore()
+
+    def _draw_tool_feedback(self, p: QPainter) -> None:
+        """What a point being given shows: a command's whole preview, or,
+        with a grip hot, the object snap marker and the tracking paths --
+        the grip snapped, but nothing on screen said where (a plugin
+        repainted the grips to show it)."""
+        delegate = self.tool_delegate
+        if delegate.active():
+            self._draw_tool_preview(p)
+        elif getattr(delegate, "grip_hot", lambda: False)():
+            self._draw_snap_feedback(p, delegate)
+
+    def _draw_snap_feedback(self, p: QPainter, delegate) -> None:
         self._draw_tracking(p, delegate)
         hit = delegate.snap_hit
         if hit is not None:
@@ -2156,15 +2286,16 @@ class Viewport(QOpenGLWidget):
                 self._set_soft_cursor(None)
                 if self._rubber is not None:
                     self._rubber.hide()
-            elif self.tool_delegate._grip_drag is not None:
-                self.tool_delegate.cancel()      # drop the hot grip
-            elif (event.modifiers() & Qt.ShiftModifier
+            elif (event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier)
                     and window is not None
                     and hasattr(window, "show_osnap_menu")
-                    and self.tool_delegate.active()):
-                # AutoCAD: Shift + right-click, the object snap menu -- one
-                # snap for the next point only.
+                    and (self.tool_delegate.active()
+                         or self.tool_delegate._grip_drag is not None)):
+                # Shift (or Ctrl) + right-click, the object snap menu -- one
+                # snap for the next point only, a hot grip's drop included.
                 window.show_osnap_menu(event.globalPosition().toPoint())
+            elif self.tool_delegate._grip_drag is not None:
+                self.tool_delegate.cancel()      # drop the hot grip
             elif window is not None and hasattr(window, "on_canvas_right_click"):
                 # AutoCAD: Enter during a command, context menu when idle.
                 window.on_canvas_right_click(event.globalPosition().toPoint())
@@ -2276,16 +2407,23 @@ class Viewport(QOpenGLWidget):
         delegate = self.tool_delegate
         if delegate is not None:
             delegate.shift_held = bool(modifiers & Qt.ShiftModifier)
+            delegate.ctrl_held = bool(modifiers & Qt.ControlModifier)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Shift:
             self._track_shift(event.modifiers() | Qt.ShiftModifier)
+            self.update()
+        elif event.key() == Qt.Key_Control:
+            self._track_shift(event.modifiers() | Qt.ControlModifier)
             self.update()
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
         if event.key() == Qt.Key_Shift:
             self._track_shift(event.modifiers() & ~Qt.ShiftModifier)
+            self.update()
+        elif event.key() == Qt.Key_Control:
+            self._track_shift(event.modifiers() & ~Qt.ControlModifier)
             self.update()
         super().keyReleaseEvent(event)
 
@@ -2439,6 +2577,36 @@ class Viewport(QOpenGLWidget):
                     return
             self.view.zoom_at(pos.x(), pos.y(), wheel_step() ** notches)
             self.update()
+
+    def enterEvent(self, event) -> None:
+        """The pointer came in -- or was already there when the window, or
+        the start-up dialog over it, went away: the crosshair shows NOW.
+        The canvas hides the system arrow, and the crosshair waited for the
+        first move, so a still mouse had no cursor at all (Marco: "cuando
+        abres IngeCAD por primera vez el cursor se pierde")."""
+        self._adopt_pointer(event.position())
+        super().enterEvent(event)
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.WindowActivate and self._cursor is None:
+            from PySide6.QtGui import QCursor
+
+            local = self.mapFromGlobal(QCursor.pos())
+            if self.rect().contains(local):
+                self._adopt_pointer(QPointF(local))
+        return super().event(event)
+
+    def _adopt_pointer(self, pos) -> None:
+        """Take ``pos`` as the crosshair's place, as a move to it would."""
+        if self._pan_mode or self._panning:
+            return
+        self._cursor = pos
+        wx, wy = self.view.screen_to_world(pos.x(), pos.y())
+        self.sync_cursor_shape(wx, wy)
+        if self.tool_delegate is not None:
+            self.tool_delegate.on_hover(wx, wy)
+        self.cursorMoved.emit(wx, wy)
+        self.update()
 
     def leaveEvent(self, event) -> None:
         self._cursor = None

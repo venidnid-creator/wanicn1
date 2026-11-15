@@ -71,6 +71,26 @@ class Tool:
     #: as a distance can never be eaten by an earlier prompt's Delete.
     _prompt_source: str = ""
 
+    def length_text(self, value: float) -> str:
+        """A length as the drawing writes it (LUNITS/LUPREC): the classic
+        ``<10.0000>`` at a prompt's default, not Python's ``<10>``."""
+        return self._units_text(value, "length")
+
+    def angle_text(self, degrees: float) -> str:
+        """An angle as the drawing writes it (AUNITS/AUPREC)."""
+        return self._units_text(degrees, "angle")
+
+    def _units_text(self, value: float, kind: str) -> str:
+        from core import units as units_mod
+
+        try:
+            u = self.ctx.services.units()
+            if kind == "angle":
+                return units_mod.format_angle(value, u.aunits, u.auprec)
+            return units_mod.format_length(value, u.lunits, u.luprec)
+        except Exception:  # noqa: BLE001 -- no drawing units: the classic default
+            return f"{value:g}" if kind == "angle" else f"{value:.4f}"
+
     def prompt(self, source: str, **kwargs) -> None:
         """Show ``source`` translated, and remember it for :meth:`option`.
 
@@ -94,6 +114,11 @@ class Tool:
         from core.i18n import keywords
 
         return keywords.match(text, self._prompt_source) or ""
+
+    def ctrl_held(self) -> bool:
+        """Is Ctrl down right now? Arcs read it to turn the other way,
+        while the cursor moves and at the click."""
+        return bool(getattr(self.ctx.services, "ctrl_held", False))
 
     def ucs(self):
         """The current UCS (core/ucs.py): a typed angle or an "along X"
@@ -148,6 +173,55 @@ class Tool:
 
     def preview_segments(self, cursor: Point) -> list[tuple[Point, Point]]:
         """Rubber-band segments from committed points to the cursor."""
+        return []
+
+    #: True hides the selection's highlight while this tool runs: a tool
+    #: that paints what it chose in its own way (:meth:`overlay`).
+    suppress_selection_highlight = False
+
+    def overlay(self, cursor: Point) -> dict:
+        """What the tool paints over the drawing besides its rubber band,
+        by role: ``"preview"`` (dashed, as the rubber band), ``"chosen"``
+        (the selection's colour) and ``"ghost"`` (faint) take a list of
+        segments ``((x1, y1), (x2, y2))``; ``"points"`` a list of
+        ``(x, y)`` marked with a small cross. Plugins' tools use it
+        (contract level 2); the core's tools answer through
+        :meth:`preview_segments`."""
+        return {}
+
+    def on_selection_step(self, handles: frozenset) -> None:
+        """Each change of the selection while this tool asks "Select
+        objects:" (a pick, a window, Remove, Undo), before Enter ends it
+        with :meth:`on_selection` (contract level 2)."""
+
+    #: True: :meth:`extra_osnaps` apply with OSNAP off too.
+    extra_osnaps_always = False
+
+    def extra_osnaps(self) -> frozenset:
+        """Object snap keys (``"END"``, ``"MID"``... as in ``core.osnap``)
+        this tool adds to the running ones while it asks for a point; a
+        one-shot snap (END, INT...) still replaces them all, and OSNAP off
+        (F3) drops them unless :attr:`extra_osnaps_always` (level 2)."""
+        return frozenset()
+
+    def last_segment_direction(self):
+        """The direction in degrees of the last segment drawn by this
+        tool, or None (no segment yet, or not a tool that draws them)."""
+        return None
+
+    #: The function keys the core leaves free, offered to the running
+    #: tool through :meth:`on_key`.
+    FREE_KEYS = ("F4", "F5", "F6")
+
+    def on_key(self, key: str) -> bool:
+        """A free function key (:attr:`FREE_KEYS`, e.g. ``"F5"``) pressed
+        while the tool runs. True if the tool used it (contract level 2)."""
+        return False
+
+    def preview_entities(self, cursor: Point) -> list:
+        """Virtual entities (built for the drawing, never added to it)
+        rendered as what the next click leaves, through the real styles.
+        Empty for none."""
         return []
 
     def ghost_placement(self, cursor: Point):

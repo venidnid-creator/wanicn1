@@ -13,7 +13,13 @@ in an extension they choose, not in everyone's IngeTrazo.
 Contract (``API_VERSION`` 2; still 0.x — see docs/plugins.md). Version 2
 adds, without changing anything version 1 did: named panels that keep
 their place and have a Window-menu entry, the projection an overlay needs,
-opening an extension's own file type, and workspaces.
+opening an extension's own file type, and workspaces. Projects in tabs
+only add to it, so the number stays 2 — published extensions check for
+``api_version in (1, 2)`` and a 3 would turn them away for nothing:
+:attr:`ExtensionApp.viewport` and ``scene`` are the project in front,
+``on_document_changed`` also fires when another tab comes to the front,
+and ``on_document_closed`` (test for it with ``hasattr``) says when a tab
+goes.
 
 - **Document data** is ONE JSON-safe value per extension (its key: the
   plugin's file name). It is saved in the .igz, reset by New/Open, and every
@@ -35,6 +41,9 @@ opening an extension's own file type, and workspaces.
   extension already claimed, is refused (logged, not raised).
 - A **workspace** shows the extension's own document instead of the model,
   which waits untouched ("parked") until the workspace is left.
+- **Projects in tabs**: overlays, snap providers and pickables registered
+  once work in every tab; ``viewport``/``scene`` are always read anew (do
+  not keep them from ``setup``).
 """
 from __future__ import annotations
 
@@ -133,28 +142,49 @@ class ExtensionApp:
 
     def on_document_changed(self, fn) -> None:
         """Call ``fn()`` whenever the document changes — an edit, an undo,
-        New, Open — so a panel can show the current data.
+        New, Open, and another project tab brought to the front — so a
+        panel can show the current data (:attr:`scene` is then the
+        project in front).
 
         A click that only changes the SELECTION is not a change of the
-        document (``Scene.bump_view``): it is filtered out here. The
-        building, take-off, road and profile panels each re-read the whole
+        document (``Scene.bump_view``): it is filtered out here (WANICNSURVEY).
+        The building, take-off, road and profile panels each re-read the whole
         model on this signal, so every click on a part used to re-walk the
         model (the lag when selecting objects in a large house)."""
-        last = {"v": None}
+        last = {}
 
-        def changed(_v):
-            sc = self.viewport.scene
-            v = (id(sc), getattr(sc, "content_version", sc.version))
-            if v == last["v"]:
-                return
-            last["v"] = v
-            fn()
-        self.viewport.sceneVersionChanged.connect(changed)
+        def filtered(vp):
+            def changed(_v):
+                sc = vp.scene
+                v = (id(sc), getattr(sc, "content_version", sc.version))
+                if last.get(id(vp)) == v:
+                    return
+                last[id(vp)] = v
+                fn()
+            return changed
+        win = self._window
+        if hasattr(win, "_wire_viewport"):
+            # Projects in tabs: every viewport, the ones opened later too,
+            # and each answers only while its project is in front.
+            win.__dict__.setdefault("_doc_change_hooks", []).append(fn)
+            for vp in win.all_viewports():
+                cb = filtered(vp)
+                vp.sceneVersionChanged.connect(
+                    lambda _v, v=vp, cb=cb: cb(_v) if v is win.viewport else None)
+            return
+        self.viewport.sceneVersionChanged.connect(filtered(self.viewport))
+
+    def on_document_closed(self, fn) -> None:
+        """Call ``fn(scene)`` when a project's tab is closed, with the
+        scene that goes — to drop whatever the extension kept for it. The
+        project in front at that moment may be another one."""
+        win = self._window
+        win.__dict__.setdefault("_doc_close_hooks", []).append(fn)
 
     # ---- Side panel ----------------------------------------------------------
     def add_panel(self, title: str, widget, name: str | None = None, *,
                   panel: str | None = None, stretch: int = 0,
-                  start_hidden: bool = False):
+                  start_hidden: bool = False, icon=None):
         """Put ``widget`` in the side tray as a tab of its own, beside
         Properties / BIM / Terrain. Returns the dock.
 
@@ -174,7 +204,13 @@ class ExtensionApp:
 
         ``start_hidden``: the panel starts closed the first time (for a
         panel few users need open all the time); Window ▸ Panels opens it,
-        and from then on the user's choice is kept."""
+        and from then on the user's choice is kept.
+
+        ``icon``: what the panel's tab shows — the tabs show only an icon,
+        the name being their tooltip and the panel's heading. A QIcon, or
+        the key of one of IngeTrazo's drawn icons (``"panel_render"``…),
+        which then follows the theme. Without one the tab shows the
+        title's initial in a rounded square."""
         from PySide6.QtWidgets import QDockWidget, QVBoxLayout, QWidget
         win = self._window
         shared = getattr(win, "_shared_panels", None)
@@ -183,6 +219,8 @@ class ExtensionApp:
         if panel is not None and panel in shared:
             dock, box = shared[panel]
             box.addWidget(widget, stretch)
+            if icon is not None and not dock.property("ingetrazo_icon"):
+                self._set_panel_icon(dock, icon)
             return dock
         if panel is not None:
             object_name = f"extension_{panel}"
@@ -209,7 +247,9 @@ class ExtensionApp:
                 win._start_hidden = set()
             win._start_hidden.add(object_name)
         dock.setWidget(widget)
-        dock.setTitleBarWidget(QWidget(dock))   # the tab already names it
+        dock.setTitleBarWidget(QWidget(dock))   # the window puts its header
+        if icon is not None:
+            self._set_panel_icon(dock, icon)
         win._register_extension_dock(dock)
         if panel is not None:
             shared[panel] = (dock, box)
@@ -217,6 +257,10 @@ class ExtensionApp:
         if tray is not None:
             tray.raise_()                   # Properties stays the one in front
         return dock
+
+    def _set_panel_icon(self, dock, icon) -> None:
+        dock.setProperty("ingetrazo_icon", True)
+        self._window.set_dock_icon(dock, icon)
 
     def show_panel(self, dock) -> None:
         """Bring a tab from :meth:`add_panel` to the front — shown again
@@ -316,6 +360,40 @@ class ExtensionApp:
         The painter state is saved and restored around each call."""
         self.viewport._ext_overlays.append(fn)
         self.viewport.update()
+
+    # ---- Sheets ----------------------------------------------------------------
+    def add_sheet_annotations(self, fn) -> None:
+        """What an overlay draws on screen, for the SHEETS too: ``fn(scene,
+        sheet)`` returns the items to print in a model-view frame, in
+        WORLD points (metres), and the sheet projects them with the frame's
+        own camera and draws them as vectors — crisp at any scale, in the
+        print and in the PDF. It is asked each time a frame's overlay is
+        worked out (an Update, an annotation switch), with that frame's
+        scene applied: ask ``scene.entity_visible(group)`` and a layer the
+        frame hides hides your items too.
+
+        ``sheet`` gives ``scale_n`` (1:N; 0 for a perspective frame),
+        ``text_mm`` (the frame's annotation text height) and
+        ``paper(points)`` → ``[(x_mm, y_mm), …]``, where your points land.
+
+        Items are dicts:
+
+        - ``{"line": [p0, p1, …]}``: a polyline; ``width_mm`` (0.25),
+          ``color`` (RGB 0–255).
+        - ``{"text": "0+020", "at": p}``: ``toward`` (a second world
+          point: the text runs from ``at`` toward it, turned so it is never
+          upside down; none = level on the page), ``anchor`` (``"center"``
+          or ``"start"``: the text begins at ``at``), ``size_mm``,
+          ``bold`` (True), ``color``, ``background`` (RGB or None),
+          ``background_opacity`` (0–100), and ``priority``: texts that
+          have one give way where they would overlap, the LOWER number
+          kept first.
+
+        A provider that raises is logged once and removed."""
+        win = self._window
+        if not hasattr(win, "_ext_sheet_annots"):
+            win._ext_sheet_annots = []
+        win._ext_sheet_annots.append(fn)
 
     def world_to_pixels(self, points):
         """World points (metres; anything shaped ``(N, 3)``) → ``(px, py,

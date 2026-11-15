@@ -19,34 +19,86 @@ class BlockTool(Tool):
 
     wants_selection = True
 
+    REDEFINE = 'Block "{name}" already exists. Redefine it? [Yes/No] <No>:'
+
     def start(self) -> None:
         self.name = "BLOCK"
         self._entities: list = []
         self._block_name: str | None = None
+        self._redefine = False
+        self._await: str | None = None
 
     def on_selection(self, entities: list) -> None:
         if not entities:
             self.ctx.finish()
             return
         self._entities = entities
+        self._ask_name()
+
+    def _ask_name(self) -> None:
         name = self.ctx.ask_text(tr("Block name:"), "")
         if not name or not name.strip():
             self.ctx.echo(tr("*Cancel*"))
             self.ctx.finish()
             return
         self._block_name = name.strip()
+        if self._exists(self._block_name):
+            # AutoCAD asks before touching a definition every reference
+            # shares; ours swapped the selection for the OLD content
+            # without a word
+            self._await = "redefine"
+            self.entity_picker = True
+            self.prompt(self.REDEFINE, name=self._block_name)
+            return
         self.prompt("Specify insertion base point:")
 
+    def _exists(self, name: str) -> bool:
+        document = getattr(self.ctx.services, "document", None)
+        if document is None:
+            document = getattr(getattr(self.ctx.services, "window", None),
+                               "document", None)
+        return document is not None and name in document.doc.blocks
+
+    def on_option(self, text: str) -> bool:
+        if self._await != "redefine":
+            return False
+        answer = self.option(text) if text.strip() else "N"
+        if answer not in ("Y", "N"):
+            return False
+        self._await = None
+        self.entity_picker = False
+        if answer == "Y":
+            self._redefine = True
+            self.prompt("Specify insertion base point:")
+        else:
+            self._ask_name()              # No: a name again, as -BLOCK does
+        return True
+
+    def on_enter(self) -> None:
+        if self._await == "redefine":
+            self.on_option("")            # <No>
+            return
+        self.ctx.finish()
+
     def on_point(self, point: Point) -> None:
+        if self._await == "redefine":
+            return
         if self._block_name and self._entities:
-            self.ctx.execute(
-                actions.create_block(self._block_name, point, self._entities))
-            self.ctx.echo(tr("Block '{name}' created.", name=self._block_name))
+            self.ctx.execute(actions.create_block(
+                self._block_name, point, self._entities,
+                redefine=self._redefine))
+            if self._redefine:
+                self.ctx.echo(tr("Block {name} redefined.", name=self._block_name))
+            else:
+                self.ctx.echo(tr("Block '{name}' created.", name=self._block_name))
         self.ctx.finish()
 
 
 class InsertTool(Tool):
     """INSERT: choose a defined block, then place it (Scale/Rotate options)."""
+
+    #: Set by the Palette to start INSERT on the block picked in its list.
+    _preset_name: str | None = None
 
     def start(self) -> None:
         self.name = "INSERT"
@@ -61,6 +113,12 @@ class InsertTool(Tool):
         self._verify_pass = False
         self._text_state = False
         names = self.ctx.services.block_names() if self.ctx.services else []
+        preset, InsertTool._preset_name = InsertTool._preset_name, None
+        if preset in names:
+            # picked in the Palette's block list: straight to its placement
+            self._block_name = preset
+            self.prompt("Specify insertion point [Scale/Rotate]:")
+            return
         # AutoCAD's Insert dialog: the defined blocks, or Browse... for a
         # drawing file (#70: with no block defined there was no way on)
         browse = tr("Browse...")
@@ -193,6 +251,7 @@ class InsertTool(Tool):
     # Attributes dialog when it is 1; ATTREQ 0 takes every default; a Preset
     # definition never asks; a Verify definition is asked twice.
     _point = None
+    _yscale: float | None = None      # -INSERT's own Y; None = the X scale
     _attdefs: list = []
     _values: dict = {}
     _queue: list = []
@@ -282,13 +341,14 @@ class InsertTool(Tool):
 
         # the rotation is measured from the UCS's X, as AutoCAD's (#91)
         rotation = self._rotation + self.ucs().degrees
+        yscale = self._xscale if self._yscale is None else self._yscale
         if self._attdefs:
             command = att.insert_block_with_attribs(
-                self._block_name, self._point, self._xscale, self._xscale,
+                self._block_name, self._point, self._xscale, yscale,
                 rotation, self._values)
         else:
             command = actions.insert_block(
-                self._block_name, self._point, self._xscale, self._xscale,
+                self._block_name, self._point, self._xscale, yscale,
                 rotation)
         self.ctx.execute(command)
         self.ctx.finish()
@@ -298,18 +358,28 @@ class ExplodeTool(Tool):
     """EXPLODE: break block references and polylines into their components."""
 
     wants_selection = True
-    _EXPLODABLE = ("INSERT", "LWPOLYLINE", "POLYLINE")
+    _EXPLODABLE = ("INSERT", "LWPOLYLINE", "POLYLINE", "HATCH")
 
     def start(self) -> None:
         self.name = "EXPLODE"
 
     def on_selection(self, entities: list) -> None:
         targets = [e for e in entities if e.dxftype() in self._EXPLODABLE]
-        if targets:
-            self.ctx.execute(actions.explode_entities(targets))
-            self.ctx.echo(tr("{n} exploded.", n=len(targets)))
-        else:
+        if not targets:
             self.ctx.echo(tr("Nothing that can be exploded was selected."))
+            self.ctx.finish()
+            return
+        command = actions.explode_entities(targets)
+        self.ctx.execute(command)
+        done = len(command.pieces)
+        if done:
+            self.ctx.echo(tr("{n} exploded.", n=done))
+        if command.not_exploded:
+            # a solid or gradient fill has no lines to break into
+            self.ctx.echo(tr("{n} could not be exploded.",
+                             n=len(command.not_exploded)))
+        if command.too_dense:
+            self.ctx.echo(actions.too_dense_message())
         self.ctx.finish()
 
 
@@ -364,6 +434,17 @@ class HatchTool(Tool):
         self.prompt(
             "Pick internal point or [Select objects/seTtings], Enter to apply:")
 
+    def _too_dense(self, boundaries, settings, user_def) -> bool:
+        """Past HPMAXLINES the hatch is not created (it froze the window
+        and came out half drawn): say so and keep the boundaries picked, for
+        another scale from the settings and Enter again."""
+        if not actions.hatch_too_dense(boundaries, settings["pattern"],
+                                       settings["scale"], 0.0, user_def):
+            return False
+        self.ctx.echo(actions.too_dense_message())
+        self._prompt()
+        return True
+
     def on_option(self, text: str) -> bool:
         # The resolver first: it turns the localized keyword, or
         # AutoCAD's _global form, into the English key the
@@ -409,6 +490,8 @@ class HatchTool(Tool):
             self.ctx.finish()
             return
         s = self.settings
+        if self._too_dense(boundaries, s, None):
+            return
         self.ctx.execute(actions.add_hatch(
             boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands))
@@ -469,8 +552,8 @@ class HatchCliTool(HatchTool):
                 return False
             self.settings["scale"] = value
             self._await = "angle"
-            self.prompt("Specify an angle for the pattern <{a:g}>:",
-                        a=self.settings["angle"])
+            self.prompt("Specify an angle for the pattern <{a}>:",
+                        a=self.angle_text(self.settings["angle"]))
             return True
         if self._await == "angle":
             if text == "":
@@ -489,8 +572,8 @@ class HatchCliTool(HatchTool):
                 return False
             self._pending["ua"] = value
             self._await = "user_spacing"
-            self.prompt("Specify spacing between the lines <{s:g}>:",
-                        s=cls._user[1])
+            self.prompt("Specify spacing between the lines <{s}>:",
+                        s=self.length_text(cls._user[1]))
             return True
         if self._await == "user_spacing":
             if text == "":
@@ -614,8 +697,8 @@ class HatchCliTool(HatchTool):
             return True
         if upper in ("U", "USER", "USER DEFINED"):
             self._await = "user_angle"
-            self.prompt("Specify angle for crosshatch lines <{a:g}>:",
-                        a=type(self)._user[0])
+            self.prompt("Specify angle for crosshatch lines <{a}>:",
+                        a=self.angle_text(type(self)._user[0]))
             return True
         # optional island-style suffix: NAME,N / NAME,O / NAME,I
         name = upper
@@ -689,6 +772,8 @@ class HatchCliTool(HatchTool):
         user_def = self._user_def
         if user_def is not None:
             user_def = (self._world_angle(user_def[0]),) + tuple(user_def[1:])
+        if self._too_dense(boundaries, s, user_def):
+            return
         self.ctx.execute(actions.add_hatch(
             boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands,
@@ -704,9 +789,215 @@ class HatchCliTool(HatchTool):
         return []
 
 
+def _echo_block_list(tool) -> None:
+    """The ? of -BLOCK and -INSERT: the definitions of the drawing."""
+    names = tool.ctx.services.block_names() if tool.ctx.services else []
+    tool.ctx.echo(tr("Blocks: {names}", names=", ".join(names))
+                  if names else tr("No blocks defined."))
+
+
+class BlockCliTool(BlockTool):
+    """-BLOCK: BLOCK from the prompt. The classic order -- name, base
+    point, then the objects -- and the classic ending: the objects leave
+    the drawing once they are a definition (U brings them back)."""
+
+    wants_selection = False
+
+    def start(self) -> None:
+        super().start()
+        self.name = "-BLOCK"
+        self._base: Point | None = None
+        self._ask_name()
+
+    def _ask_name(self) -> None:
+        self._await = "name"
+        self.prompt("Enter block name or [?]:")
+
+    def wants_raw_text(self) -> bool:
+        return self._await == "name"      # a name may have spaces
+
+    def on_option(self, text: str) -> bool:
+        if self._await != "name":
+            return super().on_option(text)
+        name = text.strip()
+        if not name:
+            self.ctx.finish()
+            return True
+        if name == "?":
+            _echo_block_list(self)
+            self.ctx.finish()
+            return True
+        self._block_name = name
+        if self._exists(name):
+            self._await = "redefine"
+            self.entity_picker = True
+            self.prompt(self.REDEFINE, name=name)
+            return True
+        self._await = None
+        self.prompt("Specify insertion base point:")
+        return True
+
+    def on_enter(self) -> None:
+        if self._await == "name":
+            self.ctx.finish()
+            return
+        super().on_enter()
+
+    def on_point(self, point: Point) -> None:
+        if self._await is not None or not self._block_name:
+            return
+        self._base = point
+        self.ctx.services.request_selection()
+
+    def on_selection(self, entities: list) -> None:
+        if not entities or self._base is None:
+            self.ctx.finish()
+            return
+        self.ctx.execute(actions.create_block(
+            self._block_name, self._base, entities,
+            redefine=self._redefine, keep_reference=False))
+        if self._redefine:
+            self.ctx.echo(tr("Block {name} redefined.", name=self._block_name))
+        else:
+            self.ctx.echo(tr("Block '{name}' created.", name=self._block_name))
+        self.ctx.finish()
+
+
+class InsertCliTool(InsertTool):
+    """-INSERT: INSERT from the prompt. Name (? lists them), insertion
+    point, X and Y scale, rotation -- typed, or the rotation shown with a
+    point -- and then the attributes, as INSERT asks them. Scale and
+    Rotate before the point preset their value and skip its question."""
+
+    def start(self) -> None:
+        self.name = "-INSERT"
+        self._block_name = None
+        self._xscale = 1.0
+        self._yscale = None
+        self._rotation = 0.0
+        self._point = None
+        self._attdefs = []
+        self._values = {}
+        self._queue = []
+        self._verify_pass = False
+        self._text_state = False
+        self._preset = set()
+        self._await = "name"
+        self.prompt("Enter block name or [?]:")
+
+    def wants_raw_text(self) -> bool:
+        return self._await == "name" or super().wants_raw_text()
+
+    def _number(self, text: str, default):
+        if not text.strip():
+            return default
+        try:
+            return float(text.strip())
+        except ValueError:
+            return False
+
+    def on_option(self, text: str) -> bool:
+        if self._text_state:
+            return super().on_option(text)
+        if self._await == "name":
+            name = text.strip()
+            if not name:
+                self.ctx.finish()
+                return True
+            if name == "?":
+                _echo_block_list(self)
+                self.ctx.finish()
+                return True
+            names = self.ctx.services.block_names() if self.ctx.services else []
+            match = next((n for n in names if n.casefold() == name.casefold()),
+                         None)
+            if match is None:
+                self.ctx.echo(tr('Block "{name}" not found.', name=name))
+                self.prompt("Enter block name or [?]:")
+                return True
+            self._block_name = match
+            self._await = None
+            self.prompt("Specify insertion point [Scale/Rotate]:")
+            return True
+        if self._await == "xs":
+            value = self._number(text, 1.0)
+            if value is False or value == 0:
+                return False
+            self._xscale = value
+            self._await = "ys"
+            self.prompt("Enter Y scale factor <use X scale factor>:")
+            return True
+        if self._await == "ys":
+            value = self._number(text, None)
+            if value is False or value == 0:
+                return False
+            self._yscale = value
+            self._ask_rotation()
+            return True
+        if self._await == "rot":
+            value = self._number(text, 0.0)
+            if value is False:
+                return False
+            self._rotation = value
+            self._place()
+            return True
+        preset = self._await
+        if not super().on_option(text):
+            return False
+        if preset in ("scale", "rotate") and self._await is None:
+            self._preset.add(preset)      # answered: not asked again
+        return True
+
+    def _ask_rotation(self) -> None:
+        if "rotate" in self._preset:
+            self._place()
+            return
+        self._await = "rot"
+        self.prompt("Specify rotation angle <{v}>:", v=self.angle_text(0.0))
+
+    def _place(self) -> None:
+        self._await = None
+        if self._begin_attributes():
+            return                        # the values come first
+        self._insert()
+
+    def on_point(self, point: Point) -> None:
+        if self._await == "rot":
+            import math
+
+            dx, dy = point[0] - self._point[0], point[1] - self._point[1]
+            # shown with a point: the angle seen, which _insert reads
+            # from the UCS's X like a typed one
+            self._rotation = math.degrees(math.atan2(dy, dx)) \
+                - self.ucs().degrees
+            self._place()
+            return
+        if self._await is not None or self._text_state \
+                or not self._block_name or self._point is not None:
+            return
+        self._point = point
+        self.last_point = point
+        if "scale" in self._preset:
+            self._ask_rotation()
+            return
+        self._await = "xs"
+        self.prompt("Enter X scale factor <1>:")
+
+    def on_enter(self) -> None:
+        if self._await == "name":
+            self.ctx.finish()
+            return
+        if self._await in ("xs", "ys", "rot"):
+            self.on_option("")
+            return
+        super().on_enter()
+
+
 BLOCK_TOOL_CLASSES = {
     "BLOCK": BlockTool,
+    "-BLOCK": BlockCliTool,
     "INSERT": InsertTool,
+    "-INSERT": InsertCliTool,
     "EXPLODE": ExplodeTool,
     "HATCH": HatchTool,
     "-HATCH": HatchCliTool,

@@ -230,12 +230,12 @@ class ChamferTool(Tool):
         mode = tr("TRIM") if trimmode.trimmode() else tr("NOTRIM")
         if cls.method == "A":
             self.ctx.echo(tr("({mode} mode) Current chamfer Length = {l}, "
-                             "Angle = {a}", mode=mode, l=f"{cls.length:g}",
-                             a=f"{cls.angle:g}"))
+                             "Angle = {a}", mode=mode, l=self.length_text(cls.length),
+                             a=self.angle_text(cls.angle)))
         else:
             self.ctx.echo(tr("({mode} mode) Current chamfer Dist1 = {d1}, "
                              "Dist2 = {d2}", mode=mode,
-                             d1=f"{cls.dist1:g}", d2=f"{cls.dist2:g}"))
+                             d1=self.length_text(cls.dist1), d2=self.length_text(cls.dist2)))
         self._first_prompt()
 
     def _first_prompt(self) -> None:
@@ -243,6 +243,27 @@ class ChamferTool(Tool):
         self._first_pick = None
         self.entity_picker = True
         self.prompt(self.OPTIONS)
+
+    def _ask_second(self) -> None:
+        self.prompt("Select second line or shift-select to apply corner "
+                    "or [Distance/Angle/Method]:")
+
+    def _ask_polyline(self) -> None:
+        self.prompt("Select 2D polyline or [Distance/Angle/Method]:")
+
+    def _resume(self) -> None:
+        """Back from a setting to the prompt it was asked at."""
+        target = getattr(self, "_resume_to", None)
+        self._resume_to = None
+        if target == "second":
+            self._await = None
+            self._ask_second()
+        elif target == "polyline":
+            self._await = "polyline"
+            self._ask_polyline()
+        else:
+            self._await = None
+            self._first_prompt()
 
     def _after(self) -> None:
         self._done += 1
@@ -273,7 +294,7 @@ class ChamferTool(Tool):
             cls.dist1 = value
             self._await = "d2"
             self.prompt("Specify second chamfer distance <{d}>:",
-                        d=f"{cls.dist1:g}")
+                        d=self.length_text(cls.dist1))
             return True
         if self._await == "d2":
             value = self._value(text, cls.dist1)
@@ -281,8 +302,7 @@ class ChamferTool(Tool):
                 return True
             cls.dist2 = value
             cls.method = "D"
-            self._await = None
-            self._first_prompt()
+            self._resume()
             return True
         if self._await == "length":
             value = self._value(text, cls.length)
@@ -291,7 +311,7 @@ class ChamferTool(Tool):
             cls.length = value
             self._await = "angle"
             self.prompt("Specify chamfer angle from the first line <{a}>:",
-                        a=f"{cls.angle:g}")
+                        a=self.angle_text(cls.angle))
             return True
         if self._await == "angle":
             value = self._value(text, cls.angle)
@@ -299,8 +319,7 @@ class ChamferTool(Tool):
                 return True
             cls.angle = value
             cls.method = "A"
-            self._await = None
-            self._first_prompt()
+            self._resume()
             return True
         if self._await == "method":
             if token in ("D", "DISTANCE"):
@@ -310,8 +329,7 @@ class ChamferTool(Tool):
             elif text.strip():
                 self.ctx.echo(tr("Requires Distance or Angle."))
                 return True
-            self._await = None
-            self._first_prompt()
+            self._resume()
             return True
         if self._await == "trim":
             if token.startswith("T"):
@@ -321,20 +339,39 @@ class ChamferTool(Tool):
             elif text.strip():
                 self.ctx.echo(tr("Requires Trim or No trim."))
                 return True
-            self._await = None
-            self._first_prompt()
+            self._resume()
             return True
-        if self._first is not None:
+        if self._first is not None or self._await == "polyline":
+            # The classic CAD (group D): the second line, and the polyline,
+            # offer [Distance/Angle/Method] and come back to that prompt
+            self._resume_to = "second" if self._first is not None else "polyline"
+            if token in ("D", "DISTANCE"):
+                self._await = "d1"
+                self.prompt("Specify first chamfer distance <{d}>:",
+                            d=self.length_text(cls.dist1))
+                return True
+            if token in ("A", "ANGLE"):
+                self._await = "length"
+                self.prompt("Specify chamfer length on the first line <{d}>:",
+                            d=self.length_text(cls.length))
+                return True
+            if token in ("M", "METHOD"):
+                self._await = "method"
+                self.prompt("Enter trim method [Distance/Angle] <{m}>:",
+                            m=tr("Angle") if cls.method == "A" else tr("Distance"))
+                return True
+            self._resume_to = None
             return False
+        self._resume_to = None
         if token in ("D", "DISTANCE"):
             self._await = "d1"
             self.prompt("Specify first chamfer distance <{d}>:",
-                        d=f"{cls.dist1:g}")
+                        d=self.length_text(cls.dist1))
             return True
         if token in ("A", "ANGLE"):
             self._await = "length"
             self.prompt("Specify chamfer length on the first line <{d}>:",
-                        d=f"{cls.length:g}")
+                        d=self.length_text(cls.length))
             return True
         if token in ("E", "METHOD"):
             self._await = "method"
@@ -353,7 +390,7 @@ class ChamferTool(Tool):
             return True
         if token in ("P", "POLYLINE"):
             self._await = "polyline"
-            self.prompt("Select 2D polyline:")
+            self._ask_polyline()
             return True
         if token in ("U", "UNDO"):
             if self._done:
@@ -383,7 +420,7 @@ class ChamferTool(Tool):
         if self._first is None:
             self._first = entity
             self._first_pick = point
-            self.prompt("Select second line or shift-select to apply corner:")
+            self._ask_second()
             return
         if entity is self._first and entity.dxftype() == "LINE":
             self.ctx.echo(tr("Pick a different line."))
@@ -642,31 +679,305 @@ class ArrayTool(Tool):
             self.prompt("Enter the number of items in the array:")
 
 
+
+class ArrayPathTool(Tool):
+    """ARRAYPATH: copies along a curve, spaced by a distance (Measure) or
+    spread over it (Divide), turning with it unless Align items is No.
+
+    Plain copies, as ARRAY makes (the module's first deviation): the
+    prompts are the path array's without the associative ones. The array
+    shows while its options are edited; Enter or eXit places it."""
+
+    wants_selection = True
+    MENU = ("Enter an option [Method/Base point/Items/Align items/eXit] "
+            "<eXit>:")
+    #: copies drawn at most in the live preview
+    PREVIEW_LIMIT = 2000
+
+    def start(self) -> None:
+        self.name = "ARRAYPATH"
+        self._entities: list = []
+        self._curve = None              # (points, closed, length)
+        self._method = "measure"
+        self._spacing = 0.0
+        self._count = 0
+        self._base: Point | None = None
+        self._align = True
+        self._await = None
+        self.entity_picker = False
+
+    # -- selection and path
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        self._entities = entities
+        self.ctx.echo(tr("Type = Path  Associative = No"))
+        self._await = "path"
+        self.entity_picker = True
+        self.prompt("Select path curve:")
+
+    def _take_path(self, point: Point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None or entity.dxftype() not in modify.PATH_CURVES:
+            self.ctx.echo(tr("Select a line, arc, circle, ellipse, "
+                             "polyline or spline."))
+            return
+        try:
+            self._curve = modify.path_curve(entity, point)
+        except ValueError:
+            self.ctx.echo(tr("Select a line, arc, circle, ellipse, "
+                             "polyline or spline."))
+            return
+        self.entity_picker = False
+        _points, closed, length = self._curve
+        self._spacing = self._default_spacing(length)
+        self._count = modify.path_fill_count(length, closed, self._spacing)
+        self._menu()
+
+    def _default_spacing(self, length: float) -> float:
+        """The selection's larger size, so the copies do not overlap."""
+        from ezdxf import bbox
+
+        box = bbox.extents(self._entities, fast=True)
+        size = max(box.size.x, box.size.y) if box.has_data else 0.0
+        if size <= 1e-9 or size > length:
+            size = length / 10.0
+        return size
+
+    # -- the option menu
+    def _menu(self) -> None:
+        self._await = "menu"
+        self.prompt(self.MENU)
+
+    def on_point(self, point: Point) -> None:
+        if self._await == "path":
+            self._take_path(point)
+        elif self._await == "base":
+            self._base = point
+            self._menu()
+
+    def on_option(self, text: str) -> bool:
+        token = self.option(text) or text.strip().upper()
+        if self._await == "menu":
+            if token in ("", "X", "EXIT"):
+                return self._place()
+            if token in ("M", "METHOD"):
+                self._await = "method"
+                self.prompt(
+                    "Enter path method [Divide/Measure] <Measure>:"
+                    if self._method == "measure" else
+                    "Enter path method [Divide/Measure] <Divide>:")
+                return True
+            if token in ("B", "BASE POINT"):
+                self._await = "base"
+                self.prompt("Specify base point <end of path curve>:")
+                return True
+            if token in ("I", "ITEMS"):
+                self._ask_items()
+                return True
+            if token in ("A", "ALIGN ITEMS"):
+                self._await = "align"
+                self.prompt("Align arrayed items to the path? [Yes/No] "
+                            "<{current}>:",
+                            current=tr("Yes" if self._align else "No"))
+                return True
+            return False
+        handler = getattr(self, f"_take_{self._await}", None)
+        return handler(text, token) if handler and self._await != "path" \
+            else False
+
+    def _take_method(self, text: str, token: str) -> bool:
+        if token in ("D", "DIVIDE"):
+            self._method = "divide"
+        elif token in ("M", "MEASURE"):
+            self._method = "measure"
+        elif token:
+            return False
+        if self._method == "measure":
+            _points, closed, length = self._curve
+            self._count = min(self._count, modify.path_fill_count(
+                length, closed, self._spacing))
+        self._menu()
+        return True
+
+    def _take_base(self, text: str, token: str) -> bool:
+        if token:
+            return False
+        self._base = None               # Enter: back to the path's end
+        self._menu()
+        return True
+
+    def _take_align(self, text: str, token: str) -> bool:
+        if token in ("Y", "YES"):
+            self._align = True
+        elif token in ("N", "NO"):
+            self._align = False
+        elif token:
+            return False
+        self._menu()
+        return True
+
+    def _ask_items(self) -> None:
+        if self._method == "measure":
+            self._await = "spacing"
+            self.prompt("Specify the distance between items along path "
+                        "<{current}>:",
+                        current=self.length_text(self._spacing))
+        else:
+            self._await = "divide_count"
+            self.prompt("Enter number of items along path <{current}>:",
+                        current=self._count)
+
+    def _take_spacing(self, text: str, token: str) -> bool:
+        if text.strip():
+            value = _number(text)
+            if value is None or value <= 0:
+                self.ctx.echo(tr("Requires a positive number."))
+                self._ask_items()
+                return True
+            self._spacing = value
+        _points, closed, length = self._curve
+        fit = modify.path_fill_count(length, closed, self._spacing)
+        self._count = min(max(self._count, 1), fit) if text.strip() == "" \
+            else fit
+        self._await = "measure_count"
+        self.prompt("Specify number of items or [Fill entire path] "
+                    "<{current}>:", current=fit)
+        return True
+
+    def _take_measure_count(self, text: str, token: str) -> bool:
+        _points, closed, length = self._curve
+        fit = modify.path_fill_count(length, closed, self._spacing)
+        if token in ("", "F", "FILL ENTIRE PATH"):
+            self._count = fit
+            self._menu()
+            return True
+        count = self._whole(text)
+        if count is None:
+            self.prompt("Specify number of items or [Fill entire path] "
+                        "<{current}>:", current=fit)
+            return True
+        if count > fit:
+            # more than the path holds at this spacing: as many as fit
+            self.ctx.echo(tr("{n} items fit on the path.", n=fit))
+        self._count = min(count, fit)
+        self._menu()
+        return True
+
+    def _take_divide_count(self, text: str, token: str) -> bool:
+        if text.strip():
+            count = self._whole(text)
+            if count is None:
+                self._ask_items()
+                return True
+            self._count = count
+        self._menu()
+        return True
+
+    def _whole(self, text: str):
+        value = _number(text)
+        if value is None or value < 1 or int(value) != value:
+            self.ctx.echo(tr("Requires a positive integer."))
+            return None
+        return int(value)
+
+    def on_enter(self) -> None:
+        if self._await in (None, "path"):
+            self.ctx.finish()
+            return
+        self.on_option("")
+
+    # -- result
+    def _transforms(self):
+        points, closed, length = self._curve
+        positions = modify.path_positions(
+            length, closed, self._method, self._count, self._spacing)
+        return modify.path_transforms(points, positions, self._base,
+                                      self._align)
+
+    def preview_entities(self, cursor: Point) -> list:
+        if self._curve is None or self._await == "path":
+            return []
+        out = []
+        transforms = self._transforms()
+        if self._base is None:
+            transforms = transforms[1:]     # the originals are the first
+        for matrix in transforms:
+            for source in self._entities:
+                if len(out) >= self.PREVIEW_LIMIT:
+                    return out
+                try:
+                    copy = source.copy()
+                    modify.transform_entity(copy, matrix)
+                except Exception:  # noqa: BLE001 -- that one is not shown
+                    continue
+                out.append(copy)
+        return out
+
+    def _place(self) -> bool:
+        transforms = self._transforms()
+        if len(transforms) < 2:
+            self.ctx.echo(tr("An array needs at least two items."))
+            self.ctx.finish()
+            return True
+        self.ctx.execute(modify.array_path(
+            self._entities, transforms, keep_first=self._base is None))
+        self.ctx.echo(tr("{count} copies placed.",
+                         count=(len(transforms) - 1) * len(self._entities)))
+        self.ctx.finish()
+        return True
+
 class MatchPropTool(Tool):
-    """MATCHPROP: one source, then every destination you click."""
+    """MATCHPROP: one source, then destinations until Enter -- each pick,
+    window (left to right) or crossing (right to left) painted at once.
+    One object selected beforehand is the source."""
 
     entity_picker = True
+    #: a window drawn left to right takes what it encloses, right to left
+    #: what it crosses, as at Select objects
+    target_windows_directional = True
 
     def start(self) -> None:
         self.name = "MATCHPROP"
         self._source = None
+        self.accepts_target_windows = False
+        services = self.ctx.services
+        # the object already selected is the source; headless services
+        # (scripts, tests) may have no selection to ask about
+        selected = getattr(services, "selected_entities", None)
+        chosen = selected() if callable(selected) else []
+        if len(chosen) == 1:
+            services.clear_selection()
+            self._take_source(chosen[0])
+            return
         self.prompt("Select source object:")
+
+    def _take_source(self, entity) -> None:
+        self._source = entity
+        # the destinations may come by window too
+        self.accepts_target_windows = True
+        self.ctx.echo(tr("Current active settings: Color Layer Ltype "
+                         "Ltscale Lineweight Thickness"))
+        self.prompt("Select destination object(s):")
 
     def on_point(self, point: Point) -> None:
         services = self.ctx.services
         entity = services.pick_entity(point) if services else None
         if entity is None:
-            self.prompt("Nothing selected. Select source object:")
+            if self._source is None:
+                self.prompt("Nothing selected. Select source object:")
             return
         if self._source is None:
-            self._source = entity
-            self.ctx.echo(tr("Current active settings: Color Layer Ltype "
-                             "Ltscale Lineweight Thickness"))
-            self.prompt("Select destination object(s):")
+            self._take_source(entity)
             return
-        if entity is self._source:
-            return
-        self.ctx.execute(modify.match_properties(self._source, [entity]))
+        self.on_target_entities([entity], None)
+
+    def on_target_entities(self, entities, rect) -> None:
+        targets = [e for e in entities if e is not self._source]
+        if targets:
+            self.ctx.execute(modify.match_properties(self._source, targets))
         # AutoCAD keeps painting until Enter.
 
 
@@ -1571,6 +1882,7 @@ MODIFY_TOOL_CLASSES = {
     "JOIN": JoinTool,
     "CHAMFER": ChamferTool,
     "ARRAY": ArrayTool,
+    "ARRAYPATH": ArrayPathTool,
     "MATCHPROP": MatchPropTool,
     "CHPROP": ChpropTool,
     "PEDIT": PeditTool,

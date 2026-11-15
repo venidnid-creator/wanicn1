@@ -207,7 +207,7 @@ def test_circle_diameter_and_last_radius_default():
     tool2 = CircleTool(h.ctx)
     tool2.start()
     tool2.on_point((20.0, 0.0))
-    assert "<5>" in h.prompts[-1]                  # CIRCLERAD default shown
+    assert "<5.0000>" in h.prompts[-1]   # CIRCLERAD, at the drawing precision
     tool2.on_enter()                               # accept <last>
     circles = h.msp.query("CIRCLE")
     assert circles[1].dxf.radius == pytest.approx(5.0)
@@ -1066,3 +1066,25 @@ def test_text_rubber_band_from_the_start_point_while_asking():
     assert tool.preview_segments((3.0, 4.0)) == [((0.0, 0.0), (3.0, 4.0))]
     tool.on_point((5.0, 0.0))                               # rotation picked
     assert tool.typing and tool.preview_segments((3.0, 4.0)) == []
+
+
+def test_an_elliptical_arc_starts_at_the_first_axis_endpoint():
+    """Classic CAD, group C6: ELLIPSE _A 300,400 400,400 25, start 0, end
+    270 starts at (300,400) and ends at (350,425); IngeCAD drew it
+    mirrored, from (400,400) to (350,375)."""
+    from PySide6.QtWidgets import QApplication
+
+    from views.main_window import MainWindow
+
+    QApplication.instance() or QApplication([])
+    win = MainWindow()
+    win.new_document()
+    win.tools.osnap_on = False
+    for answer in ("ELLIPSE", "_A", "300,400", "400,400", "25", "0", "270"):
+        win._on_command_submitted(answer)
+    (ellipse,) = win.document.modelspace().query("ELLIPSE")
+    assert tuple(ellipse.dxf.major_axis)[:2] == pytest.approx((-50, 0))
+    assert tuple(ellipse.start_point)[:2] == pytest.approx((300, 400))
+    assert tuple(ellipse.end_point)[:2] == pytest.approx((350, 425))
+    win.document.dirty = False
+    win.close()

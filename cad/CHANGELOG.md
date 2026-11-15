@@ -1,5 +1,268 @@
 # Changelog
 
+## v0.8.0 — 2026-11-10
+
+What users reported, fixed one by one, a wider contract for extensions,
+and a handful of commands asked for by name.
+
+### Hatches
+- **A hatch too dense for its area is refused** with "Hatch spacing too
+  dense, or dash size too small for object.", as the classic CAD does
+  past `HPMAXLINES`, instead of freezing the window; the boundary stays
+  picked for another scale. Properties refuses such a scale too.
+- **HATCH's internal point sees the curves inside block references**
+  (nested ones too): a room closed by door or wall blocks is found.
+- **A hatch's pattern moves, rotates and scales with its hatch** — also
+  inside a block, where walls drawn as blocks showed their pattern cut
+  at the joints.
+- **EXPLODE breaks a pattern hatch into its lines**, on the hatch's layer.
+
+### Construction lines and rays
+- **TRIM cuts xlines and rays** (an xline becomes a ray or a line, a ray a
+  line), and **FILLET** rounds them with lines.
+- **XLINE ▸ Offset and Angle ▸ Reference** accept xlines, rays and
+  polyline segments, not only lines.
+
+### Drawing and editing
+- **ARRAYPATH** lays copies along a line, polyline, arc, circle, ellipse
+  or spline: Measure or Divide, base point, aligned to the curve or not.
+- **COPY ▸ Array** lays a row of copies in one step: the number of items
+  and a second point, or Fit to spread them up to the point.
+- **Holding Ctrl turns an arc the other way round**, in ARC (start,
+  centre, end) and in PLINE's arc mode.
+- **-BLOCK and -INSERT** (`-B`, `-I`): the block commands answered wholly
+  at the prompt, for scripts and for the keyboard.
+- **The Palette lists the drawing's blocks** with a thumbnail: double
+  click inserts one, Edit opens the Block Editor.
+- **A distance or a point typed with a grip held is the grip's point**
+  (#125); a hot grip shows the object snap marker and tracking, and
+  selected objects sharing a grip stretch together.
+- **The coordinate readout adds `@distance<angle`** from the last point
+  while a command runs: a circle's radius is read as it is dragged (#118).
+- **The spacebar over the drawing is Enter** (#112), and a right-click
+  set to Enter is Enter with objects selected too.
+- **ERASE takes a member out of its group**; **MATCHPROP** takes its
+  destinations by window and crossing; an image's frame snaps.
+
+### Saving as DWG
+- **A drawing saved as DWG opens in the classic CAD without being
+  recovered.** A drawing that came from a recent format lost, on its way
+  to R2000, the version its visual styles and multileader styles must
+  state there; the classic CAD then offered to recover the file and
+  dropped those objects, and the layer groups with them.
+
+### Sheets and viewports
+- **Panning inside a viewport is fluid on a sheet whose viewports show
+  annotations at different scales.** Such a sheet was redrawn whole on
+  every move of the mouse; each viewport now moves the drawing it already
+  has, as on any other sheet.
+- **Panning inside a viewport follows the cursor on every sheet.** A
+  viewport with its own frozen layers or a shaped boundary redraws the
+  sheet as you drag; each redraw was thrown away because the drag had
+  already moved on, so the picture stood still and jumped when the button
+  was released.
+
+### Commands that did not answer
+- **SELECTSIMILAR, ISOLATEOBJECTS, HIDEOBJECTS, TEXTEDIT and HATCHEDIT**
+  were menu entries without a command behind them (#121).
+- **VIEWRES, CURSORSIZE, PICKBOX and the CENTER\* variables** wait for
+  their value instead of handing it to the command line (#132).
+- **DIMTXT and DIMASZ** can be typed, as DIMSCALE can.
+
+### Dimensions
+- **Dimension text follows the style's Unit format** — Architectural,
+  Engineering, Fractional (#122).
+- **Arc length dimensions** draw their arc symbol, and under 90° their
+  extension lines are orthogonal.
+- **A negative text gap frames the text** (a theoretically exact
+  dimension); a tolerance stack reads `+a` over `-b`.
+- **The Dimension Style dialog offers the twenty classic arrowheads.**
+- **DIMCONTINUE and DIMBASELINE** go on from an angular dimension.
+- **A double-click on a dimension** opens its text in the in-place editor.
+
+### Panels and languages
+- **Properties lists a block reference's attributes**, and its names are
+  no longer cut short.
+- **New languages: Lao and Thai** (community packs); Brazilian Portuguese
+  updated. The Attribute Definition dialog's Justification list is
+  translated.
+
+### Extensions
+- **The contract has a level** (`api_version`): an extension written for a
+  newer IngeCAD is refused with a clear notice instead of failing later.
+- **New hooks**, each asked for by a real extension: grips of its own for
+  an entity type, typed input read first, a tool's own overlay, preview
+  and object snaps, vetoes before undo, save and close, double-click,
+  transactions (one undo step for a whole operation), reactors that keep
+  derived objects true after any command, sections in the Properties
+  panel, several toolbars, the free function keys, copy and paste, and
+  the steps of a selection. Documented in `docs/plugins.md`.
+- **Roads**: PC and PT labels go on the side the stationing leaves free.
+
+## v0.7.0 — 2026-10-29
+
+Extensions you install from a catalog with one click, a third bundled
+extension for roads, and the drawing and editing commands polished one by
+one against the classic CAD, prompt by prompt.
+
+### Extensions
+- **Tools ▸ Manage extensions…** (or `PLUGINS`) opens the extension
+  manager in a window of its own: Included, Installed and Available
+  extensions as tiles with a screenshot, in columns that follow the width.
+  Install, Update, Enable/Disable and Uninstall, each with its toolbar
+  switch, and Reviewed / Community / Included badges. A standing notice
+  says an extension is code with the same access as IngeCAD.
+- **The catalog** is `ingelibre/ingecad-extensions`, read the first time
+  the window opens, never at start-up. Every download is checked against
+  its SHA-256 and unpacked safely; offline, installed extensions are still
+  listed and managed, and uninstalling leaves no trace.
+- **The first extension in the catalog: quantities by layer** (lengths,
+  areas and counts per layer, as a table in the drawing).
+- **Roads, a new bundled extension** (Peruvian DG-2018), off until turned
+  on: road axis and stationing (`ROADAXIS`, `STATIONING`, `RESTATION`,
+  `AXISREVERSE`), the axis table (`AXISTABLE`), simple horizontal curves
+  on the tangents with their PC/PT stations (`HCURVES`), and the curve
+  table (`CURVETABLE`).
+
+### Drawing
+- **ARC**: Draw ▸ Arc lists the eleven ways, and the toolbar's Arc is a
+  drop-down. A click answers the included angle, chord and radius
+  prompts; an impossible value says `*Invalid*`; the three-point preview
+  is the arc that will be drawn, not the whole circle.
+- **ELLIPSE**: the major axis points at the first axis endpoint, so an
+  elliptical arc starts where the classic CAD starts it.
+- **AREA by points** offers Arc, Length, Undo and Total; arcs are measured
+  exactly.
+- **BLOCK** onto a name the drawing already has asks "Redefine it?", and
+  the reference it leaves takes the current layer.
+- **A copied or pasted image shows at once**, not after REGEN.
+
+### Editing and selection
+- **WPolygon, CPolygon and Fence at "Select objects:"**; STRETCH stretches
+  by a crossing polygon.
+- **TRIM cuts a polyline from crossing to crossing**, over its corners,
+  and trims ellipses and elliptical arcs. A selected ellipse or spline is
+  highlighted on the curve at any zoom.
+- **ROTATE and SCALE** offer the last angle or factor as the default,
+  and Points at Reference.
+- **FILLET and CHAMFER** offer their settings at the second object too
+  (`[Radius]`, `[Distance/Angle/Method]`); FILLET starts from the
+  drawing's own radius and saves a new one into it.
+- **OFFSET Through refuses a bare number** instead of making the copy
+  somewhere unexpected.
+- **ZOOM** takes Center, All, Scale, `2X`, a bare scale and a typed
+  corner.
+
+### Prompts and messages
+- **Defaults are written at the drawing's precision** (`<25.000>`, not
+  `<25>`) in some sixty prompts.
+- **Text that is not a point** answers "Point or option keyword required.",
+  and at an object prompt "*Invalid selection*" with what it expects.
+- **Every dimension says its text**: radius, diameter and angle now end
+  with "Dimension text = …"; continued and baseline dimensions no longer
+  repeat "Non-associative dimension created.".
+- **A right click (or Ctrl+J) with a command typed runs that command**
+  (#110); Ctrl + right click opens the object snap menu.
+
+### Sheets and the screen
+- **A sheet whose page setup is in metres is drawn and plotted at its
+  scale**, not as a dot in the corner of the page.
+- **The crosshair shows as soon as the pointer enters the drawing**, not
+  on its first move.
+- **The right sidebar shows whole tab names**, with scroll arrows.
+- **Closing a window that showed raster images frees their textures at
+  once**, instead of leaving them to a late cleanup that could crash.
+
+## v0.6.9 — 2026-10-29
+
+An assistant that draws with the same commands you type, off until you
+turn it on; what a tester found in a long session, fixed; layer groups;
+and three new languages.
+
+### The AI assistant and the MCP bridge (off by default)
+- **An Assistant tab** in the right sidebar talks to a model of your
+  choice (cloud providers with your own key, or a local one) and works
+  on the drawing through the same actions as the command line: it draws,
+  queries, selects and edits, each step shown in the command history as
+  `AI: …`, and a whole turn undoes with one U. Erasing many objects,
+  overwriting a file or opening another asks first.
+- **`ingecad --mcp`** lets an MCP client (a desktop assistant or a code
+  editor) drive the open drawing over a local socket with a private
+  token; `MCPSTART`/`MCPSTOP` and Tools ▸ Options ▸ AI Assistant turn it
+  on and off, and copy the client configuration.
+- **API keys live in the system keyring**, never in the settings or the
+  drawing. The first time something goes to a cloud provider, a notice
+  says what is sent. With both switches off nothing is loaded.
+- How to connect each client and what leaves the machine:
+  `docs/ai.md`.
+
+### Layer groups
+- **The layer groups and property filters a drawing carries show in the
+  Layers tab**, as a tree above the table: pick one to see its layers,
+  right click to turn them on/off, freeze/thaw or lock/unlock together.
+- **Make, rename, fill and delete groups**: New Group Filter, drag layers
+  onto a group, or right click layers ▸ Add to group / New group with
+  these layers / Remove from group. Every change undoes.
+- **Save as DWG keeps the groups and their layers**; deleting or purging
+  a layer and undoing brings it back to its groups.
+
+### Dimensions
+- **A dimension too narrow for its text takes the arrowheads outside
+  with it**; text set Outside the part, and a leader line that follows
+  slid text.
+- **A radius with its text inside starts at the centre**, and keeps the
+  text where the user placed it when it is redrawn. DIMJOGGED points at
+  the true centre with a wide jog, steepens when the jog has no room,
+  and draws no centre mark at the centre it stands in for.
+- **Dragging the text of a dimension read from the file leaves one
+  dimension**: its old picture no longer stays on screen beside it.
+- **An angle's text sits above its arc as it is read** (ISO 129), and an
+  extension line reaches the vertex when the arc is beyond it.
+- **Arrow 1 and Arrow 2 in Properties** for one dimension; picking an
+  arrowhead in the dimension style editor changes the arrows.
+- **Vertical and rotated dimensions keep their rotation in the DWG**,
+  and the rotation an older Save as DWG took is given back on open.
+- The dimension preview no longer ends up in the drawing (#108).
+
+### Drawing and editing
+- **Arithmetic in any number or coordinate typed at a prompt**
+  (`43.3/3`, `123+45,40/2`, `@20*2<45`).
+- **TRIM with every object as an edge takes only what is on screen**:
+  lines on a layer turned off or frozen no longer cut.
+- **Object snap takes the point under the cursor**: an intersection
+  beats an endpoint a few pixels farther away, and CEN snaps from the
+  arc or circle itself.
+- **XLINE and RAY**: endless at any zoom (#104), take object snaps, and
+  OFFSET makes a parallel line of their own kind.
+- **BATTMAN**: changes reach the inserted blocks; it sits by ATTDEF in
+  the menu.
+- **Right click ▸ Symbol** while editing text, as in MTEXT.
+- **The first annotation scale change of a new drawing reaches its
+  objects.**
+
+### Interface
+- **A toolbar you hide stays hidden at the next start** (#107).
+- **Window colours chosen in one tab reach the drawings opened later**
+  (#81).
+- **An untouched template stays in metres when Options is accepted**
+  (#93).
+
+### Speed
+- **Undoing a big erase on a plan with heavy blocks no longer freezes**
+  (2.3 s → 0.07 s): the size of an edit is counted in drawing work.
+- **Ctrl+V on a plan with a warm snap index** 0.95 → 0.30 s, and a
+  collection backlog no longer lands on the next Ctrl+X (0.92 → 0.26 s).
+
+### Languages
+- **Portuguese (Portugal and Brazil) and Korean**, contributed by users.
+
+### Known limitations
+- A DWG saved by IngeCAD may ask to be recovered when opened in other
+  CAD programs, which then drop its visual styles and multileader
+  styles, and with them the layer group tree. IngeCAD and other readers
+  open it whole; the fix lives in the DWG writer and is for the next
+  release.
+
 ## v0.6.8.2 — 2026-10-21
 
 - **Plot opens again in a layout whose page setup has a scale outside

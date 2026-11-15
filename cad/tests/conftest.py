@@ -13,7 +13,24 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # Keep QSettings writes (e.g. the language switch) out of the developer's
 # real ~/.config — must be set before Qt is first imported.
-os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="ingecad-tests-")
+_SETTINGS_DIR = tempfile.mkdtemp(prefix="ingecad-tests-")
+os.environ["XDG_CONFIG_HOME"] = _SETTINGS_DIR
+
+if sys.platform == "win32":
+    # Windows reads neither XDG variable. core.paths puts the recent list and
+    # the caches under %APPDATA% / %LOCALAPPDATA%, so the suite wrote into
+    # the developer's real ones and a list left by one run failed the next.
+    os.environ["APPDATA"] = os.path.join(_SETTINGS_DIR, "Roaming")
+    os.environ["LOCALAPPDATA"] = os.path.join(_SETTINGS_DIR, "Local")
+    # Native QSettings live in the registry, and with no organization name
+    # set (tests never run main.py) they have no key to live under, so every
+    # write was silently dropped. INI files in the temporary folder behave
+    # as on Linux.
+    from PySide6.QtCore import QSettings
+
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, _SETTINGS_DIR)
+    QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, _SETTINGS_DIR)
 
 # Tests import project packages from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -56,7 +73,23 @@ def _status_toggles_start_at_defaults():
         settings.remove("statusbar")
         settings.remove("display/grid")
         settings.remove("display/lineweight")
+        settings.remove("toolbars")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _surface_format_given_back():
+    """main._configure_surface_format() sets the application's default GL
+    format -- MSAA and the swap interval -- for every window created after
+    it. Two tests that check it left multisampling on for the rest of their
+    process, and the UCS axes test, landing after one of them when the
+    files were dealt anew, found its red axis blended into another colour
+    on the CI. Each test gets back the format it found."""
+    gui = sys.modules.get("PySide6.QtGui")
+    original = gui.QSurfaceFormat.defaultFormat() if gui is not None else None
+    yield
+    if original is not None:
+        gui.QSurfaceFormat.setDefaultFormat(original)
 
 
 @pytest.fixture(autouse=True)
@@ -131,3 +164,28 @@ def pytest_unconfigure(config):
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(_EXIT_STATUS[0])
+
+
+@pytest.fixture
+def clean_settings():
+    """Snapshot and restore every setting, whatever the test wrote.
+
+    Apply() saves all four tabs at once -- template, MSAA, cursor size,
+    crosshair colour, pickbox, VIEWRES, autosave... -- so a test that opens
+    the dialog leaves all of them behind for the windows after it. A list
+    of keys kept by hand missed some, and one of them hid the axes of the
+    next window on the CI (test_ucs_pixels). The whole store, then: any
+    test that applies the Options dialog takes this fixture.
+    """
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings()
+    saved = {k: settings.value(k) for k in settings.allKeys()}
+    yield
+    settings = QSettings()
+    for key in settings.allKeys():
+        if key not in saved:
+            settings.remove(key)
+    for key, value in saved.items():
+        settings.setValue(key, value)
+    settings.sync()

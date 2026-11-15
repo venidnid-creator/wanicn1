@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from core import actions, layers as layer_ops, pickfilter, text_justify
 from core.i18n import tr
+from core.plugins import Row   # one property line; public, plugins add rows
 
 BYLAYER_LW = -1          # AutoCAD's ByLayer lineweight sentinel
 
@@ -46,15 +47,6 @@ QTreeWidget QComboBox, QTreeWidget QLineEdit { background: #1e1e22;
 _VARIES = object()   # marker: property differs across the selection
 
 
-class Row:
-    """One property line: how to read it and how to write it back."""
-
-    def __init__(self, label, kind, get, apply=None, items=None):
-        self.label = label
-        self.kind = kind          # 'combo' | 'num' | 'str' | 'ro'
-        self.get = get            # (entity) -> value  (or ignored for common)
-        self.apply = apply        # (value) -> None
-        self.items = items        # combo: list[(label, data)]
 
 
 def _fmt(v) -> str:
@@ -156,7 +148,34 @@ class PropertiesPanel(QWidget):
             for title, rows in self._schema(entities):
                 self._add_section(title, rows, entities)
         self.tree.expandAll()
+        self._fit_label_column()
         self._loading = False
+
+    #: The names' column never takes more than this share of the panel:
+    #: the values stay readable.
+    LABEL_SHARE = 0.55
+
+    def _fit_label_column(self) -> None:
+        """The names' column as wide as its longest name, up to
+        :data:`LABEL_SHARE` of the panel: "Text position X" and its kin
+        were cut to "Text position..." at the column's default width.
+        Whatever is still cut shows whole in its tooltip."""
+        metrics = self.tree.fontMetrics()
+        widest = 0
+        for i in range(self.tree.topLevelItemCount()):
+            head = self.tree.topLevelItem(i)
+            for j in range(head.childCount()):
+                widest = max(widest, metrics.horizontalAdvance(
+                    head.child(j).text(0)))
+        if widest == 0:
+            return
+        room = self.tree.viewport().width() or self.width()
+        want = widest + self.tree.indentation() * 2 + 16
+        self.tree.setColumnWidth(0, int(min(want, room * self.LABEL_SHARE)))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._fit_label_column()
 
     def _add_section(self, title: str, rows: list, entities: list) -> None:
         head = QTreeWidgetItem(self.tree, [title])
@@ -172,6 +191,7 @@ class PropertiesPanel(QWidget):
 
     def _add_row(self, parent, row: Row, entities: list) -> None:
         item = QTreeWidgetItem(parent, [row.label, ""])
+        item.setToolTip(0, row.label)          # whole, if the column cuts it
         item.setForeground(0, Qt.GlobalColor.gray)
         value = self._common(entities, row.get)
         if row.kind == "ro":
@@ -196,6 +216,10 @@ class PropertiesPanel(QWidget):
         else:   # 'num' or 'str'
             w = QLineEdit("" if value is _VARIES else _fmt(value))
             w.setPlaceholderText(tr("*varies*") if value is _VARIES else "")
+            if row.kind == "str":
+                from views import symbol_menu
+
+                symbol_menu.install(w)       # right click > Symbol
             w.editingFinished.connect(
                 lambda r=row, le=w: self._edit_text(r, le))
             self.tree.setItemWidget(item, 1, w)
@@ -221,13 +245,22 @@ class PropertiesPanel(QWidget):
 
     # -- edits ----------------------------------------------------------------
     def _edit(self, row: Row, value) -> None:
-        if self._loading or row.apply is None:
+        if self._loading or (row.apply is None and row.apply_each is None):
             return
-        row.apply(value)
+        self._apply(row, value)
         self._after_edit()
 
+    def _apply(self, row: Row, value) -> None:
+        """``apply(value)`` for the whole selection, or ``apply_each`` once
+        per object, all of it one undo step."""
+        if row.apply is not None:
+            row.apply(value)
+            return
+        ents = self._active()
+        self._in_place(lambda: [row.apply_each(e, value) for e in ents])
+
     def _edit_text(self, row: Row, editor: QLineEdit) -> None:
-        if self._loading or row.apply is None:
+        if self._loading or (row.apply is None and row.apply_each is None):
             return
         text = editor.text().strip()
         if text == "":
@@ -242,7 +275,7 @@ class PropertiesPanel(QWidget):
                 return
         else:
             value = text
-        row.apply(value)
+        self._apply(row, value)
         self._after_edit()
 
     def _after_edit(self) -> None:
@@ -298,6 +331,13 @@ class PropertiesPanel(QWidget):
             builder = _TYPE_ROWS.get(next(iter(types)))
             if builder is not None:
                 sections.append(builder(self, entities[0]))
+            if types == {"INSERT"}:
+                attributes = _block_attribute_rows(self, entities)
+                if attributes:
+                    sections.append((tr("Attributes"), attributes))
+        plugins = getattr(self.window, "plugins", None)
+        if plugins is not None:
+            sections.extend(plugins.properties_sections(entities))
         return sections
 
     def _general_rows(self, types: set | None = None):
@@ -546,6 +586,13 @@ def _set_hatch_pattern(panel, what: str, value: float) -> None:
     if what == "scale" and value <= 0:
         panel.window.command_line.echo(tr("Requires a positive number."))
         return
+    if what == "scale":
+        from core import actions
+
+        if any(e.dxftype() == "HATCH" and actions.hatch_entity_too_dense(e, value)
+               for e in panel._active()):
+            panel.window.command_line.echo(actions.too_dense_message())
+            return
 
     def mutate():
         for e in panel._active():
@@ -637,9 +684,82 @@ def _dimension_rows(panel, e):
             lambda e: e.dxf.get("text_rotation", 0.0),
             lambda v: panel._set_prop("text_rotation", v)),
     ]
+    if int(e.dxf.get("dimtype", 0)) & 7 in (0, 1):
+        # AutoCAD's Text > Vertical position: Outside puts the text on the
+        # side away from the part (Rafael's eighth review, min 16:20)
+        rows.append(Row(tr("Text pos vert"), "combo",
+                        lambda e: _dim_var(e, "dimtad", 0),
+                        lambda v: _set_dim_override(panel, "dimtad", v),
+                        [(tr(label), value) for label, value in
+                         (("Centered", 0), ("Above", 1), ("Outside", 2),
+                          ("JIS", 3), ("Below", 4))]))
+    from views.dimstyle_dialog import arrow_items
+
+    # AutoCAD's Lines & Arrows > Arrow 1 / Arrow 2: one arrowhead per end,
+    # per dimension (Rafael's eighth review, min 28 and 44)
+    rows += [
+        Row(tr("Arrow 1"), "combo", lambda e: _dim_arrow(e, 1),
+            lambda v: _set_dim_arrow(panel, 1, v), arrow_items()),
+        Row(tr("Arrow 2"), "combo", lambda e: _dim_arrow(e, 2),
+            lambda v: _set_dim_arrow(panel, 2, v), arrow_items()),
+    ]
     rows += _pt_rows(panel, "text_midpoint", tr("Text position"))
     rows.append(_annotative_row(panel))
     return (tr("Dimension"), rows)
+
+
+def _dim_arrow(e, end: int) -> str:
+    """The arrowhead ``e`` draws at ``end`` (1 or 2): DIMBLK1/DIMBLK2 under
+    DIMSAH, DIMBLK otherwise."""
+    from views.dimstyle_dialog import arrow_key
+
+    if _dim_var(e, "dimsah", 0):
+        return arrow_key(_dim_var(e, f"dimblk{end}", ""))
+    return arrow_key(_dim_var(e, "dimblk", ""))
+
+
+def _set_dim_arrow(panel, end: int, value: str) -> None:
+    """One end's arrowhead as a dimension override; the other end keeps
+    the one it draws."""
+    def mutate():
+        from core.modify import _rerender_dimension
+
+        for ent in panel._active():
+            if ent.dxftype() != "DIMENSION":
+                continue
+            ends = {1: _dim_arrow(ent, 1), 2: _dim_arrow(ent, 2), end: value}
+            override = ent.override()
+            override.set_arrows(blk1=ends[1], blk2=ends[2])
+            override["dimtsz"] = 0.0             # arrowheads, not ticks
+            override.commit()
+            _rerender_dimension(panel._document, ent)
+    panel._in_place(mutate, regen=True)
+
+
+def _dim_var(e, name: str, default):
+    """A dimension variable as this dimension draws it: its own override,
+    else its style's."""
+    try:
+        value = e.override().get(name, default)
+    except Exception:  # noqa: BLE001 -- an odd style: the default
+        return default
+    return default if value is None else value
+
+
+def _set_dim_override(panel, name: str, value) -> None:
+    """Write ``name`` as a dimension override (XDATA ACAD DSTYLE, which
+    AutoCAD reads as its own) on the selected dimensions and redraw them."""
+    def mutate():
+        from core.modify import _rerender_dimension
+
+        for ent in panel._active():
+            if ent.dxftype() != "DIMENSION":
+                continue
+            override = ent.override()
+            override[name] = value
+            override.commit()
+            _rerender_dimension(panel._document, ent)
+    panel._in_place(mutate, regen=True)
 
 
 def _set_attribute(panel, prop: str, value: str) -> None:
@@ -687,6 +807,44 @@ def _attrib_rows(panel, e):
     ]
     rows += _pt_rows(panel, "insert", tr("Position"))
     return (tr("Text"), rows)
+
+
+def _attrib_of(insert, tag: str):
+    for attrib in insert.attribs:
+        if attrib.dxf.get("tag", "") == tag:
+            return attrib
+    return None
+
+
+def _block_attribute_rows(panel, inserts):
+    """One row per tag of the selected block references, its value
+    editable, as classic CAD's Properties shows them; with several
+    references a tag they do not all carry shows *varies*."""
+    tags = []
+    for insert in inserts:
+        for attrib in insert.attribs:
+            tag = attrib.dxf.get("tag", "")
+            if tag and tag not in tags:
+                tags.append(tag)
+
+    def value(tag):
+        def get(insert):
+            attrib = _attrib_of(insert, tag)
+            return None if attrib is None else attrib.dxf.get("text", "")
+        return get
+
+    def apply(tag):
+        def set_value(text):
+            from core import attributes as att
+
+            changes = [(a, "text", text) for a in
+                       (_attrib_of(i, tag) for i in panel._active())
+                       if a is not None]
+            if changes:
+                panel.window.tools._execute(att.EditAttribsCommand(changes))
+        return set_value
+
+    return [Row(tag, "str", value(tag), apply(tag)) for tag in tags]
 
 
 def _leader_rows(panel, e):

@@ -316,6 +316,7 @@ import math as _math
 from core import tables as _tables
 from core.actions import EraseCommand, add_polyline
 from core.i18n import tr as _tr
+from core.surveying import readable_rotation  # noqa: F401  (re-exported)
 
 from . import geometry
 from .points import format_bearing, format_dms
@@ -331,15 +332,6 @@ class AnnotationStyle:
     decimals: int = 2
     prefix: str = ""
     suffix: str = ""
-
-
-def readable_rotation(angle_deg: float) -> float:
-    """The rotation a label along a line takes so it never reads upside
-    down: AutoCAD's rule, (-90, 90]."""
-    a = angle_deg % 360.0
-    if 90.0 < a <= 270.0:
-        a -= 180.0
-    return ((a + 180.0) % 360.0) - 180.0
 
 
 def _text_factory(text: str, pos, height: float, rotation: float = 0.0,

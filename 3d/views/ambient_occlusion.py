@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Marco Sumari Tellez and IngeTrazo contributors.
-"""Ambient occlusion of the 3D view (#954) — PROTOTYPE.
+"""Ambient occlusion of the 3D view (#954).
 
 The soft darkening where surfaces meet: a wall and its slab, a beam and
 its column, the foot of a cabinet. It is worked out on the picture the
@@ -13,7 +13,7 @@ face passes just drew, from its depth alone, so it never touches the model:
 4. ``ao_apply.frag`` multiplies it onto the scene, before the edges,
    dimensions, text and guides are drawn — those stay as they were.
 
-Switched on per style in the Styles panel (experimental, off in every
+Switched on per style in the Styles panel (off in every
 preset). The environment can force it, for tests and benchmarks:
 ``INGETRAZO_AO=1`` (or 0 to force it off), with
 ``INGETRAZO_AO_RADIUS`` (model units, default 0.5), ``INGETRAZO_AO_INTENSITY``
@@ -42,12 +42,14 @@ GL_DRAW_FRAMEBUFFER = 0x8CA9
 GL_DEPTH_STENCIL_ATTACHMENT = 0x821A
 GL_FRAMEBUFFER_COMPLETE = 0x8CD5
 GL_DEPTH_BUFFER_BIT = 0x00000100
+GL_COLOR_BUFFER_BIT = 0x00004000
 GL_DEPTH_TEST = 0x0B71
 GL_BLEND = 0x0BE2
 GL_ZERO = 0
 GL_SRC_COLOR = 0x0300
 GL_SRC_ALPHA = 0x0302
 GL_ONE_MINUS_SRC_ALPHA = 0x0303
+GL_ONE = 1
 GL_TRIANGLES = 0x0004
 GL_NO_ERROR = 0
 GL_STENCIL_TEST = 0x0B90
@@ -57,10 +59,14 @@ GL_KEEP = 0x1E00
 #: The stencil bit the foliage cutouts leave (viewport.AO_FOLIAGE_BIT).
 FOLIAGE_BIT = 0x80
 
+#: Refused depth resolves in a row before the pass gives up for the session.
+REFUSALS_TO_GIVE_UP = 3
+
 #: Texture units the passes use — clear of the face passes' 0 (images) and
 #: 1 (the sun's shadow map).
 _UNIT_DEPTH = 4
 _UNIT_AO = 5
+_UNIT_COLOR = 6
 
 
 def _env_float(name: str, default: float) -> float:
@@ -114,6 +120,8 @@ class AmbientOcclusion:
         self._progs = None
         #: A driver that refused something: the pass stays off this session.
         self.broken: Optional[str] = None
+        #: Depth resolves refused in a row (see REFUSALS_TO_GIVE_UP).
+        self._refusals = 0
 
     # -- resources ------------------------------------------------------------
     def _program(self, frag: str) -> QOpenGLShaderProgram:
@@ -197,15 +205,29 @@ class AmbientOcclusion:
             gl.glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo.handle())
             return False
 
-        # 1. Resolve the depth.
+        # 1. Resolve the depth. An error some earlier call left pending (a
+        # texture upload while a big file opens) is not ours to answer for:
+        # read it out first, or it switched the pass off for the session.
+        for _ in range(16):
+            if gl.glGetError() == GL_NO_ERROR:
+                break
         gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo.handle())
         gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self._depth_fbo.handle())
+        # The colour rides along into the target's own colour texture: the
+        # last pass reads how light each face is, for the light it bounces.
         extra.glBlitFramebuffer(0, 0, w, h, 0, 0, w, h,
-                                GL_DEPTH_BUFFER_BIT, GL_NEAREST)
+                                GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT,
+                                GL_NEAREST)
         if gl.glGetError() != GL_NO_ERROR:
-            self.broken = "depth resolve refused"
+            # One refused frame (the view resizing under a file being
+            # opened) only skips that frame; a driver that keeps refusing
+            # switches the pass off.
+            self._refusals += 1
+            if self._refusals >= REFUSALS_TO_GIVE_UP:
+                self.broken = "depth resolve refused"
             gl.glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo.handle())
             return False
+        self._refusals = 0
 
         gl.glDisable(GL_DEPTH_TEST)
         gl.glDepthMask(False)
@@ -244,6 +266,14 @@ class AmbientOcclusion:
                           QVector2D(1.0 / hw, 1.0 / hh))
         p.setUniformValue(p.uniformLocation("u_inv_proj"), inv)
         p.setUniformValue1f(p.uniformLocation("u_radius"), r)
+        p.setUniformValue1f(p.uniformLocation("u_spread"), 1.0)
+        gl.glDrawArrays(GL_TRIANGLES, 0, 3)
+        # ...and once more, twice as wide, back into the occlusion target:
+        # the first pass cancels the rotation tile, this one spreads the
+        # gradient so a corner fades out softly instead of in a band.
+        self._ao_fbo.bind()
+        gl.glBindTexture(GL_TEXTURE_2D, self._blur_fbo.texture())
+        p.setUniformValue1f(p.uniformLocation("u_spread"), 2.0)
         gl.glDrawArrays(GL_TRIANGLES, 0, 3)
 
         # 4. Multiply onto the scene, full size.
@@ -261,11 +291,20 @@ class AmbientOcclusion:
         gl.glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP)
         p = self._progs["ao_apply.frag"]
         p.bind()
-        gl.glBindTexture(GL_TEXTURE_2D, self._blur_fbo.texture())
+        gl.glBindTexture(GL_TEXTURE_2D, self._ao_fbo.texture())
         p.setUniformValue1i(p.uniformLocation("u_ao"), _UNIT_AO)
+        p.setUniformValue1i(p.uniformLocation("u_depth"), _UNIT_DEPTH)
+        p.setUniformValue(p.uniformLocation("u_inv_proj"), inv)
+        p.setUniformValue(p.uniformLocation("u_ao_size"), QVector2D(hw, hh))
+        p.setUniformValue1f(p.uniformLocation("u_radius"), r)
         p.setUniformValue1f(p.uniformLocation("u_intensity"),
                             float(settings["intensity"]))
+        gl.glActiveTexture(GL_TEXTURE0 + _UNIT_COLOR)
+        gl.glBindTexture(GL_TEXTURE_2D, self._depth_fbo.texture())
+        p.setUniformValue1i(p.uniformLocation("u_color"), _UNIT_COLOR)
         gl.glDrawArrays(GL_TRIANGLES, 0, 3)
+        gl.glBindTexture(GL_TEXTURE_2D, 0)
+        gl.glActiveTexture(GL_TEXTURE0 + _UNIT_AO)
         self._vao.release()
 
         # Back to the face passes' state.
@@ -276,7 +315,9 @@ class AmbientOcclusion:
         gl.glActiveTexture(GL_TEXTURE0 + _UNIT_DEPTH)
         gl.glBindTexture(GL_TEXTURE_2D, 0)
         gl.glActiveTexture(GL_TEXTURE0)
-        gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        # (the scene's blending: see viewport._scene_blend)
+        gl.glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                               GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
         gl.glEnable(GL_DEPTH_TEST)
         gl.glDepthMask(True)
         return True

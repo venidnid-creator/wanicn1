@@ -311,7 +311,8 @@ def test_the_document_hook_says_what_the_drawing_declares():
 
 # -- through the window ------------------------------------------------------------------
 
-def test_the_plugin_is_bundled_on_with_its_menu_names_and_options_page(qapp):
+def test_the_plugin_is_bundled_on_with_its_menu_names_and_options_page(
+        qapp, clean_settings):
     from PySide6.QtCore import QSettings
 
     from plugins.terreno import prefs
@@ -353,6 +354,9 @@ def test_the_plugin_is_bundled_on_with_its_menu_names_and_options_page(qapp):
     finally:
         for key in (prefs.SETTING_ZONE, prefs.SETTING_HEMISPHERE, prefs.SETTING_SHIFT):
             settings.remove(key)
+        # apply() writes every tab, the new-drawing template too; left behind,
+        # later windows in the same process start their drawings in mm
+        settings.remove("startup/template")
         win.close()
     assert prefs.default_zone() == 19 and prefs.default_northern() is False
     assert prefs.default_shift() == datum.PSAD56_PERU_SHIFT

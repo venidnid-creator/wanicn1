@@ -44,9 +44,13 @@ class _Win(QWidget):
 
         class _VP:
             edit_rest_mode = "fade"
+            edit_rest_fade = 0.75
 
             def set_edit_rest_mode(self, mode):
                 self.edit_rest_mode = mode
+
+            def set_edit_rest_fade(self, strength):
+                self.edit_rest_fade = strength
 
         self.viewport = _VP()
         self._rest_actions = {}
@@ -95,19 +99,25 @@ def test_cancel_touches_nothing(settings_file):
     win = _Win()
     dlg = PreferencesDialog(win)
     dlg._obj_unit.setCurrentIndex(dlg._obj_unit.findData("ft"))
+    dlg._rest_fade.setValue(21)
     dlg.reject()
     st = _fresh(settings_file)
     assert st.value("import/obj_unit") is None      # never written
     assert win.viewport.edit_rest_mode == "fade"
+    assert win.viewport.edit_rest_fade == 0.75
 
 
 def test_rest_mode_applies_through_the_viewport(settings_file):
     win = _Win()
     dlg = PreferencesDialog(win)
     assert dlg._rest.currentData() == "fade"        # mirrors the viewport
+    assert dlg._rest_fade.value() == 75
+    dlg._rest_fade.setValue(42)
     dlg._rest.setCurrentIndex(dlg._rest.findData("hide"))
+    assert not dlg._rest_fade.isEnabled()
     dlg.accept()
     assert win.viewport.edit_rest_mode == "hide"
+    assert win.viewport.edit_rest_fade == 0.42
 
 
 def test_dialog_reloads_saved_values(settings_file):
@@ -176,6 +186,24 @@ def test_theme_choice_applies_at_once(settings_file):
         theme.apply_theme(app, theme.DARK)
 
 
+def test_slate_is_offered_and_applies(settings_file):
+    from views import theme
+    app = QApplication.instance()
+    before = theme.saved_theme()
+    try:
+        win = _Win()
+        dlg = PreferencesDialog(win)
+        assert dlg._theme.findData(theme.SLATE) >= 0
+        dlg._theme.setCurrentIndex(dlg._theme.findData(theme.SLATE))
+        dlg.accept()
+        assert theme.saved_theme() == theme.SLATE
+        assert "QPushButton" in app.styleSheet()
+    finally:
+        theme.save_theme(before)
+        theme.apply_theme(app, theme.DARK)
+    assert app.styleSheet() == ""
+
+
 def test_the_3d_mouse_page_shows_the_device_live(settings_file, monkeypatch):
     """Nobody on the team has a SpaceMouse: the page shows the six numbers
     as the device sends them and how IngeTrazo reads them, so an owner can
@@ -196,3 +224,42 @@ def test_the_3d_mouse_page_shows_the_device_live(settings_file, monkeypatch):
     dlg.reject()
     dev.raw.emit((0, 0, 0, 0, 0, 0))             # closed: no longer listens
     assert "Y  -340" in dlg._ndof_raw.text()
+
+
+def test_the_tool_cursor_is_chosen_in_preferences(settings_file):
+    """#858: the crosshair or the plain arrow instead of the tool's icon is a
+    choice in Preferences ▸ General, saved where ``tool_cursor`` reads it and
+    applied to the active tool at once; the tool's icon stays the default."""
+    win = _Win()
+    applied = []
+    win.viewport._apply_tool_cursor = lambda: applied.append(True)
+    dlg = PreferencesDialog(win)
+    assert dlg._cursor_style.currentData() == "tool"
+    dlg._cursor_style.setCurrentIndex(dlg._cursor_style.findData("crosshair"))
+    dlg.accept()
+    assert _fresh(settings_file).value("General/cursor_style") == "crosshair"
+    assert applied == [True]
+    assert PreferencesDialog(win)._cursor_style.currentData() == "crosshair"
+
+
+def test_the_graphics_server_is_asked_only_where_there_is_a_choice(
+        settings_file, monkeypatch):
+    """Wayland or X11: Linux. On Windows the row spoke of KDE (#1179)."""
+    from PySide6.QtWidgets import QLabel
+    assert prefs_mod.graphics_server_applies("linux")
+    assert not prefs_mod.graphics_server_applies("win32")
+    assert not prefs_mod.graphics_server_applies("darwin")
+
+    def rows(dlg):
+        return [w.text() for w in dlg.findChildren(QLabel)]
+
+    monkeypatch.setattr(prefs_mod, "graphics_server_applies", lambda: True)
+    dlg = PreferencesDialog(_Win())
+    assert "Graphics server:" in rows(dlg)
+    dlg.close()
+    monkeypatch.setattr(prefs_mod, "graphics_server_applies", lambda: False)
+    dlg = PreferencesDialog(_Win())
+    assert "Graphics server:" not in rows(dlg)
+    assert dlg._platform.isHidden()
+    dlg.accept()                       # saving still goes through the box
+    assert _fresh(settings_file).value("general/platform", "auto") == "auto"

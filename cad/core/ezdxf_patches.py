@@ -31,21 +31,28 @@ def apply() -> None:
     _patch_annotative_dimension_scales()
     _patch_lwpolyline_get_points()
     _patch_radial_dimension_layout()
+    _patch_jogged_radius()
     _patch_linear_dimension_direction()
     _patch_dxfreplace_mixed_surrogates()
     _patch_single_vertex_leader()
     _patch_dimrnd_zero()
     _patch_fixed_height_dimension_text()
     _patch_dimension_number_format()
+    _patch_dimension_unit_format()
     _patch_underscored_arrow_names()
     _patch_suppressed_dimension_line_arrows()
     _patch_narrow_linear_dimension_text()
+    _patch_narrow_linear_dimension_arrows()
+    _patch_outside_text_placement()
     _patch_two_line_angular_sector()
     _patch_three_point_angular_sector()
+    _patch_angular_extension_from_vertex()
+    _patch_angular_text_above_reading()
     _patch_arc_length_symbol_text()
     _patch_dms_angular_text()
     _patch_linetype_dots()
     _patch_thai_font_fallback()
+    _patch_caret_decode()
 
 
 def dms_text(degrees: float, dimadec: int, dimdsep: str = ".",
@@ -186,6 +193,135 @@ def _in_paper_space(entity) -> bool:
     record = doc.entitydb.get(owner)
     return record is not None and record.dxftype() == "BLOCK_RECORD" \
         and record.is_any_paperspace
+
+
+def length_unit_text(value: float, dimlunit: int, dimdec: int = 4,
+                     dimzin: int = 0, dimdsep: str = ".") -> str | None:
+    """A length as the Unit format of a dimension style writes it, or None
+    for Decimal (2) and anything unknown -- the decimal path formats those.
+
+    1 Scientific (5.15E+01), 3 Engineering (feet and decimal inches,
+    4'-3.50"), 4 Architectural (feet and fractional inches, 4'-3 1/2"),
+    5 Fractional (51 1/2). The drawing unit is the inch, as the classic
+    formats assume. For the fractional ones DIMDEC is the precision as a
+    power of two (4 = 1/16). DIMZIN 0 drops zero feet and exactly zero
+    inches, 1 keeps both, 2 keeps zero feet and drops zero inches, 3 keeps
+    zero inches and drops zero feet. Fractions are written unstacked.
+    """
+    if not math.isfinite(value):
+        return None
+    dimdec = max(0, int(dimdec or 0))
+    sign = "-" if value < 0 else ""
+    value = abs(value)
+    if dimlunit == 1:
+        text = f"{value:.{dimdec}E}"
+        return sign + text.replace(".", dimdsep)
+    if dimlunit not in (3, 4, 5):
+        return None
+    zin = int(dimzin or 0) & 3
+
+    if dimlunit == 3:
+        step = 10.0 ** -dimdec
+        inches = round(value / step) * step
+        feet = int(inches // 12.0 + 1e-9)
+        rest = inches - feet * 12.0
+        if rest >= 12.0 - step / 2:
+            feet, rest = feet + 1, 0.0
+        rest_text = f"{rest:.{dimdec}f}".replace(".", dimdsep)
+    else:
+        den = 2 ** min(dimdec, 8)
+        units = int(round(value * den))
+        if dimlunit == 5:
+            whole, num = divmod(units, den)
+            return sign + _with_fraction(whole, num, den, keep_whole=True)
+        feet, rest_units = divmod(units, 12 * den)
+        whole, num = divmod(rest_units, den)
+        rest = rest_units / den
+        rest_text = _with_fraction(whole, num, den, keep_whole=True)
+
+    keep_feet = zin in (1, 2)
+    keep_inches = zin in (1, 3)
+    parts = []
+    if feet or keep_feet:
+        parts.append(f"{feet}'")
+    if rest or keep_inches or not parts:
+        parts.append(f'{rest_text}"')
+    return sign + "-".join(parts)
+
+
+def _with_fraction(whole: int, num: int, den: int, keep_whole: bool) -> str:
+    """``whole`` and ``num``/``den`` reduced, as 3 1/2, 1/2 or 3."""
+    if num == 0:
+        return str(whole)
+    g = math.gcd(num, den)
+    frac = f"{num // g}/{den // g}"
+    return f"{whole} {frac}" if whole or not keep_whole else frac
+
+
+def _patch_dimension_unit_format() -> None:
+    """A dimension's length follows its style's Unit format (DIMLUNIT).
+
+    ezdxf reads DIMLUNIT and says "not supported - ezdxf behaves like 2":
+    every dimension came out decimal, Architectural in the Dimension Style
+    dialog changed nothing (#122). Scientific, Engineering, Architectural
+    and Fractional are written by :func:`length_unit_text`; Decimal keeps
+    the decimal path (rounding as classic CAD, :func:`_patch_dimension_
+    number_format`). DIMRND and DIMPOST apply as they do there.
+    """
+    from ezdxf.render import dim_base
+
+    cls = dim_base.LengthMeasurement
+    if getattr(cls.format_text, "_ingecad_patch", False):
+        return
+    original = cls.format_text
+
+    def format_text(self, value: float) -> str:
+        unit = int(getattr(self, "length_unit", 2) or 2)
+        if unit != 2:
+            if self.text_round:
+                value = dim_base.xround(value, self.text_round)
+            text = length_unit_text(value, unit, self.decimal_places,
+                                    self.suppress_zeros,
+                                    self.decimal_separator)
+            if text is not None:
+                if self.text_post_process_format:
+                    text = dim_base.apply_dimpost(
+                        text, self.text_post_process_format)
+                return text
+        return original(self, value)
+
+    format_text._ingecad_patch = True
+    cls.format_text = format_text
+
+
+def _patch_caret_decode() -> None:
+    """Caret notation is ``^@`` to ``^_`` only: ``^`` before anything else
+    is the character itself.
+
+    ezdxf decoded every ``^x`` as ``chr((ord(x) - 64) % 126)``, so the
+    tolerance stack ``\\S+0,1^-0,2;`` -- where ``^`` divides the two
+    numbers -- read "+0,1k0,2": "-" is 45, and (45 - 64) % 126 is "k"
+    (UNE-EN ISO 129-1 in a tester's eighth review). The control characters
+    (``^I`` a tab, ``^J`` a line break) still decode, and ``^`` plus a
+    space is still a caret.
+    """
+    import re
+
+    from ezdxf.tools import text as ezdxf_text
+
+    if getattr(ezdxf_text.caret_decode, "_ingecad_patch", False):
+        return
+
+    def decode(match) -> str:
+        c = match.group(1)
+        return "^" if c == " " else chr(ord(c) - 64)
+
+    def caret_decode(text: str) -> str:
+        # "^ " stays the caret itself, as before (ezdxf writes "\\SA^ B;")
+        return re.sub(r"\^([@-_ ])", decode, text)
+
+    caret_decode._ingecad_patch = True
+    ezdxf_text.caret_decode = caret_decode
 
 
 def _patch_dimension_number_format() -> None:
@@ -395,6 +531,86 @@ def _patch_narrow_linear_dimension_text() -> None:
     LinearDimension.add_dimension_line = add_dimension_line
 
 
+def _patch_narrow_linear_dimension_arrows() -> None:
+    """Text that does not fit takes the arrowheads outside with it.
+
+    Rafael's eighth review (min 17:15, a 2.56 of his part): between the
+    width two arrowheads need and the width the text needs, ezdxf kept the
+    arrowheads inside and set the text beside -- "una distancia muy
+    específica" where his dimensions turned their arrows in while the
+    narrower and wider ones did not. The drafting norm he teaches puts both
+    outside when the text goes out; Marco chose the same rule for radii
+    (#67). AutoCAD's "best fit" may keep them in, so this is a deliberate
+    deviation, for DIMATFIT 3 (best fit) and 0 (text and arrows together).
+    DIMATFIT 2 (move the text first), a forced-inside text (DIMTIX) and
+    suppressed outside arrowheads (DIMSOXD) keep ezdxf's rule.
+
+    ezdxf decides the arrows before the text, so the answer is a property
+    read when the layout asks, after both are known.
+    """
+    from ezdxf.render.dim_linear import LinearDimension
+
+    if isinstance(LinearDimension.__dict__.get("arrows_outside"), property):
+        return
+
+    def get(self) -> bool:
+        raw = self.__dict__.get("_ingecad_arrows_outside", False)
+        if raw:
+            return True
+        m = getattr(self, "measurement", None)
+        if m is None or not m.text or not m.text_is_outside \
+                or m.force_text_inside:
+            return False
+        style = self.dim_style.get
+        try:
+            rule = int(style("dimatfit", 3))
+            soxd = int(style("dimsoxd", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        return rule in (0, 3) and not soxd
+
+    def set_(self, value: bool) -> None:
+        self.__dict__["_ingecad_arrows_outside"] = bool(value)
+
+    LinearDimension.arrows_outside = property(get, set_)
+
+
+def _patch_outside_text_placement() -> None:
+    """DIMTAD 2, "Outside": the text on the side of the dimension line
+    farthest from the defining points (DIMTAD, Command Reference).
+
+    ezdxf read 2 as "Above". Rafael's eighth review (min 16:20) asked for
+    the text to change side "como si hiciese una simetría", in the same
+    reading orientation, when the dimension goes to the other side of the
+    part: that is what Outside does, so the style's Vertical "Outside" or
+    a dimension's own override gives it.
+    """
+    from ezdxf.render.dim_linear import LinearDimension
+
+    original = LinearDimension.get_text_location
+    if getattr(original, "_ingecad_patch", False):
+        return
+
+    def get_text_location(self):
+        m = self.measurement
+        if m.text_valign == 2:
+            up = self.dim_line_vec.orthogonal()
+            side = 0.0
+            for origin in (self.ext1_line_start, self.ext2_line_start):
+                side = (origin - self.dim_line_start).dot(up)
+                if abs(side) > 1e-9:
+                    break
+            m.text_valign = 4 if side > 0.0 else 1
+            try:
+                return original(self)
+            finally:
+                m.text_valign = 2
+        return original(self)
+
+    get_text_location._ingecad_patch = True
+    LinearDimension.get_text_location = get_text_location
+
+
 def _patch_two_line_angular_sector() -> None:
     """A 2-line angular dimension measures the sector its arc point (16)
     lies in, as AutoCAD does.
@@ -446,6 +662,74 @@ def _patch_two_line_angular_sector() -> None:
     get_ext1_dir._ingecad_patch = True
     AngularDimension.get_ext1_dir = get_ext1_dir
     AngularDimension.get_ext2_dir = get_ext2_dir
+
+
+def _patch_angular_text_above_reading() -> None:
+    """Angular text sits above its arc as it is read (ISO 129-1, fig. 63).
+
+    The text of an angle is turned to read from the bottom or the right of
+    the sheet, and lies ABOVE the dimension line in that reading: outside
+    the arc in the upper half, inside it -- towards the centre -- in the
+    lower half. ezdxf put it outside always, so in the lower half it read
+    below its line: the 81,76 of Rafael's part (eighth review, min 50).
+    A centred text (DIMTAD 0) and a text too wide for its arc, set past the
+    extension lines, keep ezdxf's place.
+    """
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_curved import _CurvedDimensionLine
+    from ezdxf.tools.text import is_upside_down_text_angle
+
+    original = _CurvedDimensionLine.default_location
+    if getattr(original, "_ingecad_patch", False):
+        return
+
+    def default_location(self, shift: float = 0.0):
+        m = self.measurement
+        if shift == 0.0 and m.text_valign != 0 \
+                and not self.geometry.requires_extrusion:
+            radial = Vec2.from_angle(self.center_angle_rad)
+            reading = radial.orthogonal(ccw=False).angle_deg
+            if is_upside_down_text_angle(
+                    self.geometry.ucs.to_ocs_angle_deg(reading)):
+                radius = self.dim_line_radius - m.text_vertical_distance()
+                return self.center_of_arc + radial * radius
+        return original(self, shift)
+
+    default_location._ingecad_patch = True
+    _CurvedDimensionLine.default_location = default_location
+
+
+def _patch_angular_extension_from_vertex() -> None:
+    """An angular extension line that starts at the vertex starts there.
+
+    When a measured line lies beyond the vertex, DIMANGULAR puts its leg a
+    hair from the vertex (core.actions.angular_from_lines) so that the
+    extension line runs from the vertex to past the arc; DIMEXO's gap would
+    leave it short of the point the angle is measured from.
+    """
+    from ezdxf.render.dim_curved import _CurvedDimensionLine
+
+    original = _CurvedDimensionLine._add_ext_line
+    if getattr(original, "_ingecad_patch", False):
+        return
+
+    def _add_ext_line(self, start, direction, dxfattribs) -> None:
+        center = self.center_of_arc
+        radius = abs(self.dim_line_radius)
+        if radius > 0.0 and (start - center).magnitude <= 1e-5 * radius \
+                and not self.extension_lines.has_fixed_length:
+            end = center + direction * (radius
+                                        + self.extension_lines.extension_above)
+            self.add_line(center, end, dxfattribs=dxfattribs)
+            return
+        if radius > 0.0 and abs((start - center).magnitude - radius) \
+                <= 1e-9 * max(1.0, radius) \
+                and not self.extension_lines.has_fixed_length:
+            return          # the line reaches the arc: no extension line
+        original(self, start, direction, dxfattribs)
+
+    _add_ext_line._ingecad_patch = True
+    _CurvedDimensionLine._add_ext_line = _add_ext_line
 
 
 def _patch_three_point_angular_sector() -> None:
@@ -514,6 +798,190 @@ def _patch_arc_length_symbol_text() -> None:
     __init__._ingecad_patch = True
     __init__._ingecad_arc_prefix = True
     ArcLengthMeasurement.__init__ = __init__
+    _patch_arc_length_symbol()
+    _patch_arc_length_extension_lines()
+    _patch_text_frame()
+
+
+def _patch_arc_length_symbol() -> None:
+    """The arc length symbol drawn as the classic CAD draws it: a small ARC
+    in the dimension's block, before the number (DIMARCSYM 0) or above it
+    (1); none for 2. ezdxf wrote "( " instead (see
+    :func:`_patch_arc_length_symbol_text`), and the symbol was missing
+    (UNE-EN ISO 129-1, a tester's eighth review).
+
+    The arc spans 120 degrees over a chord of 0.9 text heights, bulging
+    up the text. Before the number it sits at the text's middle, past the
+    text box ezdxf estimates; above it, half a height over the text.
+    """
+    import math
+
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_curved import ArcLengthDimension
+
+    if getattr(ArcLengthDimension.add_measurement_text, "_ingecad_patch",
+               False):
+        return
+    original = ArcLengthDimension.add_measurement_text
+
+    def add_measurement_text(self, dim_text, pos, rotation) -> None:
+        original(self, dim_text, pos, rotation)
+        where = int(self.dim_style.get("dimarcsym", 0) or 0)
+        if where not in (0, 1) or not dim_text:
+            return
+        h = float(self.measurement.text_height)
+        u = Vec2.from_deg_angle(rotation)
+        v = u.orthogonal()
+        chord = 0.9 * h
+        radius = chord / (2.0 * math.sin(math.radians(60.0)))
+        if where == 0:
+            width = float(getattr(self.text_box, "width", 0.0) or 0.0)
+            mid = Vec2(pos) - u * (width / 2.0 + 0.5 * chord)
+            mid -= v * (0.15 * h)
+        else:
+            mid = Vec2(pos) + v * (0.75 * h)
+        center = mid - v * (radius / 2.0)          # chord's midpoint, below
+        up = math.atan2(v.y, v.x)
+        self.add_arc(center, radius, up - math.radians(60.0),
+                     up + math.radians(60.0),
+                     dxfattribs=self.measurement.dxfattribs())
+
+    add_measurement_text._ingecad_patch = True
+    ArcLengthDimension.add_measurement_text = add_measurement_text
+
+
+def _patch_arc_length_extension_lines() -> None:
+    """An arc length dimension of an arc under 90 degrees has orthogonal
+    extension lines: both parallel to the arc's bisector, as classic CAD
+    and UNE-EN ISO 129-1 draw them. ezdxf drew them radial at every angle.
+    From 90 degrees up they stay radial.
+
+    The dimension line stays concentric with the arc; it ends where each
+    extension line meets it, and the arrows sit there. If the dimension
+    line is too far inside the arc for a parallel line to reach it, the
+    lines stay radial.
+    """
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_curved import ArcLengthDimension
+
+    if getattr(ArcLengthDimension.get_ext1_dir, "_ingecad_patch", False):
+        return
+    radial_add = ArcLengthDimension._add_ext_line
+
+    def _meets(self, leg: Vec2):
+        """Where a line from ``leg`` parallel to the bisector meets the
+        dimension line, or None when the lines go radial."""
+        center = self.center_of_arc
+        p1 = self.leg1_start - center
+        p2 = self.leg2_start - center
+        span = abs(p1.angle_between(p2))
+        if not (1e-9 < span < math.pi / 2.0 - 1e-9):
+            return None
+        bisector = (p1.normalize() + p2.normalize()).normalize()
+        reach = self.get_dim_line_radius()
+        p = leg - center
+        along = p.dot(bisector)
+        disc = along * along - p.dot(p) + reach * reach
+        if disc < 0.0:
+            return None
+        return center + p + bisector * (-along + math.sqrt(disc)), bisector
+
+    def _dir(self, leg: Vec2) -> Vec2:
+        met = _meets(self, leg)
+        if met is None:
+            return (leg - self.center_of_arc).normalize()
+        return (met[0] - self.center_of_arc).normalize()
+
+    def get_ext1_dir(self) -> Vec2:
+        return _dir(self, self.leg1_start)
+
+    def get_ext2_dir(self) -> Vec2:
+        return _dir(self, self.leg2_start)
+
+    def _add_ext_line(self, start: Vec2, direction: Vec2, dxfattribs) -> None:
+        met = _meets(self, Vec2(start))
+        if met is None:
+            radial_add(self, start, direction, dxfattribs)
+            return
+        end, bisector = met
+        ext_lines = self.extension_lines
+        toward = end - Vec2(start)
+        if toward.magnitude < 1e-12:
+            return
+        sense = bisector if toward.dot(bisector) >= 0.0 else -bisector
+        if ext_lines.has_fixed_length:
+            begin = end - sense * ext_lines.length_below
+        else:
+            begin = Vec2(start) + sense * ext_lines.offset
+        self.add_line(begin, end + sense * ext_lines.extension_above,
+                      dxfattribs=dxfattribs)
+
+    get_ext1_dir._ingecad_patch = True
+    ArcLengthDimension.get_ext1_dir = get_ext1_dir
+    ArcLengthDimension.get_ext2_dir = get_ext2_dir
+    ArcLengthDimension._add_ext_line = _add_ext_line
+
+
+def _patch_text_frame() -> None:
+    """A negative DIMGAP frames the dimension text, as classic CAD does
+    ("Draw frame around text"; the theoretically exact dimension of
+    UNE-EN ISO 129-1). The gap is its absolute value.
+
+    ezdxf took the negative number as it came: no frame, and the text sat
+    that far *into* the dimension line instead of clear of it.
+
+    The frame is four lines, the text's width (as measured in its style)
+    and height plus the gap on every side, in the dimension line's
+    colour, linetype and lineweight.
+    """
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_base import (BaseDimensionRenderer, Measurement,
+                                       TextBox)
+
+    if getattr(BaseDimensionRenderer.add_text, "_ingecad_frame", False):
+        return
+    original_init = Measurement.__init__
+    original_add_text = BaseDimensionRenderer.add_text
+    original_text_box = BaseDimensionRenderer.init_text_box
+
+    def init_text_box(self):
+        """A framed text hides the dimension line up to its frame."""
+        measurement = self.measurement
+        if not getattr(measurement, "_ingecad_framed", False):
+            return original_text_box(self)
+        return TextBox(center=measurement.text_location,
+                       width=self.total_text_width(),
+                       height=measurement.text_height,
+                       angle=measurement.text_rotation or 0.0,
+                       hgap=measurement.text_gap,
+                       vgap=measurement.text_gap * 0.75)  # as ezdxf
+
+    def measurement_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self._ingecad_framed = self.text_gap < 0.0
+        self.text_gap = abs(self.text_gap)
+
+    def add_text(self, text, pos, rotation, dxfattribs) -> None:
+        original_add_text(self, text, pos, rotation, dxfattribs)
+        measurement = self.measurement
+        if not text or not getattr(measurement, "_ingecad_framed", False):
+            return
+        gap = measurement.text_gap
+        half_w = self.total_text_width() / 2.0 + gap
+        half_h = measurement.text_height / 2.0 + gap
+        u = Vec2.from_deg_angle(rotation)
+        v = u.orthogonal()
+        center = Vec2(pos)
+        corners = [center + u * (sx * half_w) + v * (sy * half_h)
+                   for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        attribs = self.dimension_line.dxfattribs()
+        for start, end in zip(corners, corners[1:] + corners[:1]):
+            self.add_line(start, end, dxfattribs=dict(attribs))
+
+    Measurement.__init__ = measurement_init
+    BaseDimensionRenderer.init_text_box = init_text_box
+    add_text._ingecad_frame = True
+    BaseDimensionRenderer.add_text = add_text
 
 
 def _patch_single_vertex_leader() -> None:
@@ -608,7 +1076,25 @@ def _patch_polygon_transform() -> None:
     Reported upstream: https://github.com/mozman/ezdxf/issues/1399 (still
     present on master/1.4.5b0 — the scale half was fixed there, the angle
     half was not). Drop this patch once a fixed release ships.
+
+    The same transform never MOVES the pattern either: its lines keep
+    their base points while the boundary goes, so a hatch inside a block
+    is drawn with the pattern anchored where the block's origin is in the
+    world, not where the block was inserted. A colleague's plan whose
+    walls are blocks, each hatch lined up with the next by its author,
+    showed the pattern cut and doubled at every joint; MOVE, COPY and
+    EXPLODE slid the pattern under the hatch the same way. The base
+    points now follow the image of the hatch's OCS origin.
+
+    ezdxf 1.4.5 moves the base points itself, reading them as vectors
+    (``base_point.x``): a pattern line holding a plain tuple -- what
+    ``add_line`` stores when handed one -- raises there. The lines are
+    vectors before the original runs, and the rebuilt ones are too; the
+    rebuild from the snapshot replaces whatever the original did, so the
+    result is the same on both versions.
     """
+    from ezdxf.math import OCSTransform, Vec2, Vec3
+
     original = DXFPolygon.transform
 
     def transform(self, m):
@@ -616,6 +1102,13 @@ def _patch_polygon_transform() -> None:
         snapshot = pattern.as_list() if pattern and pattern.lines else None
         old_scale = self.dxf.pattern_scale
         old_angle = self.dxf.pattern_angle
+        if snapshot is not None:
+            # where the OCS origin goes, in the hatch's new OCS
+            shift = OCSTransform(self.dxf.extrusion, m).transform_vertex(
+                Vec3(0, 0, Vec3(self.dxf.elevation).z))
+            for line in pattern.lines:
+                line.base_point = Vec2(line.base_point)
+                line.offset = Vec2(line.offset)
         result = original(self, m)
         if snapshot is not None and self.pattern:
             factor = (self.dxf.pattern_scale / old_scale
@@ -627,8 +1120,10 @@ def _patch_polygon_transform() -> None:
                 rebuilt = _pattern_tools.scale_pattern(
                     snapshot, factor=factor, angle=delta)
             self.pattern.clear()
-            for line in rebuilt:
-                self.pattern.add_line(*line)
+            for angle, base, offset, dashes in rebuilt:
+                self.pattern.add_line(
+                    angle, Vec2(base[0] + shift.x, base[1] + shift.y),
+                    Vec2(offset), dashes)
         return result
 
     transform._ingecad_patch = True  # marker for tests / idempotence
@@ -1033,6 +1528,31 @@ def _patch_lwpolyline_get_points() -> None:
     LWPolyline.get_points = get_points
 
 
+def _patch_jogged_radius() -> None:
+    """A DIMJOGGED radius is drawn jogged on every render.
+
+    Not an ezdxf defect: IngeCAD stores a jogged radius as a plain radius
+    with its centre override and jog in XDATA (core.dim_commands), so a
+    re-render -- a style change, a moved text -- must draw the jog again;
+    it used to come back as a plain radius to the override.
+    """
+    from ezdxf.render.dim_radius import RadiusDimension
+
+    original = RadiusDimension.render
+    if getattr(original, "_ingecad_patch", False):
+        return
+
+    def render(self, block) -> None:
+        original(self, block)
+        if type(self) is RadiusDimension:
+            from core.dim_commands import draw_jog
+
+            draw_jog(self, block)
+
+    render._ingecad_patch = True
+    RadiusDimension.render = render
+
+
 def _patch_radial_dimension_layout() -> None:
     """DIMRADIUS / DIMDIAMETER drawn by the drafting norm (#67).
 
@@ -1046,7 +1566,8 @@ def _patch_radial_dimension_layout() -> None:
       past it (one arrowhead length past its tail: 5 mm with ISO-25) -- a
       line cut at the arrow "as with a knife" reads wrong;
     * the text fits inside: arrowheads inside, the text on the dimension
-      line, no extension of any kind; a diameter spans the whole circle.
+      line, no extension of any kind; a diameter spans the whole circle and
+      a radius starts at the centre (not at its text, as ezdxf drew it).
 
     ezdxf 1.4 draws the outside case with the arrowheads inside (or one in,
     one out), and a diameter with its text placed inside as a single leader
@@ -1094,6 +1615,20 @@ def _patch_radial_dimension_layout() -> None:
             base = self.add_arrow(self.point_on_circle, rotate=True)  # outside, to the centre
         self.add_radial_dim_line(self.point_on_circle)
         ext_line(self, base, user)
+
+    radius_from_text = RadiusDimension.add_radial_dim_line_from_text
+
+    def radial_dim_line_from_text(self, start, end) -> None:
+        """Text inside the circle: the line starts at the centre, ISO 129's
+        rule (Rafael's eighth review, min 18-20) -- ezdxf drew it from the
+        text, like a leader. With DIMTOFL off (the imperial Standard style)
+        ezdxf's own path stands."""
+        if self.outside_text_force_dimline:
+            self.add_radial_dim_line(end)
+        else:
+            radius_from_text(self, start, end)
+
+    RadiusDimension.add_radial_dim_line_from_text = radial_dim_line_from_text
 
     def render_user_location_radius(self) -> None:
         if iso_case(self):

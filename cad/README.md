@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature clone of any other CAD.
 
-## Status — v0.6.8.2
+## Status — v0.8.0
 
 What works today:
 
@@ -45,8 +45,17 @@ What works today:
   the British National Grid is `EPSG:27700` — through PROJ), read or type
   latitude and longitude, ground elevations
   from a global DEM, the satellite image under the plan, and Google Earth
-  both ways by KML/KMZ. Plugins are managed in Tools ▸ Plugins; the
-  contract for writing one is in `docs/plugins.md`.
+  both ways by KML/KMZ.
+- **Roads plugin** (menu *Roads*, Peruvian DG-2018): a road axis from a
+  polyline of tangents and arcs, its stationing and axis table, simple
+  horizontal curves at each PI with their PC/PT stations, and the curve
+  table.
+- **Extensions**: Tools ▸ Manage extensions opens a window with the
+  included plugins, the ones you installed and the catalog of
+  [ingecad-extensions](https://github.com/ingelibre/ingecad-extensions),
+  installed with one click (each download checked against its SHA-256)
+  and removed without a trace. The contract for writing one is in
+  `docs/plugins.md`.
 
   ![Topography: the construction chart and contours](docs/images/topografia.jpeg)
 
@@ -83,7 +92,8 @@ What works today:
   (chamfer/fillet/area/rotation), polygons, ellipses and elliptical arcs,
   text with all 14 justifications, hatches that find their boundary among
   lines and arcs (islands included, like BPOLY); construction lines (XLINE/RAY),
-  DIVIDE/MEASURE with aligned blocks, REVCLOUD.
+  DIVIDE/MEASURE with aligned blocks, REVCLOUD, ARRAYPATH along a curve,
+  and the drawing's blocks listed with thumbnails in the Palette.
 - **Dimensions, complete**: linear, aligned, angular, arc length, ordinate,
   radius and diameter to the norm (arrowheads inside the circle), center
   marks and the chain-line axes of CENTERMARK / CENTERLINE,
@@ -95,8 +105,14 @@ What works today:
   and a colleague's dimensions keep their author's text, number and
   position when edited, moved, rotated or mirrored.
 - **Layers, the classic way**: the properties table (status, on, freeze, lock,
-  colour, linetype, lineweight, plot, description) with live search, and the
-  `-LAYER` command line with wildcards for the keyboard-only flow.
+  colour, linetype, lineweight, plot, description) with live search, the
+  `-LAYER` command line with wildcards for the keyboard-only flow, and the
+  **layer groups** and property filters of the drawing as a tree — made,
+  filled and switched on/off together, kept in Save as DWG.
+- **An AI assistant, off by default**: a sidebar tab that draws, queries and
+  edits through the same commands you type (one U undoes its whole turn),
+  with the model and key of your choice, and `ingecad --mcp` for an MCP
+  client to drive the open drawing (`docs/ai.md`).
 - **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET
   (polylines and arcs included, distance by mouse) / TRIM / EXTEND / FILLET /
   CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT (Join turns
@@ -119,8 +135,8 @@ What works today:
   Drafting Settings), a user coordinate system (UCS: moved and turned
   origin, named, Previous, Object) that typed points, the grid and the
   commands follow, the nested adaptive grid with GRIDUNIT / SNAPUNIT
-  saved in the drawing, absolute / relative / polar coordinate input and
-  LASTPOINT, command prefix autocomplete (`OFF` runs OFFSET), inquiry
+  saved in the drawing, absolute / relative / polar coordinate input (with arithmetic:
+  `43.3/3`, `@20*2<45`) and LASTPOINT, command prefix autocomplete (`OFF` runs OFFSET), inquiry
   commands (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup
   window with template units and recent drawings with thumbnails, and
   undo/redo of everything.

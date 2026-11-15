@@ -33,6 +33,13 @@ features of the drawing. Instead each type contributes what it really has:
 * both give a MIDpoint measured ALONG the curve, and feed a separate chord
   table (``_curves``) that only NEA, PER and INT read — the snaps for which
   a fine chord chain is the right approximation.
+
+Construction lines (XLINE, RAY) are infinite, so they cannot sit in the
+segment table: they keep their own (``_lines``: a base point, a unit
+direction, and whether they also run backwards). A query cuts each one near
+the cursor into a short segment that rides along with the curve chords for
+NEA and INT; PER and PAR use the whole line. A RAY's base is its ENDpoint;
+an XLINE has none, and neither has a MIDpoint -- as in AutoCAD.
 """
 from __future__ import annotations
 
@@ -44,10 +51,14 @@ import numpy as np
 
 from core import ocs
 
-# Lower = wins when within threshold.
+# Breaks a tie between snaps as near the cursor (lower wins); the nearest
+# point wins first (SnapEngine.find).
 PRIORITY = {"END": 0, "INT": 1, "MID": 2, "CEN": 3, "GCE": 4, "NOD": 5,
             "ORI": 6, "QUA": 7, "INS": 8, "PER": 9, "TAN": 10, "DTAN": 10,
             "NEA": 11}
+#: Snaps that sit on the object rather than at a point of it: they wait
+#: until no point snap is in reach.
+DEFERRED = frozenset(("PER", "TAN", "DTAN", "NEA"))
 #: Every snap a drawing's geometry offers. The origin (ORI) is not one of
 #: them: it is a point no entity owns, offered only when the user ticks it.
 ALL_KINDS = frozenset(k for k in PRIORITY if k not in ("ORI", "DTAN"))
@@ -109,6 +120,9 @@ class SnapEngine:
         # x y kind_code, for the exact targets a curve owns (see TARGET_KINDS)
         self._targets = np.empty((0, 3))
         self._target_oidx = np.empty(0, dtype=np.int32)
+        # XLINE/RAY: x y ux uy back (back = 1 when it also runs backwards)
+        self._lines = np.empty((0, 5))
+        self._line_oidx = np.empty(0, dtype=np.int32)
 
     def invalidate(self) -> None:
         self._dirty = True
@@ -196,11 +210,57 @@ class SnapEngine:
                 SnapEngine._spline(e, oid, curves, curve_o, targets, target_o)
             elif t == "VIEWPORT":
                 SnapEngine._viewport_frame(e, oid, segs, seg_o)
+            elif t in ("IMAGE", "WIPEOUT"):
+                # its frame (the clip boundary when clipped): ENDpoints at
+                # the corners, MIDpoints, INTersections, PERpendicular...
+                frame = [(v.x, v.y) for v in e.boundary_path_wcs()]
+                for (x0, y0), (x1, y1) in zip(frame, frame[1:]):
+                    if (x0, y0) != (x1, y1):
+                        segs.append((x0, y0, x1, y1))
+                        seg_o.append(oid)
+                if t == "IMAGE" and targets is not None:
+                    anchor = e.dxf.insert
+                    targets.append((anchor.x, anchor.y, _TARGET_CODE["INS"]))
+                    target_o.append(oid)
             elif t in ("DIMENSION", "ARC_DIMENSION") and targets is not None:
                 SnapEngine._dimension(e, oid, segs, seg_o, points, point_o,
                                       targets, target_o)
         except Exception:
             pass  # malformed entity: not snappable, not fatal
+
+    @staticmethod
+    def _infinite(e, oid, lines, line_o, targets, target_o) -> None:
+        """An XLINE or a RAY: its line, and a RAY's base as its ENDpoint.
+        Only the space's own: construction lines inside a block are rare."""
+        try:
+            base, unit = e.dxf.start, e.dxf.unit_vector
+            length = math.hypot(unit.x, unit.y)
+            if length < 1e-12:
+                return                      # seen straight down the Z axis
+            ray = e.dxftype() == "RAY"
+            lines.append((base.x, base.y, unit.x / length, unit.y / length,
+                          0.0 if ray else 1.0))
+            line_o.append(oid)
+            if ray:
+                targets.append((base.x, base.y, _TARGET_CODE["END"]))
+                target_o.append(oid)
+        except Exception:
+            pass  # malformed entity: not snappable, not fatal
+
+    def _near_lines(self, cx: float, cy: float, threshold: float):
+        """The construction lines within ``threshold`` of the cursor, as
+        rows of ``_lines``, their owner ids, and the foot parameter of the
+        cursor along each."""
+        lines = self._lines
+        if not len(lines):
+            return lines, self._line_oidx, np.empty(0)
+        dx, dy = cx - lines[:, 0], cy - lines[:, 1]
+        t = dx * lines[:, 2] + dy * lines[:, 3]
+        t = np.where(lines[:, 4] > 0, t, np.maximum(t, 0.0))
+        d = np.hypot(lines[:, 0] + t * lines[:, 2] - cx,
+                     lines[:, 1] + t * lines[:, 3] - cy)
+        near = d <= threshold
+        return lines[near], self._line_oidx[near], t[near]
 
     @staticmethod
     def _dimension(dim, oid, segs, seg_o, points, point_o,
@@ -576,6 +636,13 @@ class SnapEngine:
             self._emit("arcs", moved, oid, arcs, arc_o)
 
     _CHUNK_KEYS = ("segs", "circles", "arcs", "points", "curves", "targets")
+    #: chunk key -> (rows attribute, owner-index attribute)
+    _ARRAYS = {"segs": ("_segs", "_seg_oidx"),
+               "circles": ("_circles", "_circle_oidx"),
+               "arcs": ("_arcs", "_arc_oidx"),
+               "points": ("_points", "_point_oidx"),
+               "curves": ("_curves", "_curve_oidx"),
+               "targets": ("_targets", "_target_oidx")}
 
     def _emit(self, key, rows, oid, values, owners) -> None:
         """A transformed block's rows: kept as one array while a build
@@ -614,6 +681,8 @@ class SnapEngine:
         curve_o: list = []
         targets: list = []
         target_o: list = []
+        lines: list = []
+        line_o: list = []
         space = self._space if self._space is not None \
             else self.document.modelspace()
         for e in space:
@@ -627,9 +696,13 @@ class SnapEngine:
                 self._insert_children(e, oid, segs, seg_o, circles, circle_o,
                                       arcs, arc_o, points, point_o,
                                       curves, curve_o, targets, target_o)
+            elif e.dxftype() in ("XLINE", "RAY"):
+                self._infinite(e, oid, lines, line_o, targets, target_o)
             self._extract(e, oid, segs, seg_o, circles, circle_o,
                           arcs, arc_o, points, point_o,
                           curves, curve_o, targets, target_o)
+        self._lines = np.asarray(lines, dtype=np.float64).reshape(-1, 5)
+        self._line_oidx = np.asarray(line_o, dtype=np.int32)
         self._segs, self._seg_oidx = self._merged("segs", segs, seg_o, 4)
         self._seg_bounds = self._seg_bounds_of(self._segs)
         self._circles, self._circle_oidx = self._merged(
@@ -655,6 +728,16 @@ class SnapEngine:
         """
         if self._dirty:
             return
+        # a block's transformed rows stay arrays, as in _build: turning a
+        # pasted plan's 170 000 block segments into Python lists and back
+        # froze a Ctrl+V 0.95 s on Plaza Yanque (0.3 s now)
+        self._chunks = {key: [] for key in self._CHUNK_KEYS}
+        try:
+            self._add_entities(entities)
+        finally:
+            self._chunks = None
+
+    def _add_entities(self, entities) -> None:
         segs: list = []
         seg_o: list = []
         circles: list = []
@@ -667,6 +750,8 @@ class SnapEngine:
         curve_o: list = []
         targets: list = []
         target_o: list = []
+        lines: list = []
+        line_o: list = []
         for e in entities:
             try:
                 oid = self._intern(e.dxf.handle)
@@ -676,46 +761,34 @@ class SnapEngine:
                 self._insert_children(e, oid, segs, seg_o, circles, circle_o,
                                       arcs, arc_o, points, point_o,
                                       curves, curve_o, targets, target_o)
+            elif e.dxftype() in ("XLINE", "RAY"):
+                self._infinite(e, oid, lines, line_o, targets, target_o)
             self._extract(e, oid, segs, seg_o, circles, circle_o,
                           arcs, arc_o, points, point_o,
                           curves, curve_o, targets, target_o)
-        if segs:
-            new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
-            self._segs = np.vstack([self._segs, new])
-            self._seg_oidx = np.concatenate(
-                [self._seg_oidx, np.asarray(seg_o, dtype=np.int32)])
-            self._seg_bounds = np.vstack(
-                [self._seg_bounds, self._seg_bounds_of(new)])
-        if circles:
-            self._circles = np.vstack(
-                [self._circles,
-                 np.asarray(circles, dtype=np.float64).reshape(-1, 3)])
-            self._circle_oidx = np.concatenate(
-                [self._circle_oidx, np.asarray(circle_o, dtype=np.int32)])
-        if arcs:
-            self._arcs = np.vstack(
-                [self._arcs, np.asarray(arcs, dtype=np.float64).reshape(-1, 5)])
-            self._arc_oidx = np.concatenate(
-                [self._arc_oidx, np.asarray(arc_o, dtype=np.int32)])
-        if points:
-            self._points = np.vstack(
-                [self._points,
-                 np.asarray(points, dtype=np.float64).reshape(-1, 2)])
-            self._point_oidx = np.concatenate(
-                [self._point_oidx, np.asarray(point_o, dtype=np.int32)])
-        if curves:
-            new = np.asarray(curves, dtype=np.float64).reshape(-1, 4)
-            self._curves = np.vstack([self._curves, new])
-            self._curve_oidx = np.concatenate(
-                [self._curve_oidx, np.asarray(curve_o, dtype=np.int32)])
-            self._curve_bounds = np.vstack(
-                [self._curve_bounds, self._seg_bounds_of(new)])
-        if targets:
-            self._targets = np.vstack(
-                [self._targets,
-                 np.asarray(targets, dtype=np.float64).reshape(-1, 3)])
-            self._target_oidx = np.concatenate(
-                [self._target_oidx, np.asarray(target_o, dtype=np.int32)])
+        if lines:
+            self._lines = np.vstack(
+                [self._lines, np.asarray(lines, dtype=np.float64).reshape(-1, 5)])
+            self._line_oidx = np.concatenate(
+                [self._line_oidx, np.asarray(line_o, dtype=np.int32)])
+        for key, values, owners, width in (
+                ("segs", segs, seg_o, 4), ("circles", circles, circle_o, 3),
+                ("arcs", arcs, arc_o, 5), ("points", points, point_o, 2),
+                ("curves", curves, curve_o, 4),
+                ("targets", targets, target_o, 3)):
+            new, oidx = self._merged(key, values, owners, width)
+            if not len(new):
+                continue
+            rows_name, oidx_name = self._ARRAYS[key]
+            setattr(self, rows_name, np.vstack([getattr(self, rows_name), new]))
+            setattr(self, oidx_name,
+                    np.concatenate([getattr(self, oidx_name), oidx]))
+            if key == "segs":
+                self._seg_bounds = np.vstack(
+                    [self._seg_bounds, self._seg_bounds_of(new)])
+            elif key == "curves":
+                self._curve_bounds = np.vstack(
+                    [self._curve_bounds, self._seg_bounds_of(new)])
 
     def translate_handles(self, handles, dx: float, dy: float) -> None:
         """Shift the cached geometry of MOVEd entities in place.
@@ -740,7 +813,8 @@ class SnapEngine:
         for arr_name, oidx_name in (("_circles", "_circle_oidx"),
                                     ("_arcs", "_arc_oidx"),
                                     ("_points", "_point_oidx"),
-                                    ("_targets", "_target_oidx")):
+                                    ("_targets", "_target_oidx"),
+                                    ("_lines", "_line_oidx")):
             oidx = getattr(self, oidx_name)
             if not len(oidx):
                 continue
@@ -775,7 +849,8 @@ class SnapEngine:
         for arr_name, oidx_name in (("_circles", "_circle_oidx"),
                                     ("_arcs", "_arc_oidx"),
                                     ("_points", "_point_oidx"),
-                                    ("_targets", "_target_oidx")):
+                                    ("_targets", "_target_oidx"),
+                                    ("_lines", "_line_oidx")):
             oidx = getattr(self, oidx_name)
             if not len(oidx):
                 continue
@@ -829,9 +904,12 @@ class SnapEngine:
         PAR, or None."""
         if self._dirty:
             self._build()
+        cx, cy = cursor
+        lines, _, _ = self._near_lines(cx, cy, threshold)
+        if len(lines):
+            return (float(lines[0, 2]), float(lines[0, 3]))
         if not len(self._segs):
             return None
-        cx, cy = cursor
         b = self._seg_bounds
         near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
                 & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
@@ -868,10 +946,10 @@ class SnapEngine:
         if self._dirty:
             self._build()
         cx, cy = cursor
-        best: Optional[tuple[int, float, SnapHit]] = None
+        best: Optional[tuple[tuple, float, SnapHit]] = None
 
         def offer(kind: str, x: float, y: float, circle=None,
-                  reach: Optional[float] = None) -> None:
+                  reach: Optional[float] = None, tier: int = 0) -> None:
             """``reach``: how far the cursor is from what it points at, when
             that is not the snap point itself (PER: the object, not the
             foot)."""
@@ -879,9 +957,13 @@ class SnapEngine:
             d = math.hypot(x - cx, y - cy) if reach is None else reach
             if d > threshold:
                 return
-            key = (PRIORITY[kind], d)
-            if best is None or key < (best[0], best[1]):
-                best = (PRIORITY[kind], d, SnapHit(x, y, kind, circle=circle))
+            # A point the cursor is nearer to wins, whatever its kind: an END
+            # 10 px away beat an INT under the cursor, and a 1 mm slot was
+            # drawn with zero-length lines. PER, TAN and NEA only when no
+            # point is in reach; the kind's rank breaks a tie.
+            key = (2 if kind in DEFERRED else tier, d, PRIORITY[kind])
+            if best is None or key < best[0]:
+                best = (key, d, SnapHit(x, y, kind, circle=circle))
 
         circles, arcs, points = self._circles, self._arcs, self._points
 
@@ -970,11 +1052,23 @@ class SnapEngine:
             i = int(np.argmin(d2))
             offer("MID", float(mx[i]), float(my[i]))
         if "CEN" in kinds:
-            for arr in (circles, arcs):
+            for arr, full in ((circles, True), (arcs, False)):
                 if len(arr):
                     d2 = (arr[:, 0] - cx) ** 2 + (arr[:, 1] - cy) ** 2
                     i = int(np.argmin(d2))
                     offer("CEN", float(arr[i, 0]), float(arr[i, 1]))
+                    # and from the curve itself, as AutoCAD's aperture finds
+                    # it: a cursor passing over an arc took no snap at all
+                    off = np.abs(np.sqrt(d2) - arr[:, 2])
+                    for j in np.nonzero(off <= threshold)[0]:
+                        if not full and not _angle_in_sweep(
+                                math.atan2(cy - arr[j, 1], cx - arr[j, 0]),
+                                arr[j, 3], arr[j, 4]):
+                            continue
+                        # behind the points ON the curve (its ends,
+                        # quadrants...), ahead of NEA on that same curve
+                        offer("CEN", float(arr[j, 0]), float(arr[j, 1]),
+                              reach=float(off[j]), tier=1)
         offer_targets("CEN")
         offer_targets("GCE")
         offer_targets("INS")
@@ -1035,6 +1129,35 @@ class SnapEngine:
             i = int(np.argmin(d2))
             offer("NOD", float(points[i, 0]), float(points[i, 1]))
 
+        # Construction lines near the cursor, cut to a piece around it: an
+        # INT or NEA within reach of the cursor lies on that piece. They go
+        # FIRST, so the pairwise cap below never drops them.
+        lines, line_oids, feet = self._near_lines(cx, cy, threshold)
+        if len(lines):
+            half = 2.0 * threshold
+            lo = np.where(lines[:, 4] > 0, feet - half, np.maximum(feet - half, 0.0))
+            hi = feet + half
+            pieces = np.column_stack([lines[:, 0] + lo * lines[:, 2],
+                                      lines[:, 1] + lo * lines[:, 3],
+                                      lines[:, 0] + hi * lines[:, 2],
+                                      lines[:, 1] + hi * lines[:, 3]])
+            segs = np.vstack([pieces, segs]) if len(segs) else pieces
+            seg_oids = (np.concatenate([line_oids, seg_oids])
+                        if len(seg_oids) else line_oids)
+        if "PER" in kinds and from_point is not None and len(lines):
+            # the foot on the WHOLE line, however far it falls from the cursor
+            fx, fy = from_point
+            for row, t_cursor in zip(lines, feet):
+                t = (fx - row[0]) * row[2] + (fy - row[1]) * row[3]
+                if row[4] == 0 and t < 0:
+                    continue                    # behind a RAY's base
+                px, py = row[0] + t * row[2], row[1] + t * row[3]
+                if math.hypot(px - fx, py - fy) <= threshold * 1e-3:
+                    continue                    # drawn from the line itself
+                over_x = row[0] + t_cursor * row[2]
+                over_y = row[1] + t_cursor * row[3]
+                offer("PER", float(px), float(py),
+                      reach=math.hypot(over_x - cx, over_y - cy))
         if len(curves):
             segs = np.vstack([segs, curves]) if len(segs) else curves
             seg_oids = (np.concatenate([seg_oids, curve_oids])

@@ -249,28 +249,37 @@ class AddEntityCommand(Command):
         self.entity = None
 
     def do(self, document) -> None:
-        self.entity = self._factory(self.space(document))
-        dress_new_entity(document, self.entity, self.layer)
+        entity = self.entity
+        if entity is not None and entity.is_alive \
+                and entity.dxf.get("owner") is None:
+            # a redo: the SAME entity comes back, handle and all, so a later
+            # step that changed it (an APPLOAD script, a turn of the AI that
+            # drew a line and then moved it) still finds it
+            self.space(document).add_entity(entity)
+        else:
+            entity = self.entity = self._factory(self.space(document))
+            dress_new_entity(document, entity, self.layer)
         # A text in an annotative style is born annotative at the current
         # annotation scale: its typed height was a paper height (A2).
-        if self.entity.dxftype() in ("TEXT", "MTEXT"):
+        if entity.dxftype() in ("TEXT", "MTEXT"):
             from core import annotative
 
-            annotative.annotate_new_entity(document, self.entity)
+            annotative.annotate_new_entity(document, entity)
         document.dirty = True
 
     def undo(self, document) -> None:
-        if self.entity is not None:
-            # Handles destroyed here are recorded so the UI can hide the
+        if self.entity is not None and self.entity.is_alive:
+            # Handles taken away here are recorded so the UI can hide the
             # base-scene copies surgically instead of paying a full regen.
             self.removed_handles = [self.entity.dxf.handle]
             from core import annotative
 
             # its scale representations go with it (ezdxf's delete would
-            # leave them orphaned in OBJECTS)
+            # leave them orphaned in OBJECTS); a redo makes them again
             annotative.remove_representations(self.entity)
-            self.space(document).delete_entity(self.entity)
-            self.entity = None
+            # unlinked, not destroyed -- as ERASE keeps what it takes -- so
+            # the redo can give back the same entity
+            self.space(document).unlink_entity(self.entity)
         document.dirty = True
 
 
@@ -304,8 +313,10 @@ def circle_from_3p(p1, p2, p3) -> tuple[tuple[float, float], float]:
     return (ux, uy), math.hypot(ax - ux, ay - uy)
 
 
-def add_arc_3p(p1, p2, p3) -> AddEntityCommand:
-    """Arc from start, a point on the arc, and end (AutoCAD ARC 3P)."""
+def arc_3p(p1, p2, p3):
+    """(center, radius, start_deg, end_deg) of the arc from ``p1`` through
+    ``p2`` to ``p3`` (the classic ARC 3P) -- the arc drawn and the one its
+    preview shows. Raises ValueError for collinear points."""
     center, radius = circle_from_3p(p1, p2, p3)
     a1 = math.degrees(math.atan2(p1[1] - center[1], p1[0] - center[0]))
     a2 = math.degrees(math.atan2(p2[1] - center[1], p2[0] - center[0]))
@@ -314,6 +325,12 @@ def add_arc_3p(p1, p2, p3) -> AddEntityCommand:
     # point is not on the ccw sweep.
     if ((a2 - a1) % 360.0) > ((a3 - a1) % 360.0):
         a1, a3 = a3, a1
+    return center, radius, a1, a3
+
+
+def add_arc_3p(p1, p2, p3) -> AddEntityCommand:
+    """Arc from start, a point on the arc, and end (the classic ARC 3P)."""
+    center, radius, a1, a3 = arc_3p(p1, p2, p3)
     return AddEntityCommand(
         "ARC",
         lambda msp: msp.add_arc((center[0], center[1]), radius, a1, a3))
@@ -425,6 +442,9 @@ def arc_ser(start, end, radius: float):
 def add_arc_geom(geom) -> AddEntityCommand:
     """Command from an arc geometry tuple (see the section comment)."""
     center, radius, a1, a2 = geom[0], geom[1], geom[2], geom[3]
+    # the sweep math runs past 360 (a negative chord's major arc ended at
+    # 466 deg); the entity stores both angles in [0, 360) as AutoCAD does
+    a1, a2 = a1 % 360.0, a2 % 360.0
     return AddEntityCommand(
         "ARC", lambda msp: msp.add_arc((center[0], center[1]), radius, a1, a2))
 
@@ -1004,15 +1024,21 @@ class EraseCommand(Command):
         self.entities = list(entities)
 
     def do(self, document) -> None:
+        from core import groups
+
         msp = self.space(document)
+        self._groups = groups.drop_members(document, self.entities)
         for e in self.entities:
             msp.unlink_entity(e)
         document.dirty = True
 
     def undo(self, document) -> None:
+        from core import groups
+
         msp = self.space(document)
         for e in self.entities:
             msp.add_entity(e)
+        groups.restore_members(getattr(self, "_groups", ()))
         document.dirty = True
 
 
@@ -1134,12 +1160,25 @@ class CreateBlockCommand(Command):
     name = "BLOCK"
     touches_blocks = True
 
-    def __init__(self, block_name: str, base_point, entities) -> None:
+    def __init__(self, block_name: str, base_point, entities,
+                 redefine: bool = False, keep_reference: bool = True) -> None:
         self.block_name = block_name
         self.base = base_point
         self.sources = list(entities)
         self.insert = None
+        # -BLOCK: the objects leave the drawing once defined, as the
+        # command-line form always did (the dialog's "Delete").
+        self.keep_reference = keep_reference
         self._defined = False
+        # A name the drawing already has, answered Yes to "Redefine it?":
+        # the definition takes the selection and every reference shows it.
+        # Without that answer the old content is kept (the reference
+        # placed is to the existing block, as before).
+        self.redefine = redefine
+        self._old: list = []
+        self._old_base = None
+        if redefine:
+            self.needs_regen = True         # every reference changes at once
 
     def do(self, document) -> None:
         doc = document.doc
@@ -1151,10 +1190,27 @@ class CreateBlockCommand(Command):
             for e in self.sources:
                 blk.add_entity(e.copy())
             self._defined = True
+        elif self.redefine:
+            blk = doc.blocks.get(self.block_name)
+            # unlinked, not destroyed: undo puts the very same entities back
+            self._old = list(blk)
+            for e in self._old:
+                blk.unlink_entity(e)
+            self._old_base = blk.block.dxf.base_point
+            blk.block.dxf.base_point = (self.base[0], self.base[1], 0)
+            for e in self.sources:
+                blk.add_entity(e.copy())
         for e in self.sources:
             msp.unlink_entity(e)
+        if not self.keep_reference:
+            self.removed_handles = [e.dxf.handle for e in self.sources]
+            document.dirty = True
+            return
         self.insert = msp.add_blockref(
             self.block_name, (self.base[0], self.base[1]))
+        # a new object: on the current layer with the current properties,
+        # like any other (it landed on layer 0 whatever CLAYER said)
+        dress_new_entity(document, self.insert)
         # Its attributes, at their defaults: a reference carries its own
         # ATTRIBs, and without them the definitions just packed vanished
         # from the drawing -- Rafael's "Rafa" was nowhere to be seen (#88)
@@ -1175,11 +1231,22 @@ class CreateBlockCommand(Command):
         if self._defined and self.block_name in doc.blocks:
             doc.blocks.delete_block(self.block_name, safe=False)
             self._defined = False
+        elif self.redefine and self._old_base is not None:
+            blk = doc.blocks.get(self.block_name)
+            for e in list(blk):
+                blk.unlink_entity(e)
+                doc.entitydb.delete_entity(e)
+            for e in self._old:
+                blk.add_entity(e)
+            blk.block.dxf.base_point = self._old_base
+            self._old, self._old_base = [], None
         document.dirty = True
 
 
-def create_block(block_name, base_point, entities) -> CreateBlockCommand:
-    return CreateBlockCommand(block_name, base_point, entities)
+def create_block(block_name, base_point, entities, redefine: bool = False,
+                 keep_reference: bool = True) -> CreateBlockCommand:
+    return CreateBlockCommand(block_name, base_point, entities, redefine,
+                              keep_reference)
 
 
 class DefineBlockFromFileCommand(Command):
@@ -1278,7 +1345,8 @@ def insert_block(name, point, xscale=1.0, yscale=None,
 
 
 class ExplodeCommand(Command):
-    """EXPLODE: replace INSERT/POLYLINE with their component entities.
+    """EXPLODE: replace INSERT/POLYLINE with their component entities, and a
+    pattern HATCH with the lines of its pattern.
 
     Component entities come from ``virtual_entities`` (already placed in world
     coordinates); the originals are unlinked (kept alive for exact undo).
@@ -1289,12 +1357,32 @@ class ExplodeCommand(Command):
     def __init__(self, entities) -> None:
         self.sources = list(entities)
         self.pieces: list = []
+        #: hatches left whole: solid or gradient fill (nothing to break
+        #: into lines), and patterns past HPMAXLINES
+        self.not_exploded: list = []
+        self.too_dense: list = []
 
     def do(self, document) -> None:
         msp = self.space(document)
         self.pieces = []
+        self.not_exploded, self.too_dense = [], []
         for e in self.sources:
-            if e.dxftype() not in ("INSERT", "LWPOLYLINE", "POLYLINE"):
+            kind = e.dxftype()
+            if kind == "HATCH":
+                lines = hatch_pattern_lines(e)
+                if lines is None:
+                    self.too_dense.append(e)
+                    continue
+                if not lines:
+                    self.not_exploded.append(e)
+                    continue
+                parts = _hatch_line_entities(e, lines)
+                for v in parts:
+                    msp.add_entity(v)
+                msp.unlink_entity(e)
+                self.pieces.append((e, parts))
+                continue
+            if kind not in ("INSERT", "LWPOLYLINE", "POLYLINE"):
                 continue
             parts = []
             for v in e.virtual_entities():
@@ -1322,6 +1410,43 @@ class ExplodeCommand(Command):
             msp.add_entity(original)
         self.pieces = []
         document.dirty = True
+
+
+def hatch_pattern_lines(hatch, limit: int | None = None):
+    """The lines a hatch's pattern draws, in WCS, as ``(start, end)``
+    pairs (a dot is a pair with start == end). Empty for a solid or
+    gradient fill; None past ``limit`` (HPMAXLINES by default)."""
+    from ezdxf.render import hatching
+
+    if hatch.dxf.get("solid_fill", 0) or hatch.has_gradient_data:
+        return []
+    limit = HPMAXLINES if limit is None else limit
+    lines = []
+    try:
+        for start, end in hatching.hatch_entity(hatch):
+            lines.append((start, end))
+            if len(lines) > limit:
+                return None
+    except hatching.HatchingError:
+        return []
+    return lines
+
+
+def _hatch_line_entities(hatch, lines) -> list:
+    """LINE (POINT for a dot) entities, not yet in a layout, carrying the
+    hatch's layer, colour and lineweight."""
+    from ezdxf.entities import factory
+
+    attribs = hatch.graphic_properties()
+    out = []
+    for start, end in lines:
+        if start.isclose(end):
+            out.append(factory.new("POINT", dxfattribs={
+                **attribs, "location": start}, doc=hatch.doc))
+        else:
+            out.append(factory.new("LINE", dxfattribs={
+                **attribs, "start": start, "end": end}, doc=hatch.doc))
+    return out
 
 
 def _exploded_attdefs(insert) -> list:
@@ -1380,6 +1505,108 @@ def pattern_definition(name: str):
         if key.upper() == upper:
             return definition
     return None
+
+
+#: Most hatch line segments one hatch may generate (classic CAD's
+#: HPMAXLINES, initial value 1 000 000). A pattern far too fine for its area
+#: would otherwise generate millions of dashes: the GUI froze while drawing
+#: it, and the drawing gave up halfway, leaving the hatch partly drawn.
+HPMAXLINES = 1_000_000
+
+
+def too_dense_message() -> str:
+    """What is said when a hatch would pass :data:`HPMAXLINES`."""
+    return tr("Hatch spacing too dense, or dash size too small for object.")
+
+
+def hatch_segment_estimate(boundaries, pattern="SOLID", scale=1.0,
+                           angle=0.0, user_def=None) -> float:
+    """How many line segments ``pattern`` at ``scale`` puts over the
+    boundaries' extents (an upper bound: the extents' diagonal crossed at
+    every spacing). 0 for SOLID. Same arguments as :func:`add_hatch`."""
+    if user_def is not None:
+        u_angle, u_spacing, u_double = user_def
+        families = user_pattern_definition(u_angle, u_spacing, bool(u_double))
+        scale = 1.0
+    elif str(pattern).upper() == "SOLID":
+        return 0.0
+    else:
+        families = pattern_definition(pattern)
+    if not families:
+        return 0.0
+    del angle               # turns every family alike: see _segments_over
+    return _segments_over(_extents_diagonal(boundaries), families, scale)
+
+
+def _extents_diagonal(boundaries) -> float:
+    """The diagonal of the extents of point lists and entities."""
+    import math
+
+    xs, ys = [], []
+    for b in boundaries:
+        if isinstance(b, (list, tuple)):
+            xs += [p[0] for p in b]
+            ys += [p[1] for p in b]
+            continue
+        from ezdxf import bbox
+
+        box = bbox.extents([b])
+        if box.has_data:
+            xs += [box.extmin.x, box.extmax.x]
+            ys += [box.extmin.y, box.extmax.y]
+    if not xs:
+        return 0.0
+    return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _segments_over(diag: float, families, scale: float) -> float:
+    """Line segments of pattern ``families`` (angle, base, offset, dashes)
+    at ``scale`` over a region whose extents' diagonal is ``diag``: every
+    spacing crossed by a line as long as the diagonal, an upper bound. The
+    pattern's own angle turns every family alike and changes neither."""
+    import math
+
+    if diag <= 0.0:
+        return 0.0
+    scale = abs(float(scale)) or 1.0
+    total = 0.0
+    for fam_angle, _base, offset, dashes in families:
+        # The offset is stored rotated with its family: across the lines
+        # is its component normal to the line's direction.
+        a = math.radians(float(fam_angle))
+        across = abs(offset[1] * math.cos(a) - offset[0] * math.sin(a))
+        across *= scale
+        if across <= 0.0:
+            return math.inf
+        lines = diag / across + 1.0
+        period = sum(abs(d) for d in dashes) * scale
+        drawn = sum(1 for d in dashes if d >= 0)
+        per_line = (diag / period * drawn + 1.0) if period > 0 and drawn \
+            else 1.0
+        total += lines * per_line
+    return total
+
+
+def hatch_entity_too_dense(hatch, scale: float) -> bool:
+    """An existing hatch given another pattern scale (Properties): its own
+    pattern lines — a colleague's custom pattern too — at the new scale,
+    over its boundaries."""
+    pattern = getattr(hatch, "pattern", None)
+    if pattern is None or not pattern.lines:
+        return False
+    old = float(hatch.dxf.get("pattern_scale", 1.0) or 1.0)
+    families = [(ln.angle, ln.base_point, ln.offset, ln.dash_length_items)
+                for ln in pattern.lines]
+    return _segments_over(_extents_diagonal([hatch]), families,
+                          float(scale) / old) > HPMAXLINES
+
+
+def hatch_too_dense(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
+                    user_def=None) -> bool:
+    """True when the hatch would pass :data:`HPMAXLINES`: classic CAD then
+    refuses it with :func:`too_dense_message` instead of creating it."""
+    return hatch_segment_estimate(boundaries, pattern, scale, angle,
+                                  user_def) > HPMAXLINES
 
 
 def canonical_pattern_name(name: str) -> str:
@@ -1899,6 +2126,61 @@ class DimTextTranslateCommand(Command):
         document.dirty = True
 
 
+def _extend_dim_line_to_text(document, dim) -> None:
+    """Text slid along its dimension line past an extension line: the
+    line runs on under it (Rafael's eighth review, min 16: the text taken
+    off the part's lines, "la línea de cota obviamente crezca con ella")."""
+    import math
+
+    from ezdxf import bbox
+
+    from core.ezdxf_patches import aligned_angle
+
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks:
+        return
+    block = document.doc.blocks.get(name)
+    texts = [e for e in block if e.dxftype() in ("MTEXT", "TEXT")]
+    loc, p1, p2 = (dim.dxf.get(a, None) for a in ("defpoint", "defpoint2",
+                                                   "defpoint3"))
+    if not texts or loc is None or p1 is None or p2 is None:
+        return
+    angle = math.radians(aligned_angle(dim, float(dim.dxf.get("angle", 0.0))))
+    ux, uy = math.cos(angle), math.sin(angle)
+
+    def along(x: float, y: float) -> float:
+        return (x - loc.x) * ux + (y - loc.y) * uy
+
+    lo, hi = sorted((along(p1.x, p1.y), along(p2.x, p2.y)))
+    box = bbox.extents(texts)
+    if not box.has_data:
+        return
+    corners = [(box.extmin.x, box.extmin.y), (box.extmin.x, box.extmax.y),
+               (box.extmax.x, box.extmin.y), (box.extmax.x, box.extmax.y)]
+    t_lo = min(along(x, y) for x, y in corners)
+    t_hi = max(along(x, y) for x, y in corners)
+    attribs = None
+    for e in block:
+        if e.dxftype() == "LINE" and e.dxf.layer.lower() != "defpoints":
+            a, b = e.dxf.start, e.dxf.end
+            if max(abs((q.x - loc.x) * -uy + (q.y - loc.y) * ux)
+                   for q in (a, b)) <= 1e-9 * max(1.0, abs(loc.x), abs(loc.y)) + 1e-9:
+                attribs = e.dxfattribs()
+                for key in ("handle", "owner", "start", "end"):
+                    attribs.pop(key, None)
+                break
+    if attribs is None:
+        return
+
+    def point(t: float):
+        return (loc.x + ux * t, loc.y + uy * t)
+
+    if t_hi > hi:
+        block.add_line(point(hi), point(t_hi), dxfattribs=attribs)
+    if t_lo < lo:
+        block.add_line(point(t_lo), point(lo), dxfattribs=attribs)
+
+
 class DimTextWithLineCommand(Command):
     """The text grip of a linear dimension under DIMTMOVE 0, AutoCAD's
     default: "moves the dimension line with dimension text" (DIMTMOVE). The
@@ -1938,6 +2220,7 @@ class DimTextWithLineCommand(Command):
         self._steps[0].do(document)
         if abs(self._along[0]) > 1e-12 or abs(self._along[1]) > 1e-12:
             translate_dim_text(document, self.dim, *self._along)
+            _extend_dim_line_to_text(document, self.dim)
         document.dirty = True
 
     def undo(self, document) -> None:
@@ -2011,7 +2294,24 @@ def rerender_dimension(document, dim) -> None:
     edited property): render, dress the block as AutoCAD writes it, drop
     the superseded block unless another dimension still shares it."""
     old_block = dim.dxf.get("geometry", None)
-    dim.render()
+    mid = dim.dxf.get("text_midpoint", None)
+    dimtype = int(dim.dxf.get("dimtype", 0))
+    if dimtype & 128 and dimtype & 7 in (3, 4) and mid is not None:
+        # A radius or diameter whose text the user placed keeps it there
+        # (DIMTMOVE 0 extends the leader to it): ezdxf's plain render
+        # ignores flag 128 and pulled every such text of Rafael's part back
+        # against its circle -- on any style change, making it annotative
+        # too. The text stays where the author's CAD drew it.
+        old_text = _block_text_insert(document, old_block)
+        override = dim.override()
+        override.user_location_override((mid.x, mid.y))
+        override.render()
+        new_text = _block_text_insert(document, dim.dxf.get("geometry", None))
+        if old_text is not None and new_text is not None:
+            _shift_block_text(document, dim, old_text[0] - new_text[0],
+                              old_text[1] - new_text[1])
+    else:
+        dim.render()
     _stamp_dim_block_byblock(document, dim)
     _drop_dim_block(document, old_block)
 
@@ -2075,6 +2375,24 @@ def _block_text_rotation(entity) -> float:
                                   or abs(direction.y) > 1e-12):
         return math.degrees(math.atan2(direction.y, direction.x)) % 360.0
     return float(entity.dxf.get("rotation", 0.0))
+
+
+def _dim_line_crossed_part(dim, old_loc, nx: float, ny: float) -> bool:
+    """True when ``dim`` places its text Outside (DIMTAD 2) and its
+    dimension line moved from ``old_loc`` to the other side of the points
+    it measures."""
+    try:
+        if int(dim.override().get("dimtad", 0) or 0) != 2:
+            return False
+    except Exception:  # noqa: BLE001 -- an odd style: nothing to flip
+        return False
+    new_loc = dim.dxf.get("defpoint", None)
+    origin = dim.dxf.get("defpoint2", None)
+    if new_loc is None or origin is None:
+        return False
+    before = (old_loc.x - origin.x) * nx + (old_loc.y - origin.y) * ny
+    after = (new_loc.x - origin.x) * nx + (new_loc.y - origin.y) * ny
+    return before * after < 0.0
 
 
 class DimGripCommand(Command):
@@ -2181,6 +2499,10 @@ class DimGripCommand(Command):
             setattr(d.dxf, attr, (point[0], point[1], z))
         d.render()
         _stamp_dim_block_byblock(document, d)
+        # DIMTAD 2, Outside: the text keeps to the side away from the part,
+        # so a line taken across the part takes the text to its other side
+        crossed = linear and old_loc is not None \
+            and _dim_line_crossed_part(d, old_loc, nx, ny)
         if old_text is not None:
             target_x, target_y = old_text
             if "defpoint" in self.points and linear and old_loc is not None:
@@ -2189,17 +2511,23 @@ class DimGripCommand(Command):
                 along = (new_loc.x - old_loc.x) * nx + (new_loc.y - old_loc.y) * ny
                 target_x += nx * along
                 target_y += ny * along
+                if crossed:
+                    off = (target_x - new_loc.x) * nx + (target_y - new_loc.y) * ny
+                    target_x -= 2.0 * off * nx
+                    target_y -= 2.0 * off * ny
             new_text = _block_text_insert(document, d.dxf.get("geometry", None))
             if new_text is not None:
                 _shift_block_text(document, d, target_x - new_text[0],
                                   target_y - new_text[1])
+            if linear:
+                _extend_dim_line_to_text(document, d)
         elif perp_old is not None:
             new_mid = d.dxf.get("text_midpoint", None)
             new_loc = d.dxf.get("defpoint", None)
             if new_mid is not None and new_loc is not None:
                 perp_new = (new_mid.x - new_loc.x) * nx \
                     + (new_mid.y - new_loc.y) * ny
-                shift = perp_old - perp_new
+                shift = (-perp_old if crossed else perp_old) - perp_new
                 if abs(shift) > 1e-9:
                     translate_dim_text(document, d, nx * shift, ny * shift,
                                        set_user_flag=False)
@@ -2390,6 +2718,12 @@ def line_intersection(l1, l2):
     return (x1 + t * d1[0], y1 + t * d1[1])
 
 
+#: Where an angular dimension's leg sits, as a fraction of its arc radius,
+#: when its extension line starts at the vertex: ezdxf needs a direction,
+#: and the renderer recognises it and starts the line at the vertex itself.
+VERTEX_EXTENSION = 1e-6
+
+
 def angular_from_lines(l1, l2, region):
     """(vertex, p1, p2) for DIMANGULAR between two lines, or None if
     parallel. Of the four regions the two lines form, the one containing
@@ -2410,9 +2744,18 @@ def angular_from_lines(l1, l2, region):
 
     def defpoint(angle, line):
         ux, uy = math.cos(angle), math.sin(angle)
-        reach = max((p[0] - vertex[0]) * ux + (p[1] - vertex[1]) * uy
-                    for p in line)
-        at = min(radius, reach) if reach > 1e-9 else radius
+        along = [(p[0] - vertex[0]) * ux + (p[1] - vertex[1]) * uy
+                 for p in line]
+        reach, near = max(along), min(along)
+        if reach <= 1e-9 * radius:
+            # the line lies beyond the vertex: the extension starts AT the
+            # vertex (Rafael's eighth review, min 21: "tiene que venir justo
+            # hasta el punto de origen del ángulo"); it had none at all
+            at = VERTEX_EXTENSION * radius
+        elif near > radius:
+            at = near           # the line starts past the arc: back to it
+        else:
+            at = min(radius, reach)
         return (vertex[0] + at * ux, vertex[1] + at * uy)
 
     for a in (ang1, ang1 + math.pi):
@@ -2429,7 +2772,8 @@ def angular_from_lines(l1, l2, region):
 
 
 def dim_angular(vertex, p1, p2, location, *, region=None, text: str = "<>",
-                text_rotation: float | None = None) -> AddDimensionCommand:
+                text_rotation: float | None = None,
+                dimstyle: str | None = None) -> AddDimensionCommand:
     """DIMANGULAR: the CCW angle p1 -> p2 around ``vertex``. When ``region``
     is given (the location or the Quadrant pick), the points are reordered so
     the dimensioned angle is the one containing it; None keeps the order
@@ -2443,7 +2787,7 @@ def dim_angular(vertex, p1, p2, location, *, region=None, text: str = "<>",
             base=(location[0], location[1]), center=(vertex[0], vertex[1]),
             p1=(q1[0], q1[1]), p2=(q2[0], q2[1]),
             text=text, text_rotation=text_rotation,
-            dimstyle=_current_dimstyle(document))
+            dimstyle=_chained_dimstyle(dimstyle, document))
     return AddDimensionCommand(factory)
 
 
@@ -3003,8 +3347,14 @@ def _ellipse_normalize(center, first_axis, other_dist: float):
 def ellipse_from_axis(p1, p2, other_dist: float):
     """Axis endpoints p1,p2 + distance to the other axis -> (center, major, ratio)."""
     center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-    first = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
-    return _ellipse_normalize(center, first, other_dist)
+    half = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
+    if other_dist > math.hypot(*half):
+        # the axes swap; the classic CAD was not recorded doing this, so the
+        # major axis keeps the side it always had
+        return _ellipse_normalize(center, half, other_dist)
+    # the major axis points at the FIRST endpoint, as the classic CAD stores
+    # it (group C6): an elliptical arc's angle 0 is that endpoint
+    return _ellipse_normalize(center, (-half[0], -half[1]), other_dist)
 
 
 def ellipse_from_center(center, axis_end, other_dist: float):

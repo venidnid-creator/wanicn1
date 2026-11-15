@@ -29,7 +29,7 @@ def test_field_of_view_is_set_kept_and_reset(tmp_path):
         assert cam.fov_deg == 70.0
         assert (cam.eye() - eye).length() < 1e-6       # the eye stays put
         assert win.set_field_of_view(500.0) and cam.fov_deg == 120.0
-        assert win.set_field_of_view(1.0) and cam.fov_deg == 10.0
+        assert win.set_field_of_view(0.2) and cam.fov_deg == 1.0   # long lenses (533 mm ≈ 2.6°)
         win.set_field_of_view(70.0)
         # A scene remembers it.
         view = SavedView.capture("vista", win.viewport.scene, cam)
@@ -40,7 +40,11 @@ def test_field_of_view_is_set_kept_and_reset(tmp_path):
         win._do_save(path)
         cam.fov_deg = 45.0
         win._saved_version = win.viewport.scene.version
-        assert win.open_path(path)
+        # A copy: the same file would only bring its tab back (#1066).
+        import shutil
+        shutil.copy(path, tmp_path / "copy.igz")
+        assert win.open_path(tmp_path / "copy.igz")
+        cam = win.viewport.camera
         assert cam.fov_deg == 70.0
         # Parallel has no angle: refused, nothing changes.
         cam.perspective = False

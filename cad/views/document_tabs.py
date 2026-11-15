@@ -253,7 +253,7 @@ class DocumentTabsMixin:
             viewport.view.cx, viewport.view.cy, viewport.view.scale = session.camera
         viewport._view_stack = list(session.view_stack)
         cached = self._layout_scenes.get(self._active_layout)
-        if cached is not None and cached[0] == document.revision:
+        if cached is not None and cached[0] == self._scene_key(document.revision):
             viewport.set_scene(cached[1])
             self.tools.mark_scene_merged()
         else:
@@ -295,6 +295,10 @@ class DocumentTabsMixin:
         if session not in self._sessions:
             return False
         if session is not self._session and not self.switch_document(session):
+            return False
+        reason = self.plugins.veto("close")
+        if reason:
+            self.command_line.echo(reason)
             return False
         if not self.maybe_save_changes():
             return False

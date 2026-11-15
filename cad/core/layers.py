@@ -231,25 +231,86 @@ class NewLayerCommand(Command):
         document.dirty = True
 
 
+def _owned_objects(entity) -> list:
+    """The OBJECTS an entity owns: its extension dictionary and everything
+    under it (an AutoCAD layer carries ADSK_XREC_LAYER_RECONCILED there)."""
+    found = []
+    xdict = getattr(entity, "extension_dict", None)
+    if xdict is None or not xdict.has_valid_dictionary:
+        return found
+    pending = [xdict.dictionary]
+    while pending:
+        obj = pending.pop()
+        found.append(obj)
+        if obj.dxftype() == "DICTIONARY":
+            pending.extend(v for _key, v in obj.items()
+                           if hasattr(v, "dxf") and v.is_alive
+                           and v.dxf.get("owner") == obj.dxf.handle)
+        nested = getattr(obj, "extension_dict", None)
+        if nested is not None and nested.has_valid_dictionary:
+            pending.append(nested.dictionary)
+    return found
+
+
+def unhook_table_entry(doc, table, entry) -> list:
+    """Take an entry out of its table without destroying it, so that undo
+    hooks back the very same object (handle and properties included).
+    What it owns leaves the OBJECTS section with it: left behind, it was
+    saved as an orphan with an owner that no longer exists. Answers what
+    ``rehook_table_entry`` needs. (ezdxf's ``discard`` forgets the handle,
+    so each one is kept here: re-added without it, the layer came back as
+    another handle, and the groups that listed it lost it.)"""
+    owned = [(obj, obj.dxf.handle) for obj in _owned_objects(entry)]
+    space = doc.objects.get_entity_space()
+    for obj, _handle in owned:
+        space.remove(obj)
+        doc.entitydb.discard(obj)
+    owned.append((entry, entry.dxf.handle))
+    table.discard(entry.dxf.name)
+    doc.entitydb.discard(entry)
+    return owned
+
+
+def rehook_table_entry(doc, table, entry, owned) -> None:
+    space = doc.objects.get_entity_space()
+    for obj, handle in owned:         # before the entry: its bind skips them
+        obj.dxf.handle = handle
+        if obj is entry:
+            continue
+        doc.entitydb.add(obj)
+        space.add(obj)
+    if not table.has_entry(entry.dxf.name):
+        table.add_entry(entry)
+
+
 class DeleteLayerCommand(Command):
     name = "delete layer"
 
     def __init__(self, layer_name: str) -> None:
         self.layer_name = layer_name
-        self._color = 7
-        self._linetype = "Continuous"
+        self._layer = None
+        self._owned: list = []
+        self._groups: list = []
 
     def do(self, document) -> None:
-        layer = document.doc.layers.get(self.layer_name)
-        self._color = layer.dxf.color
-        self._linetype = layer.dxf.linetype
-        document.doc.layers.remove(self.layer_name)
+        # Unhooked, not destroyed (as PURGE does): undo hooks back the very
+        # same layer, handle and every property included. A new one lost
+        # its lineweight, plot flag and description, and its handle --
+        # which is how the layer groups that listed it know it.
+        from core.layer_filters import unlist_layers
+
+        table = document.doc.layers
+        self._layer = table.get(self.layer_name)
+        self._groups = unlist_layers(document, [self._layer.dxf.handle])
+        self._owned = unhook_table_entry(document.doc, table, self._layer)
         document.dirty = True
 
     def undo(self, document) -> None:
-        layer = document.doc.layers.add(self.layer_name)
-        layer.dxf.color = self._color
-        layer.dxf.linetype = self._linetype
+        from core.layer_filters import relist_layers
+
+        rehook_table_entry(document.doc, document.doc.layers, self._layer,
+                           self._owned)
+        relist_layers(document, self._groups)
         document.dirty = True
 
 
@@ -355,20 +416,23 @@ _COLOR_NAMES = {"RED": 1, "YELLOW": 2, "GREEN": 3, "CYAN": 4, "BLUE": 5,
                 "MAGENTA": 6, "WHITE": 7}
 
 
+def name_matches(name: str, pattern: str) -> bool:
+    """One AutoCAD layer-name pattern: ``*``/``?`` wildcards, any case."""
+    import fnmatch
+
+    return fnmatch.fnmatchcase(name.lower(), pattern.lower())
+
+
 def match_layers(document, spec: str) -> list[str]:
     """Resolve an AutoCAD name list: comma-separated, ``*``/``?`` wildcards,
     case-insensitive. Empty spec -> the current layer (the official default)."""
-    import fnmatch
-
     all_names = [layer.dxf.name for layer in document.doc.layers]
     patterns = [p.strip() for p in spec.split(",") if p.strip()]
     if not patterns:
         return [current_layer_name(document)]
     result: list[str] = []
     for pattern in patterns:
-        low = pattern.lower()
-        hits = [n for n in all_names
-                if fnmatch.fnmatchcase(n.lower(), low)]
+        hits = [n for n in all_names if name_matches(n, pattern)]
         for n in hits:
             if n not in result:
                 result.append(n)

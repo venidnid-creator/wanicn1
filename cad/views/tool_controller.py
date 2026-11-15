@@ -9,6 +9,7 @@ incremental overlay scene so drawing stays instant on any file size.
 from __future__ import annotations
 
 import math
+import re
 from typing import Optional
 
 import numpy as np
@@ -56,6 +57,9 @@ MERGE_THRESHOLD = 50
 #: An undo or redo touching more objects than this is shown by a background
 #: regen, not re-drawn one by one on the GUI thread (see after_history_change).
 BIG_EDIT = 2000
+#: ...or more drawing work than this (render.parallel's cost: a block
+#: reference costs its content): about 0.2 s of overlay on the GUI thread
+BIG_EDIT_COST = 5000
 #: A drawing with more objects than this in the current space waits for the
 #: background warmer instead of building its caches on the GUI thread.
 WARM_GUARD = 3000
@@ -359,6 +363,29 @@ class ToolController(QObject):
     TRACK_DWELL_MS = 300          # pause on a snap point this long to acquire it
     TRACK_MAX = 8                 # acquired points kept, oldest dropped first
 
+    @property
+    def selection(self) -> set:
+        """The selected handles."""
+        return self._selection
+
+    @selection.setter
+    def selection(self, handles) -> None:
+        # every pick, window, Remove and Undo of a "Select objects" phase
+        # ends here: the tool asking hears each step (Tool.on_selection_step)
+        self._selection = handles
+        tool = getattr(self, "_selecting_for", None)
+        if tool is None:
+            return
+        # |= and -= change the set in place: compare with the last step told
+        step = frozenset(handles)
+        if step == self._step_told:
+            return
+        self._step_told = step
+        try:
+            tool.on_selection_step(step)
+        except Exception as exc:          # noqa: BLE001 - a plugin's tool
+            self.window.command_line.echo(f"{type(exc).__name__}: {exc}")
+
     def __init__(self, window) -> None:
         super().__init__(window)
         self.window = window
@@ -383,6 +410,7 @@ class ToolController(QObject):
         self.ortho_on = False
         self.polar_on = False
         self.snap_on = False        # SNAP / F9: the cursor jumps by the grid
+        self.ctrl_held = False      # Ctrl held: an arc being drawn turns the other way
         self.shift_held = False     # AutoCAD: Shift held = ortho flipped for the moment
         self.cycling_on = True      # SELECTIONCYCLING (Ctrl+W)
         # OTRACK / F11: object snap tracking. Pausing on an object snap
@@ -440,6 +468,8 @@ class ToolController(QObject):
         # Stamped commits (big MOVE/COPY/PASTE): id(command) -> record.
         self._stamp_records: dict = {}
         self._pending_stamps: list = []   # record keys awaiting ghost scene
+        #: The menu macro answering the running command's prompts.
+        self.macro = None
         # Per-frame caches keyed on (index.version, selection).
         self._highlight_cache = None
         self._grips_cache = None
@@ -447,10 +477,13 @@ class ToolController(QObject):
         self._warmers: set = set()        # background cache builders
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
-        self.selection: set[str] = set()
+        self._step_told = frozenset()
+        self.selection = set()
         # typed answers at "Select objects:" (_selection_option)
         self._sel_remove = False          # Remove(R) mode until Add(A)
         self._sel_force: Optional[str] = None   # "W"/"C" for the next window
+        #: WPolygon/CPolygon/Fence being drawn: (mode, [vertex, ...])
+        self._sel_poly: Optional[tuple[str, list]] = None
         self._previous_selection: set[str] = set()   # Previous(P)
         self._sel_history: list[set[str]] = []       # Undo(U)
         self._selecting_for: Optional[Tool] = None
@@ -464,6 +497,9 @@ class ToolController(QObject):
         self._pending_render: list = []
         # Grip drag state: (handle, grip_index, role, SnapshotCommand).
         self._grip_drag = None
+        #: (handle, index, role) of the other selected objects' grips on the
+        #: hot grip's spot: they stretch with it.
+        self._grip_partners: list = []
         #: Where the hot grip was grabbed: the base point of the grip edit,
         #: what ORTHO, POLAR and PERpendicular measure from (#60).
         self._grip_base = None
@@ -643,9 +679,11 @@ class ToolController(QObject):
                 self._previous_selection = set(self.selection)
                 self.tool.on_selection(entities)
             else:
+                self._step_told = frozenset(self.selection)
                 self._selecting_for = self.tool
                 self._sel_remove = False
                 self._sel_force = None
+                self._sel_poly = None
                 self._sel_history = []
                 self.window.command_line.echo_prompt(self.tool.selection_prompt())
         self.changed.emit()
@@ -693,6 +731,7 @@ class ToolController(QObject):
         start of a ``wants_selection`` tool enters."""
         if self.tool is None:
             return
+        self._step_told = frozenset(self.selection)
         self._selecting_for = self.tool
         self.window.command_line.echo_prompt(self.tool.selection_prompt())
         self.changed.emit()
@@ -818,6 +857,18 @@ class ToolController(QObject):
                       & (circ_arr[:, 0] + circ_arr[:, 2] >= x0)
                       & (circ_arr[:, 1] - circ_arr[:, 2] <= y1)
                       & (circ_arr[:, 1] + circ_arr[:, 2] >= y0))
+        if handles is None:
+            # "Enter selects all" means all that is on screen: a layer that
+            # is off or frozen (construction lines put away) cut the outline
+            # it was hidden behind, which a pick or a window never takes
+            oids = np.unique(np.concatenate(
+                (self.index._seg_oidx[smask], self.index._circle_oidx[cmask])))
+            owners = self.index._owners
+            shown = set(self._shown([owners[i] for i in oids]))
+            gone = [i for i in oids if owners[i] not in shown]
+            if gone:
+                smask &= ~np.isin(self.index._seg_oidx, gone)
+                cmask &= ~np.isin(self.index._circle_oidx, gone)
         segs = [tuple(s) for s in seg_arr[smask]]
         # (center, r, a0, a1): arcs cut/bound only along their real sweep
         circles = [((c[0], c[1]), c[2], c[4], c[5]) for c in circ_arr[cmask]]
@@ -922,10 +973,33 @@ class ToolController(QObject):
         self.changed.emit()
         return len(self.selection)
 
+    def selected_entities(self) -> list:
+        """The selected entities, live ones only (plugins, panels)."""
+        return list(self._selection_entities())
+
+    def select_entities(self, entities) -> int:
+        """Make ``entities`` the selection, through the same filter a pick
+        goes through; returns how many were kept."""
+        handles = {e.dxf.handle for e in entities if e.is_alive}
+        self.selection = self._filtered(handles)
+        self._highlight_cache = None
+        self._grips_cache = None
+        self.changed.emit()
+        return len(self.selection)
+
+    def pick_tolerance(self) -> float:
+        """The pickbox's half-size in drawing units at the current zoom
+        (worked out now: the hover's copy is from the last mouse move)."""
+        try:
+            return self.px_to_space(self.pickbox_px())
+        except Exception:                 # noqa: BLE001 - no view yet
+            return self._pick_tolerance
+
     def clear_selection(self) -> None:
         self.reset_pick_cycle()
         self.selection = set()
         self._window_anchor = None
+        self._sel_poly = None
         self.changed.emit()
 
     # -- Delete / clipboard (noun-verb: act on the current selection) ----------
@@ -1042,6 +1116,9 @@ class ToolController(QObject):
         self._clip_id = built[0] if built is not None else None
         if built is None:
             return
+        # what plugins' on_copy see: the copy's own entities, alive even
+        # after a cut
+        self._clip_doc = built[1]
         writer = clipboard.ClipWriter(*built)
         writer.done.connect(self._on_clip_written)
         self._clip_writers.add(writer)
@@ -1055,7 +1132,25 @@ class ToolController(QObject):
             worker.wait()   # thread has emitted; joins immediately
             self._clip_writers.discard(worker)
         if data and clip_id == self._clip_id:   # not overtaken by a newer copy
-            clipboard.put(clip_id, data)
+            clipboard.put(clip_id, data, self._plugins_extend_copy())
+
+    def _plugins_extend_copy(self):
+        """``extend(mime)`` for clipboard.put: the plugins' on_copy."""
+        plugins = getattr(self.window, "plugins", None)
+        doc = getattr(self, "_clip_doc", None)
+        if plugins is None or doc is None:
+            return None
+        return lambda mime: plugins.copy(list(doc.modelspace()), mime)
+
+    def plugins_take_paste(self) -> bool:
+        """A paste starts: True when a plugin took the clipboard itself."""
+        from views import clipboard
+
+        plugins = getattr(self.window, "plugins", None)
+        if plugins is None or not plugins.wants_paste():
+            return False
+        mime = clipboard.current_mime()
+        return mime is not None and plugins.paste(mime)
 
     def _system_clipboard(self) -> Optional[tuple]:
         """(sources, base) of an IngeCAD copy made in ANOTHER window, read
@@ -1096,7 +1191,9 @@ class ToolController(QObject):
 
     def paste(self) -> None:
         """Ctrl+V: place the clipboard entities from a picked point."""
-        if not self._clipboard and self._system_clipboard() is None:
+        plugins = getattr(self.window, "plugins", None)
+        if not self._clipboard and self._system_clipboard() is None \
+                and not (plugins is not None and plugins.wants_paste()):
             self.window.command_line.echo(tr("Clipboard is empty."))
             return
         self.start_tool("PASTECLIP")
@@ -1197,11 +1294,16 @@ class ToolController(QObject):
         after = dialog.settings()
         if after == before:
             return True
+        if actions.hatch_too_dense([entity], after.get("pattern", "SOLID"),
+                                   after.get("scale", 1.0)):
+            self.window.command_line.echo(actions.too_dense_message())
+            return True
         snap = actions.SnapshotCommand([entity])
         snap.name = "HATCHEDIT"
+        state = self.window.history.dimassoc_state()
         actions.apply_hatch_settings(entity, after)
         snap.commit(document)
-        self.window.history.record(snap)
+        self.window.history.record(snap, state)
         # its look changed, its geometry did not: redraw that one entity
         # instead of the drawing (the same path a layer's colour takes)
         self.redraw_entities([entity])
@@ -1235,6 +1337,55 @@ class ToolController(QObject):
                 self.changed.emit()
         return True
 
+    def _edit_dimension_text(self, entity) -> bool:
+        """Double-click on a dimension: its text in the in-place editor, as
+        the classic double-click action (TEXTEDIT) does. What it shows is
+        the text drawn; left as it was, nothing changes; anything else is
+        the dimension's text override ("<>" stands for the measurement),
+        set the way the Properties panel's Text override sets it."""
+        from core.modify import _rerender_dimension
+        from views.mtext_editor import MTextInPlaceEditor
+
+        block = (entity.doc.blocks.get(entity.dxf.get("geometry", ""))
+                 if entity.doc is not None else None)
+        drawn = [e for e in (block or ()) if e.dxftype() in ("MTEXT", "TEXT")]
+        shown = drawn[0] if drawn else None
+        if shown is None:
+            return False
+        if shown.dxftype() == "MTEXT":
+            text = shown.plain_text()
+            height = float(shown.dxf.get("char_height", 2.5) or 2.5)
+        else:
+            text = shown.dxf.text
+            height = float(shown.dxf.get("height", 2.5) or 2.5)
+        mid = entity.dxf.get("text_midpoint", None) or shown.dxf.insert
+        width = max(len(text), 8) * height
+        document = self.window.document
+
+        def commit(content: str, _extras: dict) -> None:
+            new = content.replace("\\P", " ").strip()
+            if new == text.strip():
+                return                        # untouched: not an edit
+            if new == "":
+                new = " "                     # an empty override hides it
+
+            def mutate() -> None:
+                entity.dxf.text = new
+                _rerender_dimension(document, entity)
+            actions.apply_in_place(self.window.history, [entity], mutate)
+            # a longer word is picked by its new end at once
+            self.reindex_entities([entity])
+            self.window.regen_in_memory()
+            self.window.viewport.update()
+
+        self._mtext_editor = MTextInPlaceEditor(
+            self.window.viewport,
+            top_left=(mid.x - width / 2.0, mid.y + height / 2.0),
+            width_world=width, char_height=height, text=text,
+            on_commit=commit, single_line=True, document=document,
+            style=str(shown.dxf.get("style", "Standard")))
+        return True
+
     def open_text_editor_for(self, entity) -> bool:
         """Double-click on a text object: edit it in place. True if handled.
 
@@ -1249,6 +1400,8 @@ class ToolController(QObject):
         from views.mtext_editor import MTextInPlaceEditor
 
         kind = entity.dxftype()
+        if kind == "DIMENSION":
+            return self._edit_dimension_text(entity)
         if kind not in ("MTEXT", "TEXT", "ATTRIB", "ATTDEF"):
             return False
         if kind == "ATTDEF":
@@ -1301,6 +1454,8 @@ class ToolController(QObject):
                 if new_style:
                     entity.dxf.style = new_style
             actions.apply_in_place(self.window.history, [entity], mutate)
+            # a longer word is picked by its new end at once
+            self.reindex_entities([entity])
             self.window.regen_in_memory()
             self.window.viewport.update()
 
@@ -1354,15 +1509,24 @@ class ToolController(QObject):
 
         The boundary set is what the canvas shows, as AutoCAD's default
         (HPBOUND = current viewport): a region is traced from every curve
-        in view, lines and arcs included, not only from closed objects.
+        in view, lines and arcs included, not only from closed objects,
+        and the curves inside block references too.
         """
+        from core import xrefs
         from core.hatch_boundary import region_at_point
 
-        if self.window.document is None:
+        document = self.window.document
+        if document is None:
             return None
-        return region_at_point(
-            list(self.window.document.modelspace()), point,
-            window=self._visible_space_rect())
+        # The space being drawn in (a sheet, a block being edited), and
+        # what its block references draw: a wall inside a block bounds a
+        # room as well as a loose line ("No closed boundary found" inside
+        # a block, a review video).
+        entities = []
+        for e in document.current_space():
+            entities.extend(xrefs.plain_entities(e, document))
+        return region_at_point(entities, point,
+                               window=self._visible_space_rect())
 
     def _visible_space_rect(self):
         """The canvas in coordinates of the current space, or None headless."""
@@ -1409,9 +1573,34 @@ class ToolController(QObject):
         dynamic-input tooltip beside the cursor."""
         self.current_prompt = text
         self.window.command_line.echo_prompt(text)
+        if self.macro is not None:
+            self._macro_step()
+
+    #: A menu macro's pause: this prompt is the user's to answer (AutoCAD's
+    #: backslash in ``^C^C_arc \_c``).
+    MACRO_PAUSE = "\\"
+
+    def run_macro(self, answers) -> None:
+        """Answer the running command's prompts in turn, as an AutoCAD menu
+        macro does: one entry per prompt, a keyword typed for the user or
+        MACRO_PAUSE to let the user answer it. The answers go through the
+        command line, so the history reads as if they had been typed."""
+        self.macro = list(answers)
+        self._macro_step()
+
+    def _macro_step(self) -> None:
+        if not self.macro or self.tool is None:
+            self.macro = None
+            return
+        answer = self.macro.pop(0)
+        if not self.macro:
+            self.macro = None
+        if answer != self.MACRO_PAUSE:
+            self.window._on_command_submitted(answer)
 
     def _finish(self) -> None:
         self.tool = None
+        self.macro = None
         self.snap_hit = None
         self.osnap_override = None
         self._modifier = None
@@ -1420,6 +1609,7 @@ class ToolController(QObject):
         self.clear_tracking()
         self._selecting_for = None
         self._window_anchor = None
+        self._sel_poly = None
         self.selection = set()  # command done: highlight goes off
         self._crossing_rects = []
         if self._ghost_on:
@@ -1441,6 +1631,7 @@ class ToolController(QObject):
 
     def cancel(self) -> None:
         self.repeat_name = None          # Esc ends MULTIPLE too
+        self.macro = None
         self.reset_pick_cycle()
         if self._grip_drag is not None and self._grip_drag[0] == _VP_GRIP:
             # Esc mid-drag of a viewport grip: nothing was mutated yet
@@ -1455,6 +1646,8 @@ class ToolController(QObject):
             # for instant feedback while the async regen rebuilds the base.
             handle, _i, _r, snap = self._grip_drag
             self._grip_drag = None
+            self.osnap_override = None    # a snap asked for this grip only
+            self._grip_partners = []
             snap.undo(self.window.document)
             self._invalidate_geometry()
             self._pending_render.extend(
@@ -1610,7 +1803,11 @@ class ToolController(QObject):
                      actions.SetPropertyCommand, actions.ReplaceEntitiesCommand,
                      actions.CreateBlockCommand, actions.ExplodeCommand,
                      actions.DimGripCommand, actions.DimTextTranslateCommand,
-                     actions.DimTextEditCommand)
+                     actions.DimTextEditCommand,
+                     # missing, the old picture of a dimension read from
+                     # the file stayed beside the moved one until a full
+                     # regen (Rafael's eighth review, min 15:57)
+                     actions.DimTextWithLineCommand)
 
     @classmethod
     def _patchable(cls, command) -> bool:
@@ -1755,8 +1952,13 @@ class ToolController(QObject):
             else:
                 if not isinstance(command, actions.AddEntityCommand):
                     # drawn entities reach the overlay via _draw_commands()
-                    self._pending_render.extend(added)
+                    self._pending_render.extend(
+                        e for e in added if e.dxftype() != "IMAGE")
                 self._refresh_overlay()
+                if any(e.dxftype() == "IMAGE" for e in added):
+                    # a new raster has no quad, and the overlay never draws
+                    # one: a pasted image stayed invisible until REGEN
+                    self.window.regen_in_memory()
             if (not isinstance(command, actions.AddDimensionCommand)
                     and any(e.dxftype() == "DIMENSION" for e in added)):
                 # A PASTED dimension may arrive without its *D block, so only
@@ -1809,8 +2011,10 @@ class ToolController(QObject):
                 old_handles = [e.dxf.handle for e in command.entities]
             elif isinstance(command, actions.ReplaceEntitiesCommand):
                 old_handles = [e.dxf.handle for e in command.old_entities]
-            elif isinstance(command, (actions.CreateBlockCommand,
-                                      actions.ExplodeCommand)):
+            elif isinstance(command, actions.ExplodeCommand):
+                # what was broken up; a solid hatch left whole stays shown
+                old_handles = [e.dxf.handle for e, _parts in command.pieces]
+            elif isinstance(command, actions.CreateBlockCommand):
                 old_handles = [e.dxf.handle for e in command.sources]
             if old_handles:
                 self._drop_conflicting_stamps(old_handles)
@@ -1835,15 +2039,21 @@ class ToolController(QObject):
             # Dedupe: MATCHPROP onto an entity already riding the overlay
             # (a dimension drawn seconds ago) would otherwise queue it twice
             # and tessellate it twice on every refresh.
+            fresh_image = False
             for entity in new_ents:
-                if entity.dxftype() == "IMAGE" and self._sync_image_quad(entity):
+                if entity.dxftype() == "IMAGE":
                     # a MOVEd/ROTATEd image: its pixels are repositioned
-                    # surgically, and queuing it would decode its file on
-                    # every overlay refresh until the merge. A fresh COPY
-                    # has no quad yet — sync fails and it queues normally.
+                    # surgically. A fresh COPY has no quad yet, and the
+                    # overlay never draws rasters (it would decode the file
+                    # on every refresh): the copy stayed invisible until
+                    # REGEN, so only a regen puts it on screen.
+                    if not self._sync_image_quad(entity) and entity.is_alive:
+                        fresh_image = True
                     continue
                 if entity not in self._pending_render:
                     self._pending_render.append(entity)
+            if fresh_image:
+                self.window.regen_in_memory()
             alive = [e for e in new_ents if e.is_alive]
             # patch both caches: O(touched) instead of a full rebuild
             # (all calls no-op if the cache was invalidated above)
@@ -1921,13 +2131,18 @@ class ToolController(QObject):
         touched.extend(getattr(command, "_pieces", None) or [])  # DIMASSOC 0
         for _orig, parts in (getattr(command, "pieces", None) or []):
             touched.extend(parts)
-        if len(touched) > BIG_EDIT:
+        from render.parallel import edit_cost
+
+        if len(touched) > BIG_EDIT or edit_cost(touched) > BIG_EDIT_COST:
             # Thousands of objects at once (undo of a colour change or an
             # ERASE over the whole plan): re-drawing them through the
             # overlay and re-filing each one in the pick index froze the
             # window 7-8 s on a 10 000-entity sheet. Rebuild everything in
             # the background instead -- the window keeps answering and the
             # result lands with the regen, as when the plan was opened.
+            # Counted as WORK, not objects: a thousand objects with six big
+            # block references among them (54 000 pieces once exploded)
+            # froze the undo 2.3 s while counting as "a thousand".
             removed = list(getattr(command, "removed_handles", None) or [])
             if removed:
                 self.window.viewport.hide_handles(removed)
@@ -2359,7 +2574,20 @@ class ToolController(QObject):
         there is one (even with OSNAP off), else the running modes."""
         if self.osnap_override is not None:
             return self.osnap_override
-        return frozenset(self.osnap_modes) if self.osnap_on else frozenset()
+        kinds = frozenset(self.osnap_modes) if self.osnap_on else frozenset()
+        tool = self.tool
+        if tool is None or not (self.osnap_on or tool.extra_osnaps_always):
+            return kinds
+        try:
+            extra = frozenset(tool.extra_osnaps())
+        except Exception as exc:          # noqa: BLE001 - a plugin's tool
+            self.window.command_line.echo(f"{type(exc).__name__}: {exc}")
+            return kinds
+        if not extra:
+            return kinds
+        from core import osnap as osnap_modes
+
+        return kinds | (extra & osnap_modes.AVAILABLE)
 
     def set_osnap_override(self, keys, typed: bool = False) -> bool:
         """Use only ``keys`` for the next point (empty: no snap at all).
@@ -2468,6 +2696,10 @@ class ToolController(QObject):
         and taken back at once, and the entity's picture is kept."""
         tool = self.tool
         fn = getattr(tool, "preview_command", None) if tool is not None else None
+        if fn is None and tool is not None and self.window.document is not None \
+                and type(tool).preview_entities is not Tool.preview_entities:
+            self._sync_entity_preview(tool, wx, wy)
+            return
         if fn is None or self.window.document is None:
             self._clear_preview()
             return
@@ -2488,33 +2720,60 @@ class ToolController(QObject):
         self._preview_key = key
         self.window.viewport.set_preview_scene(scene)
 
+    def _sync_entity_preview(self, tool, wx: float, wy: float) -> None:
+        """A tool's :meth:`Tool.preview_entities`, rendered."""
+        from render.backend import build_scene_for_entities
+
+        point = self.resolved_point(wx, wy)
+        key = ("entities", id(tool), round(point[0], 9), round(point[1], 9))
+        if key == self._preview_key:
+            return
+        try:
+            entities = list(tool.preview_entities(point) or ())
+            scene = (build_scene_for_entities(
+                self.window.document, entities, self._flatten,
+                self.canvas_space()) if entities else None)
+        except Exception:                   # noqa: BLE001 - a plugin's tool
+            scene = None
+        self._preview_key = key
+        self.window.viewport.set_preview_scene(scene)
+
     def _preview_scene_for(self, command):
         """Create the command's entity, picture it, remove it: no revision
-        bump, no dirty flag, no history -- the document is as it was."""
+        bump, no dirty flag, no history -- the document is as it was.
+
+        The entity is built in a scratch anonymous block, never in the
+        drawing's space: the cache warmer and the background regen walk that
+        space from their own threads, and a preview dimension caught there
+        for a moment stayed behind -- pickable but invisible in the pick
+        index, or visible but unpickable in the regen scene. The revision
+        does not change, so both results were adopted as current."""
         from render.backend import build_scene_for_entities
 
         document = self.window.document
         factory = getattr(command, "_factory", None)
         if factory is None:
             return None
-        space = command.space(document)
-        override = factory(space, document)
-        override.render()
-        entity = override.dimension
-        block = entity.dxf.get("geometry", None)
+        blocks = document.doc.blocks
+        scratch = blocks.new_anonymous_block("U")
+        block = None
         try:
+            override = factory(scratch, document)
+            override.render()
+            entity = override.dimension
+            block = entity.dxf.get("geometry", None)
             current = document.doc.header.get("$CLAYER", "0")
             if current in document.doc.layers:
                 entity.dxf.layer = current
             return build_scene_for_entities(document, [entity], self._flatten,
                                             self.canvas_space())
         finally:
-            space.delete_entity(entity)
-            if block and block in document.doc.blocks:
-                try:
-                    document.doc.blocks.delete_block(block, safe=False)
-                except Exception:
-                    pass
+            for name in (block, scratch.name):
+                if name and name in blocks:
+                    try:
+                        blocks.delete_block(name, safe=False)
+                    except Exception:
+                        pass
 
     def _preview_now(self) -> None:
         """Rebuild the rendered preview for the current cursor (a tool step
@@ -2623,6 +2882,8 @@ class ToolController(QObject):
         """Anchor a selection window (drag start). Idempotent during a drag."""
         if self.space_vp is not None or not self.in_active_viewport(wx, wy):
             return
+        if getattr(self, "_sel_poly", None) is not None:
+            return      # WPolygon/CPolygon/Fence: a press is a vertex
         wx, wy = self.to_space(wx, wy)
         if self._window_anchor is None:
             self._window_anchor = (wx, wy)
@@ -2649,7 +2910,10 @@ class ToolController(QObject):
                 ax, ay = self._window_anchor
                 self._window_anchor = None
                 rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-                handles = self._shown(self.index.crossing(rect))
+                enclosed = (wx > ax and getattr(
+                    self.tool, "target_windows_directional", False))
+                handles = self._shown(self.index.window(rect) if enclosed
+                                      else self.index.crossing(rect))
                 entities = [e for h in handles
                             if (e := self.index.entity(h)) is not None
                             and e.is_alive]
@@ -3014,6 +3278,10 @@ class ToolController(QObject):
         # Remove(R) at "Select objects": every pick takes away, as Shift does
         shift = shift or (self._selecting_for is not None
                           and getattr(self, "_sel_remove", False))
+        if self._selecting_for is not None \
+                and getattr(self, "_sel_poly", None) is not None:
+            self._polygon_vertex(wx, wy)
+            return
         force = getattr(self, "_sel_force", None)
         if self._selecting_for is not None and self._window_anchor is not None:
             self._sel_history.append(set(self.selection))   # Undo(U) target
@@ -3075,6 +3343,8 @@ class ToolController(QObject):
         "W": "W", "WINDOW": "W", "V": "W", "VENTANA": "W", "C": "C",
         "CROSSING": "C", "CAPTURA": "C", "R": "R", "REMOVE": "R",
         "E": "R", "ELIMINAR": "R", "A": "A", "ADD": "A", "AÑADIR": "A",
+        "WP": "WP", "WPOLYGON": "WP", "VP": "WP", "CP": "CP",
+        "CPOLYGON": "CP", "F": "F", "FENCE": "F", "BORDE": "F",
     }
 
     def _selection_prompt(self) -> str:
@@ -3088,6 +3358,9 @@ class ToolController(QObject):
         letters, and the Spanish names as an extra. Coordinates answer a
         Window/Crossing corner."""
         echo = self.window.command_line.echo
+        if getattr(self, "_sel_poly", None) is not None:
+            self._polygon_answer(text)
+            return
         option = self._SELECT_OPTIONS.get(text.upper().lstrip("_"))
         document = self.window.document
         if option is None and getattr(self, "_sel_force", None) is not None:
@@ -3101,13 +3374,20 @@ class ToolController(QObject):
                 return
         if option is None or document is None:
             echo(tr("*Invalid selection*"))
-            echo(tr("Expects a point or Window/Last/Crossing/ALL/Previous/Undo/Add/Remove"))
+            echo(tr("Expects a point or Window/Last/Crossing/ALL/Fence/"
+                    "WPolygon/CPolygon/Previous/Undo/Add/Remove"))
             self.window.command_line.echo_prompt(self._selection_prompt())
             return
         if option in ("W", "C"):
             self._sel_force = option
             self._window_anchor = None
             self.window.command_line.echo_prompt(tr("Specify first corner:"))
+            return
+        if option in ("WP", "CP", "F"):
+            self._sel_poly = (option, [])
+            self._sel_force = None
+            self._window_anchor = None
+            self._polygon_prompt()
             return
         if option == "U":
             if self._sel_history:
@@ -3145,6 +3425,88 @@ class ToolController(QObject):
             self._grips_cache = None
             self._echo_count()
         self.window.command_line.echo_prompt(self._selection_prompt())
+
+    # -- WPolygon / CPolygon / Fence at "Select objects:" ----------------------
+    def _polygon_prompt(self) -> None:
+        mode, points = self._sel_poly
+        if mode == "F":
+            text = ("Specify next fence point or [Undo]:" if points
+                    else "Specify first fence point:")
+        else:
+            text = ("Specify endpoint of line or [Undo]:" if points
+                    else "First polygon point:")
+        self.window.command_line.echo_prompt(tr(text))
+
+    def _polygon_answer(self, text: str) -> None:
+        """A typed answer while a polygon or fence is drawn: Undo takes the
+        last vertex back, a coordinate is the next vertex."""
+        mode, points = self._sel_poly
+        if text.upper().lstrip("_") in ("U", "UNDO"):
+            if points:
+                points.pop()
+            self._polygon_prompt()
+            return
+        try:
+            point = parse_point(text, points[-1] if points else None)
+        except CoordinateError as exc:
+            self.window.command_line.echo(tr("Invalid point: {error}", error=exc))
+            point = None
+        if point is None:
+            self._polygon_prompt()
+            return
+        x, y = self.current_ucs().to_world(point.x, point.y)
+        self._polygon_vertex(x, y)
+
+    def _polygon_vertex(self, x: float, y: float) -> None:
+        """One more vertex. WPolygon and CPolygon "cannot cross or touch
+        itself" (SELECT): a point that would make it do so is refused."""
+        from core.select import polygon_is_simple
+
+        mode, points = self._sel_poly
+        if mode != "F" and len(points) >= 2 \
+                and not polygon_is_simple(points + [(x, y)]):
+            self.window.command_line.echo(
+                tr("Invalid point, polygon segments cannot intersect."))
+            self._polygon_prompt()
+            return
+        points.append((x, y))
+        self._polygon_prompt()
+
+    def _close_polygon(self) -> None:
+        """Enter: the polygon closes (the fence ends) and selects --
+        WPolygon what lies fully inside, CPolygon what is inside or
+        crosses, Fence what it crosses -- then "Select objects:" again."""
+        mode, points = self._sel_poly
+        self._sel_poly = None
+        if self.index is None and self.window.document is not None:
+            self.index = GeometryIndex(self.window.document)
+        if self.index is not None and len(points) >= (2 if mode == "F" else 3):
+            query = {"WP": self.index.window_polygon,
+                     "CP": self.index.crossing_polygon,
+                     "F": self.index.fence}[mode]
+            hits = self._shown(query(points))
+            self._sel_history.append(set(self.selection))   # Undo(U) target
+            if getattr(self, "_sel_remove", False):
+                self.selection -= self._with_groups(hits)
+            else:
+                if mode == "CP":
+                    # STRETCH moves what the polygon caught, as a crossing
+                    self._crossing_rects.append(tuple(points))
+                self.selection |= self._filtered(self._with_groups(hits))
+            self._highlight_cache = None
+            self._grips_cache = None
+            self._echo_count()
+        self.window.command_line.echo_prompt(self._selection_prompt())
+
+    def selection_polygon(self):
+        """(mode, vertices + cursor) while a WPolygon, CPolygon or Fence is
+        drawn, for the rubber band; None otherwise."""
+        poly = getattr(self, "_sel_poly", None)
+        if poly is None or not poly[1]:
+            return None
+        mode, points = poly
+        tail = [] if self._cursor is None else [tuple(self._cursor)]
+        return mode, list(points) + tail
 
     def _filtered(self, handles) -> set:
         """What the selection filter lets in; says how many it kept out,
@@ -3224,7 +3586,8 @@ class ToolController(QObject):
         ax, ay = self._window_anchor
         wx, wy = self._cursor
         rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-        return rect, wx < ax
+        force = getattr(self, "_sel_force", None)
+        return rect, (wx < ax if force is None else force == "C")
 
     def finish_selection(self) -> None:
         """Enter during a tool's 'Select objects' phase."""
@@ -3236,6 +3599,7 @@ class ToolController(QObject):
         self._window_anchor = None
         self._sel_remove = False
         self._sel_force = None
+        self._sel_poly = None
         self._previous_selection = set(self.selection)
         entities = self._unlocked_for(tool, entities)
         # keep the highlight while the command runs (AutoCAD behavior)
@@ -3362,15 +3726,38 @@ class ToolController(QObject):
         return lines
 
     # -- prompt input ----------------------------------------------------------
+    def _echo_not_understood(self) -> None:
+        """Typed text that is neither a point nor one of the prompt's
+        options, answered as the classic CAD does: an object prompt says
+        "*Invalid selection*" and lists what it expects, a point prompt
+        asks for a point or a keyword."""
+        echo = self.window.command_line.echo
+        source = getattr(self.tool, "_prompt_source", "") or ""
+        if not (self.tool.entity_picker and source.startswith("Select")):
+            echo(tr("Point or option keyword required."))
+            return
+        echo(tr("*Invalid selection*"))
+        options = re.search(r"\[([^\]]+)\]", self.current_prompt or "")
+        if options:
+            echo(tr("Expects a point or {options}", options=options.group(1)))
+        else:
+            echo(tr("Expects a single object."))
+
     def on_text(self, text: str) -> bool:
         """Prompt input while a tool is active. True if consumed."""
         if self._selecting_for is not None:
+            if not text.strip() and getattr(self, "_sel_poly", None) is not None:
+                self._close_polygon()
+                self.changed.emit()
+                return True
             if not text.strip():
                 self.finish_selection()
                 return True
             self._selection_option(text.strip())
             self.changed.emit()
             return True
+        if self.tool is None and self._grip_drag is not None:
+            return self._grip_text(text)
         if self.tool is None:
             return False
         stripped = text.strip()
@@ -3378,6 +3765,11 @@ class ToolController(QObject):
             self.tool.on_enter()
             self.changed.emit()
             return True
+        if not self.tool.wants_raw_text():
+            # arithmetic in any number or coordinate: 43.3/3, 123+45,40/2
+            from core.calc import expand_input
+
+            stripped = expand_input(stripped)
         if not self.tool.entity_picker:
             # END, TAN, NONE... at a point prompt: a one-shot object snap,
             # ahead of the command's own options (AutoCAD reads CEN at
@@ -3448,7 +3840,7 @@ class ToolController(QObject):
                                              error=str(exc)))
             return True
         if point is None:
-            self.window.command_line.echo(tr("Invalid input."))
+            self._echo_not_understood()
             return True
         self._note_point((point.x, point.y))
         # a typed point releases the acquired points, as a picked one does
@@ -3504,6 +3896,18 @@ class ToolController(QObject):
             return []
         return self.tool.preview_segments(self.resolved_point(*self._cursor))
 
+    def tool_overlay(self) -> dict:
+        """The running tool's :meth:`Tool.overlay` at the cursor."""
+        if self.tool is None or self._cursor is None:
+            return {}
+        fn = getattr(self.tool, "overlay", None)
+        if fn is None:
+            return {}
+        try:
+            return fn(self.resolved_point(*self._cursor)) or {}
+        except Exception:                   # noqa: BLE001 - a plugin's tool
+            return {}
+
     def preview_dimension(self):
         """Rich dimension preview (frame + measurement) for the dim tools."""
         if self.tool is None or self._cursor is None:
@@ -3539,7 +3943,10 @@ class ToolController(QObject):
             # size. 0 means "always show", as the variable documents.
             return []
         # per-frame AND per-hover (grip_at): cache per (version, selection)
-        key = (self.index.version, frozenset(self.selection))
+        from core import select as _select
+
+        key = (self.index.version, frozenset(self.selection),
+               _select.grip_handlers_revision)
         cached = self._grips_cache
         if cached is not None and cached[0] == key:
             return cached[1]
@@ -3564,6 +3971,68 @@ class ToolController(QObject):
                 return (x, y, role, h, i)
         return None
 
+    #: What a hot grip asks, as classic CAD's grip STRETCH mode does. Only
+    #: eXit is offered: Base point, Copy and Undo come with the
+    #: multifunction grips.
+    GRIP_PROMPT = "Specify stretch point or [eXit]:"
+
+    def grip_hot(self) -> bool:
+        """A grip is held: what is typed is its point, not a command."""
+        return self._grip_drag is not None
+
+    def _ask_grip_point(self) -> None:
+        self.window.command_line.echo(tr("** STRETCH **"))
+        self._on_prompt(tr(self.GRIP_PROMPT))
+
+    def _grip_text(self, text: str) -> bool:
+        """Typed while a grip is hot: a point for it (absolute, @relative,
+        polar, or a distance toward the cursor), X to let it go. A word
+        that is neither is refused -- it used to reach the command line,
+        and an "L" started LINE with the grip still in the hand."""
+        stripped = text.strip()
+        if not stripped:
+            return True                    # Enter keeps the grip hot
+        if stripped.upper() in ("X", "EXIT", "_X", "_EXIT"):
+            self.cancel()
+            self.current_prompt = ""
+            self.changed.emit()
+            return True
+        from core.calc import expand_input
+
+        stripped = expand_input(stripped)
+        # @ and a bare distance are measured from where the grip was taken
+        anchor = getattr(self, "_grip_base", None) or self.lastpoint
+        direction = self.current_ucs().angle
+        if self._cursor is not None:
+            target = self.resolved_point(*self._cursor)
+            if math.hypot(target[0] - anchor[0], target[1] - anchor[1]) > 0:
+                direction = math.atan2(target[1] - anchor[1],
+                                       target[0] - anchor[0])
+        try:
+            frame = self.current_ucs()
+            point = parse_point(stripped, frame.to_ucs(*anchor),
+                                direction - frame.angle,
+                                relative_default=self.dyn_on)
+            if point is not None and not frame.is_world:
+                point = ParsedPoint(*frame.to_world(point.x, point.y))
+        except CoordinateError as exc:
+            self.window.command_line.echo(tr("Invalid point: {error}",
+                                             error=str(exc)))
+            return True
+        if point is None:
+            asked = tr(self.GRIP_PROMPT)
+            options = re.search(r"\[([^\]]+)\]", asked)
+            self.window.command_line.echo(
+                tr("Expects a point or {options}",
+                   options=options.group(1) if options else "eXit"))
+            self._on_prompt(asked)
+            return True
+        self._note_point((point.x, point.y))
+        self.finish_grip_drag(point.x, point.y)
+        self.current_prompt = ""
+        self.changed.emit()
+        return True
+
     def begin_grip_drag(self, grip) -> None:
         from core.actions import SnapshotCommand
         from core.select import entity_grips
@@ -3572,25 +4041,61 @@ class ToolController(QObject):
         if self.paper_vp is not None:
             # viewport grip: only the rubber rectangle moves until the drop
             self._grip_drag = (_VP_GRIP, index, role, None)
+            self._grip_base = (gx, gy)
             self.window.viewport.vp_drag_rect = layout_ops.viewport_rect(
                 self.paper_vp)
+            self._ask_grip_point()
             return
         entity = self.index.entity(handle)
         if entity is None:
             return
-        snap = SnapshotCommand([entity])   # captures the pre-grab state
+        # Every other selected object with a grip on this very spot is
+        # stretched with it, as classic CAD does: two lines meeting at a
+        # corner keep meeting when the corner is dragged.
+        self._grip_partners = self._grips_sharing(grip, entity)
+        partners = [self.index.entity(h) for h, _i, _r in self._grip_partners]
+        snap = SnapshotCommand([entity] + partners)   # the pre-grab state
         # and the associative dimensions' (core.dimassoc), for the drop
         self._grip_dimassoc = self.window.history.dimassoc_state()
         self._grip_drag = (handle, index, role, snap)
         self._grip_base = (gx, gy)
         # Hide the base-scene copy ONCE (a full-scene re-upload); from here
         # the live entity rides the cheap 1-entity overlay each frame.
-        self.window.viewport.hide_handles([handle])
+        self.window.viewport.hide_handles(
+            [handle] + [h for h, _i, _r in self._grip_partners])
         if entity.dxftype() == "IMAGE":
             # hide_handles hides the frame AND the pixels; the pixels can
             # stay — the drag moves their quad surgically, no regen.
             self.window.viewport.show_image(handle)
         self._refresh_overlay()
+        self._ask_grip_point()
+
+    def _grips_sharing(self, grip, entity) -> list:
+        """(handle, index, role) of the other selected objects' grips at
+        the taken grip's spot. Not for a dimension's grips (their own
+        commands re-render the dimension) nor an image's."""
+        gx, gy, role, handle, _index = grip
+        if role.startswith("dim_") or entity.dxftype() == "IMAGE":
+            return []
+        tol = max(1e-9, 1e-6 * max(1.0, abs(gx), abs(gy)))
+        out = []
+        for x, y, r, h, i in self.grip_points():
+            if h == handle or r.startswith("dim_"):
+                continue
+            if abs(x - gx) > tol or abs(y - gy) > tol:
+                continue
+            other = self.index.entity(h)
+            if other is None or not other.is_alive \
+                    or other.dxftype() == "IMAGE":
+                continue
+            if any(p[0] == h for p in out):
+                continue                    # one grip per object
+            out.append((h, i, r))
+        return out
+
+    def _partner_entities(self) -> list:
+        return [e for h, _i, _r in getattr(self, "_grip_partners", ())
+                if (e := self.index.entity(h)) is not None and e.is_alive]
 
     def current_ucs(self):
         """The UCS typed points, the readout, ORTHO, POLAR and the grid
@@ -3645,6 +4150,10 @@ class ToolController(QObject):
                 self.window.viewport.update()
                 return
             apply_grip_edit(entity, index, role, (wx, wy))
+            for h, i, r in getattr(self, "_grip_partners", ()):
+                other = self.index.entity(h)
+                if other is not None and other.is_alive:
+                    apply_grip_edit(other, i, r, (wx, wy))
             if entity.dxftype() == "IMAGE":
                 # the pixels ride along live (6 quad vertices per frame) and
                 # the vector overlay is skipped: the frontend cannot draw an
@@ -3674,6 +4183,7 @@ class ToolController(QObject):
             return
         handle, index, role, snap = self._grip_drag
         self._grip_drag = None
+        self.osnap_override = None        # a one-shot snap lasts one point
         entity = self.index.entity(handle)
         self.grip_dim_preview = None
         self.grip_align_marker = None
@@ -3709,21 +4219,30 @@ class ToolController(QObject):
             self._execute(command)
             self.changed.emit()
             return
+        if entity is not None and self._plugin_grip_drop(
+                entity, index, role, (wx, wy), snap):
+            return
         if entity is not None:
             apply_grip_edit(entity, index, role, (wx, wy))
+            partners = []
+            for h, i, r in getattr(self, "_grip_partners", ()):
+                other = self.index.entity(h)
+                if other is not None and other.is_alive:
+                    apply_grip_edit(other, i, r, (wx, wy))
+                    partners.append(other)
+            self._grip_partners = []
             snap.commit(self.window.document)
             self.window.history.record(snap, self._grip_dimassoc)
             self._grip_dimassoc = None
             self._show_reacted(snap)
             # grips/snap see the new shape; both caches are patched, not
             # rebuilt (a full rebuild froze the next pick on big files)
-            self._drop_conflicting_stamps([handle])
-            if self.snap_engine is not None:
-                self.snap_engine.remove_handles([handle])
-                self.snap_engine.add_entities([entity])
-            if self.index is not None:
-                self.index.remove_handles([handle])
-                self.index.add_entities([entity])
+            moved = [entity] + partners
+            self.reindex_entities(moved)
+            for other in partners:
+                if other not in self._pending_render:
+                    self._pending_render.append(other)
+                self._base_handles.discard(other.dxf.handle)
             if entity.dxftype() == "IMAGE":
                 # The pixels are already at their new place (the live quad);
                 # the frame catches up at the deferred merge. The entity
@@ -3751,6 +4270,45 @@ class ToolController(QObject):
             self._base_handles.discard(handle)
             self._refresh_overlay()
             self._merge_timer.start()
+
+    def reindex_entities(self, entities) -> None:
+        """Entities edited in place (a grip, a text typed over): pick and
+        snap see their new shape. Both caches are patched, not rebuilt --
+        a full rebuild froze the next pick on big files."""
+        handles = [e.dxf.handle for e in entities]
+        self._drop_conflicting_stamps(handles)
+        if self.snap_engine is not None:
+            self.snap_engine.remove_handles(handles)
+            self.snap_engine.add_entities(entities)
+        if self.index is not None:
+            self.index.remove_handles(handles)
+            self.index.add_entities(entities)
+
+    def _plugin_grip_drop(self, entity, index, role, point, snap) -> bool:
+        """A plugin's grip handler with a ``drop`` gives the command the
+        drop runs (its own undo): the live edit is taken back and that
+        command executed. True when it did."""
+        from core.select import grip_handler
+
+        handler = grip_handler(entity)
+        drop = getattr(handler, "drop", None)
+        if drop is None:
+            return False
+        plugins = getattr(self.window, "plugins", None)
+        ctx = plugins.context() if plugins is not None else None
+        try:
+            command = drop(ctx, entity, index, role, point)
+        except Exception as exc:            # noqa: BLE001 - a plugin's fault
+            self.window.command_line.echo(f"{type(exc).__name__}: {exc}")
+            command = None
+        if command is None:
+            return False
+        self._grip_partners = []
+        snap.undo(self.window.document)     # the live edit, taken back
+        self.window.viewport.unhide_handles([entity.dxf.handle])
+        self._execute(command)
+        self.changed.emit()
+        return True
 
     def _sync_image_quad(self, entity) -> bool:
         """Reposition a raster image's pixels surgically; True on success.
@@ -3790,7 +4348,7 @@ class ToolController(QObject):
             # file, and the overlay built at grab time kept the OLD frame
             # on screen until the merge — the live quad is the feedback.
             return []
-        return [entity]
+        return [entity] + self._partner_entities()
 
     def highlight_geometry(self):
         """(segments, circles, boxes) of the current selection, world coords.
@@ -3799,10 +4357,12 @@ class ToolController(QObject):
         the isin sweep over a cadastre's 1.35 M rows costs ~40 ms and must
         not run per frame.
         """
-        if not self.selection or self.index is None:
+        if not self.selection or self.index is None or getattr(
+                self.tool, "suppress_selection_highlight", False):
             empty = np.empty((0, 4))
             return empty, empty, empty
-        key = (self.index.version, frozenset(self.selection))
+        bucket = self._curve_bucket()
+        key = (self.index.version, frozenset(self.selection), bucket)
         cached = self._highlight_cache
         if cached is not None and cached[0] == key:
             return cached[1]
@@ -3814,6 +4374,51 @@ class ToolController(QObject):
                 return cached[1]
             empty = np.empty((0, 4))
             return empty, empty, empty
-        result = self.index.highlight_of(self.selection)
+        result = self._exact_curves(self.selection, bucket)
         self._highlight_cache = (key, result)
         return result
+
+    #: Past this many selected ellipses and splines the highlight keeps the
+    #: index's chords: re-tracing them per zoom step would cost more than
+    #: the facets do on a selection that size.
+    EXACT_CURVES_MAX = 200
+
+    def _curve_bucket(self) -> float:
+        """A pixel in space units, rounded down to a power of two: the
+        highlight's curves are traced again only when the zoom halves or
+        doubles."""
+        import math
+
+        px = self.px_to_space(1.0)
+        return 2.0 ** math.floor(math.log2(px)) if px > 0 else 1.0
+
+    def _exact_curves(self, handles, bucket: float):
+        """The index's outline of ``handles``, with ellipses and splines
+        traced to a quarter of a pixel. The index keeps chords of 1/500 of
+        each curve's size -- plenty to pick by, but zoomed in on a selected
+        ellipse its highlight showed as a polygon beside the smooth curve,
+        a second, false line (the author's recording, 2026-10-29)."""
+        db = self.document.doc.entitydb
+        curves = []
+        for handle in handles:
+            entity = db.get(handle)
+            if entity is not None and entity.dxftype() in ("ELLIPSE", "SPLINE"):
+                curves.append(entity)
+        if not curves or len(curves) > self.EXACT_CURVES_MAX:
+            return self.index.highlight_of(handles)
+        from ezdxf import path as ezpath
+
+        traced = []
+        for entity in curves:
+            try:
+                points = [(v.x, v.y) for v in
+                          ezpath.make_path(entity).flattening(bucket / 4.0)]
+            except Exception:
+                return self.index.highlight_of(handles)
+            traced.extend((a[0], a[1], b[0], b[1])
+                          for a, b in zip(points, points[1:]))
+        keep = set(handles) - {e.dxf.handle for e in curves}
+        segs, circles, boxes = self.index.highlight_of(keep)
+        if traced:
+            segs = np.vstack([segs.reshape(-1, 4), np.asarray(traced, float)])
+        return segs, circles, boxes

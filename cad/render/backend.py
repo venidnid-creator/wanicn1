@@ -62,9 +62,11 @@ HATCHING_TIMEOUT = 5.0
 # (a cadastre: 43 M of 49 M vertices) and the viewport hides them when they
 # would be smaller than a few pixels.
 _TEXT_TYPES = frozenset(("TEXT", "MTEXT", "ATTRIB", "ATTDEF"))
-#: Infinite by definition: drawn far past the drawing (frontend_config) and
-#: left out of its extents (bucket kind "X", batches._world_extents)
-_CONSTRUCTION_TYPES = frozenset(("XLINE", "RAY"))
+#: Infinite by definition: drawn far past the drawing (frontend_config),
+#: left out of its extents (batches._world_extents) and carried on to the
+#: edge of the screen at any zoom (batches.construction_lines). The bucket
+#: kind tells the two apart: an XLINE goes both ways, a RAY one.
+_CONSTRUCTION_TYPES = {"XLINE": "X", "RAY": "R"}
 #: How far a construction line reaches, in drawing diagonals (both halves of
 #: an XLINE together; a RAY all of it)
 CONSTRUCTION_SPAN = 10.0
@@ -128,7 +130,7 @@ class VertexBackend(Backend):
         super().enter_entity(entity, properties)
         dxftype = entity.dxftype()
         kind = ("T" if dxftype in _TEXT_TYPES
-                else "X" if dxftype in _CONSTRUCTION_TYPES else "")
+                else _CONSTRUCTION_TYPES.get(dxftype, ""))
         handle = getattr(entity.dxf, "handle", None)
         # Attribute the primitives to the OUTERMOST entity that has a handle.
         # Block content is drawn from virtual copies whose handle is None, and
@@ -332,9 +334,9 @@ class VertexBackend(Backend):
         """Capture the pixels and the world-space quad; GL textures them.
 
         The transform maps pixel coordinates (top-left origin, y down) to
-        WCS. Non-rectangular clip boundaries still show the full quad — the
-        clip FRAME is drawn by the frontend either way; pixel-exact clipping
-        can come later without touching the format.
+        WCS. A clip boundary arrives already applied: ezdxf's pipeline
+        turns the pixels it removes transparent (``_mask_image``), and the
+        blend hides them over a whole quad.
         """
         corners = _image_quad_corners(image_data)
         if corners is None:
@@ -820,6 +822,9 @@ class TolerantFrontend(Frontend):
     _anno_scale = _UNSET
     #: ANNOALLVISIBLE of that space
     _anno_show_all: bool = True
+    #: (scale, show all) to draw MODEL space at instead of its own: the
+    #: model as a viewport with another annotation scale shows it
+    anno_override = None
     #: ANNOALLVISIBLE of the sheet whose viewports are being drawn
     _anno_sheet_show_all: bool = True
 
@@ -832,7 +837,10 @@ class TolerantFrontend(Frontend):
         from core.attributes import attmode
 
         self._attmode = attmode(layout.doc)
-        if layout.is_modelspace:
+        if layout.is_modelspace and self.anno_override is not None:
+            # the model as ONE viewport shows it (live navigation)
+            self._anno_scale, self._anno_show_all = self.anno_override
+        elif layout.is_modelspace:
             self._anno_scale = annotative.current_scale(layout.doc)
             self._anno_show_all = annotative.all_visible(layout)
         else:
@@ -1425,7 +1433,7 @@ def _draw_viewport_borders(layout, context, backend) -> None:
 
 
 def build_scene(document: Document, layout_name: str | None = None, *,
-                canvas=None) -> Scene:
+                canvas=None, anno=None) -> Scene:
     """Run the ezdxf frontend over the drawing and pack the result ("regen").
 
     ``layout_name`` selects a tab explicitly: "Model" renders modelspace with
@@ -1440,6 +1448,10 @@ def build_scene(document: Document, layout_name: str | None = None, *,
     entity comes out white -- invisible on the white sheet, which on a
     plan drawn all in "color 7" is the whole drawing vanishing the moment
     a pan starts inside a viewport.
+
+    ``anno`` is ``(scale, show all)`` when that model is the one a viewport
+    with its own annotation scale shows: annotative objects then take the
+    representation of THAT scale, as in the sheet's bake.
     """
     if getattr(document, "edit_block", None) and layout_name in (None, "Model"):
         return _build_block_scene(document)
@@ -1475,6 +1487,7 @@ def build_scene(document: Document, layout_name: str | None = None, *,
         frontend = TolerantFrontend(context, backend, frontend_config(flatten, document))
         frontend._host_document = document   # xref paths resolve from here
         frontend.hidden_handles = hidden
+        frontend.anno_override = anno
         if instancing:
             frontend._block_cache = {}
         return frontend, backend

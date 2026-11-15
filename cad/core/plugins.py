@@ -18,11 +18,20 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from core.paths import app_root
+
+#: The level of the plugin contract this IngeCAD offers. A plugin states the
+#: level it was written for in ``PluginSpec.api_version``; one that needs a
+#: higher level uses hooks this IngeCAD does not have, so it is listed with
+#: the reason and never activated half-working. Raised by one each time the
+#: contract grows (docs/plugins.md says what every level added); a level is
+#: never taken back, so a plugin for an older level keeps working.
+API_VERSION = 2
 
 
 # -- what a plugin declares ----------------------------------------------------
@@ -52,6 +61,65 @@ class ToolbarItem:
     label: str
     command: str
     icon: Optional[Path] = None
+    #: Stable name of the button (its QAction's ``plugin_key`` property);
+    #: the command when not given.
+    key: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ToolbarSpec:
+    """One more toolbar of a plugin (``PluginSpec.toolbars``, level 2):
+    ``id`` unique within the plugin, ``items`` as ``PluginSpec.toolbar``."""
+
+    id: str
+    title: str
+    items: tuple = ()
+
+
+class _Consumed:
+    """An input filter's answer: "I took it, nothing else runs"."""
+
+    def __repr__(self) -> str:
+        return "CONSUMED"
+
+
+#: Returned by an input filter that handled the input itself.
+CONSUMED = _Consumed()
+
+#: The text an input filter receives when Esc is pressed.
+ESCAPE = "\x1b"
+
+
+@dataclass(frozen=True)
+class InputState:
+    """Where the input arrives, for an input filter to decide on."""
+
+    tool: str = ""            # the running command's tool name, "" if none
+    selecting: bool = False   # at a "Select objects:" prompt
+    grip_hot: bool = False    # a grip is held, no command running
+    prompt: str = ""          # the prompt on screen, as shown
+
+
+class Row:
+    """One line of the Properties panel: how to read it and write it back.
+
+    ``kind`` is ``"combo"`` (``items`` = [(label, data)]), ``"num"`` (the
+    value comes as a float; a decimal comma is accepted), ``"str"`` (the
+    text as typed) or ``"ro"`` (read only). ``get(entity)`` gives the
+    value; the panel shows it once when every selected object agrees, and
+    *varies* when not. ``apply(value)`` writes it for the whole selection;
+    ``apply_each(entity, value)`` instead is called once per selected
+    object, all of it one undo step. A plugin returns rows from its
+    ``properties_sections`` (contract level 2)."""
+
+    def __init__(self, label, kind, get, apply=None, items=None,
+                 apply_each=None):
+        self.label = label
+        self.kind = kind          # 'combo' | 'num' | 'str' | 'ro'
+        self.get = get            # (entity) -> value  (or ignored for common)
+        self.apply = apply        # (value) -> None
+        self.items = items        # combo: list[(label, data)]
+        self.apply_each = apply_each   # (entity, value) -> None
 
 
 @dataclass
@@ -66,7 +134,9 @@ class PluginSpec:
     ``<lang>/ui.json`` and ``<lang>/commands.json`` in the same shape as the
     app's ``i18n/``. ``requires`` names importable modules the plugin needs;
     a missing one lists the plugin as unavailable with the reason instead of
-    breaking the start-up.
+    breaking the start-up. ``api_version`` is the contract level the plugin
+    was written for (:data:`API_VERSION`); a level this IngeCAD does not
+    reach lists it as unavailable the same way.
     """
 
     id: str
@@ -82,11 +152,29 @@ class PluginSpec:
     options_page: Optional[Callable] = None
     i18n_dir: Optional[Path] = None
     on_document_open: Optional[Callable] = None
+    api_version: int = 1
+    on_regen_done: Optional[Callable] = None
+    on_selection_changed: Optional[Callable] = None
+    grip_handlers: dict = field(default_factory=dict)
+    input_filters: tuple = ()
+    on_before: Optional[Callable] = None
+    on_double_click: Optional[Callable] = None
+    reactors: tuple = ()
+    properties_sections: Optional[Callable] = None
+    toolbars: tuple = ()
+    on_paste: Optional[Callable] = None
+    on_copy: Optional[Callable] = None
 
 
 @dataclass
 class PluginContext:
-    """What a plugin's command handler receives as its first argument."""
+    """What a plugin's command handler receives as its first argument.
+
+    Everything a plugin may ask of the running window goes through here,
+    so it never reads the window's private state (which changes from one
+    release to the next). Level 2 of the contract added everything after
+    :meth:`start_tool`.
+    """
 
     host: object                     # the main window, or a test double
     echo: Callable[[str], None]
@@ -102,6 +190,95 @@ class PluginContext:
     def start_tool(self, name: str) -> None:
         self.host.tools.start_tool(name)
 
+    # -- level 2 ---------------------------------------------------------------
+    def run_command(self, *answers) -> None:
+        """Type ``answers`` at the command line, one after the other, as
+        the user would: ``ctx.run_command("CIRCLE", "0,0", "5")``."""
+        for answer in answers:
+            self.host._on_command_submitted(str(answer))
+
+    @property
+    def active_layout(self) -> str:
+        """The tab in view: ``"Model"`` or a layout's name."""
+        return getattr(self.host, "_active_layout", "Model")
+
+    @property
+    def selection(self) -> list:
+        """The selected entities (live ones only)."""
+        tools = getattr(self.host, "tools", None)
+        return list(tools.selected_entities()) if tools is not None else []
+
+    def select(self, entities) -> int:
+        """Make ``entities`` the selection, as a pick would (a locked
+        layer's stay out with no command running); returns how many."""
+        return self.host.tools.select_entities(entities)
+
+    def toolbar(self, plugin_id: str, bar_id: Optional[str] = None):
+        """The QToolBar on screen for a plugin: its ``toolbar`` with no
+        ``bar_id``, or one of its ``toolbars`` by id. None while the user
+        keeps the plugin's toolbars off."""
+        return self.host.plugin_toolbar(plugin_id, bar_id)
+
+    @property
+    def pick_tolerance(self) -> float:
+        """The pickbox's half-size in drawing units at the current zoom."""
+        return float(self.host.tools.pick_tolerance())
+
+    def redraw(self, entities=None) -> None:
+        """Show ``entities`` again with their current look, without a
+        regen; with none, just repaint the drawing area."""
+        if entities:
+            self.host.tools.redraw_entities(list(entities))
+        else:
+            self.host.viewport.update()
+
+    def regen(self) -> None:
+        """Rebuild the whole drawing in the background (REGEN); the
+        plugins' ``on_regen_done`` hear when it is in view."""
+        self.host.regen_in_memory()
+
+    # -- undo steps (level 2) ----------------------------------------------------
+    def mark(self) -> int:
+        """Where the undo history stands now, for :meth:`fold_since` and
+        :meth:`undo_to`."""
+        return self.host.history.depth
+
+    def fold_since(self, mark: int, name: str) -> None:
+        """Make everything executed since ``mark`` one undo step."""
+        self.host.history.fold(min(mark, self.host.history.depth), name)
+        self._refresh()
+
+    def undo_to(self, mark: int) -> None:
+        """Undo everything executed since ``mark``, leaving nothing to
+        redo, and show the drawing as it was."""
+        tools = self.host.tools
+        for command in self.host.history.undo_to(mark):
+            tools.after_history_change(command)
+        self._refresh()
+
+    @contextmanager
+    def transaction(self, name: str):
+        """Several commands as one undo step::
+
+            with ctx.transaction("Parcel"):
+                ctx.execute(...)
+                ctx.execute(...)
+
+        If the block raises, what it executed is undone and the error goes
+        on to the caller."""
+        start = self.mark()
+        try:
+            yield self
+        except BaseException:
+            self.undo_to(start)
+            raise
+        self.fold_since(start, name)
+
+    def _refresh(self) -> None:
+        changed = getattr(getattr(self.host, "tools", None), "changed", None)
+        if changed is not None:
+            changed.emit()
+
 
 @dataclass
 class LoadedPlugin:
@@ -115,17 +292,34 @@ class LoadedPlugin:
     missing: tuple[str, ...] = ()
 
     @property
+    def too_new(self) -> bool:
+        """Written for a contract level this IngeCAD does not offer."""
+        return self.spec is not None and needed_api(self.spec) > API_VERSION
+
+    @property
     def available(self) -> bool:
-        return self.spec is not None and not self.missing and not self.error
+        return (self.spec is not None and not self.missing and not self.error
+                and not self.too_new)
 
     @property
     def reason(self) -> str:
         """Why it cannot be turned on, in plain words (empty when it can)."""
         if self.error:
             return self.error
+        if self.too_new:
+            from core.i18n import tr
+
+            return tr("needs plugin API {need}; this IngeCAD offers {have}. "
+                      "Update IngeCAD.", need=needed_api(self.spec),
+                      have=API_VERSION)
         if self.missing:
             return "needs " + ", ".join(self.missing)
         return ""
+
+    @property
+    def screenshot(self) -> Optional[Path]:
+        """The picture its card shows in the extension manager, if any."""
+        return plugin_screenshot(self.location)
 
 
 @dataclass
@@ -135,6 +329,8 @@ class _Activation:
     aliases: list[str] = field(default_factory=list)
     pack_dir: Optional[Path] = None
     toolbar: bool = False
+    grip_types: list[str] = field(default_factory=list)
+    reactors: bool = False
 
 
 # -- where plugins live --------------------------------------------------------
@@ -147,6 +343,29 @@ def user_plugins_dir() -> Path:
     from core.paths import user_config_dir
 
     return user_config_dir() / "plugins"
+
+
+#: A plugin declares the picture of its card in the extension manager by
+#: shipping one of these files beside its ``__init__.py`` (the first found
+#: wins). A file, not a spec field: the folder travels whole in every
+#: package (PyInstaller datas, the Flatpak's ``cp -a``), the picture shows
+#: even when the plugin cannot be imported, and no network is asked.
+SCREENSHOT_FILES = ("screenshot.jpg", "screenshot.jpeg", "screenshot.png")
+
+
+def plugin_screenshot(folder: Path) -> Optional[Path]:
+    for name in SCREENSHOT_FILES:
+        path = Path(folder) / name
+        if path.is_file():
+            return path
+    return None
+
+
+def needed_api(spec: PluginSpec) -> int:
+    """The contract level ``spec`` asks for; a value that is not a whole
+    number reads as the first level."""
+    value = getattr(spec, "api_version", 1)
+    return value if isinstance(value, int) and value >= 1 else 1
 
 
 def missing_requirements(spec: PluginSpec) -> tuple[str, ...]:
@@ -253,6 +472,39 @@ class PluginManager:
             self.scan_dir(folder, bundled)
         return sorted(self.loaded)
 
+    @property
+    def user_dir(self) -> Path:
+        """Where the user's own plugins live (the extension center installs
+        there)."""
+        return next(folder for folder, bundled in self._dirs if not bundled)
+
+    def forget(self, plugin_id: str) -> None:
+        """Turn the plugin off and drop it and its modules, as if it had
+        never been found -- before its folder is replaced or deleted."""
+        self.deactivate(plugin_id)
+        self.loaded.pop(plugin_id, None)
+        module_name = f"ingecad_plugin_{plugin_id}"
+        for name in [n for n in sys.modules
+                     if n == module_name or n.startswith(module_name + ".")]:
+            del sys.modules[name]
+
+    def reload(self, plugin_id: str) -> Optional[LoadedPlugin]:
+        """Load a user plugin afresh from its folder (just installed or
+        updated); it is switched on again if it was on. None if gone."""
+        was_active = self.is_active(plugin_id)
+        loaded = self.loaded.get(plugin_id)
+        if loaded is not None and loaded.bundled:
+            return loaded                 # the app's own never change here
+        self.forget(plugin_id)
+        folder = self.user_dir / plugin_id
+        if not folder.is_dir():
+            return None
+        importlib.invalidate_caches()     # the folder's listing changed
+        self.loaded[plugin_id] = loaded = load_plugin(folder, bundled=False)
+        if was_active:
+            self.activate(plugin_id)
+        return loaded
+
     def problems(self) -> list[tuple[str, str]]:
         """``(id, reason)`` for every plugin that cannot be turned on."""
         return [(pid, p.reason) for pid, p in sorted(self.loaded.items())
@@ -293,7 +545,8 @@ class PluginManager:
     # -- the toolbar, the user's choice -----------------------------------------------
     def has_toolbar(self, plugin_id: str) -> bool:
         loaded = self.loaded.get(plugin_id)
-        return bool(loaded and loaded.spec is not None and loaded.spec.toolbar)
+        return bool(loaded and loaded.spec is not None
+                    and (loaded.spec.toolbar or loaded.spec.toolbars))
 
     def toolbar_enabled(self, plugin_id: str) -> bool:
         """Does the user want this plugin's toolbar shown? Off until asked."""
@@ -368,10 +621,23 @@ class PluginManager:
             for alias, command in spec.aliases.items():
                 if host.add_alias(alias, command):
                     record.aliases.append(alias.upper())
+            if spec.reactors:
+                from core import commands as core_commands
+
+                for reactor in spec.reactors:
+                    core_commands.register_reactor(reactor, spec.id)
+                record.reactors = True
+            if spec.grip_handlers:
+                from core import select
+
+                for dxftype, handler in spec.grip_handlers.items():
+                    select.register_grip_handler(dxftype, handler, spec.id)
+                    record.grip_types.append(dxftype)
             if spec.i18n_dir is not None and Path(spec.i18n_dir).is_dir():
                 host.add_pack_dir(Path(spec.i18n_dir))
                 record.pack_dir = Path(spec.i18n_dir)
-            if spec.toolbar and self.toolbar_enabled(spec.id):
+            if (spec.toolbar or spec.toolbars) \
+                    and self.toolbar_enabled(spec.id):
                 host.add_toolbar(spec)
                 record.toolbar = True
             host.menus_changed()
@@ -392,6 +658,15 @@ class PluginManager:
             host.unregister_command(name)
         for alias in record.aliases:
             host.remove_alias(alias)
+        if record.reactors:
+            from core import commands as core_commands
+
+            core_commands.unregister_reactors(plugin_id)
+        if record.grip_types:
+            from core import select
+
+            for dxftype in record.grip_types:
+                select.unregister_grip_handler(dxftype, plugin_id)
         if record.tools:
             host.unregister_tools(record.tools, plugin_id)
         if record.pack_dir is not None:
@@ -411,6 +686,138 @@ class PluginManager:
                 continue
             try:
                 hook(ctx, document)
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+
+    def filter_input(self, text: str, state: InputState):
+        """Hand what was typed (``""`` for Enter, :data:`ESCAPE` for Esc)
+        to each active plugin's input filters in turn. A filter returns
+        None to leave it, a new text to pass on instead, or
+        :data:`CONSUMED` to take it. Returns the text to act on, or
+        CONSUMED."""
+        ctx = None
+        for spec in self.active_specs():
+            for keep in spec.input_filters:
+                if ctx is None:
+                    ctx = self.context()
+                try:
+                    answer = keep(ctx, text, state)
+                except Exception as exc:
+                    ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+                    continue
+                if answer is CONSUMED:
+                    return CONSUMED
+                if isinstance(answer, str):
+                    text = answer
+        return text
+
+    def veto(self, event: str) -> Optional[str]:
+        """Ask each active plugin's ``on_before(ctx, event)`` -- event is
+        ``"undo"``, ``"save"`` or ``"close"`` -- whether it may go on. The
+        first text returned stops it and is the reason shown; None from
+        every plugin lets it go."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_before
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                reason = hook(ctx, event)
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+                continue
+            if reason:
+                return f"{spec.name}: {reason}"
+        return None
+
+    def double_click(self, entity) -> bool:
+        """A double-click on ``entity``: True when a plugin's
+        ``on_double_click(ctx, entity)`` handled it, ahead of the core's
+        own editor for it."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_double_click
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                if hook(ctx, entity):
+                    return True
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+        return False
+
+    def wants_paste(self) -> bool:
+        """Does any active plugin read the clipboard on a paste?"""
+        return any(spec.on_paste is not None for spec in self.active_specs())
+
+    def paste(self, mime) -> bool:
+        """A paste is starting: True when a plugin's ``on_paste(ctx,
+        mime)`` took the clipboard's contents (``mime``, a QMimeData)
+        itself, ahead of the core's own paste."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_paste
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                if hook(ctx, mime):
+                    return True
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+        return False
+
+    def copy(self, entities: list, mime) -> None:
+        """A copy is going to the system clipboard: each ``on_copy(ctx,
+        entities, mime)`` may add formats of its own to ``mime``."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_copy
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                hook(ctx, list(entities), mime)
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+
+    def properties_sections(self, entities: list) -> list:
+        """The Properties panel's sections the active plugins add for the
+        selected ``entities``: each ``properties_sections(ctx, entities)``
+        returns ``[(title, [Row, ...]), ...]``, or an empty list."""
+        sections = []
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.properties_sections
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                sections.extend(hook(ctx, list(entities)) or ())
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+        return sections
+
+    def regen_done(self, layout: str) -> None:
+        """A regen of ``layout`` is now on screen."""
+        self._tell("on_regen_done", layout)
+
+    def selection_changed(self) -> None:
+        """The selection is another set now (``ctx.selection`` has it)."""
+        self._tell("on_selection_changed")
+
+    def _tell(self, hook_name: str, *args) -> None:
+        """Call each active plugin's ``hook_name(ctx, *args)``; a plugin
+        that raises is named at the command line, the rest still hear."""
+        ctx = self.context()
+        for spec in self.active_specs():
+            hook = getattr(spec, hook_name, None)
+            if hook is None:
+                continue
+            try:
+                hook(ctx, *args)
             except Exception as exc:
                 ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
 

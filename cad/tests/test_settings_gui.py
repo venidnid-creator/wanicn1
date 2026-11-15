@@ -22,34 +22,6 @@ def win(qapp):
 
 # -- SAVE ----------------------------------------------------------------------
 
-@pytest.fixture
-def clean_settings():
-    """Snapshot and restore every setting the Options dialog writes.
-
-    Apply() saves all four tabs at once, so a test that opens the dialog
-    leaves the template behind even when it never touched it — and the
-    startup window reads that one. Restoring by hand test by test is how
-    the startup test came to fail; this does it in one place.
-    """
-    from PySide6.QtCore import QSettings
-
-    from views.options_dialog import (SETTING_GRID, SETTING_LWT,
-                                      SETTING_RIGHT_CLICK, SETTING_VSYNC)
-    from views.startup_dialog import SETTING_SHOW, SETTING_TEMPLATE
-
-    keys = (SETTING_GRID, SETTING_LWT, SETTING_RIGHT_CLICK, SETTING_VSYNC,
-            SETTING_SHOW, SETTING_TEMPLATE, "osnap/osmode")
-    saved = {k: QSettings().value(k) for k in keys}
-    yield
-    settings = QSettings()
-    for key, value in saved.items():
-        if value is None:
-            settings.remove(key)
-        else:
-            settings.setValue(key, value)
-    settings.sync()
-
-
 def test_save_writes_over_the_open_file_without_asking(win, tmp_path, monkeypatch):
     path = tmp_path / "plano.dxf"
     win.document.save_as(path)
@@ -356,6 +328,30 @@ def test_the_shortcut_menu_follows_the_reference(qapp):
         assert "Polyline" not in entries({text.dxf.handle, poly.dxf.handle})
     finally:
         win.document.dirty = False
+        win.close()
+
+
+def test_ok_in_options_keeps_new_drawings_in_metres(qapp, clean_settings):
+    """Never having picked a template, new drawings start in metres -- but
+    the Files tab showed Millimeters, and OK wrote it back: a user who only
+    changed, say, the right-click mode found every next drawing in mm."""
+    from PySide6.QtCore import QSettings
+
+    from core import templates as templates_mod
+    from views.main_window import MainWindow
+    from views.options_dialog import OptionsDialog
+    from views.startup_dialog import SETTING_TEMPLATE
+
+    QSettings().remove(SETTING_TEMPLATE)
+    win = MainWindow()
+    try:
+        assert win.startup_template() == templates_mod.DEFAULT_TEMPLATE == "m"
+        dlg = OptionsDialog(win)
+        assert dlg.template.currentData() == "m"
+        dlg.apply()
+        dlg.close()
+        assert win.startup_template() == "m"
+    finally:
         win.close()
 
 

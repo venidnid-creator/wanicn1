@@ -49,10 +49,19 @@ _ACI = [("ByBlock", 0), ("ByLayer", 256), ("Red", 1), ("Yellow", 2),
         ("Green", 3), ("Cyan", 4), ("Blue", 5), ("Magenta", 6), ("White", 7)]
 
 # Arrowhead names (ezdxf ARROWS constants; "" = AutoCAD's Closed filled).
+# The classic list, all twenty in its order (ISO 129-1 uses the open 90,
+# the origin and the blank dot, which were missing).
 _ARROWS = [("Closed filled", ""), ("Closed blank", "CLOSEDBLANK"),
            ("Closed", "CLOSED"), ("Dot", "DOT"),
            ("Architectural tick", "ARCHTICK"), ("Oblique", "OBLIQUE"),
-           ("Open 30", "OPEN30"), ("None", "NONE")]
+           ("Open", "OPEN"), ("Origin indicator", "ORIGIN"),
+           ("Origin indicator 2", "ORIGIN2"), ("Right angle", "OPEN90"),
+           ("Open 30", "OPEN30"), ("Dot small", "DOTSMALL"),
+           ("Dot blank", "DOTBLANK"), ("Dot small blank", "SMALL"),
+           ("Box", "BOXBLANK"), ("Box filled", "BOXFILLED"),
+           ("Datum triangle", "DATUMBLANK"),
+           ("Datum triangle filled", "DATUMFILLED"),
+           ("Integral", "INTEGRAL"), ("None", "NONE")]
 
 _VERTICAL = [("Centered", 0), ("Above", 1), ("Outside", 2), ("JIS", 3),
              ("Below", 4)]
@@ -207,6 +216,27 @@ def _combo(pairs, value, translate: bool = True) -> QComboBox:
                 if box.itemData(i) == value), 0)
     box.setCurrentIndex(idx)
     return box
+
+
+def arrow_key(value) -> str:
+    """An arrowhead as the arrowhead lists name it. A drawing stores
+    AutoCAD's own arrowheads with a leading underscore (``_DOT``, how they
+    come back from a DWG), and Closed filled as "" or CLOSEDFILLED; a
+    stored ``_DOT`` showed as Closed filled."""
+    name = str(value or "").upper()
+    if name.startswith("_"):
+        name = name[1:]
+    return "" if name == "CLOSEDFILLED" else name
+
+
+def arrow_items() -> list:
+    """(label, arrow key) for an arrowhead combo, labels translated."""
+    return [(tr(label), key) for label, key in _ARROWS]
+
+
+def _arrow_combo(value) -> QComboBox:
+    """An arrowhead combo."""
+    return _combo(_ARROWS, arrow_key(value))
 
 
 def precision_samples(kind: str) -> list:
@@ -417,13 +447,18 @@ class DimStyleEditorDialog(QDialog):
         sv = QVBoxLayout(sym)
         arr_group = QGroupBox(tr("Arrowheads"))
         f = QFormLayout(arr_group)
-        blk1 = a("dimblk1", a("dimblk", ""))
-        blk2 = a("dimblk2", a("dimblk", ""))
-        self.dimblk1 = _combo(_ARROWS, blk1)
+        # DIMSAH off draws DIMBLK at both ends: show what is drawn, not
+        # DIMBLK1/2, which nothing reads then
+        if a("dimsah", 0):
+            blk1 = a("dimblk1", a("dimblk", ""))
+            blk2 = a("dimblk2", a("dimblk", ""))
+        else:
+            blk1 = blk2 = a("dimblk", "")
+        self.dimblk1 = _arrow_combo(blk1)
         f.addRow(tr("First"), self.dimblk1)
-        self.dimblk2 = _combo(_ARROWS, blk2)
+        self.dimblk2 = _arrow_combo(blk2)
         f.addRow(tr("Second"), self.dimblk2)
-        self.dimldrblk = _combo(_ARROWS, a("dimldrblk", ""))
+        self.dimldrblk = _arrow_combo(a("dimldrblk", ""))
         f.addRow(tr("Leader"), self.dimldrblk)
         self.dimasz = _dspin(a("dimasz", 2.5))
         f.addRow(tr("Arrow size"), self.dimasz)
@@ -647,7 +682,16 @@ class DimStyleEditorDialog(QDialog):
     def changed_props(self) -> dict:
         """The DIMVARS the user actually changed in this dialog."""
         props = self.result_props()
-        return {k: v for k, v in props.items() if self._initial.get(k) != v}
+        changed = {k: v for k, v in props.items() if self._initial.get(k) != v}
+        if "dimblk1" in changed or "dimblk2" in changed:
+            # DIMBLK1/2 are read only with DIMSAH on, and the dialog always
+            # reports 1, so "unchanged" never wrote it: a style with DIMSAH 0
+            # -- Rafael's, and ISO-25's -- kept its arrows whatever was picked
+            # (eighth review, 28:50)
+            changed["dimsah"] = 1
+            changed.setdefault("dimblk1", props["dimblk1"])
+            changed.setdefault("dimblk2", props["dimblk2"])
+        return changed
 
     def _render_preview(self) -> None:
         self.preview.setPixmap(render_dim_preview(

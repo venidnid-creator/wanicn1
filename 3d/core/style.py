@@ -29,6 +29,11 @@ from dataclasses import dataclass, field
 FACE_MODES = ("textures", "shaded", "hidden_line", "monochrome",
               "wireframe", "xray")
 
+#: The soft warm white of the faces that wear no material in the shaded
+#: modes — the matte cardstock of an architecture model. The style's Front
+#: color tints it (``views.viewport._front_tint``).
+DEFAULT_FACE_COLOR = (0.96, 0.95, 0.925)
+
 #: The classic default back-face blue-grey: a visible back face means "you are
 #: looking at the inside" (or at a genuinely inverted face).
 DEFAULT_BACK_COLOR = (0.62, 0.70, 0.78)
@@ -45,7 +50,9 @@ class Style:
     # (issue #234). Off in every preset.
     back_edges: bool = False
     edge_color: tuple = (0.13, 0.17, 0.23)
-    front_color: tuple = (1.0, 1.0, 1.0)     # hidden line / monochrome faces
+    # The faces' front colour: every face in Hidden line and Monochrome,
+    # and the faces wearing no material in the other modes (issue #776).
+    front_color: tuple = (1.0, 1.0, 1.0)
     # Back-face tint (Back color). ``None`` = automatic: the
     # document's adopted tint (``scene.back_face_color``, e.g. from an
     # imported .skp) or ``DEFAULT_BACK_COLOR``. A picked colour wins over
@@ -62,15 +69,23 @@ class Style:
     # Lives in the STYLE, with the other modeling settings.
     section_fill: bool = True
     section_fill_color: tuple = (0.35, 0.37, 0.41)
-    # Ambient occlusion (#954, experimental): the soft darkening where
+    # Ambient occlusion (#954): the soft darkening where
     # surfaces meet. Off in every preset; the distance is in metres (how
     # far a surface still darkens its neighbour), the intensity 0–2.
     ambient_occlusion: bool = False
     ao_distance: float = 0.5
     ao_intensity: float = 1.0
+    # Colour by layer: faces draw in their layer's colour (core.layers
+    # .layer_color) instead of their material — the shaded, textured and
+    # X-ray modes. Off in every preset; a scene remembers it with the style.
+    color_by_layer: bool = False
+    # The layers' line types on their edges in the model too, not only on
+    # the sheets: dashed where the line type is, in its colour where it has
+    # one (a gas line yellow). On unless a style says otherwise.
+    model_linetypes: bool = True
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "name": self.name,
             "face_mode": self.face_mode,
             "edges": self.edges,
@@ -90,6 +105,11 @@ class Style:
             "ao_distance": self.ao_distance,
             "ao_intensity": self.ao_intensity,
         }
+        if self.color_by_layer:
+            out["color_by_layer"] = True
+        if not self.model_linetypes:
+            out["model_linetypes"] = False
+        return out
 
     @classmethod
     def from_dict(cls, raw: dict) -> "Style":
@@ -119,6 +139,8 @@ class Style:
                                  AO_DISTANCE_RANGE),
             ao_intensity=_clamped(raw.get("ao_intensity"), d.ao_intensity,
                                   AO_INTENSITY_RANGE),
+            color_by_layer=bool(raw.get("color_by_layer", False)),
+            model_linetypes=raw.get("model_linetypes") is not False,
         )
 
     def copy(self) -> "Style":
@@ -181,6 +203,12 @@ def style_by_name(name: str) -> Style | None:
         if saved.name == name:
             return saved
     return None
+
+
+#: The colour glass wears in Monochrome, at the opacity of its material: a
+#: neutral grey, since the style has no colours. ``None``: its real colour or
+#: texture instead, as in Shaded — the one place to change that decision.
+MONOCHROME_GLASS_RGB: tuple | None = (0.5, 0.5, 0.5)
 
 
 BUILTIN_STYLES: list[Style] = [

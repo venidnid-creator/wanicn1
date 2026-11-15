@@ -3,6 +3,50 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
+## 2026-10-29: layer groups keep their layers in the DWG
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Found while adding
+layer groups (AutoCAD's layer filters) to the Layers tab: a plan saved as
+DWG kept its groups, but every group came back empty.
+
+- **`in_dxf.c` dropped every 330 of an XRECORD after its owner.** The
+  `case 330` branch knows reactors, the owner and a few typed fields
+  (SORTENTSTABLE, LAYOUT, FIELDLIST); any other 330 ended in its `break`
+  without a trace. An XRECORD's 340/350/360 already fall through to
+  `add_xdata`, so only 330 was lost -- and 330 is how AutoCAD's
+  `AcLyLayerGroup` records (in `ACLYDICTIONARY` under the layer table)
+  list their layers. A 330 met inside `AcDbXrecord` is now data; the
+  owner's 330, read before the subclass marker, is still the owner.
+
+ODA as the judge: an AutoCAD 2018 drawing with a group of two layers and
+a nested one, opened and saved as DWG, read in ODA with the group empty
+before and `330 2D2 / 330 2D0` after. `make check` 270/0; `dwg_fuzz`
+500 seeds identical, seed by seed. Upstream: not reported yet.
+
+## 2026-10-28: a vertical or rotated dimension keeps its rotation in the DWG
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Found through a user
+review: after making a dimension style annotative, every vertical dimension
+of a part saved as DWG read "0", and dragging the text of a vertical one
+turned it horizontal.
+
+- **`in_dxf.c` read a rotated dimension's rotation (50) as an aligned
+  dimension's `oblique_angle`.** A rotated DIMENSION is written
+  `100 AcDbAlignedDimension … 50 … 100 AcDbRotatedDimension` (AutoCAD and
+  ezdxf alike): the type became DIMENSION_LINEAR only at the second marker,
+  after the 50 had already gone to the aligned layout's oblique angle. The
+  DWG then held `dim_rotation 0, oblique_angle 90°`. The code even says
+  "we rather checked the flag before": now it does -- type 0 in the flag
+  (70, read before the marker) makes it DIMENSION_LINEAR at
+  `AcDbAlignedDimension`. A flag of 0 is no flag (bit 5 is always set since
+  r13): the dimensions the add API creates are written without one and keep
+  the old path (`add_test` failed without that guard).
+
+ODA as the judge: the DWG of a vertical 12.4 dimension read in ODA as
+`42 = 0.0, 52 = 90` (measurement 0, oblique 90) before, `42 = 12.4,
+50 = 90` after. `make check` 254/0; `dwg_fuzz` 500 seeds identical, seed by
+seed. Upstream: not reported yet (master has the same code).
+
 ## 2026-10-19: no false errors saving a recent AutoCAD plan
 
 Appended to `current/ingecad-vendor-0.14.8597.patch`. Every AutoCAD 2013+

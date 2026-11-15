@@ -88,6 +88,21 @@ def push_recent(entries: list, entry: dict, cap: int = RECENT_MAX) -> list:
     return [entry] + rest[:max(cap - 1, 0)]
 
 
+def rename_recent(entries: list, old: str, stamp: dict) -> list:
+    """``entries`` with every one named *old* now wearing *stamp* (the
+    new material's face attrs): a material renamed or recoloured in the
+    model is not offered back under its old name and colour."""
+    out = []
+    for e in entries:
+        if e.get("mat") == old:
+            e = {k: v for k, v in e.items()
+                 if k not in ("mat", "color", "texture", "opacity")}
+            e.update({k: (list(v) if isinstance(v, tuple) else v)
+                      for k, v in stamp.items()})
+        out.append(e)
+    return out
+
+
 def _face_plane(face) -> tuple:
     """``(unit normal, offset)`` of the face's plane."""
     from PySide6.QtGui import QVector3D
@@ -243,11 +258,12 @@ class PaintTool(Tool):
         a whole shows no change."""
         from core.group import iter_placements
         from core.materials import has_own_material
+        from core.mesh import face_attrs
         seen = False
         for g, _m in iter_placements(obj):
-            for f in g.mesh.faces:
+            for attrs in face_attrs(g.mesh):     # builds no lazy mesh (#1092)
                 seen = True
-                if not has_own_material(f.attrs):
+                if not has_own_material(attrs):
                     return False
         return seen
 
@@ -258,7 +274,10 @@ class PaintTool(Tool):
         # marked: a marked face promised a paint the click does not do. The
         # eyedropper samples one face and marks that face.
         if not self._sampling(ctx):
-            _face, group = vp.pick_face_any(x, y)
+            # Whose face it is, no more: a big lazy mesh stays unbuilt (#1092).
+            from views.array_bake import reading_only
+            with reading_only():
+                _face, group = vp.pick_face_any(x, y)
             if self._container_under(vp, group, x, y) is not None:
                 vp.set_hover(None)
                 return
@@ -275,7 +294,16 @@ class PaintTool(Tool):
 
     def on_click(self, ctx: ToolContext) -> None:
         vp = ctx.viewport
-        face, group = vp.pick_face_any(ctx.screen.x(), ctx.screen.y())
+        # A closed container is painted whole, its faces untouched: a big lazy
+        # mesh is not built for that (#1092). A sample or a loose face is real.
+        from views.array_bake import reading_only
+        with reading_only():
+            face, group = vp.pick_face_any(ctx.screen.x(), ctx.screen.y())
+        if (self._sampling(ctx) or self._container_under(
+                vp, group, ctx.screen.x(), ctx.screen.y()) is None):
+            face, group = vp.pick_face_any(ctx.screen.x(), ctx.screen.y())
+        if self._sampling(ctx) and self._sample_image(ctx, face):
+            return
         if face is None:
             return
         back_side = clicked_back_side(vp, face, group,
@@ -363,7 +391,7 @@ class PaintTool(Tool):
                     # material — the SketchUp rule, as in #408).
                     flash(tr("{name}: every face has its own material, so "
                              "nothing changed — open it and paint the "
-                             "faces", name=name))
+                             "faces", name=name), 10000)
                 else:
                     flash(tr("{name} painted as a whole; a face that "
                              "already had its own material keeps it",
@@ -435,6 +463,49 @@ class PaintTool(Tool):
             ]))
         self._remember_current(vp)
         vp.update()
+
+    @staticmethod
+    def _sample_image(ctx: ToolContext, face) -> bool:
+        """The eyedropper over a reference image (#687: «el gotero no da la
+        opción de seleccionarla»): its picture becomes the current paint,
+        mapped where the image sits — a face drawn over the image on its
+        plane takes the picture exactly under it, any other face projects
+        it at the image's real size. An image behind the face under the
+        cursor does not count. True when an image was sampled."""
+        vp = ctx.viewport
+        x, y = ctx.screen.x(), ctx.screen.y()
+        if face is not None:
+            image = (vp.image_in_front_of(face, x, y)
+                     if hasattr(vp, "image_in_front_of") else None)
+        else:
+            image = (vp.image_plane_at(x, y)
+                     if hasattr(vp, "image_plane_at") else None)
+        if image is None:
+            return False
+        from PySide6.QtGui import QVector3D
+        tex = image.texture()
+        n = image.normal()
+        PaintTool.current_is_default = False
+        PaintTool.current_texture = tex
+        PaintTool.current_texture_plane = (
+            (n, QVector3D.dotProduct(n, image.origin)) if tex.get("uvw")
+            else None)
+        opacity = float(getattr(image, "opacity", 1.0))
+        PaintTool.current_opacity = opacity if opacity < 1.0 else None
+        PaintTool.current_material = None
+        win = vp.window() if hasattr(vp, "window") else None
+        if PaintTool.sample_armed:
+            PaintTool.sample_armed = False
+            if hasattr(win, "release_eyedropper"):
+                win.release_eyedropper()
+        panel = getattr(getattr(win, "tray", None), "materials", None)
+        if hasattr(panel, "sync_from_paint"):
+            panel.sync_from_paint()
+        vp.update()
+        flash = getattr(vp, "flash_status", None)
+        if callable(flash):
+            flash(tr("Material sampled — click a face to paint it"))
+        return True
 
     @classmethod
     def _remember_current(cls, vp=None) -> None:

@@ -124,6 +124,9 @@ hiddenimports = [
     'PySide6.QtOpenGL',
     'PySide6.QtOpenGLWidgets',
     'PySide6.QtNetwork',        # tile/DEM fetch (georef)
+    # Export ▸ Scenes as Video (.mkv): Qt Multimedia writes the file with
+    # its own ffmpeg plugin; imported inside functions (views/video_export).
+    'PySide6.QtMultimedia',
     # Lazily imported project modules (inside functions) — listed for safety.
     'core.text3d',
     'core.textlabel',
@@ -137,6 +140,10 @@ hiddenimports += collect_submodules('ezdxf')
 # manifold3d (Solid Tools) is imported inside core.solids' functions — one
 # self-contained native extension module (libstdc++/libm/libc only).
 hiddenimports += ['manifold3d', 'core.solids', 'tools.solid_tools']
+# truststore (#783): Python's HTTPS on Windows verifies through the system
+# verifier; imported inside core.tls.https_context, and without it the
+# extension manager silently falls back to Python's own store.
+hiddenimports += ['truststore']
 # Copy/Paste between windows (#76): imported lazily by the viewport and
 # the main window.
 hiddenimports += ['formats.clip']

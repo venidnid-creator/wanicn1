@@ -71,6 +71,14 @@ def _parent_layout(lay):
     return p if isinstance(p, QLayout) else None
 
 
+def _keep_shown(ws, shown) -> None:
+    """Qt hides a widget that changes parent and shows it again only on the
+    next event cycle; show the ones that were shown right away."""
+    for w, v in zip(ws, shown):
+        if v:
+            w.setVisible(True)
+
+
 def reflow_rows(root: QWidget) -> int:
     """Every horizontal row of buttons under ``root`` becomes a row that
     wraps (FlowLayout). A row that is a widget's own layout is wrapped in
@@ -84,6 +92,7 @@ def reflow_rows(root: QWidget) -> int:
             continue
         owner = lay.parentWidget()
         parent = _parent_layout(lay)
+        shown = [not w.isHidden() for w in ws]       # a moved widget keeps its own shown/hidden state
         if parent is None:
             # the row IS the layout of a widget (e.g. a button bar): rebuild it in place
             if owner is None or owner.layout() is not lay:
@@ -96,6 +105,7 @@ def reflow_rows(root: QWidget) -> int:
             fl.setContentsMargins(margins)
             for w in ws:
                 fl.addWidget(w)
+            _keep_shown(ws, shown)
             n += 1
             continue
         box = QWidget()
@@ -105,6 +115,8 @@ def reflow_rows(root: QWidget) -> int:
             fl.addWidget(w)
         if _replace(parent, lay, box):
             lay.setParent(None)
+            box.setVisible(True)
+            _keep_shown(ws, shown)
             n += 1
         else:                                         # could not place it: put the widgets back
             for w in ws:
