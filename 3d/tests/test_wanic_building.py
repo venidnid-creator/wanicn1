@@ -269,6 +269,11 @@ def test_panel_select_copy_marks_library_and_standard_boq(monkeypatch):
     dlg = BoqDialog(panel)
     assert dlg.tree.topLevelItemCount() >= 5
     dlg.sample_prices()
+    assert dlg.result["totals"]["total"] == 0          # every price 0 until the province is chosen
+    d_ = panel.data()
+    d_["province"] = "ขอนแก่น"
+    panel._write(d_)
+    dlg.recompute()
     assert dlg.result["totals"]["total"] > 0
     n = panel.send_standard_boq(dlg.result)
     tk = scene_data(scene)["wanic_takeoff"]
@@ -402,6 +407,26 @@ def test_boq_prices_by_province(monkeypatch, tmp_path):
     QApplication.clipboard().setText("ทรายละเอียด\tลบ.ม.\t480\t490")
     assert dlg.paste_prices() == 1
     assert panel.data()["prices"]["ทรายละเอียด"] == 490
+    # ห้ามส่งออกจนราคาครบ: the orange rows block the export, told why …
+    n_msgs = len(msgs)
+    dlg.send()
+    assert "wanic_takeoff" not in scene_data(scene) and "ยังไม่มีราคา" in msgs[n_msgs]
+    # … the rows filled in (every material and labour rate), the export goes
+    from core import wanic_quantities as Q
+    d_ = panel.data()
+    for ln in Q.missing_lines(dlg.result):
+        if ln["mat_key"]:
+            d_.setdefault("prices", {})[ln["mat_key"]] = 1.0
+        if ln["lab_code"]:
+            d_.setdefault("labour", {})[ln["lab_code"]] = 1.0
+    panel._write(d_)
+    dlg.recompute()
+    for ln in Q.missing_lines(dlg.result):          # the recipe lines: their materials
+        for k in dlg.result.get("need") or {}:
+            d_["prices"].setdefault(k, 1.0) if not d_["prices"].get(k) else None
+    panel._write(d_)
+    dlg.recompute()
+    assert not dlg.missing_text(), dlg.missing_text()
     # Sending names the province in the takeoff's ปร. header.
     dlg.send()
     st = scene_data(scene)["wanic_takeoff"]["settings"]

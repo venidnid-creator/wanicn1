@@ -125,25 +125,35 @@ def _isnum(v) -> bool:
 # ---------------------------------------------------------------------------
 
 class _Bill:
-    def __init__(self, prices, labour):
+    def __init__(self, prices, labour, zero=False):
         self.lines = []
         self.prices = prices
         self.labour = labour
+        self.zero = zero                              # no province yet: every price 0
 
-    def add(self, group, desc, net, unit, *, waste=0.0, mat=0.0,
+    def add(self, group, desc, net, unit, *, waste=0.0, mat=None,
             mat_key="", lab_code="", lab=None, basis="", ref="", note=""):
         if net is None or net <= 1e-9:
             return None
         qty = S.q2(net * (1 + waste / 100.0))
+        # a line that has a material (a price-list key or a recipe price) and/or
+        # a labour rate must have them priced — else it is «ยังไม่มีราคา» (orange)
+        need_mat = bool(mat_key) or mat is not None
+        need_lab = bool(lab_code) or lab is not None
+        mat = 0.0 if mat is None else mat
         if mat_key and not mat:
             mat = float(self.prices.get(mat_key) or 0.0)
         if lab is None:
             lab = float(self.labour.get(lab_code, 0.0)) if lab_code else 0.0
+        if self.zero:
+            mat = lab = 0.0
+        missing = ([] if not need_mat or float(mat) > 0 else ["ค่าวัสดุ"]) + \
+            ([] if not need_lab or float(lab) > 0 else ["ค่าแรง"])
         ln = {"group": group, "desc": desc, "net": net, "waste": waste,
               "qty": qty, "unit": unit, "mat": round(float(mat), 2),
               "lab": round(float(lab), 2), "mat_key": mat_key,
               "lab_code": lab_code, "basis": basis, "ref": ref,
-              "note": note}
+              "note": note, "missing": missing}
         ln["mat_total"] = round(qty * ln["mat"], 2)
         ln["lab_total"] = round(qty * ln["lab"], 2)
         ln["total"] = round(ln["mat_total"] + ln["lab_total"], 2)
@@ -204,13 +214,30 @@ def _perimeter(fam, params) -> float:
 
 # ---------------------------------------------------------------------------
 
-def compute(data) -> dict:
-    """``{"lines", "groups", "totals", "rebar", "notes"}`` for the plan."""
+def priced(data) -> dict:
+    """The bill as the user sees and sends it: every price 0 until the
+    province is chosen (ราคากลางต้องเป็นของจังหวัดที่ก่อสร้าง); each line says
+    what it still lacks (``missing``), the totals how many lack a price."""
+    return compute(data, gate=True)
+
+
+def missing_lines(result) -> list:
+    """The lines with no price yet, the BOQ shows them orange."""
+    return [ln for ln in (result or {}).get("lines") or [] if ln.get("missing")]
+
+
+def compute(data, gate: bool = False) -> dict:
+    """``{"lines", "groups", "totals", "rebar", "notes"}`` for the plan.
+    ``gate``: no province chosen → no material price and no labour rate."""
     E = B.elements(data)
     s, lib, H, n = E["settings"], E["lib"], E["H"], E["n"]
     o = options_of(data)
     prices, labour = prices_of(data), labour_of(data)
-    bill = _Bill(prices, labour)
+    zero = gate and not str((data or {}).get("province") or "")
+    if zero:
+        prices = S.empty_prices()
+        labour = {k: 0.0 for k in labour}
+    bill = _Bill(prices, labour, zero)
     need: dict[str, str] = {}
 
     def rprice(code, prices_):
@@ -1056,7 +1083,8 @@ def compute(data) -> dict:
             "totals": _totals(bill.lines), "rebar": rebar, "notes": notes,
             "province": province, "price_month": month,
             "price_ref": price_ref(province, month),
-            "footer": footer("WANIC ออกแบบอาคาร")}
+            "footer": footer("WANIC ออกแบบอาคาร"),
+            "zero": zero, "missing": sum(1 for ln in bill.lines if ln.get("missing"))}
 
 
 def market_note(province: str, src, price: float, where: str = "",

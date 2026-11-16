@@ -312,3 +312,25 @@ def test_monier_accessories_and_valley_in_boq():
     assert close(ridge["net"], _by(r, "ค่าแรงครอบสัน")[0]["net"] * 3.3)
     sq = _one_room()                                 # 3×3 hip: a pyramid
     assert _by(Q.compute(sq), "ครอบโค้งสี่ทาง")[0]["qty"] == 1
+
+
+def test_prices_are_zero_until_the_province_and_missing_lines_are_named():
+    """BOQ: every price 0 until the province is chosen; then each line that
+    has a material or a labour rate without a price says so (orange)."""
+    from core import wanic_quantities as Q
+    from core import wanic_rc as R
+    d = {"floors": [{"rooms": []}], "settings": {}}
+    R.apply_grid(d, [4, 4], [4], 1, [])
+    d["prices"] = {"DB12": 24.0}
+    gated = Q.priced(d)
+    assert gated["zero"] and gated["totals"]["total"] == 0
+    assert all(ln["mat"] == 0 and ln["lab"] == 0 for ln in gated["lines"])
+    assert Q.compute(d)["totals"]["total"] > 0                  # the plain bill is unchanged
+    d["province"] = "ขอนแก่น"
+    res = Q.priced(d)
+    assert not res["zero"] and res["totals"]["total"] > 0
+    miss = Q.missing_lines(res)
+    assert miss and res["missing"] == len(miss)
+    assert all(set(ln["missing"]) <= {"ค่าวัสดุ", "ค่าแรง"} for ln in miss)
+    db12 = [ln for ln in res["lines"] if ln["mat_key"] == "DB12"]
+    assert db12 and not db12[0]["missing"]                      # priced: not orange

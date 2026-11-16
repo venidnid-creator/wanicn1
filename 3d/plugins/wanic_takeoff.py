@@ -424,7 +424,7 @@ class TakeoffPanel(QWidget):
                 self, TITLE, "ยังไม่มีผังห้องในแท็บ «ออกแบบอาคาร» — วางห้องและกด "
                 "«สร้างทั้งหมด» ก่อน หรือเพิ่มรายการราคาเองที่นี่")
             return 0
-        rates = Q.to_rates(Q.compute(bd))
+        rates = Q.to_rates(Q.priced(bd))
         d = self.data()
         d["rates"] = [r for r in self._rates_from_table()
                       if not str(r.get("id", "")).startswith("std")] + rates

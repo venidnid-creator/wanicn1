@@ -35,6 +35,9 @@ from core import wanic_downloads as WD
 from core.wanic_sign import label_html
 
 TITLE = "ออกแบบอาคาร"
+#: a BOQ line or a price with no price yet — to be filled in before the export
+ORANGE_BG = QColor("#FDBA74")
+ORANGE_INK = QColor("#431407")
 NAVY = QColor("#0F2A44")
 ROOM = QColor(64, 170, 110, 70)
 ROOM_EDGE = QColor(30, 120, 70)
@@ -1003,7 +1006,7 @@ class BoqDialog(QDialog):
         self.setWindowTitle("BOQ ตามหลักเกณฑ์กรมบัญชีกลาง พ.ศ. 2569 — WANIC ออกแบบอาคาร")
         self.resize(1180, 760)
         from core import wanic_quantities as Q
-        self.result = Q.compute(panel.data())
+        self.result = Q.priced(panel.data())
         lay = QVBoxLayout(self)
         # a newer labour list / Factor F table / rules from กรมบัญชีกลาง:
         # said here, at the top of the BOQ (checked in the background)
@@ -1121,11 +1124,14 @@ class BoqDialog(QDialog):
                  "คัดลอกตารางราคาจากหน้าเว็บกระทรวงพาณิชย์ (Ctrl+C) แล้วกดปุ่มนี้",
                  self.paste_prices),
                 ("🌐 เปิดเว็บราคาจังหวัด (สนค.)", P.PRICE_SITE,
-                 self.open_price_site))):
+                 self.open_price_site),
+                ("🏛 เติมราคาส่วนกลาง (กรุงเทพฯ) เฉพาะที่ขาด",
+                 "รายการที่พาณิชย์จังหวัดไม่มีราคา ใช้ราคาวัสดุก่อสร้างส่วนกลาง (กรุงเทพมหานคร) — "
+                 "ที่ยังไม่มีอีกให้สืบราคาท้องถิ่นแล้วกรอกเอง", self.fill_central))):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
-            g.addWidget(b, 1, [0, 2, 4, 6][col], 1, 2 if col < 3 else 1)
+            g.addWidget(b, 1 + col // 4, [0, 2, 4, 6][col % 4], 1, 2 if col % 4 < 3 else 1)
         lay.addWidget(box)
 
     def _need_keys(self):
@@ -1141,8 +1147,10 @@ class BoqDialog(QDialog):
         need = list((self.result or {}).get("need") or {})
         n, missing = P.coverage(Q.prices_of(d), need)
         if not prov:
-            text = ("<span style='color:#B26A00'>ยังไม่ได้เลือกจังหวัด — "
-                    "ราคาวัสดุต้องเป็นของจังหวัดที่ก่อสร้าง</span>")
+            text = ("<span style='color:#C2410C'><b>ยังไม่ได้เลือกจังหวัด — ราคาทุกรายการเป็น 0</b> "
+                    "(ราคากลางต้องเป็นของจังหวัดที่ก่อสร้าง) · เลือกจังหวัดก่อน</span>")
+            self.cover.setText(text)
+            return
         else:
             col = "#2E7D4F" if not missing else "#B26A00"
             text = (f"<span style='color:{col}'><b>มีราคา {n}/{len(need)} "
@@ -1151,6 +1159,11 @@ class BoqDialog(QDialog):
                 text += (" — ขาด: " + ", ".join(missing[:4]) +
                          (f" และอีก {len(missing) - 4}" if len(missing) > 4
                           else ""))
+        left = len(Q.missing_lines(self.result))
+        text += (f"<br><span style='background:#FDBA74;color:#7C2D12'>&nbsp;<b>ยังไม่มีราคา {left} รายการ "
+                 "(แถวสีส้ม)</b> — พาณิชย์จังหวัดไม่มี → กด «🏛 เติมราคาส่วนกลาง» แล้วสืบราคาท้องถิ่นกรอกเอง "
+                 "(ดับเบิลคลิกแถวสีส้ม) · ส่งออก ปร.1–ปร.4 ได้เมื่อครบ&nbsp;</span>" if left else
+                 "<br><span style='color:#2E7D4F'><b>✓ ราคาครบทุกรายการ — ส่งออก ปร.1–ปร.4 ได้</b></span>")
         self.cover.setText(text)
 
     def choose_province(self):
@@ -1186,6 +1199,8 @@ class BoqDialog(QDialog):
         # No prices yet, or older than last month: fetch them now.
         if prov and (not book or book.get("month") != P.last_month()):
             self.fetch_prices(auto=True)
+        if prov:
+            self.fill_central(auto=True)
 
     def fetch_prices(self, auto=False):
         """Latest average prices of the province from MOC Open Data."""
@@ -1394,6 +1409,7 @@ class BoqDialog(QDialog):
         widths = [52, 330, 90, 56, 90, 56, 90, 100, 90, 100, 110, 420]
         for i, px in enumerate(widths):
             self.tree.setColumnWidth(i, px)
+        self.tree.itemDoubleClicked.connect(lambda it, _c: _safe(self, lambda: self.goto_price(it)))
         v.addWidget(self.tree, 1)
         self.total = QLabel()
         self.total.setWordWrap(True)
@@ -1498,7 +1514,7 @@ class BoqDialog(QDialog):
         self._units = {k: need.get(k) or S.price_unit(k) for k in keys}
         self._shown = {}
         self.prices.setRowCount(len(keys))
-        warn = QColor(255, 179, 0, 60)
+        warn = ORANGE_BG
         for r, k in enumerate(keys):
             v = float(prices.get(k) or 0)
             self._shown[k] = v
@@ -1506,6 +1522,8 @@ class BoqDialog(QDialog):
                 f"ไม่พบราคาที่จ.{prov}ประกาศ" if prov else "— ไม่มีราคา")
             if where == "พาณิชย์":
                 where = f"พาณิชย์จ.{prov}" if prov else "ไฟล์พาณิชย์"
+            elif where == "ส่วนกลาง":
+                where = "ราคาส่วนกลาง (กรุงเทพฯ)"
             elif where == "กรอกเอง":
                 where = "ท้องตลาด"
             a, b, c = QTI(k), QTI(self._units.get(k, "")), QTI(where)
@@ -1521,6 +1539,7 @@ class BoqDialog(QDialog):
             if v <= 0 and k in need:
                 for col in range(5):
                     self.prices.item(r, col).setBackground(warn)
+                    self.prices.item(r, col).setForeground(ORANGE_INK)
         labour = Q.labour_of(d)
         codes = list(S.LABOUR)
         self.labour.setRowCount(len(codes))
@@ -1532,6 +1551,10 @@ class BoqDialog(QDialog):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 self.labour.setItem(r, col, it)
             self.labour.setItem(r, 3, QTI(f"{labour[c]:g}"))
+            if not float(labour[c] or 0):
+                for col in range(4):
+                    self.labour.item(r, col).setBackground(ORANGE_BG)
+                    self.labour.item(r, col).setForeground(ORANGE_INK)
 
     def _option_tab(self):
         from core import wanic_quantities as Q
@@ -1676,6 +1699,103 @@ class BoqDialog(QDialog):
         self.cats.blockSignals(False)
         self._filter_cat()
 
+    def goto_price(self, it):
+        """An orange row of the bill: to its price (material) or its rate
+        (labour) in «ฐานข้อมูลราคา», ready to be typed in."""
+        key = it.data(1, Qt.UserRole) if it is not None else None
+        if not key:
+            return
+        what = it.data(2, Qt.UserRole) or "mat"
+        self.tabs.setCurrentIndex(1)
+        table = self.labour if what == "lab" else self.prices
+        for r in range(table.rowCount()):
+            cell = table.item(r, 0)
+            if cell is not None and cell.text() == key:
+                col = 3 if what == "lab" else 2
+                table.setCurrentCell(r, col)
+                table.scrollToItem(table.item(r, col))
+                table.editItem(table.item(r, col))
+                return
+
+    def missing_text(self) -> str:
+        """What still blocks the export, in words ('' when nothing does)."""
+        from core import wanic_quantities as Q
+        d = self.panel.data()
+        if not d.get("province"):
+            return "ยังไม่ได้เลือกจังหวัดที่ก่อสร้าง — ราคาทุกรายการยังเป็น 0"
+        miss = Q.missing_lines(self.result)
+        if not miss:
+            return ""
+        names = ", ".join(ln["desc"][:40] for ln in miss[:8])
+        return (f"ยังไม่มีราคา {len(miss)} รายการ (แถวสีส้ม) เช่น {names}"
+                + (" …" if len(miss) > 8 else ""))
+
+    def _ready_to_export(self) -> bool:
+        """ห้ามส่งออกจนราคาครบ: told why, taken to the first orange row."""
+        self.recompute()
+        why = self.missing_text()
+        if not why:
+            return True
+        QMessageBox.warning(self, TITLE, why + "\n\nกรอกราคาวัสดุ/ค่าแรงในแถวสีส้มให้ครบ (ดับเบิลคลิกแถว → "
+                            "กรอกราคา → «💾 บันทึกราคาและคำนวณใหม่») แล้วจึงส่งออก ปร.1–ปร.4 / ปริมาณงาน")
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            for j in range(top.childCount()):
+                ch = top.child(j)
+                if ch.data(1, Qt.UserRole):
+                    self.tabs.setCurrentIndex(0)
+                    self.tree.setCurrentItem(ch)
+                    self.tree.scrollToItem(ch)
+                    return False
+        return False
+
+    def fill_central(self, auto=False):
+        """ราคาส่วนกลาง (กรุงเทพมหานคร) for the materials the province's
+        commerce office has no price of — as the central price list stands in
+        when a province does not publish one; what is still missing stays
+        orange for a local survey."""
+        from core import wanic_province as P
+        d = self.panel.data()
+        if not d.get("province"):
+            if not auto:
+                QMessageBox.information(self, TITLE, "เลือกจังหวัดที่ก่อสร้างก่อน")
+            return 0
+        central = "กรุงเทพมหานคร"
+        book = P.load_book(central)
+        if book is None and not auto:
+            try:
+                items, month, _u = self._fetch_in_background(central)
+            except P.FetchError as e:
+                QMessageBox.warning(self, TITLE, f"ดึงราคาส่วนกลางไม่ได้: {e}")
+                return 0
+            from core import wanic_std2569 as S
+            keys = self._need_keys()
+            need = dict((self.result or {}).get("need") or {})
+            got = P.match(items, keys, {k: need.get(k) or S.price_unit(k) for k in keys})
+            book = {"prices": {k: v for k, (v, _n) in got.items()}, "month": month}
+            P.save_book(central, book["prices"], month)
+        if not book:
+            return 0
+        prices = dict(d.get("prices") or {})
+        src = dict(d.get("price_src") or {})
+        n = 0
+        for k, v in (book.get("prices") or {}).items():
+            if float(v or 0) > 0 and not float(prices.get(k) or 0):
+                prices[k] = float(v)
+                src[k] = "ส่วนกลาง"
+                n += 1
+        if n:
+            d["prices"], d["price_src"] = prices, src
+            self.panel._write(d)
+            self.recompute()
+            self._fill_prices()
+        msg = (f"เติมราคาส่วนกลาง (กรุงเทพมหานคร) {n} รายการที่จังหวัดไม่มี — "
+               + (self.missing_text() or "ราคาครบทุกรายการแล้ว"))
+        self.panel.status.setText(msg)
+        if not auto:
+            QMessageBox.information(self, TITLE, msg)
+        return n
+
     def _filter_cat(self):
         it = self.cats.currentItem()
         want = it.data(Qt.UserRole) if it is not None else None
@@ -1686,7 +1806,7 @@ class BoqDialog(QDialog):
     def recompute(self):
         from PySide6.QtWidgets import QTreeWidgetItem
         from core import wanic_quantities as Q
-        self.result = Q.compute(self.panel.data())
+        self.result = Q.priced(self.panel.data())
         self.tree.clear()
         bold = QFont(self.font())
         bold.setBold(True)
@@ -1719,10 +1839,14 @@ class BoqDialog(QDialog):
                     it.setData(0, Qt.UserRole, ln["extra_id"])
                 if ln["note"]:
                     it.setForeground(1, QColor("#B26A00"))
-                if ln["mat_key"] and not ln["mat"]:
-                    it.setForeground(6, QColor("#B26A00"))
-                    it.setToolTip(6, f"ยังไม่มีราคา «{ln['mat_key']}» "
-                                     "ของจังหวัดที่เลือก")
+                if ln.get("missing"):                       # ยังไม่มีราคา: orange, to be filled in
+                    for c in range(len(self.COLS)):
+                        it.setBackground(c, ORANGE_BG)
+                        it.setForeground(c, ORANGE_INK)
+                    lack = " และ ".join(ln["missing"])
+                    it.setToolTip(1, f"ยังไม่มี{lack} — ดับเบิลคลิกเพื่อกรอกราคา\n{tip}")
+                    it.setData(1, Qt.UserRole, ln.get("mat_key") or ln.get("lab_code") or "")
+                    it.setData(2, Qt.UserRole, "lab" if ln["missing"] == ["ค่าแรง"] else "mat")
                 top.addChild(it)
             top.setExpanded(True)
         t = self.result["totals"]
@@ -1877,7 +2001,8 @@ class BoqDialog(QDialog):
     def send(self):
         from core import wanic_province as P
         from core import wanic_quantities as Q
-        self.recompute()
+        if not self._ready_to_export():
+            return
         n = self.panel.send_standard_boq(self.result)
         d = self.panel.data()
         need = list(self.result.get("need") or {})
@@ -1897,6 +2022,8 @@ class BoqDialog(QDialog):
         from PySide6.QtWidgets import QFileDialog
         from core import wanic_quantities as Q
         from core import wanic_takeoff as T
+        if not self._ready_to_export():
+            return
         path, _f = QFileDialog.getSaveFileName(
             self, "บันทึก Excel", "BOQ_ปร.xlsx", "Excel (*.xlsx)")
         if not path:
@@ -1918,6 +2045,8 @@ class BoqDialog(QDialog):
     def save_csv(self):
         from PySide6.QtWidgets import QFileDialog
         from core import wanic_quantities as Q
+        if not self._ready_to_export():
+            return
         path, _f = QFileDialog.getSaveFileName(self, "บันทึก CSV", "BOQ.csv",
                                                "CSV (*.csv)")
         if not path:
@@ -2195,6 +2324,18 @@ class DrawingDialog(QDialog):
             small = self._model_picture(1200, 672)
             if small:
                 info["plan_picture"] = small
+        if "BOQ" in info["groups"]:                    # ห้ามส่งออก ปร. จนราคาครบ
+            from core import wanic_quantities as Q
+            pd_ = self.panel.data()
+            res_ = Q.priced(pd_)
+            left = len(Q.missing_lines(res_))
+            if not pd_.get("province") or left:
+                info["groups"] = tuple(g for g in info["groups"] if g != "BOQ")
+                QMessageBox.information(
+                    self, TITLE, ("ยังไม่ได้เลือกจังหวัดที่ก่อสร้าง" if not pd_.get("province")
+                                  else f"ยังไม่มีราคา {left} รายการ") +
+                    " — แบบชุดนี้จะไม่รวมแผ่น BOQ (ปร.) จนกว่าราคาจะครบ: เปิด «📊 BOQ ตามหลักเกณฑ์ 2569…» "
+                    "เลือกจังหวัดและกรอกราคาในแถวสีส้มให้ครบก่อน")
         sheets = D.build_set(self.panel.data(), info, info["groups"])
         if not sheets:
             QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
@@ -3396,7 +3537,7 @@ class BuildingPanel(QWidget):
         earlier send made (ids ``std…``)."""
         from core import wanic_quantities as Q
         from core.history import SetPluginDataCommand
-        result = result or Q.compute(self.data())
+        result = result or Q.priced(self.data())
         tk = self.takeoff_data()
         tk["rates"] = [r for r in tk.get("rates", [])
                        if not str(r.get("id", "")).startswith("std")]

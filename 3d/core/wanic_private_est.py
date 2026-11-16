@@ -116,7 +116,7 @@ def compute(data) -> dict:
     """{"cats": [(no, name, [line])], "direct", "overhead", "vat", "total", "settings"}."""
     from core import wanic_quantities as Q
     st = settings(data)
-    base = Q.compute(data)
+    base = Q.priced(data)
     lines = []
     for ln in base["lines"]:
         kind = waste_kind(ln)

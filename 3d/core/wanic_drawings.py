@@ -4763,7 +4763,7 @@ def build_boq(data, info=None) -> list:
     :func:`core.wanic_quantities.compute`, summary first."""
     from core import wanic_quantities as Q
     info = dict(info or {})
-    result = Q.compute(data)
+    result = Q.priced(data)
     if not result.get("groups"):
         return []
     show = bool(info.get("boq_prices", True))
