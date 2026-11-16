@@ -1207,6 +1207,7 @@ def structure_members(data) -> tuple[list, dict]:
     for e in E["beams"]:
         bw_at[e["level"]] = max(bw_at.get(e["level"], 0.0),
                                 float(lib[e["mark"]]["b"]))
+    holes = holes_by_floor(E)
     for e in E["slabs"]:
         rm, t = e["room"], float(lib[e["mark"]]["t"])
         inset = bw_at.get(e["floor"], 0.0)
@@ -1226,12 +1227,19 @@ def structure_members(data) -> tuple[list, dict]:
                 ("รายการ BOQ", "งานคอนกรีตโครงสร้าง (พื้น)")]
         if e.get("drop"):
             info.insert(7, ("พื้นห้องเปียก", f"ต่ำกว่าพื้นข้างเคียง {e['drop'] * 100:g} ซม."))
-        add(_member("structure", "slab", e["mark"], "rect",
-                    dict(b=_mm(w), h=_mm(d)),
-                    [(cx, cy, top - t), (cx, cy, top)], ifc="IfcSlab",
-                    name=f"พื้น {e['mark']} หนา {_cm(t)} ซม. · {rname} · "
-                         f"{_floor_name(e['floor'])} · {G.area(rm)}",
-                    info=info), "slab")
+        rect = (cx - w / 2, cy - d / 2, cx + w / 2, cy + d / 2)
+        cut = holes.get(e["floor"]) or []
+        pieces = rect_minus(rect, cut) if cut else [rect]
+        if pieces != [rect]:                          # ช่องบันได: the slab around the opening
+            info.insert(7, ("ช่องบันได", f"เจาะช่อง {hole_area(rect, cut):.2f} ตร.ม."))
+        for px0, py0, px1, py1 in pieces:
+            add(_member("structure", "slab", e["mark"], "rect",
+                        dict(b=_mm(px1 - px0), h=_mm(py1 - py0)),
+                        [((px0 + px1) / 2, (py0 + py1) / 2, top - t), ((px0 + px1) / 2, (py0 + py1) / 2, top)],
+                        ifc="IfcSlab",
+                        name=f"พื้น {e['mark']} หนา {_cm(t)} ซม. · {rname} · "
+                             f"{_floor_name(e['floor'])} · {G.area(rm)}",
+                        info=info), "slab")
     if s.get("walls"):
         _walls(E, add)
     for e in E["stairs"]:
@@ -1239,6 +1247,9 @@ def structure_members(data) -> tuple[list, dict]:
             add(g_, "stair")
         for g_ in railing_members(e["st"], s, e["floor"] * E["H"]):
             add(g_, "stair_rail")
+        if e["floor"] + 1 < E["n"]:                   # the guard rail round the opening upstairs
+            for g_ in well_railing_members(e["st"], s, (e["floor"] + 1) * E["H"], building_outline(E)):
+                add(g_, "stair_rail")
     rooms_of = [f["rooms"] for f in E["floors"]]
     drop = max(float(s.get("wet_drop") or 0.0), 0.0)
     for e in E["fixtures"]:
@@ -1358,7 +1369,10 @@ def ceiling_members(E, data=None):
         where = f"{rname} · {_floor_name(k)} · {G.area(rm)}"
         bx = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
         board = {"color": (0.96, 0.96, 0.94)} if ct != "fc" else {"color": (0.88, 0.88, 0.86)}
-        bx.box(x0, x1, y0, y1, zc - 0.009, zc, board)
+        cut = holes_by_floor(E).get(k + 1) or []          # no ceiling over the stair well
+        for px0, py0, px1, py1 in (rect_minus((x0, y0, x1, y1), cut) if cut else [(x0, y0, x1, y1)]):
+            bx.box(px0, px1, py0, py1, zc - 0.009, zc, board)
+        area -= hole_area((x0, y0, x1, y1), cut)
         g = bx.group(f"ฝ้าเพดาน · {where}", "structure", "ceiling", "ฝ้าเพดาน",
                      "IfcCovering")
         if g is not None:
@@ -1387,19 +1401,38 @@ def ceiling_members(E, data=None):
                 if zr is not None:
                     return zr - rdepth
             return top
+        def spans(a, b, at, along_y):
+            """[a, b] less the stair openings crossing the line at ``at``."""
+            out_, lo = [], a
+            for hx0, hy0, hx1, hy1 in sorted(cut, key=lambda h: h[1] if along_y else h[0]):
+                c0, c1, o0, o1 = (hy0, hy1, hx0, hx1) if along_y else (hx0, hx1, hy0, hy1)
+                if o0 - 1e-9 <= at <= o1 + 1e-9 and c1 > lo and c0 < b:
+                    if c0 - lo > 0.05:
+                        out_.append((lo, c0))
+                    lo = max(lo, c1)
+            if b - lo > 0.05:
+                out_.append((lo, b))
+            return out_
+
+        def in_hole(x, y):
+            return any(hx0 <= x <= hx1 and hy0 <= y <= hy1 for hx0, hy0, hx1, hy1 in cut)
         xs_n = max(int(math.ceil((x1 - x0) / sub - 1e-9)), 1)
         for i in range(xs_n + 1):                    # furring channels along y
             x = min(x0 + i * sub, x1 - 0.019)
             x = max(x, x0 + 0.019)
-            fb.box(x - 0.019, x + 0.019, y0 + 0.02, y1 - 0.02, z1, z1 + 0.012, steel)
+            for ya, yb in spans(y0 + 0.02, y1 - 0.02, x, True):
+                fb.box(x - 0.019, x + 0.019, ya, yb, z1, z1 + 0.012, steel)
         ys_n = max(int(math.ceil((y1 - y0) / main - 1e-9)), 1)
         mains = [y0 + (y1 - y0) * (j + 0.5) / ys_n for j in range(ys_n)]
         for y in mains:                              # main runners along x
-            fb.box(x0 + 0.02, x1 - 0.02, y - 0.019, y + 0.019, z1 + 0.012,
-                   z1 + 0.012 + 0.025, steel)
+            for xa, xb in spans(x0 + 0.02, x1 - 0.02, y, False):
+                fb.box(xa, xb, y - 0.019, y + 0.019, z1 + 0.012,
+                       z1 + 0.012 + 0.025, steel)
             nh = max(int(math.ceil((x1 - x0) / main - 1e-9)), 1)
             for i in range(nh):                      # hangers
                 x = x0 + (x1 - x0) * (i + 0.5) / nh
+                if in_hole(x, y):
+                    continue
                 top_h = top_at(x, y)
                 if top_h - (z1 + 0.037) > 0.02:
                     fb.box(x - 0.003, x + 0.003, y - 0.003, y + 0.003,
@@ -2116,6 +2149,113 @@ def stair_railing(stp, s) -> dict:
         out["plan"] += [((ends[0][1][0], ends[0][1][1]), (p[0], p[1])), ((p[0], p[1]), (q[0], q[1]))]
     out["length"] = sum(math.dist(a, b) for a, b in out["rails"])
     return out
+
+
+def stair_hole(stp, s) -> tuple:
+    """ช่องบันได: the opening the stair needs in the floor above it —
+    its footprint (x0, y0, x1, y1)."""
+    r = stair_rect(stp, s)
+    xs, ys = [p[0] for p in r], [p[1] for p in r]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def holes_by_floor(E) -> dict:
+    """{floor: [(x0, y0, x1, y1)]} — the stair openings in each floor's slab
+    (a stair on floor k opens the slab of floor k + 1)."""
+    s = E["settings"]
+    out: dict = {}
+    for e in E["stairs"]:
+        k = e["floor"] + 1
+        if k < E["n"]:
+            out.setdefault(k, []).append(stair_hole(e["st"], s))
+    return out
+
+
+def rect_minus(rect, holes) -> list:
+    """A rectangle less the rectangles cut out of it, as rectangles (strips
+    across the holes) — the pieces of a slab around its stair opening."""
+    pieces = [rect]
+    for hx0, hy0, hx1, hy1 in holes:
+        nxt = []
+        for x0, y0, x1, y1 in pieces:
+            if hx1 <= x0 + 1e-9 or hx0 >= x1 - 1e-9 or hy1 <= y0 + 1e-9 or hy0 >= y1 - 1e-9:
+                nxt.append((x0, y0, x1, y1))
+                continue
+            cx0, cy0, cx1, cy1 = max(x0, hx0), max(y0, hy0), min(x1, hx1), min(y1, hy1)
+            for p in ((x0, y0, x1, cy0), (x0, cy1, x1, y1), (x0, cy0, cx0, cy1), (cx1, cy0, x1, cy1)):
+                if p[2] - p[0] > 1e-6 and p[3] - p[1] > 1e-6:
+                    nxt.append(p)
+        pieces = nxt
+    return pieces
+
+
+def hole_area(rect, holes) -> float:
+    """The area of ``holes`` inside ``rect`` (m²)."""
+    x0, y0, x1, y1 = rect
+    a = 0.0
+    for hx0, hy0, hx1, hy1 in holes:
+        a += max(min(x1, hx1) - max(x0, hx0), 0.0) * max(min(y1, hy1) - max(y0, hy0), 0.0)
+    return a
+
+
+def well_railing(stp, s, outline) -> list:
+    """ราวกันตกรอบช่องบันได on the floor above: the opening's edges, less
+    the piece where the stair arrives and the edges along the outside walls
+    (``outline`` = the building's x0, y0, x1, y1) — [((x, y), (x, y))]."""
+    hx0, hy0, hx1, hy1 = stair_hole(stp, s)
+    lay = stair_layout(stp, s)
+    last = lay["flights"][-1]
+    top = (last["p0"][0] + last["d"][0] * last["L"], last["p0"][1] + last["d"][1] * last["L"])
+    w = last["w"]
+    edges = [((hx0, hy0), (hx1, hy0)), ((hx1, hy0), (hx1, hy1)), ((hx1, hy1), (hx0, hy1)),
+             ((hx0, hy1), (hx0, hy0))]
+    ox0, oy0, ox1, oy1 = outline
+    out = []
+    for a, b in edges:
+        horiz = abs(a[1] - b[1]) < 1e-9
+        if horiz and (abs(a[1] - oy0) < 0.2 or abs(a[1] - oy1) < 0.2):
+            continue                                  # along an outside wall
+        if not horiz and (abs(a[0] - ox0) < 0.2 or abs(a[0] - ox1) < 0.2):
+            continue
+        # the arrival: the stretch of this edge in front of the last flight's top
+        on = (abs(a[1] - top[1]) < 0.06) if horiz else (abs(a[0] - top[0]) < 0.06)
+        if on:
+            c = top[0] if horiz else top[1]
+            lo, hi = sorted((a[0], b[0]) if horiz else (a[1], b[1]))
+            cuts = [(lo, max(lo, c - w / 2)), (min(hi, c + w / 2), hi)]
+            for u0, u1 in cuts:
+                if u1 - u0 > 0.05:
+                    out.append(((u0, a[1]), (u1, a[1])) if horiz else ((a[0], u0), (a[0], u1)))
+            continue
+        out.append((a, b))
+    return out
+
+
+def well_railing_members(stp, s, z, outline) -> list:
+    """The guard rail around the stair opening in 3D: the 2"x4" rail at
+    0.90 m and a 1" baluster every 0.20 m."""
+    out = []
+    for a, b in well_railing(stp, s, outline):
+        out.append(_member("structure", "stair_rail", "ราวกันตกช่องบันได", "rect", dict(b=50.0, h=100.0),
+                           [(a[0], a[1], z + RAIL_H), (b[0], b[1], z + RAIL_H)], ifc="IfcRailing",
+                           name='ราวกันตกช่องบันได ไม้เนื้อแข็ง 2"x4"'))
+        L = math.dist(a, b)
+        n = max(1, int(L / 0.20))
+        for i in range(n + 1):
+            t = i / n
+            p = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            out.append(_member("structure", "stair_rail", "ลูกกรง", "pipe", dict(D=33.4, t=2.3),
+                               [(p[0], p[1], z), (p[0], p[1], z + RAIL_H)], ifc="IfcRailing",
+                               name='ลูกกรงแป๊บดำ Ø 1"'))
+    return [g for g in out if g is not None]
+
+
+def building_outline(E) -> tuple:
+    rooms = [rm for f in E["floors"] for rm in f["rooms"]]
+    if not rooms:
+        return (0.0, 0.0, 0.0, 0.0)
+    return (min(r["x"] for r in rooms), min(r["y"] for r in rooms),
+            max(r["x"] + r["w"] for r in rooms), max(r["y"] + r["d"] for r in rooms))
 
 
 def railing_members(stp, s, z) -> list:

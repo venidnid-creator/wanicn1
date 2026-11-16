@@ -84,3 +84,34 @@ def test_the_dialog_and_the_detail_sheets():
     SA.apply(d, dlg.stair)
     titles = [s.title for s in D.build_set(d, {"project": "x"}, ("A", "S"))]
     assert "แบบขยายบันได" in titles and "รายละเอียดบันได คสล." in titles
+
+
+def test_the_floor_above_is_opened_and_railed():
+    """ช่องบันได: the slab of the floor above has the stair's opening (in the
+    model and the BOQ), a guard rail runs round it except where one steps
+    off, and the stair keeps a clear floor in front of its first step."""
+    from core import wanic_building as B
+    from core import wanic_quantities as Q
+    from core import wanic_stair_auto as SA
+    d = _house()
+    before = Q.compute(d)
+    st, rep = SA.design(d, ("left", "front"))
+    assert rep["ok"] and st["y"] - rep["D"] / 2 >= 1.0 - 1e-6        # 1.00 m clear at the foot
+    SA.apply(d, st)
+    E = B.elements(d)
+    holes = B.holes_by_floor(E)
+    assert list(holes) == [1] and len(holes[1]) == 1
+    hx0, hy0, hx1, hy1 = holes[1][0]
+    groups, count = B.structure_members(d)
+    slabs_up = [g for g in groups if (g.ext or {}).get(B.EXT_KEY, {}).get("kind") == "slab"
+                and min(v.position.z() for v in g.mesh.vertices) > 1.0]
+    for g in slabs_up:                                # no slab piece over the opening's middle
+        xs = [v.position.x() for v in g.mesh.vertices]
+        ys = [v.position.y() for v in g.mesh.vertices]
+        cx, cy = (hx0 + hx1) / 2, (hy0 + hy1) / 2
+        assert not (min(xs) + 1e-6 < cx < max(xs) - 1e-6 and min(ys) + 1e-6 < cy < max(ys) - 1e-6)
+    rail = B.well_railing(st, B.settings_of(d), B.building_outline(E))
+    assert rail and count["stair_rail"] > 20
+    after = Q.compute(d)
+    conc = lambda r: sum(ln["qty"] for ln in r["lines"] if ln["desc"].startswith("คอนกรีตโครงสร้าง") and "พื้นชั้นบน" in ln["desc"])  # noqa: E731
+    assert conc(after) < conc(before)

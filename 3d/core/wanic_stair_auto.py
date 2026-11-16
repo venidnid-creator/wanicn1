@@ -84,11 +84,15 @@ def design(data, where=("center", "front"), w=1.00, typ="U") -> tuple:
     ys = [p[1] for p in lay["rect"]]
     W, D = max(xs) - min(xs), max(ys) - min(ys)
     stair["x"] = (x0 + t / 2 + W / 2) if across == "left" else (x1 - t / 2 - W / 2) if across == "right" else cx
-    stair["y"] = (y0 + t / 2 + D / 2) if along == "front" else (y1 - t / 2 - D / 2)
+    # a clear floor as deep as the stair is wide in front of the first step (and,
+    # upstairs, where one steps off): the stair stands back from the outside wall
+    clear = float(w)
+    far = clear if typ == "straight" else 0.0         # a straight flight arrives at the far end
+    stair["y"] = (y0 + t / 2 + clear + D / 2) if along == "front" else (y1 - t / 2 - clear - D / 2)
     lay = B.stair_layout(stair, s)
     n, R_, g = lay["n"], lay["R"], lay["g"]
     flights = [f["n"] for f in lay["flights"]]
-    fits = W + t <= (x1 - x0) + 1e-6 and D + t <= (y1 - y0) + 1e-6
+    fits = W + t <= (x1 - x0) + 1e-6 and D + t + clear + far <= (y1 - y0) + 1e-6
     rise_ok = all(k * R_ <= LAW["flight_rise"] + 1e-9 for k in flights)
     ok = fits and R_ <= LAW["riser"] + 1e-9 and g >= LAW["going"] - 1e-9 and w >= LAW["width"] - 1e-9 and rise_ok
     lines = [f"ความสูงชั้น {lay['H']:.2f} ม. → ลูกตั้ง {n} ขั้น สูงขั้นละ {R_ * 100:.2f} ซม. (กฎหมาย ≤ 20 ซม.)",
@@ -97,7 +101,8 @@ def design(data, where=("center", "front"), w=1.00, typ="U") -> tuple:
                  f"2 ช่วง ช่วงละ {flights[0]} / {flights[1]} ขั้น สูงช่วงละ ≤ {max(flights) * R_:.2f} ม. · "
                  f"ชานพัก {w:.2f} × {W if typ == 'U' else w:.2f} ม." if len(flights) > 1
                  else f"ช่วงเดียว {flights[0]} ขั้น สูง {flights[0] * R_:.2f} ม."),
-             f"พื้นที่บันได {W:.2f} × {D:.2f} ม. ({W * D:.1f} ตร.ม.) · วางที่ {PLACES.get(where, '')} ของอาคาร"]
+             f"พื้นที่บันได {W:.2f} × {D:.2f} ม. ({W * D:.1f} ตร.ม.) · วางที่ {PLACES.get(where, '')} ของอาคาร · "
+             f"เว้นพื้นหน้าขั้นแรก {clear:.2f} ม. · พื้นชั้นบนเจาะช่องบันไดพร้อมราวกันตก"]
     if not fits:
         lines.append(f"✗ อาคารเล็กเกินไปสำหรับบันไดนี้ (อาคาร {x1 - x0:.2f} × {y1 - y0:.2f} ม.) — ลดความกว้างหรือขยายห้อง")
     elif not rise_ok:

@@ -474,6 +474,7 @@ def compute(data, gate: bool = False) -> dict:
 
     # --- 4. Slabs --------------------------------------------------------
     g = "slab"
+    holes = B.holes_by_floor(E)                       # ช่องบันได: not cast, not tiled, no ceiling
     for ground, title in ((True, "พื้นวางบนดิน"), (False, "พื้นชั้นบน")):
         vol = soffit = sand_s = 0.0
         basis = {}
@@ -485,6 +486,8 @@ def compute(data, gate: bool = False) -> dict:
             rm = e["room"]
             bw = float(lib[ROLE_beam(e["floor"], n)]["b"])
             area = max(float(rm["w"]) - bw, 0) * max(float(rm["d"]) - bw, 0)
+            area = max(area - B.hole_area((rm["x"], rm["y"], rm["x"] + rm["w"], rm["y"] + rm["d"]),
+                                          holes.get(e["floor"]) or []), 0.0)
             t = float(sl["t"])
             vol += area * t
             basis[e["mark"]] = basis.get(e["mark"], 0.0) + area
@@ -538,11 +541,15 @@ def compute(data, gate: bool = False) -> dict:
     if vol:
         concrete(g, "บันได", vol, "พื้นที่หน้าตัดขั้นบันได × กว้าง")
         formwork(g, "บันได", area, "ท้องบันได + ข้าง 2 ด้าน + ลูกตั้ง")
-    rail = sum(B.stair_railing(e["st"], s)["length"] for e in E["stairs"])
+    outline = B.building_outline(E)
+    rail = sum(B.stair_railing(e["st"], s)["length"] for e in E["stairs"]) + sum(
+        math.dist(a, b) for e in E["stairs"] if e["floor"] + 1 < E["n"]
+        for a, b in B.well_railing(e["st"], s, outline))
     if rail:                                          # ราวบันได as the standard plans
         posts = sum(len(B.stair_railing(e["st"], s)["posts"]) for e in E["stairs"])
         bill.add(g, B.RAIL_TEXT, rail, "ม.", waste=5.0, mat_key="ราวบันไดไม้เนื้อแข็ง 2\"x4\"",
-                 basis=f"ยาวตามแนวลาดราวบันได {rail:.2f} ม. · ลูกกรง {posts} ต้น (ทุกขั้น) สูง {B.RAIL_H:.2f} ม.",
+                 basis=f"ราวบันไดตามแนวลาด + ราวกันตกรอบช่องบันไดชั้นบน รวม {rail:.2f} ม. · "
+                       f"ลูกกรงบันได {posts} ต้น (ทุกขั้น) สูง {B.RAIL_H:.2f} ม.",
                  ref="แบบมาตรฐานกรมโยธาธิการและผังเมือง (แบบขยายบันได)")
 
     # --- 6. Reinforcing bars by size --------------------------------------
@@ -777,6 +784,8 @@ def compute(data, gate: bool = False) -> dict:
             rm = e["room"]
             fin = CAT.finish_of(rm, o["floor_recipe"])
             a = max(float(rm["w"]) - wt, 0) * max(float(rm["d"]) - wt, 0)
+            a = max(a - B.hole_area((rm["x"], rm["y"], rm["x"] + rm["w"], rm["y"] + rm["d"]),
+                                    holes.get(e["floor"]) or []), 0.0)
             floors[fin["floor"]] = floors.get(fin["floor"], 0.0) + a
             if fin["ceiling"]:
                 ceiling += a
@@ -799,7 +808,8 @@ def compute(data, gate: bool = False) -> dict:
             if ct == "none" or not CAT.finish_of(rm, o["floor_recipe"])["ceiling"]:
                 continue
             x0, y0, x1, y1 = B.room_inner(E, rm, k)
-            ceil[ct] = ceil.get(ct, 0.0) + (x1 - x0) * (y1 - y0)
+            ceil[ct] = ceil.get(ct, 0.0) + (x1 - x0) * (y1 - y0) - B.hole_area((x0, y0, x1, y1),
+                                                                                holes.get(k + 1) or [])
             cper[ct] = cper.get(ct, 0.0) + 2 * ((x1 - x0) + (y1 - y0))
         for ct, area in ceil.items():
             name, lab, frame, sub, main = B.CEILING_TYPES[ct]

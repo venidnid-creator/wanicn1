@@ -827,6 +827,25 @@ def draw_stairs(sh, v, E, k):
             sh.line(v(*p), v(*q), "door", 0.25)
         e = v(*w[-1])
         sh.text((e[0], e[1] + 1.2), "ขึ้น", 2.0, "center", "dim")
+    # upstairs: the stair below seen through its opening (ช่องบันได) and the
+    # guard rail round the opening, as the standard upper floor plans
+    outline = B.building_outline(E)
+    for st in (x for x in E["stairs"] if x["floor"] == k - 1):
+        hx0, hy0, hx1, hy1 = B.stair_hole(st["st"], s)
+        pl = B.stair_plan(st["st"], s)
+        for poly in pl["polys"]:
+            sh.poly([v(*p) for p in poly], "wall", 0.18, dash=True)
+        for p, q in pl["treads"]:
+            sh.line(v(*p), v(*q), "wall", 0.10, dash=True)
+        sh.line(v(hx0, hy0), v(hx1, hy1), "hidden", 0.13, dash=True)
+        sh.line(v(hx0, hy1), v(hx1, hy0), "hidden", 0.13, dash=True)
+        for p, q in B.well_railing(st["st"], s, outline):
+            for off in (-0.03, 0.03):
+                dx, dy = (0.0, off) if abs(p[1] - q[1]) < 1e-9 else (off, 0.0)
+                sh.line(v(p[0] + dx, p[1] + dy), v(q[0] + dx, q[1] + dy), "door", 0.25)
+        c = v((hx0 + hx1) / 2, (hy0 + hy1) / 2)
+        sh.text((c[0], c[1] + 1.5), "ช่องบันได", 2.0, "center", "text", True)
+        sh.text((c[0], c[1] - 1.5), "ลง", 2.0, "center", "dim")
 
 
 def fixture_spec(t):
