@@ -2115,38 +2115,54 @@ def stair_railing(stp, s) -> dict:
     [((x, y), (x, y))], "length" (m)}; z from the floor the stair starts on."""
     lay = stair_layout(stp, s)
     fl, R_, g = lay["flights"], lay["R"], lay["g"]
-    inset = 0.05
     out = {"rails": [], "posts": [], "plan": [], "length": 0.0}
-    ends = []
+
+    def seg(a, b, post_a=None, post_b=None):
+        out["rails"].append((a, b))
+        out["plan"].append(((a[0], a[1]), (b[0], b[1])))
+    prev_end = None
+    last = len(fl) - 1
     for i, f in enumerate(fl):
         (x, y), (dx, dy) = f["p0"], f["d"]
         nx, ny = dy, -dx
-        if len(fl) > 1:
-            other = fl[1 - i] if i < 2 else fl[0]
+        if len(fl) > 1:                               # the edge on the well, toward the other flight
+            other = fl[1] if i == 0 else fl[i - 1]
             ox, oy = other["p0"][0] - x, other["p0"][1] - y
             sgn = 1.0 if ox * nx + oy * ny >= 0 else -1.0
         else:
             sgn = 1.0
-        off = (f["w"] / 2 - inset) * sgn
+        off = f["w"] / 2 * sgn                        # on the flight's edge: it meets the opening's corner
 
         def at(u, z, x=x, y=y, dx=dx, dy=dy, nx=nx, ny=ny, off=off):
             return (x + dx * u + nx * off, y + dy * u + ny * off, z)
-        z0 = f["z0"]
-        a = at(0.0, z0 + R_ + RAIL_H)
-        b = at((f["n"] - 1) * g, z0 + f["n"] * R_ + RAIL_H)
-        out["rails"].append((a, b))
-        for k in range(f["n"]):
+        z0, n, L = f["z0"], f["n"], f["L"]
+        a = at(0.0, z0 + R_ + RAIL_H)                 # above the first nosing
+        if prev_end is not None:                      # round the well at the landing, level
+            seg(prev_end, a)
+            out["posts"].append(((a[0], a[1], z0), a))
+        else:
+            out["posts"].append(((a[0], a[1], z0 + R_), a))   # the newel at the foot
+        if i < last:
+            # on the nosing line up to the landing's edge: there both flights'
+            # rails stand one riser above the landing — they meet level
+            e = at(L, z0 + (n + 1) * R_ + RAIL_H)
+            seg(a, e)
+            out["posts"].append(((e[0], e[1], z0 + n * R_), e))
+        else:
+            # the last flight: down to the floor's 0.90 m over the last tread,
+            # level to the opening's corner, where the guard rail goes on
+            b = at((n - 1) * g, z0 + n * R_ + RAIL_H)
+            e = at(L, z0 + n * R_ + RAIL_H)
+            seg(a, b)
+            seg(b, e)
+            out["posts"].append(((e[0], e[1], z0 + n * R_), e))
+        for k in range(n):                            # a baluster on every tread
             u = (k + 0.5) * g
-            out["posts"].append((at(u, z0 + (k + 1) * R_), at(u, z0 + (k + 1) * R_ + RAIL_H + (g / 2) * R_ / g)))
-        out["plan"].append(((a[0], a[1]), (b[0], b[1])))
-        ends.append((a, b, at(f["L"], z0 + f["n"] * R_ + RAIL_H)))
-    if len(ends) == 2:                                # along the well at the landing
-        p = ends[0][2]
-        q = ends[1][0]
-        q = (q[0], q[1], p[2])
-        out["rails"].append((ends[0][1], p))
-        out["rails"].append((p, q))
-        out["plan"] += [((ends[0][1][0], ends[0][1][1]), (p[0], p[1])), ((p[0], p[1]), (q[0], q[1]))]
+            top = z0 + (k + 1.5) * R_ + RAIL_H
+            if i == last:
+                top = min(top, z0 + n * R_ + RAIL_H)  # under the level piece at the top
+            out["posts"].append((at(u, z0 + (k + 1) * R_), at(u, top)))
+        prev_end = e
     out["length"] = sum(math.dist(a, b) for a, b in out["rails"])
     return out
 

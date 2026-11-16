@@ -103,8 +103,12 @@ def a_stair_detail(sh, E, e):
         sh.text((q[0] + 7, q[1] - 0.6), lab, 2.0)
     # ราวบันได: the hardwood rail 2"x4" on a baluster at every tread, 0.90 m above the nosings
     hr = B.RAIL_H
+    up_to = L1 if len(fl) > 1 else L1 - g             # to the landing's edge: both flights meet level there
+    z_up = (n1 + 1) * R_ if len(fl) > 1 else n1 * R_
     for dz in (0.0, 0.10):
-        sh.line(vs(0.0, R_ + hr - dz), vs(L1 - g, n1 * R_ + hr - dz), "door", 0.25)
+        sh.line(vs(0.0, R_ + hr - dz), vs(up_to, z_up + hr - dz), "door", 0.25)
+    if len(fl) > 1:
+        sh.line(vs(L1, n1 * R_), vs(L1, z_up + hr), "door", 0.35)              # the post at the turn
     for i in range(n1):
         u = (i + 0.5) * g
         sh.line(vs(u, (i + 1) * R_), vs(u, (i + 1.5) * R_ + hr - 0.10), "door", 0.18)
@@ -116,8 +120,10 @@ def a_stair_detail(sh, E, e):
             uu = u - 0.5 * g
             sh.line(vs(uu, z + (j + 1) * R_), vs(uu, z + (j + 1.5) * R_ + hr - 0.10), "door", 0.13, dash=True)
             u -= g
-        n2 = fl[1]["n"]                               # its rail, behind: dashed
+        n2 = fl[1]["n"]                               # its rail, behind: dashed, level at the top
         sh.line(vs(L1, z + R_ + hr), vs(L1 - (n2 - 1) * g, z + n2 * R_ + hr), "door", 0.18, dash=True)
+        sh.line(vs(L1 - (n2 - 1) * g, z + n2 * R_ + hr), vs(L1 - n2 * g, z + n2 * R_ + hr), "door", 0.18,
+                dash=True)
     lab = vs(-0.5, R_ + hr + 0.9)                     # the label to the left, with a leader to the rail
     tip = vs(L1 * 0.25, R_ + hr + L1 * 0.25 * R_ / g)
     sh.line(tip, (lab[0] + 1, lab[1] - 1), "dim", 0.13)
