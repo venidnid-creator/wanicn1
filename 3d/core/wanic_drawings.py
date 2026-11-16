@@ -823,6 +823,8 @@ def draw_stairs(sh, v, E, k):
         w = pl["walk"]
         for p, q in zip(w, w[1:]):
             sh.line(v(*p), v(*q), "dim", 0.18)
+        for p, q in B.stair_railing(st["st"], s)["plan"]:          # ราวบันได
+            sh.line(v(*p), v(*q), "door", 0.25)
         e = v(*w[-1])
         sh.text((e[0], e[1] + 1.2), "ขึ้น", 2.0, "center", "dim")
 

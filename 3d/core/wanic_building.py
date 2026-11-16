@@ -1237,6 +1237,8 @@ def structure_members(data) -> tuple[list, dict]:
     for e in E["stairs"]:
         for g_ in stair_members(e["st"], s, e["floor"] * E["H"]):
             add(g_, "stair")
+        for g_ in railing_members(e["st"], s, e["floor"] * E["H"]):
+            add(g_, "stair_rail")
     rooms_of = [f["rooms"] for f in E["floors"]]
     drop = max(float(s.get("wet_drop") or 0.0), 0.0)
     for e in E["fixtures"]:
@@ -2062,6 +2064,72 @@ def stair_members(stp, s, z) -> list:
                            dict(b=_mm(max(xs) - min(xs)), h=_mm(max(ys) - min(ys))),
                            [(cx, cy, top - t), (cx, cy, top)], ifc="IfcSlab",
                            name=f"ชานพักบันได หนา {_cm(t)} ซม. · ระดับ {top:+.2f}"))
+    return [g for g in out if g is not None]
+
+
+#: ราวบันได as the standard house plans (กรมโยธาธิการฯ, บ้านครอบครัวไทยเป็นสุข):
+#: a hardwood rail 2"×4" painted on black-steel balusters Ø 1" painted —
+#: the rail 0.90 m above the nosings (the plans show 0.80; 0.90 as the
+#: guard rails of กฎกระทรวง ฉบับที่ 55), one baluster on every tread.
+RAIL_H = 0.90
+RAIL_TEXT = 'ราวบันไดไม้เนื้อแข็ง 2"x4" ทาสี ลูกกรงเหล็กแป๊บดำ ขนาด 1" ทาสี'
+
+
+def stair_railing(stp, s) -> dict:
+    """The railing on the open side of a stair (the well of a U or L stair,
+    else the right of the way up): {"rails": [((x, y, z), (x, y, z))] the top
+    rail's straight pieces, "posts": [((x, y, z0), (x, y, z1))], "plan":
+    [((x, y), (x, y))], "length" (m)}; z from the floor the stair starts on."""
+    lay = stair_layout(stp, s)
+    fl, R_, g = lay["flights"], lay["R"], lay["g"]
+    inset = 0.05
+    out = {"rails": [], "posts": [], "plan": [], "length": 0.0}
+    ends = []
+    for i, f in enumerate(fl):
+        (x, y), (dx, dy) = f["p0"], f["d"]
+        nx, ny = dy, -dx
+        if len(fl) > 1:
+            other = fl[1 - i] if i < 2 else fl[0]
+            ox, oy = other["p0"][0] - x, other["p0"][1] - y
+            sgn = 1.0 if ox * nx + oy * ny >= 0 else -1.0
+        else:
+            sgn = 1.0
+        off = (f["w"] / 2 - inset) * sgn
+
+        def at(u, z, x=x, y=y, dx=dx, dy=dy, nx=nx, ny=ny, off=off):
+            return (x + dx * u + nx * off, y + dy * u + ny * off, z)
+        z0 = f["z0"]
+        a = at(0.0, z0 + R_ + RAIL_H)
+        b = at((f["n"] - 1) * g, z0 + f["n"] * R_ + RAIL_H)
+        out["rails"].append((a, b))
+        for k in range(f["n"]):
+            u = (k + 0.5) * g
+            out["posts"].append((at(u, z0 + (k + 1) * R_), at(u, z0 + (k + 1) * R_ + RAIL_H + (g / 2) * R_ / g)))
+        out["plan"].append(((a[0], a[1]), (b[0], b[1])))
+        ends.append((a, b, at(f["L"], z0 + f["n"] * R_ + RAIL_H)))
+    if len(ends) == 2:                                # along the well at the landing
+        p = ends[0][2]
+        q = ends[1][0]
+        q = (q[0], q[1], p[2])
+        out["rails"].append((ends[0][1], p))
+        out["rails"].append((p, q))
+        out["plan"] += [((ends[0][1][0], ends[0][1][1]), (p[0], p[1])), ((p[0], p[1]), (q[0], q[1]))]
+    out["length"] = sum(math.dist(a, b) for a, b in out["rails"])
+    return out
+
+
+def railing_members(stp, s, z) -> list:
+    """The railing in 3D: the hardwood rail 50×100 mm and the Ø 1" balusters."""
+    r = stair_railing(stp, s)
+    out = []
+    for a, b in r["rails"]:
+        out.append(_member("structure", "stair_rail", "ราวบันได", "rect", dict(b=50.0, h=100.0),
+                           [(a[0], a[1], a[2] + z), (b[0], b[1], b[2] + z)], ifc="IfcRailing",
+                           name='ราวบันไดไม้เนื้อแข็ง 2"x4"'))
+    for a, b in r["posts"]:
+        out.append(_member("structure", "stair_rail", "ลูกกรง", "pipe", dict(D=33.4, t=2.3),
+                           [(a[0], a[1], a[2] + z), (b[0], b[1], b[2] + z)], ifc="IfcRailing",
+                           name='ลูกกรงแป๊บดำ Ø 1"'))
     return [g for g in out if g is not None]
 
 
@@ -4434,7 +4502,7 @@ def build(data, parts=("structure", "roof")):
 
 KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"), ("stump", "ตอม่อ"), ("column", "เสา"),
            ("beam", "คาน"), ("slab", "พื้น"), ("wall", "ผนัง"),
-           ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"),
+           ("door", "ประตู"), ("window", "หน้าต่าง"), ("stair", "บันได"), ("stair_rail", "ชิ้นราวบันได"),
            ("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"),
            ("purlin", "แป"), ("post", "ดั้ง"), ("wallplate", "อะเส"),
            ("tiebeam", "ขื่อ"), ("rbeam", "คานรับดั้ง"), ("strut", "ตุ๊กตา"),

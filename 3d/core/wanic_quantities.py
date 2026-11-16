@@ -511,6 +511,12 @@ def compute(data) -> dict:
     if vol:
         concrete(g, "บันได", vol, "พื้นที่หน้าตัดขั้นบันได × กว้าง")
         formwork(g, "บันได", area, "ท้องบันได + ข้าง 2 ด้าน + ลูกตั้ง")
+    rail = sum(B.stair_railing(e["st"], s)["length"] for e in E["stairs"])
+    if rail:                                          # ราวบันได as the standard plans
+        posts = sum(len(B.stair_railing(e["st"], s)["posts"]) for e in E["stairs"])
+        bill.add(g, B.RAIL_TEXT, rail, "ม.", waste=5.0, mat_key="ราวบันไดไม้เนื้อแข็ง 2\"x4\"",
+                 basis=f"ยาวตามแนวลาดราวบันได {rail:.2f} ม. · ลูกกรง {posts} ต้น (ทุกขั้น) สูง {B.RAIL_H:.2f} ม.",
+                 ref="แบบมาตรฐานกรมโยธาธิการและผังเมือง (แบบขยายบันได)")
 
     # --- 6. Reinforcing bars by size --------------------------------------
     g = "rebar"

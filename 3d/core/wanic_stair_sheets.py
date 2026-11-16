@@ -51,6 +51,8 @@ def a_stair_detail(sh, E, e):
         sh.poly([v(*p) for p in poly], "wall", 0.35)
     for a, b in pl["treads"]:
         sh.line(v(*a), v(*b), "wall", 0.18)
+    for p, q in B.stair_railing(st, s)["plan"]:       # ราวบันได on the open side
+        sh.line(v(*p), v(*q), "door", 0.35)
     walk = [v(*p) for p in pl["walk"]]
     for a, b in zip(walk, walk[1:]):
         sh.line(a, b, "dim", 0.25)
@@ -99,10 +101,31 @@ def a_stair_detail(sh, E, e):
         q = vs(L1 + land + 0.3, z)
         sh.line((q[0], q[1]), (q[0] + 6, q[1]), "dim", 0.13)
         sh.text((q[0] + 7, q[1] - 0.6), lab, 2.0)
-    # the handrail 0.90 m above the nosings
-    hr = 0.90
-    sh.line(vs(0.0, R_ + hr), vs(L1 - g, n1 * R_ + hr), "door", 0.25)
-    sh.text(vs(0.1, R_ + hr + 0.15), "ราวจับ สูง 0.90 ม.", 1.8)
+    # ราวบันได: the hardwood rail 2"x4" on a baluster at every tread, 0.90 m above the nosings
+    hr = B.RAIL_H
+    for dz in (0.0, 0.10):
+        sh.line(vs(0.0, R_ + hr - dz), vs(L1 - g, n1 * R_ + hr - dz), "door", 0.25)
+    for i in range(n1):
+        u = (i + 0.5) * g
+        sh.line(vs(u, (i + 1) * R_), vs(u, (i + 1.5) * R_ + hr - 0.10), "door", 0.18)
+    sh.line(vs(0.0, R_), vs(0.0, R_ + hr), "door", 0.35)                       # the newel at the foot
+    if len(fl) > 1:
+        z = n1 * R_
+        u = L1
+        for j in range(fl[1]["n"]):
+            uu = u - 0.5 * g
+            sh.line(vs(uu, z + (j + 1) * R_), vs(uu, z + (j + 1.5) * R_ + hr - 0.10), "door", 0.13, dash=True)
+            u -= g
+        n2 = fl[1]["n"]                               # its rail, behind: dashed
+        sh.line(vs(L1, z + R_ + hr), vs(L1 - (n2 - 1) * g, z + n2 * R_ + hr), "door", 0.18, dash=True)
+    lab = vs(-0.5, R_ + hr + 0.9)                     # the label to the left, with a leader to the rail
+    tip = vs(L1 * 0.25, R_ + hr + L1 * 0.25 * R_ / g)
+    sh.line(tip, (lab[0] + 1, lab[1] - 1), "dim", 0.13)
+    sh.line((lab[0] + 1, lab[1] - 1), (lab[0] - 4, lab[1] - 1), "dim", 0.13)
+    first, _sp, second = B.RAIL_TEXT.partition(" ลูกกรง")
+    sh.text((lab[0] - 5, lab[1] + 1.6), first, 1.8, "right")
+    sh.text((lab[0] - 5, lab[1] - 2.0), "ลูกกรง" + second, 1.8, "right")
+    D.dim_chain(sh, vs, [n1 * R_ - g * 0, n1 * R_ + hr], L1 - g + 0.3, "y")
     k = 0
     for i in range(n1):
         k += 1
@@ -133,7 +156,8 @@ def a_stair_detail(sh, E, e):
         f"3. 2R+G = {2 * R_ + g:.3f} ม. (เดินสบาย 0.60-0.65 ม.)",
         "4. กฎกระทรวง ฉบับที่ 55: ลูกตั้งไม่เกิน 20 ซม. ลูกนอนไม่น้อยกว่า 22 ซม.",
         "   กว้างไม่น้อยกว่า 80 ซม. ทุกช่วงสูงไม่เกิน 3.00 ม. ต้องมีชานพัก",
-        "5. ราวจับ/ราวกันตกสูงไม่น้อยกว่า 0.90 ม. จากจมูกขั้น",
+        f"5. {B.RAIL_TEXT} สูง {B.RAIL_H:.2f} ม. จากจมูกขั้น",
+        "   ลูกกรงทุกขั้น ยาวรวม %.2f ม. (เส้นสีในแปลน = แนวราวบันได)" % B.stair_railing(st, s)["length"],
         f"6. ท้องบันได ค.ส.ล. หนา {ts * 100:.0f} ซม. เหล็กเสริมตามแบบโครงสร้าง",
     ], 2.2, 80)
 
