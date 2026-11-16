@@ -88,10 +88,10 @@ class RCPanel(QWidget):
         self.btn_box = QWidget()
         row = FlowLayout(self.btn_box, spacing=4)
         # «ปรับเหล็กให้ผ่านขั้นต่ำ» is part of «แก้ตามคำแนะนำ» (fix_selected stays for the code)
-        self.advice_btn = QPushButton("แก้ตามคำแนะนำ (ทุกเบอร์)")
+        self.advice_btn = QPushButton("แก้ตามคำแนะนำ (เลือกได้)…")
         self.advice_btn.setToolTip("ปรับขนาด/เหล็กของทุกเบอร์ที่ไม่ผ่าน ตามคำแนะนำ แล้วคำนวณซ้ำจนผ่าน "
                                    "(รวมข้อกำหนดเหล็กขั้นต่ำ) — ถามยืนยันก่อน")
-        self.advice_btn.clicked.connect(self.apply_advice)
+        self.advice_btn.clicked.connect(lambda _=False: self.apply_advice())
         row.addWidget(self.advice_btn)
         self.fix_one_btn = QPushButton("แก้ชิ้นที่เลือกให้ผ่าน…")
         self.fix_one_btn.setStyleSheet("font-weight: 700; color: #B91C1C;")
@@ -433,6 +433,8 @@ class RCPanel(QWidget):
         first = next((i for i, m in enumerate(ms) if m.diagram is not None), -1)
         if first >= 0:
             self.table.setCurrentCell(first, 1)
+        if bad and self.isVisible():
+            QTimer.singleShot(400, self, self._offer_fixes)
 
     def _show_checks(self):
         if self.step == "calc":
@@ -687,26 +689,57 @@ class RCPanel(QWidget):
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
         self.refresh()
 
-    def apply_advice(self):
-        """Apply the advice to every failing mark, after a confirmation that
-        lists the changes; the RC designer's undo brings it back."""
-        import copy
-        from core import wanic_advice as AD
+    def apply_advice(self, auto: bool = False):
+        """ไม่ผ่าน — เลือกวิธีแก้: the failing marks, why, and the change for
+        each; the ticked ones are applied, the model rebuilt and the
+        calculation run again (Undo brings it back). ``auto``: opened by the
+        program after a calculation, without a message when nothing fails."""
+        from core import wanic_calc as C
+        from core import wanic_fail_view as FV
         bp = self.building()
         if bp is None:
             return
         d = bp.data()
-        trial = copy.deepcopy(d)
-        done = AD.apply_fixes(trial)
-        if not done:
-            QMessageBox.information(self, TITLE, "ทุกชิ้นส่วนผ่านแล้ว — ไม่มีอะไรต้องแก้")
+        try:
+            trial, rows = FV.proposals(d)
+        except Exception as e:                       # noqa: BLE001 - shown, never a crash
+            if not auto:
+                QMessageBox.warning(self, TITLE, f"หาวิธีแก้ไม่ได้: {e}")
             return
-        if QMessageBox.question(self, TITLE, "จะปรับเบอร์ต่อไปนี้ให้ผ่าน:\n\n" + "\n".join(f"• {t}" for t in done)
-                                + "\n\nตกลงหรือไม่? (แก้คืนได้ด้วย Undo)") != QMessageBox.Yes:
+        if not rows:
+            if not auto:
+                QMessageBox.information(self, TITLE, "ทุกชิ้นส่วนผ่านแล้ว — ไม่มีอะไรต้องแก้")
             return
-        d["library"] = trial.get("library") or {}
-        bp._write(d)
-        self._rebuild_after_fix(f"ปรับตามคำแนะนำแล้ว {len(done)} เบอร์")
+        res = self._calc or C.analyse(d)
+        dlg = FV.FailDialog(self, res, rows)
+
+        def done(code):
+            if code != FV.FailDialog.Accepted:
+                return
+            keys = dlg.chosen()
+            if not keys:
+                return
+            d2 = bp.data()
+            n = FV.apply_chosen(d2, trial, keys)
+            bp._write(d2)
+            self._rebuild_after_fix(f"ปรับตามคำแนะนำแล้ว {n} เบอร์")
+        dlg.finished.connect(done)
+        dlg.open()                                   # never blocks: the panel keeps painting
+        self._fail_dialog = dlg
+
+    def _offer_fixes(self):
+        """After a calculation with failures — once for each set of failures —
+        the program opens «ไม่ผ่าน — เลือกวิธีแก้» by itself."""
+        from core import wanic_fail_view as FV
+        if not self._calc or not FV.auto_enabled():
+            return
+        sig = FV.signature(self._calc)
+        if not sig or sig == getattr(self, "_offered", None):
+            return
+        self._offered = sig
+        if getattr(self, "_fail_dialog", None) is not None and self._fail_dialog.isVisible():
+            return
+        self.apply_advice(auto=True)
 
     def _rebuild_after_fix(self, what: str, defer: bool = True):
         """The calculation again at once (a fraction of a second) — the
