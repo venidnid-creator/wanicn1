@@ -162,3 +162,42 @@ def test_reserve_in_plain_words():
     assert "มากกว่า 5 เท่า" in s.reserve_text()
     rs = C.reserve_summary([m, s])
     assert [g for g, _t, _ok in rs] == ["slab", "column"] and rs[1][2] is False
+
+
+def test_acting_and_capacity_in_plain_words():
+    """รายการคำนวณ: every member says the load that acts, the load it can
+    take and the share used, for someone who cannot read a calculation."""
+    from core import wanic_calc as C
+    m = C.Member("column", "C1", "", "", 0.5, True)
+    m.qty, m.qty_unit = 10.0, "ตัน ต่อเสา 1 ต้น"
+    t = m.plain_text()
+    assert "น้ำหนักที่กระทำ ≈ 10.0 ตัน" in t and "รับได้ ≈ 20.0 ตัน" in t and "ใช้กำลังไป 50 %" in t
+    assert "ผ่าน" in t and "รับเพิ่มได้อีก ≈ 10.0" in t
+    m.ratio = 1.25
+    assert "ไม่ผ่าน" in m.plain_text() and "เกินอยู่ ≈ 2.0" in m.plain_text()
+    s = C.Member("slab", "S1", "", "", 0.4, True)
+    s.qty, s.qty_unit, s.qty_factor = 500.0, "กก./ตร.ม.", 1.7
+    assert "ใช้กำลังไป 40 %" in s.plain_text() and "รับเพิ่มได้อีก" in s.plain_text()
+    text, ok = C.plain(3.0, 4.0, "ตัน-ม.", "โมเมนต์", 2)
+    assert ok and "รับได้ 4.00 ตัน-ม." in text and "ใช้ไป 75 %" in text
+    assert C.plain(5.0, 4.0, "ตัน")[1] is False
+
+
+def test_the_book_shows_acting_and_capacity(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core import wanic_building as B
+    from core import wanic_calc as C
+    from core import wanic_rc as R
+    from core.wanic_calc_book import beam_plain, make_book
+    d = {"floors": [{"rooms": []}], "settings": {}}
+    R.apply_grid(d, [4, 4], [4], 1, [])
+    res = C.analyse(d)
+    beam = next(m for m in res["members"] if m.group == "beam" and hasattr(m.diagram, "spec"))
+    lines, _ok = beam_plain(beam.diagram)
+    assert lines[0].startswith("ช่วงที่ 1") and any("รับได้" in t and "ใช้ไป" in t for t in lines)
+    n = make_book(res, d, tmp_path / "book.pdf", {"project": "ทดสอบ"})
+    assert n > 5 and (tmp_path / "book.pdf").stat().st_size > 10000
+    assert B is not None

@@ -74,6 +74,11 @@ class RCPanel(QWidget):
         self.checks.setMinimumHeight(120)
         col.addWidget(self.checks, 1)
         from core.wanic_calc_view import DiagramWidget
+        # อธิบายง่าย: the selected member's load against what it can take, in one sentence
+        self.plain = QLabel()
+        self.plain.setWordWrap(True)
+        self.plain.setVisible(False)
+        col.addWidget(self.plain)
         self.diagram = DiagramWidget()
         self.diagram.setMinimumHeight(300)
         col.addWidget(self.diagram, 2)
@@ -405,9 +410,10 @@ class RCPanel(QWidget):
         except Exception:                            # noqa: BLE001 - advice never breaks the table
             tips = {}
         rows = [(names[m.group], m.name, m.demand, m.capacity, f"{m.ratio:.2f}",
-                 "✓ ผ่าน" if m.ok else "✗ ไม่ผ่าน", m.reserve_text(), tips.get(m.name, "")) for m in ms]
-        self._fill(["กลุ่ม", "ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล",
-                    "รับเพิ่มได้อีก (ภาษาง่าย)", "คำแนะนำ (เพิ่มอะไร จุดไหน)"], rows)
+                 (f"✓ ผ่าน · ใช้ไป {m.ratio * 100:,.0f} %" if m.ok else f"✗ ไม่ผ่าน · ใช้ไป {m.ratio * 100:,.0f} %"),
+                 m.plain_text(), tips.get(m.name, "")) for m in ms]
+        self._fill(["กลุ่ม", "ชิ้นส่วน", "แรงที่กระทำ", "แรงที่รับได้", "อัตราส่วน", "ผล",
+                    "อธิบายง่าย: น้ำหนักที่กระทำ · รับได้ · รับเพิ่มได้อีก", "คำแนะนำ (เพิ่มอะไร จุดไหน)"], rows)
         for r_, m in enumerate(ms):
             it = self.table.item(r_, 6)
             if it is not None:
@@ -436,7 +442,15 @@ class RCPanel(QWidget):
                 self.diagram.show_result(ms[r].diagram, ms[r].name)
             else:
                 self.diagram.show_result(None)
+            if 0 <= r < len(ms):
+                m = ms[r]
+                ok = m.ok
+                self.plain.setText(f"<b>อธิบายง่าย — {m.name}:</b> {m.plain_text()}")
+                self.plain.setStyleSheet("padding:6px;border-radius:6px;" + (
+                    "background:#ECFDF5;color:#065F46;" if ok else "background:#FEF2F2;color:#991B1B;"))
+            self.plain.setVisible(0 <= r < len(ms))
             return
+        self.plain.setVisible(False)
         marks = self.table.property("marks") or []
         r = self.table.currentRow()
         if not marks:

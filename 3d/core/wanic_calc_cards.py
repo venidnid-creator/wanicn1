@@ -153,6 +153,13 @@ def footing_pages(bk, res_all, data, critical=False):
                     ("φVc ทะลุ", "kg.", f"{r['Vc2']:,.0f}")]
             bk.table(x, yy + 2, [34, 18, 36], body, 7.0, left=True)
             bk.text(x, yy + 4 + len(body) * 7.0, 86, 6, f"Grid ({r['x']:.2f}, {r['y']:.2f})", 5.2)
+            shear = max(r["V1"] / r["Vc1"] if r["Vc1"] else 0.0, r["V2"] / r["Vc2"] if r["Vc2"] else 0.0)
+            bk.plain(x, yy + 11 + len(body) * 7.0, 88, [
+                f"น้ำหนักที่ลงฐาน ≈ {r['P'] / 1000:,.1f} ตัน",
+                ("เสาเข็ม" if r["piles"] else "ดินใต้ฐาน") + f"รับได้ ≈ {r['cap'] / 1000:,.1f} ตัน",
+                f"ใช้กำลังไป {r['P'] / r['cap'] * 100 if r['cap'] else 999:,.0f} % · "
+                f"แผ่นฐานรับแรงเฉือนใช้ไป {shear * 100:,.0f} %",
+                "→ ผ่าน" if r["ok"] else "→ ไม่ผ่าน — ขยายฐาน/เพิ่มเข็ม"], r["ok"], 5.0)
         bk.text(12, 238, 290, 6, "อ้างอิง วสท. 011008 / ACI 318: แรงดันดินจากน้ำหนักใช้งาน · โมเมนต์ที่ผิวตอม่อ · φVc ทางเดียว = φ0.53√fc′bd", 5.0)
         bk.text(12, 244, 290, 6, "เฉือนทางเดียวที่ระยะ d · เฉือนทะลุที่ d/2 รอบตอม่อ φVc = φ1.06√fc′b0d · As ≥ 0.0018bt", 5.0)
 
@@ -199,10 +206,15 @@ def slab_rows(res_all, data, critical=False) -> list:
                 for k, v in (("s+", Ms_p), ("s-", Ms_n), ("l+", Ml_p), ("l-", Ml_n))}
         sp_ = {k: _spacing(v, bar, t) for k, v in need.items()}
         ok = bar is not None and bar.s and all(bar.s <= s + 1e-6 for s in sp_.values() if s)
+        # what the slab can carry: the steel laid against the steel the moments need
+        prov = bar.area / bar.s if bar and bar.s else 0.0       # cm² per metre width
+        need_m = max((_as_need(v, 100, dcm, bar, b_) for v in (Ms_p, Ms_n, Ml_p, Ml_n) if v > 0), default=0.0)
+        use = need_m / prov if prov else 9.99
+        live_cap = max((wu / use - D_ * dead) / L_, 0.0) if use > 0 else 0.0
         out.append({"mark": sl["mark"], "name": rm.get("name", ""), "S": S, "L": Lg, "m": m, "t": t, "d": d,
                     "bar": bar, "wu": wu, "dead": dead, "ll": b_["ll_floor"], "fin": b_["finish"], "kind": kind,
                     "M": {"s+": Ms_p, "s-": Ms_n, "l+": Ml_p, "l-": Ml_n}, "As": need, "s": sp_, "ok": ok,
-                    "disc": disc})
+                    "disc": disc, "use": use, "live_cap": live_cap})
     if critical:
         best = {}
         for r in out:
@@ -247,8 +259,15 @@ def slab_pages(bk, res_all, data, critical=False):
                     ("ใช้ตามแบบ", "", (fmt(bar.s) if bar and bar.s else "-", BLUE)),
                     (r["kind"], f"ไม่ต่อเนื่อง {r['disc']}", ("OK" if r["ok"] else "NG", GREEN if r["ok"] else RED))]
             bk.table(x, 110, [44, 20, 26], body, 6.8, left=True)
-        bk.text(12, 244, 290, 6, "อ้างอิง วสท. / ACI 318-63 วิธีที่ 2 · พื้นทางเดียว wL²/10 (ต่อเนื่อง)", 5.0)
-        bk.text(12, 250, 290, 6, "As ≥ 0.0018bt (SD40) / 0.0025bt (SR24) · ระยะเรียง ≤ 3t และ ≤ 45 ซม.", 5.0)
+            bk.plain(x, 111 + len(body) * 6.8, 90, [
+                f"น้ำหนักที่กระทำ {r['dead'] + r['ll']:,.0f} กก./ตร.ม.",
+                f"(ตัวพื้น+ปูพื้น {r['dead']:,.0f} · คน/ของ {r['ll']:,.0f})",
+                f"พื้นรับคน/ของได้ ≈ {min(r['live_cap'], 9999):,.0f} กก./ตร.ม.",
+                f"เหล็กใช้กำลังไป {r['use'] * 100:,.0f} % → " + (
+                    "ผ่าน" if r["ok"] else "ไม่ผ่าน" if r["use"] > 1.0
+                    else "กำลังพอ แต่เหล็กห่างเกินข้อกำหนด/น้อยกว่าขั้นต่ำ — ลดระยะเรียง")], r["ok"], 4.8)
+        bk.text(12, 270, 270, 6, "อ้างอิง วสท. / ACI 318-63 วิธีที่ 2 · พื้นทางเดียว wL²/10 (ต่อเนื่อง)", 5.0)
+        bk.text(12, 276, 270, 6, "As ≥ 0.0018bt (SD40) / 0.0025bt (SR24) · ระยะเรียง ≤ 3t และ ≤ 45 ซม.", 5.0)
 
 
 # ---- the roof ------------------------------------------------------------------------
@@ -269,7 +288,8 @@ def roof_page(bk, res_all):
                 bold=True)
         bk.text(24, y + 7, 370, 6, f"แรงที่เกิด: {m.demand}", 5.6)
         bk.text(24, y + 13, 370, 6, f"กำลังที่รับได้: {m.capacity}" + (f"   ·   {m.note}" if m.note else ""), 5.6)
-        y += 22
+        bk.plain(24, y + 19.5, 370, m.plain_text(), m.ok, 5.4)
+        y += 30
     bk.text(12, 238, 290, 6, "อ้างอิง AISC ASD: Fb = 0.60Fy (เหล็กรูปพรรณ) · Z ต้องการ = M / Fb · การแอ่นตัวไม่เกิน L/180", 5.0)
     bk.text(12, 244, 290, 6, "แรงลมคิดแรงยก Cp 0.7 ใช้หน่วยแรงเพิ่ม ⅓ · ไม้ตามค่าที่ใช้ออกแบบ", 5.0)
 

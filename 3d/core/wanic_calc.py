@@ -525,6 +525,33 @@ class Member:
             return f"รับเพิ่มได้อีก ≈ {r:,.{nd}f} {unit} (เผื่ออีก {pct:,.0f}%)"
         return f"เกินกำลังอยู่ ≈ {-r:,.{nd}f} {unit} — ต้องแก้ก่อนก่อสร้าง"
 
+    def plain_text(self) -> str:
+        """น้ำหนักที่กระทำ กับ น้ำหนักที่รับได้ in one plain sentence, for
+        someone who cannot read a calculation: «น้ำหนักที่ลง ≈ 9.9 ตัน ·
+        รับได้ ≈ 21.7 ตัน · ใช้กำลังไป 46 % → ผ่าน»."""
+        verdict = "ผ่าน" if self.ok else "ไม่ผ่าน — ต้องแก้ก่อนก่อสร้าง"
+        pct = self.ratio * 100.0
+        if self.qty and self.qty_unit and abs(self.qty_factor - 1.0) < 1e-9 and self.ratio > 0:
+            unit = self.qty_unit
+            nd = 1 if unit.startswith("ตัน") else 0
+            cap = self.qty / self.ratio
+            more = (f"รับเพิ่มได้อีก ≈ {cap - self.qty:,.{nd}f}" if self.ok
+                    else f"เกินอยู่ ≈ {self.qty - cap:,.{nd}f}")
+            return (f"น้ำหนักที่กระทำ ≈ {self.qty:,.{nd}f} {unit} · รับได้ ≈ {cap:,.{nd}f} {unit} "
+                    f"· ใช้กำลังไป {pct:,.0f} % → {verdict} · {more}")
+        tail = self.reserve_text()
+        return f"ใช้กำลังไป {pct:,.0f} % ของที่รับได้ → {verdict}" + (f" · {tail}" if tail else "")
+
+
+def plain(acting: float, capacity: float, unit: str, what: str = "แรงที่กระทำ", nd: int = 1) -> tuple:
+    """(text, ok): «what X unit · รับได้ Y unit · ใช้ไป Z % → ผ่าน»."""
+    if capacity <= 0:
+        return f"{what} {acting:,.{nd}f} {unit} · ยังไม่มีกำลังที่รับได้ (ตรวจขนาด/เหล็ก)", False
+    pct = acting / capacity * 100.0
+    ok = acting <= capacity * (1 + 1e-9)
+    return (f"{what} {acting:,.{nd}f} {unit} · รับได้ {capacity:,.{nd}f} {unit} · ใช้ไป {pct:,.0f} % → "
+            + ("ผ่าน" if ok else "ไม่ผ่าน")), ok
+
 
 #: plain names of the groups, for the owner's summary
 GROUP_PLAIN = {"slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก", "roof": "โครงหลังคา",

@@ -340,7 +340,8 @@ def report_pdf(res, data, path) -> None:
         text(names[g], True, 12)
         for m in ms:
             text(f"{'✓' if m.ok else '✗'} {m.name}: {m.demand} / {m.capacity} → {m.ratio:.2f} "
-                 f"({'ผ่าน' if m.ok else 'ไม่ผ่าน'})" + (f" · {m.reserve_text()}" if m.qty else ""), color="#15803D" if m.ok else "#B91C1C", size=9)
+                 f"({'ผ่าน' if m.ok else 'ไม่ผ่าน'})", color="#15803D" if m.ok else "#B91C1C", size=9)
+            text("      อธิบายง่าย: " + m.plain_text(), color="#15803D" if m.ok else "#B91C1C", size=8)
         y += 6
     for m in res["members"]:
         if m.diagram is None:

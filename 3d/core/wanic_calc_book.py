@@ -107,6 +107,44 @@ class Book:
                 cx += wd
         return y + len(rows) * h
 
+    def plain(self, x, y, w, lines, ok=True, px=5.3) -> float:
+        """«อธิบายง่าย»: a tinted box with the load that acts and the load
+        it can take, in plain words — green when it passes, red when not.
+        ``lines`` is a string or a list of them; returns the y below it."""
+        if isinstance(lines, str):
+            lines = [lines]
+        lines = [t for t in lines if t]
+        if not lines:
+            return y
+        mm, p = self.mm, self.p
+        # wrap at « · » where a line is wider than the box
+        from PySide6.QtGui import QFontMetricsF
+        fm = QFontMetricsF(_font(px * mm))
+        room = (w - 3) * mm
+        wrapped = []
+        for t in lines:
+            lead = t[:len(t) - len(t.lstrip())]
+            parts = t.strip().split(" · ")
+            cur = ""
+            for part in parts:
+                cand = part if not cur else cur + " · " + part
+                if cur and fm.horizontalAdvance(lead + cand) > room:
+                    wrapped.append(lead + cur)
+                    cur, lead = part, lead or "   "
+                else:
+                    cur = cand
+            wrapped.append(lead + cur)
+        lines = wrapped
+        lh = px * 1.25
+        h = lh * len(lines) + 2.4
+        p.setPen(QPen(GREEN if ok else RED, 1))
+        p.setBrush(QColor("#ECFDF5") if ok else QColor("#FEF2F2"))
+        p.drawRoundedRect(QRectF(x * mm, y * mm, w * mm, h * mm), 1.6 * mm, 1.6 * mm)
+        p.setBrush(Qt.NoBrush)
+        for k, t in enumerate(lines):
+            self.text(x + 1.5, y + 1.2 + k * lh, w - 3, lh, t, px, QColor("#065F46") if ok else RED)
+        return y + h
+
     def close(self):
         self.p.end()
 
@@ -342,6 +380,37 @@ def _diagram_strip(bk: Book, y, res, kind):
                             align=Qt.AlignCenter)
 
 
+def beam_plain(res) -> tuple:
+    """Per span, in plain words: the moment and the shear that act against
+    what the beam can take (ตัน-ม. / ตัน), with the share used."""
+    caps = getattr(res, "caps", None) or {}
+    n = 24
+    out, ok_all = [], True
+    for i, sp in enumerate(res.spans):
+        M = res.M[i * (n + 1):(i + 1) * (n + 1)]
+        V = res.V[i * (n + 1):(i + 1) * (n + 1)]
+        mp, mn, v = max(max(M), 0.0), max(-min(M), 0.0), max(abs(x) for x in V)
+        out.append(f"ช่วงที่ {i + 1} ยาว {sp.L:.2f} ม. · น้ำหนักบนคาน {sp.w:,.0f} กก./ม.")
+        for lab, act, cap in (("โมเมนต์กลางช่วง", mp, caps.get("M+")), ("โมเมนต์ที่หัวเสา", mn, caps.get("M-")),
+                              ("แรงเฉือน", v, caps.get("V"))):
+            if act <= 1.0 or not cap:
+                continue
+            unit = "ตัน" if lab == "แรงเฉือน" else "ตัน-ม."
+            ok = act <= cap * (1 + 1e-9)
+            t = (f"   {lab} {act / 1000:,.2f} · รับได้ {cap / 1000:,.2f} {unit} · ใช้ไป {act / cap * 100:,.0f} % "
+                 + ("ผ่าน" if ok else "ไม่ผ่าน"))
+            ok_all = ok_all and ok
+            out.append(t)
+        if i >= 1:                                   # the two spans whose tables are on the page
+            if len(res.spans) > 2:
+                worst = max(range(len(res.spans)), key=lambda j: max(abs(v) for v in
+                                                                      res.M[j * (n + 1):(j + 1) * (n + 1)]))
+                out.append(f"(อีก {len(res.spans) - 2} ช่วง · ช่วงที่รับแรงมากที่สุดคือช่วงที่ {worst + 1} "
+                           "· ดูตารางสรุปท้ายเล่ม)")
+            break
+    return out, ok_all
+
+
 def beam_pages(bk: Book, res_all, b_, fc):
     k = 0
     for m in res_all["members"]:
@@ -374,6 +443,9 @@ def beam_pages(bk: Book, res_all, b_, fc):
         if len(res.spans) > 2:
             bk.text(12, 262, 270, 6, f"(แสดง 2 ช่วงแรกจาก {len(res.spans)} ช่วง — ช่วงที่เหลือดูในรายการคำนวณแบบสรุป)",
                     5, RED)
+        lines, ok_all = beam_plain(res)
+        bk.text(272, 133, 124, 6, "อธิบายง่าย: แรงที่กระทำ เทียบกับ แรงที่รับได้", 5.6, bold=True)
+        bk.plain(272, 140, 124, lines + [m.plain_text()], ok_all and m.ok, 4.9)
 
 
 def column_pages(bk: Book, res_all, b_, fc):
@@ -410,17 +482,23 @@ def column_pages(bk: Book, res_all, b_, fc):
                 ("Fc′", "ksc", f"{fc:.2f}"), (cap_lab, "", (f"{cap:,.0f}", RED))], 7.0)
             fl = "ตอม่อ" if c["floor"] < 0 else f"ชั้น {c['floor'] + 1}"
             bk.text(x, yy + 2 + 9 * 7.0, 82, 6, f"{fl}      Grid ({c['x']:.2f}, {c['y']:.2f})", 5.2)
+            f_ = (sum(C.factors(b_)) / 2.0) or 1.0            # back to the load in use (no safety factor)
+            bk.plain(x, yy + 9 + 9 * 7.0, 82, [f"น้ำหนักที่ลงเสา ≈ {c['P'] / f_ / 1000:,.1f} ตัน",
+                                              f"เสารับได้ ≈ {cap / f_ / 1000:,.1f} ตัน",
+                                              f"ใช้กำลังไป {c['P'] / cap * 100 if cap else 999:,.0f} % → "
+                                              + ("ผ่าน" if ok else "ไม่ผ่าน")], ok, 5.0)
 
 
 def list_page(bk: Book, title: str, tag: str, members):
     bk.page(title, tag)
-    rows = [("ชิ้นส่วน", "แรงที่เกิด", "กำลังที่รับได้", "อัตราส่วน", "ผล")]
+    rows = [("ชิ้นส่วน", "แรงที่กระทำ", "แรงที่รับได้", "อัตราส่วน", "อธิบายง่าย")]
     for m in members:
         rows.append((m.name, m.demand, m.capacity, f"{m.ratio:.2f}",
-                     ("ผ่าน", GREEN) if m.ok else ("ไม่ผ่าน", RED)))
+                     (f"ใช้กำลังไป {m.ratio * 100:,.0f} % · ผ่าน", GREEN) if m.ok
+                     else (f"ใช้กำลังไป {m.ratio * 100:,.0f} % · ไม่ผ่าน", RED)))
     y = 34
     for chunk in range(0, len(rows), 30):
-        y = bk.table(10, y, [95, 135, 110, 22, 18], rows[chunk:chunk + 30], 7.0, left=True)
+        y = bk.table(10, y, [88, 118, 100, 20, 58], rows[chunk:chunk + 30], 7.0, left=True)
         if chunk + 30 < len(rows):
             bk.page(title, tag)
             y = 34
@@ -582,6 +660,18 @@ def stair_page(bk: Book, dz: dict, b_: dict):
 C2_COVER = 0.020
 
 
+def column_capacity(spec, b_) -> float:
+    """The axial load a column can take (factored, kg) — as the column cards."""
+    fc = b_["fc"]
+    b, h = float(spec.get("b", 0.2)), float(spec.get("h", 0.2))
+    main = R.parse_bar(spec.get("main"))
+    Ag = b * h * 1e4
+    As = (main.n * main.area) if main and main.n else 0.0
+    if b_["method"] == "SDM":
+        return 0.80 * 0.70 * (0.85 * fc * (Ag - As) + C.fy_of(main, b_) * As)
+    return 0.85 * Ag * (0.25 * fc + C.fs_of(main, b_) * (As / Ag if Ag else 0.0))
+
+
 def checkload_page(bk: Book, res_all, data):
     """Checkload — Wcol, Wcol-Area and Wfloor of every ground-floor column."""
     from core import wanic_calc as C2
@@ -592,7 +682,14 @@ def checkload_page(bk: Book, res_all, data):
     if not ck["rows"]:
         return
     lo, hi = ck["range"]
-    head = ("เสา", "ตำแหน่ง", "พื้นที่รับ ตร.ม.", "Wcol ตัน", "Wcol-Area ตัน", "ต่าง %", "Wfloor กก./ตร.ม.", "ผล")
+    head = ("เสา", "ตำแหน่ง", "พื้นที่รับ ตร.ม.", "Wcol ตัน", "Wcol-Area ตัน", "ต่าง %", "Wfloor กก./ตร.ม.",
+            "เสารับได้ ตัน", "ใช้ไป %", "ผล")
+    b_ = res_all["basis"]
+    caps = {}                                         # (x, y) of a ground-floor column → its capacity in use, tonnes
+    f_ = (sum(C2.factors(b_)) / 2.0) or 1.0
+    for c in res_all.get("cards") or []:
+        if c["floor"] == 0:
+            caps[(round(c["x"], 2), round(c["y"], 2))] = column_capacity(c["spec"], b_) / f_ / 1000.0
     per = 24
     rows = ck["rows"]
     for k in range(0, len(rows), per):
@@ -603,9 +700,23 @@ def checkload_page(bk: Book, res_all, data):
         tab = [head]
         for r in rows[k:k + per]:
             col = GREEN if r["ok"] and r["note"] == "ปกติ" else ORANGE if r["ok"] else RED
+            cap = caps.get((round(r["x"], 2), round(r["y"], 2)))
+            use = r["W"] / 1000.0 / cap * 100 if cap else None
             tab.append((r["mark"], f"({r['x']:.2f}, {r['y']:.2f})", f"{r['A']:,.2f}", f"{r['W'] / 1000:,.2f}",
-                        f"{r['WA'] / 1000:,.2f}", f"{r['diff']:+.0f}", f"{r['Wf']:,.0f}", (r["note"], col)))
-        bk.table(10, 42, [18, 34, 34, 26, 36, 20, 40, 176], tab, 6.6, left=True)
+                        f"{r['WA'] / 1000:,.2f}", f"{r['diff']:+.0f}", f"{r['Wf']:,.0f}",
+                        f"{cap:,.1f}" if cap else "—",
+                        (f"{use:,.0f}", GREEN if use <= 100 else RED) if use is not None else "—", (r["note"], col)))
+        y = bk.table(10, 42, [16, 30, 30, 22, 30, 18, 34, 28, 20, 156], tab, 6.6, left=True)
+        if k == 0:
+            heavy = max(rows, key=lambda r: r["W"])
+            cap = caps.get((round(heavy["x"], 2), round(heavy["y"], 2)))
+            bk.plain(12, y + 3, 380, [
+                "อธิบายง่าย: Wcol คือน้ำหนักจริงที่ลงเสาแต่ละต้น (ตัน) · «เสารับได้» คือน้ำหนักที่เสาต้นนั้นรับได้ "
+                "(ไม่รวมค่าความปลอดภัย) · «ใช้ไป %» ไม่เกิน 100 = เสารับได้",
+                f"เสาที่รับน้ำหนักมากที่สุด {heavy['mark']} ที่ ({heavy['x']:.2f}, {heavy['y']:.2f}): น้ำหนักที่กระทำ "
+                f"{heavy['W'] / 1000:,.1f} ตัน" + (f" · รับได้ {cap:,.1f} ตัน · ใช้กำลังไป {heavy['W'] / 1000 / cap * 100:,.0f} %"
+                                                   if cap else "")],
+                bool(cap) and heavy["W"] / 1000 <= cap, 5.4)
         bk.text(12, 244, 380, 6, "Wcol = น้ำหนักใช้งานที่ลงเสาจากการคำนวณคาน · Wcol-Area = พื้นที่รับ × ค่าเฉลี่ยทั้งอาคาร · "
                 "Wfloor = Wcol ÷ พื้นที่ — ค่าที่ต่างมากแสดงว่ามีน้ำหนักพิเศษหรือข้อมูลผิด ควรตรวจทาน", 5.0)
 
