@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 — «📐 ถอดแบบตาม BOQ» (16 พ.ย. 2569, อนุมัติภาพแล้ว — ตัวติดตั้ง 2027.4.2 ไม่ release)
+## ReadWanicn2027 — «📐 ถอดแบบตาม BOQ» (16 พ.ย. 2569, อนุมัติภาพแล้ว — ตัวติดตั้ง 2027.4.2 run 43886462829 artifact 14235510949 ผ่าน selftest+OCR, ไม่ release)
 - ปุ่มแถบบน «📐 ถอดแบบตาม BOQ» ใช้กับ PDF ที่เปิดอยู่ → `readwanicn/boqread_view.py` (BoqDialog: อ่านในเธรดแยก, แท็บ
   ผลการอ่านทีละแผ่น / รายการ BOQ / ป้ายที่นับได้, ช่องหัวแบบ ปร.1, ปุ่มส่งออก CSV) · ตัวอ่าน `readwanicn/boqread.py`
 - จัดชนิดหน้า: ตาราง BOQ · แบบ (มีข้อความ) · แบบ (ข้อความเป็นเส้น) · ภาพสแกน · ข้อความ · ว่าง; ผล อ่านได้/อ่านได้บางส่วน/อ่านไม่ได้ + หมายเหตุสิ่งที่ต้องทำ
