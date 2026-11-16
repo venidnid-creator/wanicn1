@@ -20,6 +20,7 @@ EN = {
     "ยังไม่ได้เปิดไฟล์": "No file open", "📊 ดาวน์โหลดสะสม — ": "📊 Downloads — ",
     "จำนวนครั้งที่ดาวน์โหลดตัวติดตั้งจากหน้า Releases": "Installer downloads from the Releases page",
     "⬇ มีเวอร์ชันใหม่": "⬇ New version", "🏗 ปรับลดราคา ว651 · ว124 · ว78": "🏗 Price reduction · work plan · materials",
+    "📐 ถอดแบบตาม BOQ": "📐 Take-off to BOQ",
     "📊 สถิติการใช้งาน": "📊 Usage", "▤ แผงไฟล์": "▤ Files panel", "▥ แผงวัด": "▥ Measure panel",
     "ธีม": "Theme", "ธีม:": "Theme:", "ภาษา": "Language",
     "บลูพริ้นท์": "Blueprint", "สว่าง": "Light", "มืด": "Dark", "ทองเวนิช": "Venit Gold", "เขียวสำรวจ": "Survey Green",

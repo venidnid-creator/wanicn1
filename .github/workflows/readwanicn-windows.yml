@@ -82,6 +82,18 @@ jobs:
           rm -f readwanicn/_license_key.py
           ls ../dist/ReadWanicn2027 | head
 
+      - name: Thai OCR for «ถอดแบบตาม BOQ» (Tesseract, Apache-2.0) beside the program
+        shell: pwsh
+        run: |
+          choco install tesseract -y --no-progress
+          $src = "C:\Program Files\Tesseract-OCR"
+          $dst = "dist\ReadWanicn2027\tesseract"
+          Copy-Item $src $dst -Recurse
+          Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/tha.traineddata" -OutFile "$dst\tessdata\tha.traineddata"
+          Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata" -OutFile "$dst\tessdata\eng.traineddata"
+          & "$dst\tesseract.exe" --list-langs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Smoke test (the program starts and imports everything)
         shell: bash
         env:

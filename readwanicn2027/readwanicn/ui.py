@@ -634,6 +634,11 @@ class MainWindow(QMainWindow):
                       "รายงาน ว651 ปรับลดราคา · ว124 แผนการทำงาน · ว78 แผนการใช้พัสดุในประเทศ")
         pb.clicked.connect(lambda: self._safe(self.open_procure, "ปรับลดราคา ว651/ว124/ว78"))
         lay.addWidget(pb)
+        bq = QPushButton("📐 ถอดแบบตาม BOQ")
+        bq.setToolTip("อ่านแบบ PDF ที่เปิดอยู่ทั้งชุด (สถาปัตย์ โครงสร้าง ไฟฟ้า สุขาภิบาล …) → CSV แบบ ปร.1 "
+                      "แยกงานอาคาร งานทาง งานชลประทาน พร้อมรายงานแผ่นที่อ่านไม่ได้/ไม่ชัด")
+        bq.clicked.connect(lambda: self._safe(self.open_boq, "ถอดแบบตาม BOQ"))
+        lay.addWidget(bq)
         ub = QPushButton("📊 สถิติการใช้งาน")
         ub.setToolTip("สถิติการใช้งานทุกเมนู รายวัน รายสัปดาห์ รายเดือน รายปี และออกรายงาน")
         ub.clicked.connect(lambda: self._safe(lambda: UsageDialog(self, self.usage).exec()))
@@ -955,6 +960,16 @@ class MainWindow(QMainWindow):
         from .procure_view import ProcureDialog
         dlg = ProcureDialog(self.doc_editor.family, self.usage.record, self)
         dlg.exec()
+
+    def open_boq(self):
+        f = self._need()
+        if not f:
+            return
+        if not str(f.path).lower().endswith(".pdf"):
+            QMessageBox.information(self, APP_NAME, "ถอดแบบตาม BOQ ใช้กับไฟล์แบบ PDF")
+            return
+        from .boqread_view import BoqDialog
+        BoqDialog(f.path, self.usage.record, self).exec()
 
     def _pan(self, dx, dy):
         h, v = self.scroll.horizontalScrollBar(), self.scroll.verticalScrollBar()

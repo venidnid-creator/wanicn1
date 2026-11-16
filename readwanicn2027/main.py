@@ -48,7 +48,16 @@ def selftest(out: str) -> int:
     procure.auto_plan(bill, 2)
     for kind in ("651", "124", "78"):
         procure_report.write(kind, bill, os.path.join(tmp, f"r{kind}.pdf"), "Laksaman")
-    open(out, "w", encoding="utf-8").write(f"ok 1:{r.ratio}")
+    # ถอดแบบตาม BOQ: the reader, its window, and the Thai OCR shipped beside the program
+    from readwanicn import boqread, boqread_view  # noqa: F401
+    res = boqread.analyse(r.pdf, ocr=False)
+    boqread.write_csv(res, os.path.join(tmp, "boq"))
+    ocr = boqread.tesseract_path()
+    if getattr(sys, "frozen", False):
+        assert ocr, "the Thai OCR (tesseract) is not beside the program"
+        png = pymupdf.open(r.pdf)[0].get_pixmap().tobytes("png")
+        boqread._ocr(png)
+    open(out, "w", encoding="utf-8").write(f"ok 1:{r.ratio} ocr:{ocr or '-'}")
     del app
     return 0
 
