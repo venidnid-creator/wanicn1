@@ -115,3 +115,22 @@ def test_the_floor_above_is_opened_and_railed():
     after = Q.compute(d)
     conc = lambda r: sum(ln["qty"] for ln in r["lines"] if ln["desc"].startswith("คอนกรีตโครงสร้าง") and "พื้นชั้นบน" in ln["desc"])  # noqa: E731
     assert conc(after) < conc(before)
+
+
+def test_four_storeys_ask_for_a_fire_escape_stair_and_the_rules_say_so():
+    from core import wanic_building as B
+    from core import wanic_drawings as D
+    from core import wanic_stair_auto as SA
+    d = _house(4)
+    st, _r = SA.design(d, ("left", "front"))
+    SA.apply(d, st)
+    assert SA.needs_fire_stair(d)
+    fire, rep = SA.design(d, ("right", "back"))
+    assert rep["ok"] and SA.apply_fire(d, fire) == 3
+    assert not SA.needs_fire_stair(d)
+    assert [len(f["stairs"]) for f in d["floors"]] == [2, 2, 2, 0]
+    E = B.elements(d)
+    assert len(B.holes_by_floor(E)[1]) == 2
+    rules = " ".join(D.storey_rules(E))
+    assert "บันไดหนีไฟ" in rules and "ฉบับที่ 39" in rules
+    assert "บันไดหนีไฟ" not in " ".join(D.storey_rules(B.elements(_house(2))))

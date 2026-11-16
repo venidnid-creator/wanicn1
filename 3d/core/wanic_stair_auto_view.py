@@ -103,6 +103,19 @@ class StairAutoDialog(QDialog):
         form.addWidget(QLabel("แบบบันได"), 1, 0)
         form.addWidget(self.type_box, 1, 1)
         left.addLayout(form)
+        from PySide6.QtWidgets import QCheckBox
+        self.fire = QCheckBox("บันไดหนีไฟ (แห่งที่ 2 — อาคาร 4 ชั้นขึ้นไป ตามกฎกระทรวง 55 ข้อ 27)")
+        storeys = sum(1 for f in (data.get("floors") or []) if f.get("rooms"))
+        self.fire.setVisible(storeys >= 4)
+        has_main = bool(((data.get("floors") or [{}])[0].get("stairs")))
+        self.fire.setChecked(storeys >= 4 and has_main and SA.needs_fire_stair(data))
+        left.addWidget(self.fire)
+        if storeys >= 4:
+            warn = QLabel("⚠ อาคาร 4 ชั้นขึ้นไป: ต้องมีบันไดหนีไฟอีกอย่างน้อย 1 แห่ง — สร้างบันไดหลักก่อน "
+                          "แล้วเปิดหน้าต่างนี้อีกครั้ง ติ๊ก «บันไดหนีไฟ» และเลือกตำแหน่งอีกด้านของอาคาร")
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color:#B45309")
+            left.addWidget(warn)
         self.report = QLabel()
         self.report.setWordWrap(True)
         self.report.setMinimumWidth(380)

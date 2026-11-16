@@ -113,6 +113,26 @@ def design(data, where=("center", "front"), w=1.00, typ="U") -> tuple:
                    "flights": flights, "settings": s}
 
 
+FIRE_ID = "sf"                       # the id prefix of the fire-escape stair (4 storeys and up)
+
+
+def needs_fire_stair(data) -> bool:
+    """4 storeys and up: a second stair, the fire escape (กฎกระทรวง 55 ข้อ 27)."""
+    floors = data.get("floors") or []
+    return sum(1 for f in floors if f.get("rooms")) >= 4 and not any(
+        str(x.get("id", "")).startswith(FIRE_ID) for x in (floors[0].get("stairs") or []))
+
+
+def apply_fire(data, stair) -> int:
+    """The fire-escape stair on every floor below the top (an earlier one is replaced)."""
+    n = 0
+    for k, f in enumerate((data.get("floors") or [])[:-1]):
+        keep = [x for x in f.get("stairs") or [] if not str(x.get("id", "")).startswith(FIRE_ID)]
+        f["stairs"] = keep + [dict(copy.deepcopy(stair), id=f"{FIRE_ID}{k + 1}", fire=True)]
+        n += 1
+    return n
+
+
 def apply(data, stair) -> int:
     """The stair on every floor that has a floor above it (the automatic one
     replaces an earlier automatic one; stairs drawn by hand stay); the

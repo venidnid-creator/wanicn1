@@ -3588,8 +3588,12 @@ class BuildingPanel(QWidget):
             if code != StairAutoDialog.Accepted:
                 return
             d2 = self.data()
-            n = SA.apply(d2, dlg.stair)
+            n = SA.apply_fire(d2, dlg.stair) if dlg.fire.isChecked() else SA.apply(d2, dlg.stair)
             self._write(d2)
+            if SA.needs_fire_stair(d2):
+                QTimer.singleShot(0, self, lambda: QMessageBox.information(
+                    self, TITLE, "อาคาร 4 ชั้นขึ้นไป ต้องมีบันไดหนีไฟอีกอย่างน้อย 1 แห่ง (กฎกระทรวง 55 ข้อ 27) — "
+                    "กด «🪜 บันไดอัตโนมัติ…» อีกครั้ง ติ๊ก «บันไดหนีไฟ» แล้วเลือกตำแหน่งอีกด้านของอาคาร"))
             self.status.setText(f"สร้างบันไดอัตโนมัติ {n} ชุด (ชั้น 1→{n + 1}) ที่ {SA.PLACES[dlg.where()]} — "
                                 + " · ".join(dlg.rep["lines"][:2]))
         dlg.finished.connect(done)
