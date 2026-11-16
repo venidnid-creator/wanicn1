@@ -63,6 +63,23 @@ def ac_size(area: float, kind: str) -> int:
     return AC_SIZES[-1]
 
 
+#: wire sizes (ตร.มม.) offered for a dedicated circuit, and the breaker each needs
+WIRES = {2.5: "1P 16 A", 4: "1P 20 A", 6: "1P 32 A", 10: "1P 40 A"}
+HEATER_W = 4500                       # a water heater, watts
+
+
+def ac_wire(btu: int) -> float:
+    """A split AC's own circuit (วสท. 2001): THW 4 ตร.มม. on 20 A up to
+    24,000 BTU, THW 6 on 32 A above."""
+    return 4 if btu <= 24000 else 6
+
+
+def heater_wire(watts: float) -> float:
+    """A water heater's circuit: up to 6,000 W → THW 6 on 32 A, above THW 10
+    on 40 A."""
+    return 6 if watts <= 6000 else 10
+
+
 def plan(data, E=None) -> list:
     """One dict per room: what services it gets and where the AC goes."""
     from core import wanic_building as B
@@ -88,6 +105,20 @@ def plan(data, E=None) -> list:
         if ac and s.get("mep", True):
             rec["ac"] = ac_size(area, kind)
             rec["ac_wall"] = _ac_wall(E, rm, k)
+        rec["auto"] = {k_: rec[k_] for k_ in ("lights", "outlets", "switches", "tv", "fan", "ac", "heater")}
+        # the room's own choices (งานระบบรายห้อง) over the automatic ones
+        own = rm.get("mep") or {}
+        for k_ in ("lights", "outlets", "switches", "tv", "fan", "ac"):
+            if own.get(k_) is not None:
+                rec[k_] = max(int(own[k_]), 0)
+        if own.get("heater") is not None:
+            rec["heater"] = bool(own["heater"])
+        if rec["ac"] and rec["ac_wall"] is None and s.get("mep", True):
+            rec["ac_wall"] = _ac_wall(E, rm, k)
+        rec["heater_w"] = float(own.get("heater_w") or HEATER_W)
+        rec["ac_wire"] = float(own.get("ac_wire") or ac_wire(rec["ac"])) if rec["ac"] else 0.0
+        rec["heater_wire"] = float(own.get("heater_wire") or heater_wire(rec["heater_w"])) if rec["heater"] else 0.0
+        rec["own"] = {k_: v for k_, v in own.items() if v is not None}
         out.append(rec)
     return out
 
@@ -1583,10 +1614,18 @@ def bill(data, E, add, labour) -> None:
         mat_key="สาย VAF-G 2×2.5 ตร.มม.", lab=lab("4.24"),
         basis=f"{outlets} เต้ารับ × 6 ม.", ref=f"{W480} 4.24")
     dedicated = (len(acs) + heaters) * 15.0
-    if dedicated:
-        add(g, "สาย THW 4 ตร.มม. + สายดิน (วงจรแอร์/เครื่องทำน้ำอุ่น)", dedicated * 3,
-            "ม.", mat_key="สาย THW 4 ตร.มม.", lab=lab("4.22", "4 sq"),
-            basis=f"{len(acs) + heaters} วงจร × 15 ม. × 3 เส้น (L N G)",
+    by_size: dict = {}                                # วงจรเฉพาะ: each AC / heater on its own wire size
+    for r in rooms:
+        for size, what in ((r.get("ac_wire") if r["ac"] else 0, "แอร์"),
+                           (r.get("heater_wire") if r["heater"] else 0, "น้ำอุ่น")):
+            if size:
+                n_, names = by_size.get(size, (0, []))
+                by_size[size] = (n_ + 1, names + [f"{what} {r['room'].get('name') or ''}".strip()])
+    for size, (cnt, names) in sorted(by_size.items()):
+        sz = f"{size:g}"
+        add(g, f"สาย THW {sz} ตร.มม. + สายดิน (วงจรเฉพาะ แอร์/เครื่องทำน้ำอุ่น)", cnt * 15.0 * 3,
+            "ม.", mat_key=f"สาย THW {sz} ตร.มม.", lab=lab("4.22", f"{sz} sq"),
+            basis=f"{cnt} วงจร × 15 ม. × 3 เส้น (L N G): " + ", ".join(names[:6]),
             ref=f"วสท. 2001 วงจรเฉพาะ · {W480} 4.22")
     add(g, "ท่อร้อยสายไฟ PVC สีเหลือง Ø 20 มม.", wire + wire2 + dedicated, "ม.",
         mat_key="ท่อ PVC ร้อยสายไฟ 20 มม. (สีเหลือง)", lab=lab("4.44", "20 mm"),

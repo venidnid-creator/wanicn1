@@ -2586,6 +2586,7 @@ class BuildingPanel(QWidget):
             "ถอดปริมาณตามหลักเกณฑ์กรมบัญชีกลาง (เผื่อตามมาตรฐาน ค่าแรง ว480) "
             "แล้วส่งเข้า ปร.1–ปร.4 · ประมาณราคาเอกชน 8 หมวด อยู่ในหน้าต่างนี้", None, 1, 0, "#7B3FA0",
             menu=(("📊 BOQ ตามหลักเกณฑ์ 2569 (ปร.1–ปร.4 · ราคาเอกชน 8 หมวด)…", self.open_boq),
+                  ("🔌 งานระบบรายห้อง (ไฟฟ้า แอร์ น้ำอุ่น ขนาดสาย)…", self.open_mep),
                   ("💰 ผูกรายการราคากับชิ้นส่วนโมเดล (แท็บ ถอดปริมาณ)", self.send_rates)))
         btn("📐 ส่งออกแบบ…",
             "แบบก่อสร้างจากโมเดล กระดาษ A3 พร้อมตารางชื่อแบบ (PDF / DXF)", None, 1, 1, "#8A5A00",
@@ -3509,6 +3510,22 @@ class BuildingPanel(QWidget):
         self.open_drawings(with_3d=True)
 
     # ---- standard BOQ -------------------------------------------------------------
+    def open_mep(self):
+        """งานระบบรายห้อง: lights, sockets, AC, water heater and wire sizes,
+        room by room — kept on the rooms, into the model, sheets and BOQ."""
+        from core.wanic_mep_view import MepRoomsDialog
+        d = self.data()
+        if not any(f.get("rooms") for f in d["floors"]):
+            QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
+            return
+        dlg = MepRoomsDialog(self, d)
+        if dlg.exec() != MepRoomsDialog.Accepted:
+            return
+        n = dlg.apply(d)
+        self._write(d)
+        self.status.setText(f"บันทึกงานระบบรายห้องแล้ว ({n} ห้องที่กำหนดเอง) — กด «✅ สร้าง/อัปเดตโมเดล» "
+                            "เพื่อดูในโมเดล · แบบไฟฟ้า/ปรับอากาศ และ BOQ ใช้ค่าใหม่แล้ว")
+
     def open_grid(self):
         """โหมดกริด of the RC panel, from here: a new user starts on one panel."""
         rc = getattr(self.app.window, "_wanic_rc", None)

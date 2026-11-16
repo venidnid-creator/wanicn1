@@ -3151,12 +3151,15 @@ def ee_single_line(sh, E):
         n = min(8, outs - i * 8)
         circ.append((f"เต้ารับ {i + 1}", "1P 20 A", "THW 2×2.5 + G 2.5", f"{n} จุด", n * 180))
     for r in rooms:
-        if r["ac"]:
-            circ.append((f"แอร์ {r['room'].get('name') or ''}", "1P 20 A", "THW 2×4 + G 4",
-                         f"{r['ac']:,} BTU", int(r['ac'] / 9)))
+        if r["ac"]:                                   # วงจรเฉพาะ: the size the room's own settings or the rule give
+            w_ = r.get("ac_wire") or MEP.ac_wire(r["ac"])
+            circ.append((f"แอร์ {r['room'].get('name') or ''}", MEP.WIRES.get(w_, "1P 20 A"),
+                         f"THW 2×{w_:g} + G {w_:g}", f"{r['ac']:,} BTU", int(r['ac'] / 9)))
         if r["heater"]:
-            circ.append((f"น้ำอุ่น {r['room'].get('name') or ''}", "1P 32 A", "THW 2×6 + G 6",
-                         "4,500 W", 4500))
+            w_ = r.get("heater_wire") or 6
+            watts = int(r.get("heater_w") or MEP.HEATER_W)
+            circ.append((f"น้ำอุ่น {r['room'].get('name') or ''}", MEP.WIRES.get(w_, "1P 32 A"),
+                         f"THW 2×{w_:g} + G {w_:g}", f"{watts:,} W", watts))
     total = sum(c[4] for c in circ)
     amp = total / 220 * 0.8
     meter = "15(45) A" if amp <= 30 else "30(100) A" if amp <= 75 else "50(150) A"
