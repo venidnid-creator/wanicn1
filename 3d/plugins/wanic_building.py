@@ -82,6 +82,49 @@ class PlanCanvas(QWidget):
         self._hover = None
 
     # ---- coordinates ------------------------------------------------------
+    def _paint_symbol(self, p, op, seg, rooms, st, w, color):
+        """สัญลักษณ์ประตู-หน้าต่าง: the leaf and its arc on the side it opens
+        to, sliding arrows, awning V, louvres (core.wanic_opening_sym)."""
+        from core import wanic_opening_sym as OS
+        try:
+            sym = OS.symbol(op, seg[0], seg[1], rooms, float(st["wall_t"]), w)
+        except Exception:                             # noqa: BLE001 - a symbol never breaks the plan
+            return
+        p.save()
+        pen = QPen(color, 1.4)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        for a, b in sym["lines"]:
+            p.drawLine(self.to_screen(*a), self.to_screen(*b))
+        pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        for a, b in sym["dashed"]:
+            p.drawLine(self.to_screen(*a), self.to_screen(*b))
+        thin = QPen(color, 1.0, Qt.DashLine)
+        p.setPen(thin)
+        for (cx, cy), r, a0, a1 in sym["arcs"]:
+            n = max(8, int((a1 - a0) / 6))
+            pts = [self.to_screen(cx + r * math.cos(math.radians(a0 + (a1 - a0) * i / n)),
+                                  cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / n))) for i in range(n + 1)]
+            p.drawPolyline(QPolygonF(pts))
+        p.setPen(QPen(color, 1.4))
+        for a, b in sym["arrows"]:
+            ta, tb = self.to_screen(*a), self.to_screen(*b)
+            p.drawLine(ta, tb)
+            d = tb - ta
+            L = math.hypot(d.x(), d.y()) or 1.0
+            ux, uy = d.x() / L, d.y() / L
+            for s_ in (1, -1):
+                p.drawLine(tb, tb - QPointF(ux * 7 - s_ * uy * 4, uy * 7 + s_ * ux * 4))
+        if sym["label"] and self.scale >= 28:
+            pos, text = sym["label"]
+            q = self.to_screen(*pos)
+            f = p.font()
+            f.setPointSizeF(max(7.0, f.pointSizeF() * 0.85))
+            p.setFont(f)
+            p.drawText(QRectF(q.x() - 40, q.y() - 8, 80, 16), Qt.AlignCenter, text)
+        p.restore()
+
     def to_screen(self, x, y) -> QPointF:
         return QPointF(self.origin.x() + x * self.scale,
                        self.origin.y() - y * self.scale)
@@ -223,6 +266,7 @@ class PlanCanvas(QWidget):
                           max(5.0, st["wall_t"] * self.scale * 1.6),
                           Qt.SolidLine, Qt.FlatCap))
             p.drawLine(a, b)
+            self._paint_symbol(p, op, hit[2], rooms, st, w, SEL if sel else color.darker(130))
             if self.scale >= 20:
                 code, _spec = CAT.opening_type(op)
                 p.setPen(QColor("#5A3A00") if op.get("type") != "window"
@@ -2304,8 +2348,9 @@ class BuildingPanel(QWidget):
         self.op_swing = QComboBox()
         self.op_swing.addItem("เปิดเข้าใน", "in")
         self.op_swing.addItem("เปิดออกนอก", "out")
-        self.op_swing.setToolTip("ทิศทางการเปิดบานประตู (ผนังภายนอก: เข้าใน = เข้าอาคาร · "
-                                 "ผนังภายใน: เข้าใน = เข้าห้องที่คลิก)")
+        self.op_swing.setToolTip("ทิศทางการเปิดบานประตู/หน้าต่าง (ผนังภายนอก: เข้าใน = เข้าอาคาร · "
+                                 "ผนังภายใน: เข้าใน = เข้าห้องที่คลิก) — ในผังเส้นโค้งอยู่ฝั่งที่บานเปิดไป "
+                                 "และมีคำว่า «เปิดเข้า/เปิดออก» · หน้าต่างบานเปิดปกติเปิดออกนอก")
         self.op_hinge = QComboBox()
         self.op_hinge.addItem("บานพับซ้าย", "left")
         self.op_hinge.addItem("บานพับขวา", "right")
@@ -2970,8 +3015,8 @@ class BuildingPanel(QWidget):
               "y": hit[1], "w": w, "h": h}
         if kind == "window":
             op["sill"] = sill
-        elif hasattr(self, "op_swing"):
-            op["swing"] = self.op_swing.currentData()      # in / out
+        if hasattr(self, "op_swing"):
+            op["swing"] = self.op_swing.currentData()      # in / out (a window: out by default)
             op["hinge"] = self.op_hinge.currentData()      # left / right
         clash = B.opening_overlaps(op, f.get("openings"), f.get("rooms"), s)
         if clash:
@@ -3052,6 +3097,8 @@ class BuildingPanel(QWidget):
             self.op_style.blockSignals(False)
             self._style_changed()
             self.op_sill.setEnabled(t == "window")
+            # a window opens outward, a door inward — as most are built
+            self.op_swing.setCurrentIndex(self.op_swing.findData("out" if t == "window" else "in"))
 
     def _toggle_trim(self, key, on):
         if self._loading:

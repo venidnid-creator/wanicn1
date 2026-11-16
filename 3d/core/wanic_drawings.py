@@ -677,13 +677,16 @@ def draw_walls(sh, v, E, k, t, codes=None, swings=True, tags=True):
                 sh.line(v(*p), v(*q), "wall", 0.35)
             if el["type"] == "door":
                 if swings:
-                    _door(sh, v, (x0, y0), (ux, uy), (nx, ny), c0, c1, t, el,
-                          w, rooms)
+                    _symbol(sh, v, el, w, rooms, t, c1 - c0, "door")
             else:
-                for off in (-t / 2, 0.0, t / 2):
+                for off in (-t / 2, t / 2):            # the frame lines in the wall's faces
                     p = (x0 + ux * c0 + nx * off, y0 + uy * c0 + ny * off)
                     q = (x0 + ux * c1 + nx * off, y0 + uy * c1 + ny * off)
                     sh.line(v(*p), v(*q), "window", 0.18)
+                if swings:
+                    _symbol(sh, v, el, w, rooms, t, c1 - c0, "window")
+                else:
+                    sh.line(v(x0 + ux * c0, y0 + uy * c0), v(x0 + ux * c1, y0 + uy * c1), "window", 0.18)
             if tags and codes is not None:
                 cm = (c0 + c1) / 2
                 no = outward(w, rooms) if w["exterior"] else (-nx, -ny)
@@ -708,6 +711,28 @@ def draw_walls(sh, v, E, k, t, codes=None, swings=True, tags=True):
         sh.fill(pts, "column", 0.15)
         sh.poly(pts, "column", 0.35)
     _ = s
+
+
+def _symbol(sh, v, el, wall, rooms, t, width, layer):
+    """สัญลักษณ์ประตู-หน้าต่าง from core.wanic_opening_sym — the same
+    symbol as on the plan on screen: arcs on the side the leaves open to,
+    sliding arrows, an awning's dashed V, louvres, a fixed light."""
+    from core import wanic_opening_sym as OS
+    sym = OS.symbol(el["op"], wall["p0"], wall["p1"], rooms, t, width)
+    for a, b in sym["lines"]:
+        sh.line(v(*a), v(*b), layer, 0.35 if layer == "door" else 0.18)
+    for a, b in sym["dashed"]:
+        sh.line(v(*a), v(*b), layer, 0.13, dash=True)
+    for c, r, a0, a1 in sym["arcs"]:
+        sh.arc(v(*c), v.len(r), a0, a1, layer, 0.13)
+    for a, b in sym["arrows"]:
+        ta, tb = v(*a), v(*b)
+        sh.line(ta, tb, layer, 0.13)
+        dx, dy = tb[0] - ta[0], tb[1] - ta[1]
+        L = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / L, dy / L
+        for s_ in (1, -1):
+            sh.line(tb, (tb[0] - ux * 1.2 - s_ * uy * 0.6, tb[1] - uy * 1.2 + s_ * ux * 0.6), layer, 0.13)
 
 
 def _door(sh, v, p0, u, n, c0, c1, t, el, wall, rooms):
@@ -1903,7 +1928,7 @@ def a_schedules(sh, E, codes, fcodes):
         k = 1000.0 / 50
         bw, bh = w * k, h * k
         if x + max(bw, 40) > x1:
-            x, y = x0, y - 70
+            x, y = x0, y - 86
         base = y - 52
         sh.rect(x, base, x + bw, base + bh, "door" if code.startswith("ป")
                 else "window", 0.35)
@@ -1919,6 +1944,10 @@ def a_schedules(sh, E, codes, fcodes):
         sh.text((x, base - 7.5), f"ขนาด {w:.2f}×{h:.2f} ม."
                 + (f" ขอบล่าง {sill:.2f}" if sill else ""), 2.0)
         sh.text((x, base - 11), f"จำนวน {count.get(code, 0)} ชุด", 2.0)
+        # the plan symbol of this type, above its elevation, as the standard sets show it
+        sample = next((o for o in E["openings"] if op_code(o, codes) == code), None)
+        if sample is not None:                       # under its text, at 1:100
+            opening_sample(sh, (x + max(bw, 20) / 2, base - 24), sample["op"], w, 100)
         x += max(bw, 40) + 10
     # finish schedule
     rows = [(c, d) for _k, (c, d) in sorted(fcodes.items(),
@@ -1927,10 +1956,51 @@ def a_schedules(sh, E, codes, fcodes):
     yy = min(y - 75, y0 + 70)
     sh.text((x0, yy + 6), "ตารางวัสดุตกแต่ง (พื้น/ฝ้า)", 3.6, "left", "text",
             True)
-    table(sh, x0, yy, [("รหัส", 18, "center"), ("รายละเอียด", 250, "left")],
+    table(sh, x0, yy, [("รหัส", 18, "center"), ("รายละเอียด", 162, "left")],
           rows)
+    # beside the finish table, never below the paper's drawing area
+    opening_legend(sh, x0 + 186, max(yy + 6, y0 + 3 * 17.0 + 16))
     caption(sh, ((x0 + x1) / 2, y0 + 4), "ตารางประตู-หน้าต่าง / วัสดุตกแต่ง",
             "1:50")
+
+
+def opening_sample(sh, centre, op, width, scale=50, t=0.15, word=True):
+    """One opening's plan symbol on a short piece of wall (a room below it,
+    so «เข้า» opens down the sheet and «ออก» up)."""
+    from core import wanic_opening_sym as OS
+    room = [{"x": -2.0, "y": -2.0, "w": 4.0, "d": 2.0}]
+    op = dict(op, x=0.0, y=0.0)
+    v = View(sh, scale, (0.0, 0.0), centre)
+    half = width / 2 + 0.25
+    for off in (-t / 2, t / 2):
+        for a, b in ((-half - 0.3, -width / 2), (width / 2, half + 0.3)):
+            sh.line(v(a, off), v(b, off), "wall", 0.35)
+    for c in (-width / 2, width / 2):
+        sh.line(v(c, -t / 2), v(c, t / 2), "wall", 0.35)
+    el = {"op": op}
+    wall = {"p0": (-half - 0.3, 0.0), "p1": (half + 0.3, 0.0)}
+    _symbol(sh, v, el, wall, room, t, width, "door" if op.get("type") != "window" else "window")
+    sym = OS.symbol(op, wall["p0"], wall["p1"], room, t, width)
+    if word and sym["kind"] == "swing" and op.get("type") != "window":
+        word = "เปิดเข้า" if sym["inward"] else "เปิดออก"
+        sh.text((centre[0] + v.len(width / 2) + 1.5, centre[1] + 2.2), word, 1.8)
+
+
+def opening_legend(sh, x, y):
+    """สัญลักษณ์ประตู-หน้าต่างในแปลน: every kind of leaf drawn as the plans
+    draw it, with what it means (เปิดเข้า / เปิดออก, บานเลื่อน, กระทุ้ง …)."""
+    from core import wanic_opening_sym as OS
+    sh.text((x, y + 4), "สัญลักษณ์ประตู-หน้าต่างในแปลน", 3.0, "left", "text", True)
+    cw, chh = 46.0, 17.0                              # a 3 × 3 grid of samples
+    for i, (code, swing, text) in enumerate(OS.LEGEND):
+        spec = CAT.OPENING_TYPES[code]
+        op = {"type": spec["kind"], "style": code, "swing": swing, "hinge": "left"}
+        cx, cy = x + (i % 3) * cw, y - 6 - (i // 3) * chh
+        opening_sample(sh, (cx + 10, cy - 9), op, 0.9 if spec["kind"] == "door" else 1.2, 150, word=False)
+        sh.text((cx + 22, cy - 9.8), text, 1.7)
+        sh.rect(cx, cy - chh, cx + cw - 1, cy, "text", 0.1)
+    sh.text((x, y - 6 - 3 * chh - 4), "ฝั่งล่างของผนัง = ภายในห้อง/อาคาร, เส้นโค้ง = แนวบานเปิด, "
+            "ลูกศร = ทิศบานเลื่อน, เส้นประ = บานกระทุ้งออก", 1.6)
 
 
 def a_bathrooms(sh, E):
