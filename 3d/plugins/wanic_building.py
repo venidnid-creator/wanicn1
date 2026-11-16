@@ -1911,8 +1911,16 @@ class BoqDialog(QDialog):
     def sample_prices(self):
         d = self.panel.data()
         keys = set(self._S.SAMPLE_PRICES) | set(self.result.get("need") or {})
-        d["prices"] = {k: self._S.sample_price(k) for k in keys}
-        d["price_src"] = {k: "ตัวอย่าง" for k in keys}
+        # only where there is no price yet: the province's, the central and the
+        # typed prices stay (a sample never replaces a real price)
+        prices = dict(d.get("prices") or {})
+        src = dict(d.get("price_src") or {})
+        for k in keys:
+            v = self._S.sample_price(k)
+            if v > 0 and not float(prices.get(k) or 0):
+                prices[k] = v
+                src[k] = "ตัวอย่าง"
+        d["prices"], d["price_src"] = prices, src
         self.panel._write(d)
         self.recompute()
         self._fill_prices()

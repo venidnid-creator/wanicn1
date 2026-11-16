@@ -135,11 +135,32 @@ def test_every_button_of_the_building_panel_and_boq(ui):
     assert len(done) >= 12, done
     dlg = BoqDialog(panel)
     dlg.province.setCurrentIndex(dlg.province.findData("ขอนแก่น"))
-    done = _click_all(dlg, skip=("เว็บ",))
+    # ห้ามส่งออกจนราคาครบ: blocked first …
+    dlg.save_xlsx()
+    assert not [p for p in ui["saved"] if p.endswith(".xlsx")]
+    # … every orange line priced (as the user types them in), then every button goes
+    from core import wanic_quantities as Q
+    d_ = panel.data()
+    for _round in range(3):
+        for ln in Q.missing_lines(dlg.result):
+            if ln["mat_key"]:
+                d_.setdefault("prices", {})[ln["mat_key"]] = 1.0
+            if ln["lab_code"]:
+                d_.setdefault("labour", {})[ln["lab_code"]] = 1.0
+        for k in dlg.result.get("need") or {}:
+            if not (d_.get("prices") or {}).get(k):
+                d_.setdefault("prices", {})[k] = 1.0
+        panel._write(d_)
+        dlg.recompute()
+        dlg._fill_prices()                           # the price tab shows what was typed
+    assert not dlg.missing_text(), dlg.missing_text()
+    done = _click_all(dlg, skip=("เว็บ", "ล้างราคา", "ค่าแรงตาม"))
     assert any("พาณิชย์จังหวัด" in t for t in done)
     assert any("Excel" in t for t in done)
     xlsx = [p for p in ui["saved"] if p.endswith(".xlsx")]
-    assert xlsx and zipfile.is_zipfile(xlsx[-1])
+    assert xlsx and zipfile.is_zipfile(xlsx[-1]), (done, dlg.missing_text(), ui["msgs"][-3:])
+    dlg.reset_labour()                               # the ว480 rates back: the typed ones are dropped
+    assert not (panel.data().get("labour") or {})
     csvs = [p for p in ui["saved"] if p.endswith(".csv")]
     assert csvs
     tk = (scene.plugin_data or {}).get("wanic_takeoff")
