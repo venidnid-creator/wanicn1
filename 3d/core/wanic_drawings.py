@@ -2693,6 +2693,10 @@ def build_set(data, info=None,
         if info.get("axo_sections"):
             for title, paint in axo_sheets(data):
                 add("A", title, paint, "-")
+        from core import wanic_stair_sheets as STS
+        for i, e in enumerate(STS.stairs_to_detail(E)):     # แบบขยายบันได, as the standard sets
+            add("A", "แบบขยายบันได" + (f" ({i + 1})" if i else ""),
+                lambda sh, _a, e=e: STS.a_stair_detail(sh, E, e), "ตามระบุ")
         if E["openings"]:
             add("A", "ตารางประตู-หน้าต่าง วัสดุตกแต่ง",
                 lambda sh, _a: a_schedules(sh, E, codes, fcodes), "1:50")
@@ -2729,6 +2733,10 @@ def build_set(data, info=None,
         add("S", "รายละเอียดฐานราก", lambda sh, _a: SS.s_footing_details(sh, E), "1:40")
         add("S", "รายละเอียดเสา", lambda sh, _a: SS.s_column_details(sh, E), "1:25")
         add("S", "รายละเอียดพื้น", lambda sh, _a: SS.s_slab_details(sh, E), "1:25")
+        from core import wanic_stair_sheets as STS
+        for i, e in enumerate(STS.stairs_to_detail(E)):
+            add("S", "รายละเอียดบันได คสล." + (f" ({i + 1})" if i else ""),
+                lambda sh, _a, e=e: STS.s_stair_detail(sh, E, e), "1:20")
         for lines in SS.beam_sheets(E):
             add("S", "รายละเอียดคาน", lambda sh, _a, lines=lines: SS.s_beam_details(sh, E, lines), "1:30")
         add("S", "รายละเอียดการเสริมเหล็กคานทั่วไป", lambda sh, _a: SS.s_typical_beam(sh, E), "1:50")

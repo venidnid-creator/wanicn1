@@ -2261,7 +2261,9 @@ class BuildingPanel(QWidget):
                 ("＋ ชั้นใหม่", "เพิ่มชั้นใหม่ด้านบน (ว่าง)", self.add_floor),
                 ("⧉ คัดลอกชั้นนี้ขึ้นไป", "สร้างชั้นใหม่ด้านบนที่มีห้องเหมือนชั้นนี้",
                  self.copy_floor),
-                ("✕ ลบชั้น", "ลบชั้นที่เลือก", self.delete_floor)):
+                ("✕ ลบชั้น", "ลบชั้นที่เลือก", self.delete_floor),
+                ("🪜 บันไดอัตโนมัติ…", "เลือกตำแหน่งบันได (กลาง/ซ้าย/ขวา × หน้า/หลัง) — โปรแกรมออกแบบจำนวนขั้น "
+                 "ลูกตั้ง ลูกนอน ชานพัก ตามกฎกระทรวง 55 แล้ววางทุกชั้น", self.auto_stairs)):
             b = QPushButton(text)
             b.setToolTip(tip)
             b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
@@ -3422,6 +3424,37 @@ class BuildingPanel(QWidget):
         self.floor = len(d["floors"]) - 1
         self._write(d)
 
+    def auto_stairs(self, auto: bool = False):
+        """บันไดอัตโนมัติ: where the stair goes, the program designs it and
+        puts it on every floor (``auto``: offered by the program — only when
+        the building has two storeys and no stair yet)."""
+        from core import wanic_stair_auto as SA
+        from core.wanic_stair_auto_view import StairAutoDialog
+        d = self.data()
+        if auto and not SA.needs_stairs(d):
+            return
+        if not any(f.get("rooms") for f in d["floors"]):
+            if not auto:
+                QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง — วางห้องชั้นล่างก่อน")
+            return
+        if len(d["floors"]) < 2:
+            if not auto:
+                QMessageBox.information(self, TITLE, "อาคารชั้นเดียวไม่ต้องมีบันได — เพิ่มชั้นก่อน (＋ ชั้นใหม่ / ⧉ คัดลอกชั้น)")
+            return
+        dlg = StairAutoDialog(self, d)
+
+        def done(code):
+            if code != StairAutoDialog.Accepted:
+                return
+            d2 = self.data()
+            n = SA.apply(d2, dlg.stair)
+            self._write(d2)
+            self.status.setText(f"สร้างบันไดอัตโนมัติ {n} ชุด (ชั้น 1→{n + 1}) ที่ {SA.PLACES[dlg.where()]} — "
+                                + " · ".join(dlg.rep["lines"][:2]))
+        dlg.finished.connect(done)
+        dlg.open()                                   # never blocks
+        self._stair_dialog = dlg
+
     def copy_floor(self):
         d = self.data()
         nid = int(self._next_id(d)[1:])
@@ -3433,6 +3466,7 @@ class BuildingPanel(QWidget):
                                             "stairs": []})
         self.floor += 1
         self._write(d)
+        QTimer.singleShot(0, self, lambda: _safe(self, lambda: self.auto_stairs(auto=True)))
 
     def delete_floor(self):
         d = self.data()

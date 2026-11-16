@@ -688,6 +688,8 @@ class RCPanel(QWidget):
         bp._write(d)
         self.status.setText(f"สร้างผังจากกริดแล้ว: {len(sx) + 1} × {len(sy) + 1} แกน · {n} ชั้น")
         self.refresh()
+        if n >= 2 and hasattr(bp, "auto_stairs"):       # two storeys: where does the stair go?
+            QTimer.singleShot(0, self, lambda: bp.auto_stairs(auto=True))
 
     def apply_advice(self, auto: bool = False):
         """ไม่ผ่าน — เลือกวิธีแก้: the failing marks, why, and the change for
