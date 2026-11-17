@@ -181,8 +181,7 @@ def symbols(sh, x, y0, y1, w):
     sh.text((tx - 8, y - 2.8), "ใช้กำหนดหมายเลขประตู ในแบบเพื่ออ้างอิงถึง", 2.1)
     rule(9)
     pre()
-    sh.circle((sx, y - 2), 2.4, "window", 0.25)
-    sh.text((sx, y - 2.9), "น1", 1.9, "center", "window")
+    hex_tag(sh, (sx, y - 2), "น1", 2.4)
     sh.text((tx - 8, y - 2.8), "ใช้กำหนดหมายเลขหน้าต่าง ในแบบเพื่ออ้างอิงถึง", 2.1)
     rule(9)
     pre()
@@ -645,7 +644,7 @@ def roof_notes(sh, P, L, u_of, label, pitch, wall_u, z_eave):
     # the overhangs, measured from the wall faces at the eaves
     if wall_u:
         w0, w1 = min(wall_u), max(wall_u)
-        y = P(0, ze)[1] + 4.0
+        y = P(0, ze)[1] - 4.5                        # under the fascia
         for a, b in ((u0, w0), (w1, u1)):
             if b - a < 0.05:
                 continue
@@ -659,6 +658,144 @@ def roof_notes(sh, P, L, u_of, label, pitch, wall_u, z_eave):
     # the slope, when the ridge is seen end-on (gable / hip end)
     tops = [p[0] for p in pts if p[1] > zt - 0.02]
     if pitch and tops and (max(tops) - min(tops)) < 0.5 * (u1 - u0):
-        for u, sgn in ((u0, 1), (u1, -1)):
-            q = P(u + sgn * 1.9, ze + 1.9 * __import__("math").tan(__import__("math").radians(pitch)) + 0.25)
-            sh.text((q[0], q[1] + 1.5), f"{pitch:.0f}°", 2.0, "center", "dim")
+        kk = (P(1, 0)[0] - P(0, 0)[0])
+        slope_angle(sh, P, u0, ze, pitch, 1, kk)
+        slope_angle(sh, P, u1, ze, pitch, -1, kk)
+
+
+def hex_tag(sh, p, text, r=2.5, layer="window"):
+    """The standard's window / door number: a hexagon round the code."""
+    import math as _m
+    pts = [(p[0] + r * 1.15 * _m.cos(_m.radians(a)), p[1] + r * _m.sin(_m.radians(a)))
+           for a in (0, 60, 120, 180, 240, 300)]
+    sh.poly(pts, layer, 0.2)
+    sh.text((p[0], p[1] - 0.8), text, 1.9, "center", layer)
+
+
+def elev_opening(sh, P, uc, lo, el, code):
+    """A door or window on an elevation as the standard draws it: the
+    frame (double line), the leaves and how they open (swing «<», awning
+    «^», slide arrow, louvres), the head drip above, and the number in a
+    hexagon."""
+    from core import wanic_catalog as CAT_
+    from core import wanic_opening_sym as OS
+    w, h = el["w"], el["h"]
+    hi = lo + h
+    lay = "window" if el["type"] == "window" else "door"
+    a, b = uc - w / 2, uc + w / 2
+    _c, spec = CAT_.opening_type(el["op"])
+    kind = OS.kind_of(spec, _c)
+    f = 0.05                                             # frame
+    sh.rect(*P(a, lo), *P(b, hi), lay, 0.3)
+    sh.rect(*P(a + f, lo + f), *P(b - f, hi - f), lay, 0.13)
+    # the head drip (คิ้วกันน้ำ) over the opening
+    sh.rect(*P(a - 0.1, hi + 0.02), *P(b + 0.1, hi + 0.08), lay, 0.18)
+    if el["type"] == "window" and el.get("sill", 0) > 0.05:
+        sh.rect(*P(a - 0.04, lo - 0.05), *P(b + 0.04, lo), lay, 0.13)
+    n = max(1, int(spec.get("leaves") or 1))
+    lw = (w - 2 * f) / n
+    for i in range(n):
+        x0, x1 = a + f + i * lw, a + f + (i + 1) * lw
+        if i:
+            sh.line(P(x0, lo + f), P(x0, hi - f), lay, 0.18)
+        y0, y1 = lo + f, hi - f
+        if kind == "swing":
+            hinge_left = (i % 2 == 0) if n > 1 else True
+            hx, ox = (x0, x1) if hinge_left else (x1, x0)
+            sh.line(P(ox, y0), P(hx, (y0 + y1) / 2), lay, 0.1)
+            sh.line(P(ox, y1), P(hx, (y0 + y1) / 2), lay, 0.1)
+        elif kind == "awning":
+            sh.line(P(x0, y0), P((x0 + x1) / 2, y1), lay, 0.1)
+            sh.line(P(x1, y0), P((x0 + x1) / 2, y1), lay, 0.1)
+        elif kind == "louvre":
+            z = y0 + 0.08
+            while z < y1 - 0.04:
+                sh.line(P(x0, z), P(x1, z), lay, 0.1)
+                z += 0.09
+    if kind == "slide":
+        ym = lo + h * 0.42
+        p0, p1 = P(a + w * 0.2, ym), P(b - w * 0.2, ym)
+        sh.line(p0, p1, lay, 0.13)
+        sh.line(p1, (p1[0] - 1.2, p1[1] + 0.6), lay, 0.13)
+        sh.line(p1, (p1[0] - 1.2, p1[1] - 0.6), lay, 0.13)
+    if code:
+        if w < 0.9:                                  # a narrow one: the tag beside it
+            q = P(b, lo + h * 0.72)
+            q = (q[0] + 4.2, q[1])
+        else:
+            q = P(a + min(0.32, w * 0.3), lo + h * 0.72)
+        hex_tag(sh, q, code, 2.4, lay)
+
+
+def roof_skin(sh, P, L, u_of, nx, ny, k):
+    """The roof: a heavy outline, the tiles (dense lines down the slope and
+    the courses along it) on the faces toward the viewer, and the fascia
+    board under the eaves."""
+    allp = [p for poly in L["skin"] for p in poly]
+    dmin = min(p[0] * nx + p[1] * ny for p in allp)
+    dmax = max(p[0] * nx + p[1] * ny for p in allp)
+    for poly in L["skin"]:
+        pp = [P(u_of(p[0], p[1]), p[2]) for p in poly]
+        vis = sum((p[0] * nx + p[1] * ny) for p in poly) / max(len(poly), 1)
+        if vis > dmax - 0.6 * (dmax - dmin):
+            roof_hatch(sh, pp, max(0.7, 0.09 * k))
+            ys = [q[1] for q in pp]
+            yy = min(ys) + 0.45 * k
+            while yy < max(ys) - 0.2 * k:              # tile courses
+                hits = []
+                for (x0, y0), (x1, y1) in zip(pp, pp[1:] + pp[:1]):
+                    if (y0 - yy) * (y1 - yy) < 0 and abs(y1 - y0) > 1e-9:
+                        hits.append(x0 + (x1 - x0) * (yy - y0) / (y1 - y0))
+                hits.sort()
+                for xa, xb in zip(hits[::2], hits[1::2]):
+                    sh.line((xa, yy), (xb, yy), "hatch", 0.1)
+                yy += 0.45 * k
+    # the outline heavy (edges no other face shares, or faces seen edge-on),
+    # the joints between faces thin
+    edges = {}
+    for poly in L["skin"]:
+        pp = [P(u_of(p[0], p[1]), p[2]) for p in poly]
+        ar = abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(pp, pp[1:] + pp[:1]))) / 2
+        for p0, p1 in zip(pp, pp[1:] + pp[:1]):
+            key = tuple(sorted(((round(p0[0], 1), round(p0[1], 1)), (round(p1[0], 1), round(p1[1], 1)))))
+            if key[0] != key[1]:
+                edges.setdefault(key, []).append(ar)
+    for (p0, p1), ars in edges.items():
+        heavy = len(ars) == 1 or all(a < 4.0 for a in ars)
+        sh.line(p0, p1, "roof", 0.5 if heavy else 0.18)
+    # barge boards (ปั้นลม) along a gable seen end-on: a band under each slope
+    pts2 = [(u_of(p[0], p[1]), p[2]) for p in allp]
+    zt_ = max(p[1] for p in pts2)
+    tops = [p[0] for p in pts2 if p[1] > zt_ - 0.02]
+    ze_ = min(p[1] for p in pts2)
+    if tops and max(tops) - min(tops) < 0.05:
+        ut = tops[0]
+        lo_u = [p[0] for p in pts2 if p[1] < ze_ + 0.02]
+        for ue in (min(lo_u), max(lo_u)):
+            sh.line(P(ue, ze_ - 0.2), P(ut, zt_ - 0.2 / max(0.3, abs(ut - ue)) * abs(ut - ue)), "roof", 0.18)
+    # the fascia (เชิงชาย) under the lowest edge
+    us = [u_of(p[0], p[1]) for p in allp]
+    ze = min(p[2] for p in allp)
+    u0, u1 = min(us), max(us)
+    sh.poly([P(u0 - 0.02, ze), P(u1 + 0.02, ze), P(u1 - 0.03, ze - 0.2), P(u0 + 0.03, ze - 0.2)], "roof", 0.35)
+    sh.line(P(u0 + 0.03, ze - 0.12), P(u1 - 0.03, ze - 0.12), "roof", 0.13)
+
+
+def slope_angle(sh, P, u, ze, pitch, side, k):
+    """The slope's angle at an eave seen end-on: a dash-dot level, an arc,
+    and the angle written along the arc (as the standard)."""
+    import math as _m
+    c = P(u, ze)
+    r = 9.0
+    if side > 0:                                       # left eave, slope going up-right
+        sh.line(c, (c[0] + r + 3, c[1]), "grid", 0.13, True)
+        sh.arc(c, r, 0, pitch, "dim", 0.18)
+        a = _m.radians(pitch / 2)
+        sh.text((c[0] + (r + 2.2) * _m.cos(a), c[1] + (r + 2.2) * _m.sin(a) - 0.6), f"{pitch:.0f}°", 2.0, "left",
+                "dim", angle=pitch / 2)
+    else:
+        sh.line(c, (c[0] - r - 3, c[1]), "grid", 0.13, True)
+        sh.arc(c, r, 180 - pitch, 180, "dim", 0.18)
+        a = _m.radians(180 - pitch / 2)
+        sh.text((c[0] + (r + 2.2) * _m.cos(a), c[1] + (r + 2.2) * _m.sin(a) - 0.6), f"{pitch:.0f}°", 2.0, "right",
+                "dim", angle=-pitch / 2)

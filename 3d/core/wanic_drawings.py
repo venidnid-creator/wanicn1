@@ -703,9 +703,8 @@ def draw_walls(sh, v, E, k, t, codes=None, swings=True, tags=True):
                 if el["type"] == "door":
                     sh.text((tp[0], tp[1] - 1.1), code, 2.4, "center", "door")
                 else:
-                    sh.circle(tp, 2.6, "window", 0.18)
-                    sh.text((tp[0], tp[1] - 1.0), code, 2.2, "center",
-                            "window")
+                    from core import wanic_std_sheets as STD
+                    STD.hex_tag(sh, tp, code, 2.6)
     # columns
     cs = float(lib.get("C1", {}).get("b", 0.2))
     for c in (c for c in E["columns"] if c["floor"] == k):
@@ -1309,52 +1308,39 @@ def elevation(sh, E, L, side, box):
                 sh.rect(*P(uc - half, gl), *P(uc + half, -gb_h), "wall", 0.3)
     # walls of every floor facing this side (outline + openings)
     for f in range(n):
+        # the face as one outline (no joints where wall pieces meet)
+        spans = sorted(tuple(sorted((u_of(*w["p0"]), u_of(*w["p1"])))) for w in _ext_walls(E, f, side))
+        merged = []
+        for a, b in spans:
+            if merged and a <= merged[-1][1] + 0.02:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        for a, b in merged:
+            sh.rect(*P(a, f * H), *P(b, (f + 1) * H), "wall", 0.35)
         for w in _ext_walls(E, f, side):
-            a, b = sorted((u_of(*w["p0"]), u_of(*w["p1"])))
             z0, z1 = f * H, (f + 1) * H
-            sh.rect(*P(a, z0), *P(b, z1), "wall", 0.35)
             for op in w["openings"]:
                 el = next((o for o in E["openings"] if o["op"] is op), None)
                 if el is None:
                     continue
                 uc = u_of(float(op["x"]), float(op["y"]))
-                lo, hi = z0 + el["sill"], z0 + el["sill"] + el["h"]
-                sh.rect(*P(uc - el["w"] / 2, lo), *P(uc + el["w"] / 2, hi),
-                        "window" if el["type"] == "window" else "door", 0.25)
-                if el["type"] == "window":
-                    sh.line(P(uc, lo), P(uc, hi), "window", 0.13)
-                else:
-                    sh.line(P(uc + el["w"] / 2 - 0.1, lo + el["h"] * 0.45),
-                            P(uc + el["w"] / 2 - 0.1, lo + el["h"] * 0.55),
-                            "door", 0.25)
-    # roof: the skin's outline seen from this side
+                from core import wanic_std_sheets as STD
+                STD.elev_opening(sh, P, uc, z0 + el["sill"], el, op_code(el, opening_codes(E)))
+    # floor bands (the beams) and the axes as dash-dot lines, as the standard
+    bh = float((E["lib"].get("B1") or {}).get("h", 0.4) or 0.4)
+    for f in range(n):
+        for w in _ext_walls(E, f, side):
+            a, b = sorted((u_of(*w["p0"]), u_of(*w["p1"])))
+            sh.line(P(a, (f + 1) * H - bh), P(b, (f + 1) * H - bh), "wall", 0.13)
+    # roof: the skin seen from this side
     from core import wanic_std_sheets as STD
     if L:
-        for poly in L["skin"]:
-            pp = [P(u_of(p[0], p[1]), p[2]) for p in poly]
-            sh.poly(pp, "roof", 0.25)
-            # only the faces that slope toward the viewer show their tiles
-            vis = sum((p[0] * nx + p[1] * ny) for p in poly) / max(len(poly), 1)
-            far = max(p_[0] * nx + p_[1] * ny for q in L["skin"] for p_ in q)
-            if vis > far - 0.6 * (far - min(p_[0] * nx + p_[1] * ny for q in L["skin"] for p_ in q)):
-                STD.roof_hatch(sh, pp, max(1.2, 0.22 * k))
+        STD.roof_skin(sh, P, L, u_of, nx, ny, k)
     # ground, columns at the corners of the faces, glazing bars
     for i in range(int((umax - umin) / 0.6)):
         uu = umin + 0.3 + i * 0.6
         sh.line(P(uu, gl), P(uu - 0.25, gl - 0.25), "hatch", 0.13)
-    for el in E["openings"]:
-        if el["type"] != "window":
-            continue
-        ox_, oy_ = float(el["op"]["x"]), float(el["op"]["y"])
-        rooms = E["floors"][el["floor"]]["rooms"]
-        if not any(abs(outward(w, rooms)[0] - nx) < 1e-6 and abs(outward(w, rooms)[1] - ny) < 1e-6
-                   and w["floor"] == el["floor"] and any(o is el["op"] for o in w["openings"])
-                   for w in E["walls"] if w["exterior"]):
-            continue
-        uc = u_of(ox_, oy_)
-        lo = el["floor"] * H + el["sill"]
-        sh.line(P(uc - el["w"] / 2, lo + el["h"] * 0.5), P(uc + el["w"] / 2, lo + el["h"] * 0.5),
-                "window", 0.1)
     # levels: floors, ceilings, the ring beam and the ridge
     marks = [(0.0, "ระดับพื้นชั้น 1")]
     if gl < -0.05:
@@ -1420,7 +1406,7 @@ def elevation(sh, E, L, side, box):
                           max(roof_u) if roof_u else max(gu or [0]))
     for g, nm in names:
         q = P(g * (ax[0] or ax[1]), gl)
-        sh.line((q[0], q[1] - 1), (q[0], yb - 3.5), "grid", 0.13, True)
+        sh.line(P(g * (ax[0] or ax[1]), n * H), (q[0], yb - 3.5), "grid", 0.1, True)
         sh.circle((q[0], yb - 7.0), 3.0, "grid", 0.25)
         sh.text((q[0], yb - 8.2), nm, 2.6, "center", "grid")
     # the door and window codes, and a wall tag on each storey's face
@@ -1436,15 +1422,6 @@ def elevation(sh, E, L, side, box):
                     continue
                 uc = u_of(float(op["x"]), float(op["y"]))
                 cuts.append((uc - el["w"] / 2, uc + el["w"] / 2))
-                hi = f * H + el["sill"] + el["h"]
-                tag = op_code(el, codes)
-                if el["type"] == "window":
-                    q = P(uc, hi + 0.35)
-                    sh.circle((q[0], q[1] + 1.4), 2.2, "window", 0.2)
-                    sh.text((q[0], q[1] + 0.6), tag, 1.8, "center", "window")
-                else:
-                    q = P(uc, hi - 0.35)
-                    sh.text((q[0], q[1] - 1.0), tag, 2.0, "center", "door", True)
             s0 = a
             for c0, c1 in sorted(cuts) + [(b, b)]:
                 gaps.append((c0 - s0, (s0 + c0) / 2))
