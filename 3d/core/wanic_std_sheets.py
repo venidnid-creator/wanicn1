@@ -805,3 +805,79 @@ def slope_angle(sh, P, u, ze, pitch, side, k):
         a = _m.radians(180 - pitch / 2)
         sh.text((c[0] + (r + 2.2) * _m.cos(a), c[1] + (r + 2.2) * _m.sin(a) - 0.6), f"{pitch:.0f}°", 2.0, "right",
                 "dim", angle=-pitch / 2)
+
+
+def section_roof_labels(sh, E, L, P, segs, frame, x_right):
+    """The roof members named on a section, as the standard: a short,
+    tidy leader to each — labels in one column right of the roof, in the
+    order of their points (top first) so no two leaders cross — and only
+    for members that are drawn where the leader points."""
+    s = E["settings"]
+    segs = [((ua, za), (ub, zb)) for (ua, za), (ub, zb) in segs if abs(ub - ua) > 0.3]
+    if not segs:
+        return
+    tile = CAT.roof_tile(s)[1]["name"].split(" (")[0]
+    zt = max(max(a[1], b[1]) for a, b in segs)
+    apex = next(q for sg in segs for q in sg if abs(q[1] - zt) < 1e-6)
+    right = [sg for sg in segs if max(sg[0][0], sg[1][0]) > apex[0] + 0.2]
+    items = []
+    if right and max(abs(a[1] - b[1]) for a, b in right) > 0.2:      # a slope is cut
+        (ua, za), (ub, zb) = max(right, key=lambda sg: abs(sg[0][1] - sg[1][1]))
+        if za < zb:
+            (ua, za), (ub, zb) = (ub, zb), (ua, za)               # from the apex down to the eave
+
+        def on(t, dz=0.0):
+            return (ub + (ua - ub) * (1 - t), zb + (za - zb) * (1 - t) + dz)
+        items.append((on(0.0, 0.18), "ครอบสันหลังคา"))
+        items.append((on(0.0, -0.12), f"อกไก่ {s.get('ridge', '')}"))
+        items.append((on(0.30, 0.10), f"หลังคา{tile[:30]}"))
+        items.append((on(0.48, -0.02), f"แป {s.get('purlin', '')}"))
+        raf = [ln for ln in frame.get("rafter", []) if min(ln[0][0], ln[1][0]) >= apex[0] - 0.05]
+        if raf:
+            (pa, pb) = max(raf, key=lambda ln: abs(ln[0][0] - ln[1][0]))
+            items.append(((pa[0] + (pb[0] - pa[0]) * 0.66, pa[1] + (pb[1] - pa[1]) * 0.66), f"จันทัน {s.get('rafter', '')}"))
+        posts = frame.get("post") or []
+        if posts:
+            (pa, pb) = min(posts, key=lambda ln: abs(ln[0][0] - apex[0]))
+            lo_ = pa if pa[1] < pb[1] else pb            # near its foot: the leaders stay apart
+            items.append(((lo_[0], lo_[1] + 0.25), f"ดั้ง {s.get('post', '')}"))
+        ties = frame.get("tie") or []
+        if ties:
+            (pa, pb) = max(ties, key=lambda ln: max(ln[0][0], ln[1][0]))
+            u = max(pa[0], pb[0]) - 0.6
+            items.append(((u, pa[1] + (pb[1] - pa[1]) * ((u - pa[0]) / ((pb[0] - pa[0]) or 1))), f"ขื่อ/อะเส {s.get('tiebeam', '')}"))
+        items.append((on(1.0, -0.12), "เชิงชายไม้สังเคราะห์ 1\"x8\" ฝ้าชายคา"))
+    else:                                                          # along the ridge: only what is seen
+        (ua, za), (ub, zb) = max(segs, key=lambda sg: abs(sg[1][0] - sg[0][0]))
+        items.append(((ua + (ub - ua) * 0.75, za + 0.18), "ครอบสันหลังคา"))
+        items.append(((ua + (ub - ua) * 0.55, za - 0.6), f"หลังคา{tile[:30]}"))
+    pts = [(P(*q), t) for q, t in items]
+    pts.sort(key=lambda it: -it[0][1])
+    _x0, _y0, x1a, y1a = D.drawing_area()
+    width = max(len(t) for _p, t in pts) * 1.05 + 4
+    lx = min(max(x_right, max(p[0] for p, _t in pts) + 10), x1a - width - 2)
+    gap = 4.6
+    ys, last = [], None
+    for p, _t in pts:                    # the label at its point's height, pushed down to keep the gap
+        y = p[1] + 1.5 if last is None else min(p[1] + 1.5, last - gap)
+        ys.append(y)
+        last = y
+    for (p, text), y in zip(pts, ys):
+        sh.circle(p, 0.45, "text", 0.18)
+        sh.line(p, (lx - 2.0, y), "text", 0.13)
+        sh.line((lx - 2.0, y), (lx + len(text) * 1.05 + 1.5, y), "text", 0.13)
+        sh.text((lx, y + 0.7), text, 2.0)
+
+
+def caption_marks(sh, p, title, scale_txt, mark, ref, width=95.0):
+    """The standard's title under a drawing: the name over a long rule,
+    «มาตราส่วน ........ 1 : 100» under it, and the drawing's own symbol(s)
+    at the end of the rule."""
+    x, y = p
+    sh.text((x, y + 1.0), title, 4.2, "left", "text", True)
+    sh.line((x, y - 0.6), (x + width, y - 0.6), "text", 0.5)
+    sh.text((x, y - 5.0), "มาตราส่วน", 2.4)
+    sh.text((x + width - 18, y - 5.0), scale_txt.replace(":", " : "), 2.4, "right")
+    if mark:
+        for i in range(2 if mark != "elev" else 1):
+            section_mark(sh, (x + width - 12 + i * 10, y + 2.0), ref[0], ref[1], (0.0, 1.0))

@@ -1857,17 +1857,20 @@ def section_detail(sh, E, L, cut, box):
                 (ua, za), (ub, zb) = seg
                 sh.line(P(ua, za + 0.10), P(ub, zb + 0.10), "roof", 0.7)
                 sh.line(P(ua, za), P(ub, zb), "roof", 0.25)
-        depth = 1.25
-        for key, lay, w_ in (("rafter", "roof", 0.18), ("tie", "struct", 0.25),
-                             ("rbeam", "struct", 0.25), ("post", "struct", 0.25),
-                             ("ridge", "struct", 0.25), ("hip", "roof", 0.18)):
-            for a_, b_ in L.get(key) or []:
-                ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
-                if not (at - 1e-6 <= min(ca, cb) and max(ca, cb) <= at + depth):
-                    continue
-                if abs(ca - cb) > 1e-6 and key in ("rafter", "tie", "rbeam", "ridge"):
-                    continue                         # runs across: cut, below
-                sh.line(P(U(a_[0], a_[1]), a_[2]), P(U(b_[0], b_[1]), b_[2]), lay, w_)
+        # the nearest roof truss beyond the cut, seen whole (rafters, tie,
+        # king post, struts) — so every member the labels name is drawn
+        cs = sorted({round(C(q[0], q[1]), 3) for a_, b_ in (L.get("post") or []) for q in (a_, b_)})
+        beyond_c = [c_ for c_ in cs if c_ > at + 0.02] or [c_ for c_ in reversed(cs) if c_ < at - 0.02]
+        frame = {}
+        if beyond_c:
+            fc = beyond_c[0]
+            for key, lay, w_ in (("rafter", "struct", 0.25), ("tie", "struct", 0.25), ("post", "struct", 0.3),
+                                 ("strut", "struct", 0.18), ("brace", "struct", 0.18)):
+                for a_, b_ in L.get(key) or []:
+                    if abs(C(a_[0], a_[1]) - fc) < 0.05 and abs(C(b_[0], b_[1]) - fc) < 0.05:
+                        pa, pb = (U(a_[0], a_[1]), a_[2]), (U(b_[0], b_[1]), b_[2])
+                        frame.setdefault(key, []).append((pa, pb))
+                        sh.line(P(*pa), P(*pb), lay, w_)
         for key in ("tie", "rbeam", "ridge", "plate"):
             for a_, b_ in L.get(key) or []:
                 ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
@@ -1897,7 +1900,8 @@ def section_detail(sh, E, L, cut, box):
     STD.level_ruler(sh, P, grid_u[0], ox - lab_mm + 16, marks)
     xr = P(umax - 0.3, 0)[0]
     if L:
-        roof_leaders(sh, E, L, P, U, C, axis, at, xr + 12)
+        STD.section_roof_labels(sh, E, L, P, [sg for sg in (_cut_poly(q, axis, at) for q in L["skin"]) if sg],
+                                frame if "frame" in dir() else {}, xr)
     # under it: the eaves and the axes, the overall, then the bubbles
     _segs = [sg for sg in (_cut_poly(poly, axis, at) for poly in (L or {}).get("skin", [])) if sg]
     ru = [q[0] for sg in _segs for q in sg]
@@ -1982,7 +1986,9 @@ def a_section_one(sh, E, L, cut):
     """One section on its sheet at 1:100 (the standard sets)."""
     x0, y0, x1, y1 = drawing_area()
     sc = section_detail(sh, E, L, cut, (x0, y0 + 14, x1, y1))
-    caption(sh, ((x0 + x1) / 2, y0 + 6), f"รูปตัด {cut[2]}", f"1:{sc}")
+    from core import wanic_std_sheets as STD
+    STD.caption_marks(sh, ((x0 + x1) / 2 - 50, y0 + 10), f"รูปตัด {cut[2]}", f"1:{sc}", "section",
+                      (cut[2].split("-")[0], sh.code))
     sh.scale = f"1:{sc}"
     return sc
 

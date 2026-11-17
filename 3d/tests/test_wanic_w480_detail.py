@@ -908,7 +908,7 @@ def test_bath_section_safety_septic_and_3d_picture():
     assert any("ท่อระบายอากาศ" in t for t in sn.texts())
     assert any("ตารางเลือกขนาดถังบำบัด" in t for t in sn.texts())
     sec = [s for s in sheets if s.title.startswith("รูปตัด ")]
-    assert any(any(t.startswith("จันทันเหล็ก") for t in s.texts()) for s in sec)
+    assert any(any(t.startswith("จันทัน ") for t in s.texts()) for s in sec)      # the roof members named
 
 
 def test_two_openings_at_one_place_still_draw():
