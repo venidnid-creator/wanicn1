@@ -39,3 +39,14 @@ def test_a02_specification_and_cp874():
     for s in (S["สารบัญแบบ รายการวัสดุ"], a02):
         for x in s.texts():
             D.dxf_text(x).encode("cp874")                      # DXF-safe text only
+
+
+def test_door_window_cards_like_the_standard():
+    S = _sheets()
+    cards = next(s for t, s in S.items() if t.startswith("แบบขยายประตู แบบขยายหน้าต่าง"))
+    t = cards.texts()
+    for k in ("ชนิดบาน", "วงกบ", "กรอบบาน", "บาน", "อุปกรณ์", "จำนวน", "หมายเหตุ", "ป1", "น1"):
+        assert k in t, k
+    assert any(x.startswith("ติดตั้งบริเวณ") for x in t)
+    for x in t:
+        D.dxf_text(x).encode("cp874")

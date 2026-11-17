@@ -2889,7 +2889,11 @@ def build_set(data, info=None,
         for i, e in enumerate(STS.stairs_to_detail(E)):     # แบบขยายบันได, as the standard sets
             add("A", "แบบขยายบันได" + (f" ({i + 1})" if i else ""),
                 lambda sh, _a, e=e: STS.a_stair_detail(sh, E, e), "ตามระบุ")
-        if E["openings"]:
+        if E["openings"]:                              # the standard's cards, eight to a sheet
+            cards = STD.opening_cards(E, codes)
+            for i in range(0, len(cards), 8):
+                add("A", "แบบขยายประตู แบบขยายหน้าต่าง" + (f" ({i // 8 + 1})" if len(cards) > 8 else ""),
+                    lambda sh, _a, cc=cards[i:i + 8]: STD.a_openings(sh, E, codes, cc), "1:50")
             add("A", "ตารางประตู-หน้าต่าง วัสดุตกแต่ง",
                 lambda sh, _a: a_schedules(sh, E, codes, fcodes), "1:50")
         if any((s["room"].get("name") or "").startswith("ห้องน้ำ")

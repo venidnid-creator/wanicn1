@@ -718,6 +718,12 @@ def elev_opening(sh, P, uc, lo, el, code):
             while z < y1 - 0.04:
                 sh.line(P(x0, z), P(x1, z), lay, 0.1)
                 z += 0.09
+    if float(spec.get("glass") or 0) >= 0.5 and kind != "louvre":   # glass: the three slashes
+        for i in range(n):
+            gx = a + f + (i + 0.5) * lw
+            gz = lo + h * 0.68
+            for d_ in (-0.06, 0.0, 0.06):
+                sh.line(P(gx + d_ - 0.04, gz - 0.06), P(gx + d_ + 0.04, gz + 0.06), lay, 0.1)
     if kind == "slide":
         ym = lo + h * 0.42
         p0, p1 = P(a + w * 0.2, ym), P(b - w * 0.2, ym)
@@ -941,3 +947,143 @@ def section_stairs(sh, E, P, U, C, at, rect):
         for a_, b_ in rl["posts"]:
             if C(a_[0], a_[1]) >= at - 0.6:
                 sh.line(P(U(a_[0], a_[1]), z_f + a_[2]), P(U(b_[0], b_[1]), z_f + b_[2]), "door", 0.13)
+
+
+# ---------------------------------------------------------------------------
+# A5 — แบบขยายประตู แบบขยายหน้าต่าง (the standard's 4 × 2 cards)
+# ---------------------------------------------------------------------------
+
+FRAME_TH = {"wood": "ไม้เนื้อแข็ง 2\" x 4\"", "alu": "อลูมิเนียมอบสีขาว", "teak": "ไม้สัก 2\" x 4\"",
+            "pvc": "วงกบ PVC.", "steel": "เหล็กรูปพรรณ ทาสีกันสนิม"}
+LEAF_TH = {"wood": "บานไม้ทาสี", "prefab": "บานประตูสำเร็จรูป HDF.", "alu": "กระจกใส หนา 6 มม.",
+           "teak": "บานไม้สักลูกฟัก", "pvc": "บานประตู PVC.", "none": "-"}
+
+
+def opening_kind_th(spec, code) -> str:
+    from core import wanic_opening_sym as OS
+    k = OS.kind_of(spec, code)
+    n = int(spec.get("leaves") or 1)
+    if k == "slide":
+        return "บานเลื่อน" + (f" {n} บาน" if n > 2 else "สลับ")
+    if k == "awning":
+        return "บานกระทุ้ง"
+    if k == "louvre":
+        return "บานเกล็ด"
+    if k == "fixed":
+        return "ช่องแสงติดตาย"
+    return "บานเปิดคู่" if n >= 2 else "บานเปิดเดี่ยว"
+
+
+def opening_rooms(E, code, codes) -> list:
+    """The rooms each opening of ``code`` opens from (for «ติดตั้งบริเวณ»)."""
+    names = []
+    for el in E["openings"]:
+        if D.op_code(el, codes) != code:
+            continue
+        ox, oy = float(el["op"]["x"]), float(el["op"]["y"])
+        for rm in E["floors"][el["floor"]]["rooms"]:
+            if rm["x"] - 0.06 <= ox <= rm["x"] + rm["w"] + 0.06 and rm["y"] - 0.06 <= oy <= rm["y"] + rm["d"] + 0.06:
+                nm = (rm.get("name") or "").rstrip("0123456789 ")
+                if nm and nm not in names:
+                    names.append(nm)
+    return names
+
+
+def opening_cards(E, codes) -> list:
+    """[(code, key, spec, sample el, count)] — doors first, as numbered."""
+    from core import wanic_catalog as CAT_
+    out = []
+    for key, code in sorted(codes.items(), key=lambda t: (t[1][0] != "ป", int(t[1][1:]))):
+        els = [o for o in E["openings"] if D.op_code(o, codes) == code]
+        if not els:
+            continue
+        _c, spec = CAT_.opening_type(els[0]["op"])
+        out.append((code, key, spec, els[0], len(els)))
+    return out
+
+
+def a_openings(sh, E, codes, cards):
+    """Up to eight cards: the plan symbol, the elevation with its sizes on
+    the floor line, the number (○ door / ⬡ window) and the specification
+    rows — the standard's «แบบขยายประตู แบบขยายหน้าต่าง»."""
+    x0, y0, x1, y1 = D.drawing_area()
+    cw, ch = (x1 - x0) / 4, (y1 - y0) / 2
+    sh.rect(x0, y0, x1, y1, "text", 0.35)
+    for i in range(1, 4):
+        sh.line((x0 + i * cw, y0), (x0 + i * cw, y1), "text", 0.25)
+    sh.line((x0, y0 + ch), (x1, y0 + ch), "text", 0.35)
+    for n, (code, key, spec, el, cnt) in enumerate(cards[:8]):
+        cx0, cy1 = x0 + (n % 4) * cw, y1 - (n // 4) * ch
+        style, w, h, sill = key
+        sc = 50 if w * 20 <= cw - 22 and (sill + h) * 20 <= 62 else 75
+        k = 1000.0 / sc
+        ground = cy1 - 78
+        mid = cx0 + cw / 2 + 4
+        u0 = -w / 2
+
+        def P(u, z):
+            return (mid + u * k, ground + z * k)
+        sh.line((cx0 + 2, ground), (cx0 + cw - 2, ground), "cut", 0.5)
+        elev_opening(sh, P, 0.0, sill, el, "")
+        # the width over it, the heights on its left
+        yt = P(0, sill + h)[1] + 6
+        a, b = P(u0, 0)[0], P(-u0, 0)[0]
+        sh.line((a, yt), (b, yt), "dim", 0.13)
+        for xq in (a, b):
+            sh.line((xq, yt - 1.2), (xq, yt + 1.2), "dim", 0.13)
+            sh.line((xq - 0.7, yt - 0.7), (xq + 0.7, yt + 0.7), "dim", 0.25)
+        sh.text(((a + b) / 2, yt + 0.9), f"{w:.2f}", 2.2, "center", "dim")
+        n_leaf = int(spec.get("leaves") or 1)
+        if n_leaf >= 3:
+            sh.text(((a + b) / 2, yt + 4.0), f"แบ่ง {n_leaf} ช่อง เท่าๆ กัน", 2.0, "center", "dim")
+        xl = a - 6
+        chain = ([0.0, sill] if sill > 0.01 else [0.0]) + [sill + h]
+        for za, zb in zip(chain, chain[1:]):
+            pa, pb = P(0, za)[1], P(0, zb)[1]
+            sh.line((xl, pa), (xl, pb), "dim", 0.13)
+            for yq in (pa, pb):
+                sh.line((xl - 0.7, yq - 0.7), (xl + 0.7, yq + 0.7), "dim", 0.25)
+                sh.line((xl - 1.2, yq), (a - 1, yq), "dim", 0.1)
+            sh.text((xl - 0.9, (pa + pb) / 2), f"{zb - za:.2f}", 2.0, "center", "dim", angle=90)
+        if sill > 0.01:
+            xt = xl - 5
+            pa, pb = P(0, 0)[1], P(0, sill + h)[1]
+            sh.line((xt, pa), (xt, pb), "dim", 0.13)
+            for yq in (pa, pb):
+                sh.line((xt - 0.7, yq - 0.7), (xt + 0.7, yq + 0.7), "dim", 0.25)
+            sh.text((xt - 0.9, (pa + pb) / 2), f"{sill + h:.2f}", 2.0, "center", "dim", angle=90)
+        # the plan symbol at the top of the card
+        D.opening_sample(sh, (mid, cy1 - 11), el["op"], w, 75, word=False)
+        # the number, then the rows
+        ty = ground - 9
+        sh.line((cx0, ground - 4), (cx0 + cw, ground - 4), "text", 0.18)
+        if code.startswith("ป"):
+            sh.circle((cx0 + cw / 2, ty), 3.6, "text", 0.25)
+            sh.text((cx0 + cw / 2, ty - 1.0), code, 2.6, "center", "text", True)
+        else:
+            hex_tag(sh, (cx0 + cw / 2, ty), code, 3.6, "text")
+        frame = FRAME_TH.get(spec.get("frame"), spec.get("frame") or "-")
+        glass = float(spec.get("glass") or 0)
+        leaf = LEAF_TH.get(spec.get("leaf"), "-")
+        if glass >= 0.5 and spec.get("leaf") in ("alu", "wood", "teak"):
+            leaf = "กระจกใส หนา 6 มม." if spec.get("leaf") == "alu" else f"{leaf} กรุกระจกใส"
+        rooms = opening_rooms(E, code, codes)
+        rows = [("ชนิดบาน", opening_kind_th(spec, style)),
+                ("วงกบ", frame),
+                ("กรอบบาน", frame if spec.get("frame") == "alu" else "-"),
+                ("บาน", leaf),
+                ("อุปกรณ์", ("ลูกบิด , " if code.startswith("ป") else "") + "มาตรฐานครบชุด"),
+                ("จำนวน", f"{cnt} ชุด"),
+                ("หมายเหตุ", ("ติดตั้งบริเวณ " + " , ".join(rooms)) if rooms else "")]
+        ry = ty - 6
+        sh.line((cx0, ry), (cx0 + cw, ry), "text", 0.25)
+        rh = (ry - (cy1 - ch)) / len(rows)
+        for j, (lab, val) in enumerate(rows):
+            yb = ry - (j + 1) * rh
+            sh.line((cx0, yb), (cx0 + cw, yb), "text", 0.13)
+            sh.text((cx0 + 19, yb + rh / 2 - 0.9), lab, 2.1, "right")
+            parts = D._wrap(val, 40)[:2]
+            for m, part in enumerate(parts):
+                sh.text((cx0 + 23, yb + rh / 2 - 0.8 - m * 2.3 + (1.15 if len(parts) > 1 else 0)),
+                        part, 1.9 if len(parts) > 1 else 2.1)
+        sh.line((cx0 + 21, ry), (cx0 + 21, cy1 - ch), "text", 0.13)
