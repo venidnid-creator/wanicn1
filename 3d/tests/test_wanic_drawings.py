@@ -107,7 +107,8 @@ def test_floor_plan_content():
     assert {"1", "2", "3", "A", "B"} <= set(t)     # grid bubbles
     assert p1.count("arc") >= 2                    # door swings
     assert p1.scale == "1:100"
-    assert any(re.fullmatch(r"พ\d.*±0\.00", x) for x in t)
+    assert "±0.00" in t                              # room tag: □ floor · level · ○ ceiling
+    assert "ST.1" in t and "ดูแบบขยาย" in t          # the stair detail tag, as the standard plans
 
 
 def test_schedules_and_systems():

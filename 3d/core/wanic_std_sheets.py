@@ -403,3 +403,143 @@ def a_spec(sh, E, info):
         sh.text((x3 + 1, y3), ab, 1.9, "left", "text", True)
         sh.text((x3 + 18, y3), full, 1.9)
         y3 -= 3.3
+
+
+# ---------------------------------------------------------------------------
+# A2 — floor plans as the standard draws them
+# ---------------------------------------------------------------------------
+
+def sheet_ref(sheets, *starts) -> str:
+    """The code of the first sheet whose title starts with one of ``starts``."""
+    for s in sheets or []:
+        if any(s.title.startswith(t) for t in starts):
+            return s.code
+    return ""
+
+
+def room_tag(sh, p, E, rm, sl, fcodes):
+    """ชื่อห้อง over □ floor number · level · ○ ceiling number."""
+    sh.text((p[0], p[1] + 1.2), rm.get("name") or "ห้อง", 2.8, "center", "text", True)
+    pc, _wc, cc = D.room_codes(E, rm, fcodes).split()
+    lv = f"±{sl['z']:.2f}" if sl["z"] == 0 else f"+{sl['z']:.2f}"
+    y = p[1] - 3.2
+    has_c = cc[1:].isdigit()
+    w = 4.0 + 11.0 + (5.0 if has_c else 0.0)
+    x = p[0] - w / 2
+    sh.rect(x, y - 1.9, x + 3.8, y + 1.9, "text", 0.25)
+    sh.text((x + 1.9, y - 0.8), pc[1:] if pc[1:].isdigit() else "-", 2.0, "center", "text", True)
+    sh.text((x + 4.6, y - 0.8), lv, 2.0)
+    if has_c:
+        _ceiling_mark(sh, (x + w - 2.1, y), cc[1:])
+
+
+def opening_dims(sh, v, E, k, off=0.75):
+    """The inner dimension chain along every exterior wall: the wall's ends
+    and both jambs of each opening on it (as the standard plans)."""
+    rooms = E["floors"][k]["rooms"]
+    placed = D.opening_on_wall(E, k)
+    for w in (w for w in E["walls"] if w["floor"] == k and w["exterior"]):
+        (x0, y0), (x1, y1) = w["p0"], w["p1"]
+        L = w["L"]
+        if L < 0.6:
+            continue
+        ux, uy = (x1 - x0) / L, (y1 - y0) / L
+        if abs(ux) > 1e-6 and abs(uy) > 1e-6:
+            continue                               # slanted: none
+        stops = [0.0, L]
+        for ww, s_, el in placed:
+            if ww is w:
+                stops += [s_ - el["w"] / 2, s_ + el["w"] / 2]
+        stops = sorted({round(min(max(s_, 0.0), L), 3) for s_ in stops})
+        if len(stops) <= 2:
+            continue
+        no = D.outward(w, rooms)
+        if abs(uy) < 1e-6:                          # along x
+            at = y0 + no[1] * off
+            xs_ = [x0 + ux * s_ for s_ in stops]
+            D.dim_chain(sh, v, sorted(xs_), at, "x")
+        else:
+            at = x0 + no[0] * off
+            ys_ = [y0 + uy * s_ for s_ in stops]
+            D.dim_chain(sh, v, sorted(ys_), at, "y")
+
+
+def section_mark(sh, q, tag, ref, look):
+    """The standard's section mark: a circle split by a line (name over the
+    sheet it is drawn on) with a black triangle pointing the way it looks."""
+    r = 3.4
+    lx, ly = look
+    nx, ny = -ly, lx
+    tip = (q[0] + lx * (r + 3.4), q[1] + ly * (r + 3.4))
+    b = (q[0] + lx * r * 0.8, q[1] + ly * r * 0.8)
+    sh.fill([tip, (b[0] + nx * r * 0.6, b[1] + ny * r * 0.6), (b[0] - nx * r * 0.6, b[1] - ny * r * 0.6)],
+            "hatch", 0.0)
+    sh.circle(q, r, "text", 0.35)
+    sh.line((q[0] - r, q[1]), (q[0] + r, q[1]), "text", 0.18)
+    sh.text((q[0], q[1] + 0.7), tag, 2.4, "center", "text", True)
+    sh.text((q[0], q[1] - 2.5), ref or "-", 1.5, "center")
+
+
+def detail_ref(sh, p, code, ref, label):
+    """«ST.1 / A-13  บันได ดูแบบขยาย»: an oval-ended tag with the detail
+    name over its sheet, and what it is."""
+    w, h = 5.2, 3.0
+    sh.poly([(p[0] - w, p[1] + h), (p[0] + w, p[1] + h), (p[0] + w + 1.5, p[1]),
+             (p[0] + w, p[1] - h), (p[0] - w, p[1] - h), (p[0] - w - 1.5, p[1])], "text", 0.25)
+    sh.line((p[0] - w - 1.5, p[1]), (p[0] + w + 1.5, p[1]), "text", 0.18)
+    sh.text((p[0], p[1] + 0.7), code, 1.9, "center", "text", True)
+    sh.text((p[0], p[1] - 2.3), ref or "-", 1.5, "center")
+    sh.text((p[0] + w + 3.0, p[1] + 0.6), label, 2.2, "left", "text", True)
+    sh.text((p[0] + w + 3.0, p[1] - 2.4), "ดูแบบขยาย", 2.0)
+
+
+def elev_key(sh, p, refs, r=4.2):
+    """The four-pointer key: 1 front · 2 left · 3 back · 4 right, each with
+    the sheet its elevation is on."""
+    cx, cy = p
+    R = r * 1.75
+    sh.poly([(cx, cy + R), (cx + R, cy), (cx, cy - R), (cx - R, cy)], "text", 0.25)
+    sh.circle((cx, cy), r, "text", 0.25)
+    for (dx, dy), n in (((0, -1), 1), ((-1, 0), 2), ((0, 1), 3), ((1, 0), 4)):
+        nx, ny = -dy, dx
+        sh.fill([(cx + dx * R, cy + dy * R), (cx + dx * r * 0.7 + nx * 2.6, cy + dy * r * 0.7 + ny * 2.6),
+                 (cx + dx * r * 0.7 - nx * 2.6, cy + dy * r * 0.7 - ny * 2.6)], "hatch", 0.0)
+        tx, ty = cx + dx * (R + 3.4), cy + dy * (R + 3.4)
+        sh.circle((tx, ty), 2.9, "text", 0.25)
+        sh.line((tx - 2.9, ty), (tx + 2.9, ty), "text", 0.13)
+        sh.text((tx, ty + 0.5), str(n), 1.9, "center", "text", True)
+        sh.text((tx, ty - 2.2), refs.get(n, "-"), 1.3, "center")
+
+
+#: the elevation numbers of the key → our elevation titles
+ELEV_NO = {1: "รูปด้านหน้า", 2: "รูปด้านซ้าย", 3: "รูปด้านหลัง", 4: "รูปด้านขวา"}
+
+
+def elev_refs(sheets) -> dict:
+    out = {}
+    for n, title in ELEV_NO.items():
+        for s in sheets or []:
+            if title in s.title:
+                out[n] = s.code
+                break
+    return out
+
+
+def tag_spot(E, k, rm):
+    """Where the room tag goes: the room's centre, or — when a stair sits
+    there — the middle of the widest free strip beside the stair."""
+    cx, cy = rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2
+    for e in (e for e in E["stairs"] if e["floor"] in (k, k - 1)):
+        pl = B.stair_plan(e["st"], E["settings"])
+        pts = [q for poly in pl["polys"] for q in poly]
+        x0, x1 = min(q[0] for q in pts), max(q[0] for q in pts)
+        y0, y1 = min(q[1] for q in pts), max(q[1] for q in pts)
+        if not (x0 - 0.3 <= cx <= x1 + 0.3 and y0 - 0.3 <= cy <= y1 + 0.3):
+            continue
+        strips = [(y0 - rm["y"], (cx, (rm["y"] + y0) / 2)), (rm["y"] + rm["d"] - y1, (cx, (y1 + rm["y"] + rm["d"]) / 2)),
+                  (x0 - rm["x"], ((rm["x"] + x0) / 2, cy)), (rm["x"] + rm["w"] - x1, ((x1 + rm["x"] + rm["w"]) / 2, cy))]
+        for size, spot in strips:                  # the front strip first (the way in)
+            if size >= 0.8:
+                return spot
+        return max(strips)[1]
+    return cx, cy

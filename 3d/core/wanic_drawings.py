@@ -510,12 +510,14 @@ def opening_on_wall(E, k):
 # Plan drawing (shared by A, S, SN, EE, M plans)
 # ---------------------------------------------------------------------------
 
-def draw_grid(sh, v, E, dims=True, bubbles=True):
+def draw_grid(sh, v, E, dims=True, bubbles=True, ext=2.2, at=(0.8, 1.4), both=False):
+    """Grid lines and bubbles; ``at``: the offsets of the axis chain and the
+    overall dimension (top / left); ``both``: the axis chain also on the
+    bottom / right (the standard plans)."""
     xs, ys = grids(E)
     if not xs:
         return
     x0, y0, x1, y1 = xs[0], ys[0], xs[-1], ys[-1]
-    ext = 2.2
     for i, x in enumerate(xs):
         sh.line(v(x, y0 - ext), v(x, y1 + ext), "grid", 0.13, True)
         if bubbles:
@@ -530,10 +532,13 @@ def draw_grid(sh, v, E, dims=True, bubbles=True):
             sh.text((c[0] - 3.5, c[1] - 1.1), axis_name(j), 3.0, "center",
                     "grid")
     if dims:
-        dim_chain(sh, v, xs, y1 + 0.8, "x")
-        dim_chain(sh, v, [xs[0], xs[-1]], y1 + 1.4, "x")
-        dim_chain(sh, v, ys, x0 - 0.8, "y")
-        dim_chain(sh, v, [ys[0], ys[-1]], x0 - 1.4, "y")
+        dim_chain(sh, v, xs, y1 + at[0], "x")
+        dim_chain(sh, v, [xs[0], xs[-1]], y1 + at[1], "x")
+        dim_chain(sh, v, ys, x0 - at[0], "y")
+        dim_chain(sh, v, [ys[0], ys[-1]], x0 - at[1], "y")
+        if both:
+            dim_chain(sh, v, xs, y0 - at[0], "x")
+            dim_chain(sh, v, ys, x1 + at[0], "y")
 
 
 def dim_chain(sh, v, vals, at, axis):
@@ -1162,29 +1167,58 @@ def a_site(sh, E, info):
 
 
 def a_floor(sh, E, k, codes, fcodes, sheets=None):
-    v, sc = plan_view(sh, E)
+    """แปลนพื้น as the standard plans: three dimension chains (openings,
+    axes, overall), room tags □ floor · level · ○ ceiling, section marks
+    with their sheets, the stair and bathroom detail tags, the
+    elevation key and the north arrow."""
+    from core import wanic_std_sheets as STD
+    v, sc = plan_view(sh, E, pad=4.2)
     t = float(E["settings"].get("wall_t") or 0.1)
-    draw_grid(sh, v, E)
+    ext = 3.2
+    draw_grid(sh, v, E, ext=ext, at=(1.8, 2.45), both=True)
+    STD.opening_dims(sh, v, E, k, off=1.15)
     draw_walls(sh, v, E, k, t, codes)
-    draw_rooms(sh, v, E, k, fcodes)
+    for sl in (s_ for s_ in E["slabs"] if s_["floor"] == k):
+        rm = sl["room"]
+        STD.room_tag(sh, v(*STD.tag_spot(E, k, rm)), E, rm, sl, fcodes)
     draw_free(sh, v, E, k * E["H"], (k + 1) * E["H"], ("walls", "columns"))
     draw_stairs(sh, v, E, k)
     draw_fixtures(sh, v, E, k)
-    section_marks(sh, v, E, k)
+    section_marks(sh, v, E, k, sheets or [], ext=ext)
     draw_wall_tags(sh, v, E, k, t)
     # the interior elevations of the bathrooms: A B C D, the sheet they are on
     refs = [s_.code for s_ in (sheets or []) if s_.title.startswith("รูปด้านภายใน")]
+    wc_ref = STD.sheet_ref(sheets, "แบบขยายห้องน้ำ")
     for i, (kk, rm) in enumerate(bathrooms(E)):
         if kk != k:
             continue
         ref = refs[min(i // 2, len(refs) - 1)] if refs else ""
         off = min(0.75, rm["w"] * 0.2)
         elev_marker(sh, v(rm["x"] + rm["w"] - off, rm["y"] + rm["d"] / 2), ref)
+        p = v(rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] - 0.55)
+        STD.detail_ref(sh, (p[0] - 8, p[1]), f"WC.{i + 1}", wc_ref, "ห้องน้ำ")
+    # the stairs: ST.n — see the stair detail
+    from core import wanic_stair_sheets as STS
+    st_refs = [s_.code for s_ in (sheets or []) if s_.title.startswith("แบบขยายบันได")]
+    for i, e in enumerate(STS.stairs_to_detail(E)):
+        if e["floor"] != k:
+            continue
+        pl = B.stair_plan(e["st"], E["settings"])
+        pts = [q for poly in pl["polys"] for q in poly]
+        bx1 = max(q[0] for q in pts)
+        cy = (min(q[1] for q in pts) + max(q[1] for q in pts)) / 2 - 0.4 * i
+        gx = grids(E)[0]
+        a, b = v(bx1, cy), v((gx[-1] if gx else bx1) + ext + 0.9, cy)
+        sh.line(a, (b[0] - 7.0, b[1]), "dim", 0.13)
+        sh.circle(a, 0.5, "dim", 0.25)
+        STD.detail_ref(sh, b, f"ST.{i + 1}",
+                       st_refs[min(i, len(st_refs) - 1)] if st_refs else "", "บันได")
     x0, y0, x1, y1 = drawing_area()
     north(sh, (x1 - 10, y1 - 12))
     wall_legend(sh, x0 + 4, y0 + 30, E)
     name = "แปลนพื้นชั้น 1" if k == 0 else f"แปลนพื้นชั้น {k + 1}"
     caption(sh, ((x0 + x1) / 2, y0 + 6), name, f"1:{sc}")
+    STD.elev_key(sh, ((x0 + x1) / 2 + 52, y0 + 14), STD.elev_refs(sheets))
     return sc
 
 
@@ -1933,8 +1967,10 @@ def a_section_sheet(sh, E, L, k):
     return max(scales) if scales else 100
 
 
-def section_marks(sh, v, E, k):
-    """The cut lines of floor ``k``'s sections on its plan, with arrows."""
+def section_marks(sh, v, E, k, sheets=None, ext=2.2):
+    """The cut lines of floor ``k``'s sections on its plan, with arrows;
+    with ``sheets``: the standard mark (name over the sheet it is on, a
+    black triangle pointing the way it looks)."""
     xs, ys = grids(E)
     if not xs:
         return
@@ -1944,14 +1980,20 @@ def section_marks(sh, v, E, k):
         # (bottom / right); the dashed line only across the building — it
         # does not run over the dimension chains and the bubbles
         if axis == "x":
-            a, b = v(at, ys[0] - 2.2), v(at, ys[-1] + 3.4)
+            a, b = v(at, ys[0] - ext), v(at, ys[-1] + ext + 1.2)
             a_in, b_in = v(at, ys[0] - 0.4), v(at, ys[-1] + 0.4)
             arrow = (1.0, 0.0)
         else:
-            a, b = v(xs[0] - 3.4, at), v(xs[-1] + 2.2, at)
+            a, b = v(xs[0] - ext - 1.2, at), v(xs[-1] + ext, at)
             a_in, b_in = v(xs[0] - 0.4, at), v(xs[-1] + 0.4, at)
             arrow = (0.0, 1.0)
         sh.line(a_in, b_in, "grid", 0.35, True)
+        if sheets is not None:
+            from core import wanic_std_sheets as STD
+            ref = STD.sheet_ref([s_ for s_ in sheets if f"รูปตัด {name}" in s_.title], "")
+            for q in (a, b):
+                STD.section_mark(sh, q, tag, ref, arrow)
+            continue
         for q, q_in in ((a, a_in), (b, b_in)):
             # a short heavy stub from the mark toward the plan
             dx, dy = q_in[0] - q[0], q_in[1] - q[1]
