@@ -44,7 +44,9 @@ def test_the_whole_set_numbered_like_the_standard_drawings():
     S = D.build_set(house(), INFO)
     codes = [s.code for s in S]
     assert codes[:2] == ["ปก", "สารบัญ"]                 # cover and contents first
-    assert codes[2:6] == ["A-01", "A-02", "A-03", "A-04"]
+    assert codes[2:7] == ["A-01", "A-02", "A-03", "A-04", "A-05"]
+    titles = [s.title for s in S]
+    assert titles[2:5] == ["สารบัญแบบ รายการวัสดุ", "รายการประกอบแบบ", "ผังบริเวณ"]   # as the standard sets
     for g in ("A-", "S-", "SN-", "EE-", "M-"):
         assert any(c.startswith(g) for c in codes), g
     dw = [s for s in S if s.group not in ("BOQ", "G")]
@@ -96,7 +98,7 @@ def _in_bounds(s):
 
 def test_floor_plan_content():
     S = {s.code: s for s in D.build_set(house(), INFO)}
-    p1 = S["A-03"]
+    p1 = next(s for s in S.values() if s.title == "แปลนพื้นชั้น 1")
     t = p1.texts()
     for name in ("ห้องนั่งเล่น", "ห้องครัว", "ห้องน้ำ", "ห้องนอน"):
         assert name in t

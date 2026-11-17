@@ -848,7 +848,7 @@ def test_wall_tags_legend_and_elevation_heights():
     types = {D.wall_type(E, w) for w in E["walls"]}
     assert types == {1, 2, 3}                          # outside, inside, bathroom
     sheets = {s.code: s for s in D.build_set(d, {"project": "ทดสอบ"}, ("A",))}
-    plan = sheets["A-03"]
+    plan = next(s for s in sheets.values() if s.title == "แปลนพื้นชั้น 1")
     assert "สัญลักษณ์ผนัง" in plan.texts() and D.WALL_TYPES[3] in plan.texts()
     elev = next(s for s in sheets.values() if s.title.startswith("รูปด้านหน้า"))
     note = [it for it in elev.items if it[0] == "text" and it[2].startswith("ผนังก่ออิฐฉาบ")]
@@ -860,7 +860,7 @@ def test_wall_tags_legend_and_elevation_heights():
             xs, ys = [p[0] for p in poly], [p[1] for p in poly]
             assert not (min(xs) <= x <= max(xs) and min(ys) <= y <= max(ys))
     assert elev.count(layer="dim") > 10                # sill and head heights
-    assert "สัญลักษณ์แบบ" in sheets["A-01"].texts()
+    assert "รายการสัญลักษณ์ประกอบแบบ" in sheets["A-01"].texts()
     assert any(s.title.startswith("ข้อกำหนดความปลอดภัย") for s in sheets.values())
 
 

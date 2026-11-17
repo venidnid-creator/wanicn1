@@ -2725,8 +2725,10 @@ def build_set(data, info=None,
 
     floors = range(E["n"])
     if "A" in groups:
-        add("A", "สารบัญแบบ รายการประกอบแบบสถาปัตยกรรม",
-            lambda sh, all_: a_index(sh, all_, info, E), "-")
+        from core import wanic_std_sheets as STD      # the standard sets' A-01 / A-02
+        add("A", "สารบัญแบบ รายการวัสดุ",
+            lambda sh, all_: STD.a_index(sh, all_, E, fcodes), "-")
+        add("A", "รายการประกอบแบบ", lambda sh, _a: STD.a_spec(sh, E, info), "-")
         add("A", "ผังบริเวณ", lambda sh, _a: a_site(sh, E, info), "1:200")
         for k in floors:
             add("A", f"แปลนพื้นชั้น {k + 1}",
@@ -2765,7 +2767,6 @@ def build_set(data, info=None,
             for i in range(0, len(baths), 2):
                 add("A", "รูปด้านภายในห้องน้ำ" + (f" ({i // 2 + 1})" if len(baths) > 2 else ""),
                     lambda sh, _a, rr=baths[i:i + 2]: a_bath_elevations(sh, E, rr), "1:50")
-        add("A", "รายการวัสดุประกอบแบบ", lambda sh, _a: a_materials(sh, E, fcodes), "-")
         if L:
             add("A", "แบบขยายเชิงชาย ฝ้าชายคา โครงถักหลังคา",
                 lambda sh, _a: detail_eave_truss(sh, E, L), "1:20")

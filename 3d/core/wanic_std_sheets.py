@@ -1,0 +1,405 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 นายเวนิช ธัมมะวงษ์ (วิศวกรสำรวจ) — WANICNSURVEY
+"""The architecture sheets laid out like the standard house drawing sets
+(the sheet order, the three-panel A-01 and the A-02 specification text);
+written from the published standard, drawn by this program — the title
+column stays the program's own.
+
+* :func:`a_index` — A-01 «สารบัญแบบ รายการวัสดุ»: the A sheet list, the
+  material list by code (floor □, wall △, ceiling ○, skirting, cornice,
+  roof) and the drawing symbols with the material hatches.
+* :func:`a_spec` — A-02 «รายการประกอบแบบ»: the general specification
+  (purpose, layout and levels, floors, walls, ceilings, roof, doors and
+  windows, bathrooms, painting, structure, sanitary, electrical), with the
+  building data, the storey rules and the abbreviations.
+"""
+from __future__ import annotations
+
+from core import wanic_building as B
+from core import wanic_catalog as CAT
+from core import wanic_drawings as D
+
+ROW = 6.2                     # the standard's ruled row (mm on A3)
+HEAD = 8.0
+
+
+def _panel(sh, x, y0, y1, w, title, cols):
+    """A full-height ruled panel: title band, column heads, empty rows to
+    the bottom (as the standard draws them). Returns (row tops, xs)."""
+    sh.rect(x, y0, x + w, y1, "text", 0.35)
+    sh.line((x, y1 - HEAD), (x + w, y1 - HEAD), "text", 0.35)
+    sh.text((x + w / 2, y1 - HEAD + 2.6), title, 3.2, "center", "text", True)
+    yh = y1 - HEAD
+    xs, cx = [], x
+    for head, cw in cols:
+        xs.append(cx)
+        sh.text((cx + cw / 2, yh - ROW + 2.0), head, 2.2, "center", "text")
+        cx += cw
+    xs.append(x + w)
+    sh.line((x, yh - ROW), (x + w, yh - ROW), "text", 0.25)
+    tops, y = [], yh - ROW
+    while y - ROW >= y0 - 0.01:
+        tops.append(y)
+        y -= ROW
+        sh.line((x, y), (x + w, y), "text", 0.13)
+    for cx in xs[1:-1]:
+        sh.line((cx, y0), (cx, yh), "text", 0.18)
+    return tops, xs
+
+
+def _floor_mark(sh, p, n):
+    sh.rect(p[0] - 1.9, p[1] - 1.9, p[0] + 1.9, p[1] + 1.9, "text", 0.25)
+    sh.text((p[0], p[1] - 0.8), str(n), 2.0, "center", "text", True)
+
+
+def _ceiling_mark(sh, p, n):
+    sh.circle(p, 2.1, "text", 0.25)
+    sh.text((p[0], p[1] - 0.8), str(n), 2.0, "center", "text", True)
+
+
+def material_rows(E, fcodes):
+    """[(kind, number|None, text)] — the materials by group as the
+    standard lists them; kind: head / floor / wall / ceil / text."""
+    s = E["settings"]
+    out = [("head", None, "พื้น")]
+    for code, (tag, name) in fcodes.items():
+        name = name.split(" (รวม")[0]
+        out.append(("floor", int(tag[1:]) if tag[1:].isdigit() else tag, name))
+    out.append(("head", None, "ผนัง"))
+    for n, text in D.WALL_TYPES.items():
+        out.append(("wall", n, text))
+    out.append(("head", None, "ฝ้าเพดาน"))
+    for i, (key, (name, _lab, _fr, _sub, main)) in enumerate(B.CEILING_TYPES.items(), 1):
+        out.append(("ceil", i, f"{name} [แขวน @{main:.2f} ม.]"))
+    out.append(("ceil", len(B.CEILING_TYPES) + 1,
+                "ฝ้าชายคา ระแนงไม้เทียมเว้นร่อง กรุมุ้งกันแมลง โครงคร่าวซีลาย [ฝ้าภายนอก]"))
+    out.append(("text", None, "  * เหนือฝ้าเพดานใต้หลังคา ปูฉนวนกันความร้อนใยแก้ว หนา 3\" "
+                              "หุ้มฟอยล์อลูมิเนียม"))
+    out.append(("head", None, "บัวเชิงผนัง"))
+    sk = B.SKIRTING_TYPES.get(s.get("skirting_type", "ceramic"), B.SKIRTING_TYPES["ceramic"])[0]
+    out.append(("text", "FB1", f"{sk} [ห้องทั่วไป ยกเว้นห้องน้ำ]"))
+    out.append(("head", None, "มอบฝ้าเพดาน"))
+    out.append(("text", "CB1", f"{B.CORNICE[0]} ทาสี [ทุกห้องที่มีฝ้าเพดาน]"))
+    out.append(("head", None, "หลังคา"))
+    if E["settings"].get("roof", "none") != "none":
+        tile = CAT.roof_tile(s)[1]["name"]
+        out.append(("text", "R1", f"{tile} ลาด {float(s.get('pitch') or 0):.0f} องศา"))
+        out.append(("text", "", "ติดตั้งตามมาตรฐานผู้ผลิต มุงเรียงตามที่ปรากฏในแบบ"))
+    else:
+        out.append(("text", "R1", "หลังคาดาดฟ้า คสล. ทำระบบกันซึม ลาดเอียง 1:100 สู่ท่อระบายน้ำ"))
+    return out
+
+
+def a_index(sh, sheets, E, fcodes):
+    """A-01 «สารบัญแบบ รายการวัสดุ» in the standard's three panels."""
+    x0, y0, x1, y1 = D.drawing_area()
+    w1, w2 = 82.0, 128.0
+    w3 = x1 - x0 - w1 - w2
+    # 1 — the A sheet list
+    tops, xs = _panel(sh, x0, y0, y1, w1, "รายการแบบสถาปัตยกรรม (A)",
+                      [("เลขที่", 15.0), ("แบบแสดง", w1 - 15.0)])
+    rows = [(s.code, s.title) for s in sheets if s.group == "A"]
+    for top, (code, title) in zip(tops, rows):
+        sh.text((xs[0] + 7.5, top - ROW + 2.0), code, 2.2, "center")
+        sh.text((xs[1] + 1.5, top - ROW + 2.0), D._wrap(title, 40)[0], 2.2)
+    # 2 — the material list
+    x2 = x0 + w1
+    tops, xs = _panel(sh, x2, y0, y1, w2, "รายการวัสดุ",
+                      [("สัญลักษณ์", 18.0), ("รายการ", w2 - 18.0)])
+    lines = []
+    for kind, n, text in material_rows(E, fcodes):
+        parts = D._wrap(text, 78)
+        lines.append((kind, n, parts[0]))
+        lines += [("text", None, "      " + p) for p in parts[1:]]
+    for top, (kind, n, text) in zip(tops, lines):
+        cy, sx = top - ROW / 2, xs[0] + 9.0
+        by = top - ROW + 2.0
+        if kind == "head":
+            sh.text((sx, by), text, 1.95, "center", "text", True)
+            continue
+        if kind == "floor":
+            _floor_mark(sh, (sx, cy), n)
+        elif kind == "wall":
+            D.wall_tag(sh, (sx, cy - 0.6), n, 1.9)
+        elif kind == "ceil":
+            _ceiling_mark(sh, (sx, cy), n)
+        elif n:
+            sh.text((sx, by), str(n), 2.1, "center")
+        sh.text((xs[1] + 2, by), text, 2.2)
+    # 3 — the drawing symbols
+    symbols(sh, x2 + w2, y0, y1, w3)
+
+
+def symbols(sh, x, y0, y1, w):
+    """«รายการสัญลักษณ์ประกอบแบบ» as the standard draws it."""
+    sh.rect(x, y0, x + w, y1, "text", 0.35)
+    sh.line((x, y1 - HEAD), (x + w, y1 - HEAD), "text", 0.35)
+    sh.text((x + w / 2, y1 - HEAD + 2.6), "รายการสัญลักษณ์ประกอบแบบ", 3.2, "center", "text", True)
+    sx, tx = x + 22, x + 50
+    y = y1 - HEAD
+    F = max(1.0, min(1.8, (y1 - HEAD - y0) / 156.0))
+    sizes = iter([30, 9, 9, 11, 15, 19, 13, 10, 10, 10, 10])
+
+    def pre():
+        nonlocal y, cur
+        cur = next(sizes)
+        y -= 6 + cur * (F - 1) / 2 if cur == 30 else cur * (F - 1) / 2
+
+    def rule(_dy):
+        nonlocal y
+        y -= cur + cur * (F - 1) / 2
+        sh.line((x, y + 3), (x + w, y + 3), "text", 0.13)
+    cur = 0
+    pre()
+
+    # grid dimensions
+    gx = x + 12
+    sh.circle((gx, y - 9), 3.0, "grid", 0.25)
+    sh.text((gx, y - 9.9), "1", 2.4, "center", "grid")
+    sh.line((gx, y - 6), (gx, y - 26), "grid", 0.13, True)
+    sh.circle((gx - 6, y - 19), 2.8, "grid", 0.25)
+    sh.text((gx - 6, y - 19.9), "A", 2.2, "center", "grid")
+    sh.line((gx - 3.2, y - 19), (gx + 8, y - 19), "grid", 0.13, True)
+    sh.text((gx + 3, y - 23), "แนวเสา", 2.0)
+    for i, (txt, ends) in enumerate((("ระยะศูนย์กลางถึงศูนย์กลาง", "cc"),
+                                     ("ระยะศูนย์กลางถึงริม", "ce"),
+                                     ("ระยะจากริมถึงริม", "ee"))):
+        yy = y - 2 - i * 9
+        a, b = x + 30, x + 50
+        sh.line((a, yy), (b, yy), "dim", 0.18)
+        for t, kind in ((a, ends[0]), (b, ends[1])):
+            sh.line((t, yy - 2), (t, yy + 2), "dim", 0.18)
+            if kind == "c":
+                sh.line((t - 1, yy - 1), (t + 1, yy + 1), "dim", 0.3)
+            else:
+                sh.circle((t, yy), 0.5, "dim", 0.18)
+        sh.text((b + 3, yy - 0.8), txt, 2.1)
+    rule(30)
+    pre()
+    # door / window tags
+    sh.text((sx, y - 0.8 - 2), "ป1", 2.4, "center", "door", True)
+    sh.text((tx - 8, y - 2.8), "ใช้กำหนดหมายเลขประตู ในแบบเพื่ออ้างอิงถึง", 2.1)
+    rule(9)
+    pre()
+    sh.circle((sx, y - 2), 2.4, "window", 0.25)
+    sh.text((sx, y - 2.9), "น1", 1.9, "center", "window")
+    sh.text((tx - 8, y - 2.8), "ใช้กำหนดหมายเลขหน้าต่าง ในแบบเพื่ออ้างอิงถึง", 2.1)
+    rule(9)
+    pre()
+    # detail reference
+    sh.circle((sx - 6, y - 3), 3.2, "text", 0.25)
+    sh.line((sx - 9.2, y - 3), (sx - 2.8, y - 3), "text", 0.18)
+    sh.text((sx - 6, y - 2.2), "1", 1.8, "center")
+    sh.text((sx - 6, y - 5.3), "A-NO", 1.4, "center")
+    sh.line((sx - 2.8, y - 3), (sx + 10, y - 3), "text", 0.18)
+    sh.text((tx - 8, y - 1.6), "แบบขยายทั่วไป", 2.1)
+    sh.text((tx - 8, y - 5.0), "แผ่นที่ ที่อ้างอิงไปถึง", 2.1)
+    rule(11)
+    pre()
+    # north
+    D.north(sh, (sx, y - 7.5), 4.5)
+    sh.text((tx - 8, y - 6.8), "ทิศเหนือ", 2.1)
+    rule(15)
+    pre()
+    # elevation key
+    cx, cy, r = sx, y - 9, 4.0
+    sh.poly([(cx, cy + r * 1.6), (cx + r * 1.6, cy), (cx, cy - r * 1.6), (cx - r * 1.6, cy)], "text", 0.25)
+    sh.circle((cx, cy), r, "text", 0.25)
+    for (dx, dy), lab in (((0, 1), "3"), ((1, 0), "4"), ((0, -1), "1"), ((-1, 0), "2")):
+        tip = (cx + dx * r * 1.6, cy + dy * r * 1.6)
+        nx, ny = -dy, dx
+        sh.fill([tip, (cx + dx * r * 0.9 + nx * 2.2, cy + dy * r * 0.9 + ny * 2.2),
+                 (cx + dx * r * 0.9 - nx * 2.2, cy + dy * r * 0.9 - ny * 2.2)], "hatch", 0.0)
+        sh.text((cx + dx * (r + 4.3), cy + dy * (r + 4.3) - 0.8), lab, 1.9, "center", "text", True)
+    sh.text((tx - 8, y - 7.6), "1,2,3,4 ชื่อรูปด้าน แสดงทิศทางตามแนวชี้บอก", 2.1)
+    sh.text((tx - 8, y - 11.0), "A-NO.  แผ่นที่ ที่อ้างอิงไปถึง", 2.1)
+    rule(19)
+    pre()
+    # section mark
+    for k, sx_ in enumerate((sx - 8, sx + 8)):
+        sh.circle((sx_, y - 4), 3.0, "text", 0.25)
+        sh.fill([(sx_ - 3, y - 3.2), (sx_ + 3, y - 3.2), (sx_, y + 1.2)], "hatch", 0.0)
+        sh.line((sx_ - 3, y - 4), (sx_ + 3, y - 4), "text", 0.18)
+        sh.text((sx_, y - 6.6), "A-NO.", 1.3, "center")
+    sh.line((sx - 5, y - 4), (sx + 5, y - 4), "text", 0.3, True)
+    sh.text((tx - 8, y - 2.2), "ชื่อรูปตัดอาคาร", 2.1)
+    sh.text((tx - 8, y - 5.6), "แผ่นที่ ที่อ้างอิงไปถึง", 2.1)
+    rule(13)
+    pre()
+    # hatches, two per row like the standard
+    pairs = [("brick", "ผนังก่ออิฐครึ่งแผ่น", "glasswall", "ผนังกระจก"),
+             ("conc", "คอนกรีต", "glass", "กระจก"),
+             ("steel", "เหล็ก", "soil", "ดิน"),
+             ("wood", "ไม้แต่งผิว", "slope", "แนวเรียงลาด")]
+    for k1, t1, k2, t2 in pairs:
+        for i, (kind, txt) in enumerate(((k1, t1), (k2, t2))):
+            bx = x + 4 + i * w / 2
+            hatch(sh, kind, bx, y - 6, bx + 16, y - 1)
+            sh.text((bx + 19, y - 4.4), txt, 2.1)
+        rule(10)
+        if (k1, t1) != pairs[-1][:2]:
+            pre()
+
+
+def hatch(sh, kind, a, b, c, d):
+    """A material swatch in the box (a, b)–(c, d)."""
+    if kind == "slope":
+        sh.text((a, b + 1.4), "SLOPE 1:100", 1.8)
+        sh.line((a, b + 0.8), (c, b + 0.8), "text", 0.18)
+        sh.line((c - 1.5, b + 2.0), (c, b + 0.8), "text", 0.18)
+        return
+    if kind == "brick":
+        sh.line((a, b), (c, b), "wall", 0.3)
+        sh.line((a, d), (c, d), "wall", 0.3)
+        for i in range(8):
+            t = a + i * (c - a) / 8
+            sh.line((t, b), (t + 2.0, d), "hatch", 0.13)
+        return
+    if kind == "glasswall":
+        for yy in (b + 1.5, d - 1.5):
+            sh.line((a, yy), (c, yy), "wall", 0.25)
+        sh.line((a, (b + d) / 2), (c, (b + d) / 2), "hatch", 0.13)
+        return
+    sh.rect(a, b, c, d, "text", 0.18)
+    if kind == "conc":
+        for px, py in ((0.2, 0.3), (0.45, 0.7), (0.7, 0.35), (0.85, 0.75), (0.32, 0.8), (0.6, 0.15)):
+            q = (a + px * (c - a), b + py * (d - b))
+            sh.poly([q, (q[0] + 0.9, q[1] + 0.3), (q[0] + 0.3, q[1] + 0.8)], "hatch", 0.13)
+    elif kind == "glass":
+        sh.line((a + 6, b + 1), (a + 9, d - 1), "hatch", 0.13)
+        sh.line((a + 8, b + 1), (a + 11, d - 1), "hatch", 0.13)
+    elif kind == "steel":
+        for i in range(9):
+            t = a + i * (c - a) / 9
+            sh.line((t, b), (min(t + 2.5, c), d), "hatch", 0.18)
+    elif kind == "soil":
+        for i in range(6):
+            t = a + i * (c - a) / 6
+            sh.line((t, b), (min(t + 2.6, c), d), "hatch", 0.13)
+            sh.line((min(t + 2.6, c), b), (t, d), "hatch", 0.13)
+    elif kind == "wood":
+        for f in (0.3, 0.55, 0.8):
+            yy = b + f * (d - b)
+            sh.poly([(a + 1, yy), (a + 5, yy + 0.6), (a + 9, yy - 0.4), (c - 1, yy + 0.3)], "hatch", 0.13,
+                    closed=False)
+
+
+#: รายการประกอบแบบ — general specification (the standard sets' A-02,
+#: worded for any house this program draws)
+SPEC = [
+    ("1.", "วัตถุประสงค์", [
+        "แบบชุดนี้จัดทำเพื่อใช้ประกอบการขออนุญาตก่อสร้างและการก่อสร้างอาคารพักอาศัย "
+        "ผู้รับจ้างต้องก่อสร้างให้ถูกต้องตามแบบและรายการประกอบแบบ และกฎหมายควบคุมอาคาร"]),
+    ("2.", "รายละเอียดประกอบแบบ", []),
+    ("2.1", "การวางผังและระดับ", [
+        "ผู้รับจ้างจะต้องทำการวางผังบริเวณให้ถูกต้องเรียบร้อยตามกฎหมายควบคุมอาคาร "
+        "และกำหนดระดับของอาคารและระดับพื้นที่ก่อสร้างต้องมีความลาดเอียง "
+        "เพื่อการระบายน้ำตามรูปแบบรายการที่กำหนด ก่อนดำเนินการต่อไป"]),
+    ("2.2", "งานสถาปัตยกรรม", []),
+    ("ก.", "งานพื้น", [
+        "- พื้น ค.ส.ล. ทำผิวขัดมันเรียบ หรือผิวขัดหยาบ ให้แต่งระดับผิว ค.ส.ล. ด้วยปูนทราย"
+        "ให้เรียบสม่ำเสมอ หรือมีความลาดเอียงไปสู่ด้านนอกอาคาร",
+        "- พื้น ค.ส.ล. ปูกระเบื้องเซรามิค ผิวด้าน ขนาดตามแบบระบุ พื้นห้องน้ำใช้กระเบื้องเซรามิค"
+        "ผิวด้าน ตาม มอก. 2508-2555 น้ำยากันซึม ใช้ของที่ผลิตในประเทศ",
+        "- พื้นไม้ ใช้ไม้เนื้อแข็ง ตีเข้าลิ้น อบแห้ง อัดสนิท ขัดให้เรียบแล้วเคลือบด้วยน้ำยาเคลือบเงาไม้",
+        "หมายเหตุ การเตรียมผิวพื้นและการปูกระเบื้องให้ทำตามมาตรฐานวิชาช่างที่ดี"]),
+    ("ข.", "งานผนัง", [
+        "- ผนังทั่วไปก่ออิฐมอญครึ่งแผ่น อิฐต้องเป็นอิฐที่แกร่ง เผาสุกเสมอ ไม่บิดเบี้ยว "
+        "ต้องพรมน้ำให้ชุ่มก่อนก่อ",
+        "- การก่อชนคาน เสา หรือเอ็น ค.ส.ล. ต้องเสียบเหล็ก RB6 มม. ทุกระยะไม่เกิน 40 ซม. "
+        "โดยยื่นออกมา 25 ซม. และฝังในเสาหรือคาน ค.ส.ล. 10 ซม.",
+        "- การก่อชนกันเป็นมุม การก่อเว้นช่องสำหรับติดตั้งประตูหน้าต่าง และทุกระยะที่เกิน 2 เมตร "
+        "ของความสูงผนัง และทุกระยะที่เกิน 3 เมตร ของความยาวผนัง ให้ทำเอ็น หรือทับหลัง ค.ส.ล. "
+        "หนาเท่าผนังที่ก่อสร้างและกว้าง 10 ซม. เสริมเหล็ก 2-RB6 มม. และมีปลอกเหล็ก RB6 @0.20 ม.",
+        "- ผนังบุกระเบื้องเซรามิค ขนาดตามแบบรายการที่ระบุ ใช้กระเบื้องดินเผาเคลือบชนิดบุผนังภายใน "
+        "ตาม มอก. 2508-2555"]),
+    ("ค.", "งานฝ้าเพดาน", [
+        "- ให้ใช้ฝ้าเพดานตามรูปแบบรายการที่ระบุ",
+        "- ใช้โครงคร่าวเหล็กชุบสังกะสี สำหรับยึดแผ่นฝ้า ตาม มอก. 863-2532 ติดตั้งตามมาตรฐานผู้ผลิต"]),
+    ("ง.", "งานหลังคา", [
+        "- โครงหลังคา ตามที่ได้กำหนดไว้ในรูปแบบและรายการวิศวกรรมโครงสร้าง",
+        "- วัสดุหลังคา ตามรายการวัสดุ (R1) ติดตั้งตามมาตรฐานผู้ผลิต"]),
+    ("จ.", "งานประตู-หน้าต่าง และอุปกรณ์", [
+        "- รายละเอียดตามระบุในแบบขยายประตู-หน้าต่าง และอุปกรณ์",
+        "- ประตู-หน้าต่างอลูมิเนียม ใช้อลูมิเนียม ตาม มอก. 284-2530 เคลือบผิวด้วยสีผง "
+        "POLAR POWDER COAT POLYESTER",
+        "- ประตูบานเปิดทั่วไปใช้บานพับประตู ผลิตภัณฑ์ ตาม มอก. 759-2531 ขนาด 4x3\" บานละ 3 จุด "
+        "ติดตั้งตามกรรมวิธีผู้ผลิต",
+        "- กลอนทั่วไปใช้กลอนโลหะชุบโครเมียม ผลิตภัณฑ์ภายในประเทศ",
+        "- กุญแจลูกบิดทั่วไป ใช้แบบลิ้นคู่ ล็อคได้ ผิว SATIN CHROME ประเภท STANDARD DUTY "
+        "ผลิตภัณฑ์ภายในประเทศ"]),
+    ("ฉ.", "งานห้องน้ำ-ส้วม และสุขภัณฑ์", [
+        "- รายละเอียดตามระบุในแบบขยายห้องน้ำ-ส้วม สุขภัณฑ์ และอุปกรณ์ประกอบ",
+        "- การเดินท่อน้ำประปา-ท่อน้ำทิ้ง-ท่อส้วม ให้เป็นไปตามรูปแบบและรายการวิศวกรรมสุขาภิบาล"]),
+    ("ช.", "งานสี", [
+        "- งานทาสีผนังคอนกรีต-ปูนภายนอก: สีรองพื้น ใช้สีรองพื้นสำหรับปูนใหม่ ผลิตภัณฑ์เดียวกับสีทับหน้า "
+        "สีทับหน้า ใช้สีอะครีลิค 100% กึ่งเงากึ่งด้านสำหรับทาภายนอก ตาม มอก. 2321-2549",
+        "- งานทาสีผนังคอนกรีต-ปูนภายใน: สีรองพื้น ใช้สีรองพื้นสำหรับปูนใหม่ ผลิตภัณฑ์เดียวกับสีทับหน้า "
+        "สีทับหน้า ใช้สีอะครีลิค 100% สำหรับทาภายใน ตาม มอก. 272-2549 เกรด A",
+        "- งานทาสีฝ้าภายนอก ไม้ไฟเบอร์ซีเมนต์บอร์ด ไม้สังเคราะห์: สีรองพื้นสำหรับปูนเก่าหรือไฟเบอร์ซีเมนต์บอร์ด "
+        "สีทับหน้า ใช้สีอะครีลิค 100% สำหรับทาไม้สังเคราะห์หรือไฟเบอร์ซีเมนต์บอร์ด",
+        "- งานทาสีเหล็กและไม้: สีรองพื้นเหล็กกันสนิม หรือสีรองพื้นกันยางไม้ (ALUMINIUM WOOD PRIMER) "
+        "สีทับหน้า ใช้สีน้ำมัน ตาม มอก. 327-2538",
+        "- งานทาสีพื้นไม้ปาร์เก้: สีรองพื้น และสีทับหน้า ใช้สีโพลียูรีเทนสำหรับพื้นไม้ ตามมาตรฐานผู้ผลิต",
+        "วิธีการและขั้นตอนการทาสี ให้ทารองพื้น 1 เที่ยว สีทับหน้า 2 เที่ยว โดยส่วนผสมใช้ตามมาตรฐานผู้ผลิต",
+        "หมายเหตุ วัสดุต่างๆ ดังกล่าวข้างต้น สามารถเปลี่ยนแปลงได้ตามความเหมาะสมและวัตถุประสงค์ของผู้ว่าจ้าง"]),
+    ("2.3", "งานฐานรากและโครงสร้าง ค.ส.ล.", [
+        "ตามที่ได้กำหนดไว้ในแบบและรายการวิศวกรรมโครงสร้าง ส่วนรายละเอียดอื่นๆ ให้ดำเนินการ"
+        "ตามมาตรฐานงานก่อสร้าง"]),
+    ("2.4", "งานวิศวกรรมสุขาภิบาล", [
+        "ให้ติดตั้งตามแบบวิศวกรรมสุขาภิบาลและมาตรฐานการประปาฯ"]),
+    ("2.5", "งานวิศวกรรมไฟฟ้า", [
+        "ให้ติดตั้งตามแบบวิศวกรรมไฟฟ้าและมาตรฐานการไฟฟ้าฯ"]),
+]
+
+
+def a_spec(sh, E, info):
+    """A-02 «รายการประกอบแบบ» in two columns, then the building data, the
+    storey rules and the abbreviations in the third."""
+    x0, y0, x1, y1 = D.drawing_area()
+    sh.rect(x0, y0, x1, y1, "text", 0.35)
+    colw = (x1 - x0 - 10) / 3
+    n_chars = int(colw / 1.62)
+    sh.text((x0 + 4, y1 - 8), "รายการประกอบแบบอาคาร" + (f" {info.get('project')}" if info.get("project") else ""),
+            3.2, "left", "text", True)
+    col, x, y = 0, x0 + 4, y1 - 16
+    h, lead = 2.25, 3.7
+
+    def nl(dy=lead):
+        nonlocal y, x, col
+        y -= dy
+        if y < y0 + 6 and col < 1:
+            col += 1
+            x, y = x0 + 6 + colw * col, y1 - 10
+
+    for num, head, body in SPEC:
+        top = len(num) <= 2 and num[0].isdigit()
+        sub = num[0].isdigit() and not top
+        ind = 0 if top or sub else 4
+        bold = top or sub
+        sh.text((x + ind, y), f"{num} {head}" if num[0].isdigit() else f"{num} {head}", h + (0.4 if top else 0.1),
+                "left", "text", bold)
+        if top:
+            sh.line((x + ind + 6, y - 0.9), (x + ind + 6 + len(head) * 1.75, y - 0.9), "text", 0.25)
+        nl(lead + 0.6)
+        for para in body:
+            for i, part in enumerate(D._wrap(para, n_chars - 6)):
+                sh.text((x + ind + 4 + (2 if i and para.startswith("-") else 0), y), part, h)
+                nl()
+        nl(1.2)
+    # third column: the building data, the storey rules, the abbreviations
+    x3 = x0 + 8 + colw * 2
+    sh.line((x3 - 3, y0), (x3 - 3, y1), "text", 0.18)
+    y3 = D.notes_block(sh, x3, y1 - 8, "ข้อมูลอาคาร",
+                       list(info.get("summary") or []) + (D.storey_rules(E) if E else []), 2.15,
+                       int(colw / 1.55))
+    y3 = D.notes_block(sh, x3, y3 - 4, "หมายเหตุทั่วไป", D.A_NOTES, 2.15, int(colw / 1.55))
+    y3 -= 4
+    sh.text((x3, y3), "อักษรย่อ", 3.0, "left", "text", True)
+    y3 -= 4.6
+    for ab, full in D.ABBREVIATIONS:
+        if y3 < y0 + 3:
+            break
+        sh.text((x3 + 1, y3), ab, 1.9, "left", "text", True)
+        sh.text((x3 + 18, y3), full, 1.9)
+        y3 -= 3.3
