@@ -1131,8 +1131,8 @@ def a_bath_plan(sh, E, group, codes, first_no, sheets=None):
     t = float(E["settings"].get("wall_t") or 0.1)
     x0, y0, x1, y1 = D.drawing_area()
     W, Dd = float(rm["w"]), float(rm["d"])
-    sc = next((s_ for s_ in (25, 30, 40, 50) if (W + 2.4) * 1000 / s_ <= (x1 - x0) * 0.62
-               and (Dd + 2.6) * 1000 / s_ <= (y1 - y0) - 60), 50)
+    sc = next((s_ for s_ in (25, 30, 40, 50) if (W + 2.4) * 1000 / s_ <= (x1 - x0) * 0.80
+               and (Dd + 2.2) * 1000 / s_ <= (y1 - y0) - 40), 50)
     kk = 1000.0 / sc
     cx = x0 + (x1 - x0) * 0.40
     origin = (cx - W * kk / 2, y0 + 60 + max(0.0, ((y1 - y0 - 60) - Dd * kk) / 2 - 10))
@@ -1165,17 +1165,34 @@ def a_bath_plan(sh, E, group, codes, first_no, sheets=None):
     bx0, by0 = v(rm["x"] - 0.55, rm["y"] - 0.55)
     bx1, by1 = v(rm["x"] + W + 0.55, rm["y"] + Dd + 0.55)
     sh.items[n0:] = clip_items(sh.items[n0:], (bx0, by0, bx1, by1))
-    # the fittings and their marks
+    # the walls cut: 45° hatch in the masonry, clear of the doors and windows
+    placed = D.opening_on_wall(E, k)
+    for w in near:
+        (ax, ay), (bx_, by_) = w["p0"], w["p1"]
+        Lw = w["L"]
+        if Lw < 0.05:
+            continue
+        ux, uy = (bx_ - ax) / Lw, (by_ - ay) / Lw
+        cuts = sorted((s_ - el["w"] / 2, s_ + el["w"] / 2) for ww, s_, el in placed if ww is w)
+        segs, s0 = [], 0.0
+        for c0, c1 in cuts + [(Lw, Lw)]:
+            if c0 - s0 > 0.02:
+                segs.append((s0, c0))
+            s0 = max(s0, c1)
+        for sa, sb in segs:
+            pa = v(ax + ux * sa - uy * t / 2, ay + uy * sa + ux * t / 2)
+            pb = v(ax + ux * sb + uy * t / 2, ay + uy * sb - ux * t / 2)
+            n1 = len(sh.items)
+            _brick_band(sh, pa, pb, 1.2)
+            sh.items[n1:] = clip_items(sh.items[n1:], (bx0, by0, bx1, by1))
+    # the fittings, drawn as the original draws them
     fx = bath_fixtures(E, k, rm)
+    inner = _inner(E, k, rm)
     for f in fx:
-        pts = D.fixture_rect(f["fx"])
-        q = [v(*p) for p in pts]
-        sh.fill(q, "mask", 1.0)
-    D.draw_fixtures(sh, v, {"fixtures": fx}, k, labels=False)
-    for f in fx:
-        c = v(float(f["fx"]["x"]), float(f["fx"]["y"]))
-        lab = FIX_LABEL.get(f["fx"].get("type", ""), f["fx"].get("type", ""))
-        sh.text((c[0], c[1] - 0.8), lab, 1.9, "center", "fixture")
+        q = [v(*p) for p in D.fixture_rect(f["fx"])]
+        if f["fx"].get("type") not in ("FD", "MR", "TR", "GP"):
+            sh.fill(q, "mask", 1.0)
+        fixture_plan(sh, v, f["fx"], inner)
     # the fall to the floor drain
     fd = next((f["fx"] for f in fx if f["fx"].get("type") == "FD"), None)
     if fd is not None:
@@ -1220,9 +1237,22 @@ def a_bath_plan(sh, E, group, codes, first_no, sheets=None):
             sh.line(a, b, "grid", 0.13, True)
             sh.circle((a[0] - 3.2, a[1]), 3.2, "grid", 0.25)
             sh.text((a[0] - 3.2, a[1] - 1.0), D.axis_name(j), 2.6, "center", "grid")
-    # the interior elevations: A B C D and their sheet
-    ref = sheet_ref(sheets, "รูปด้านภายในห้องน้ำ")
-    D.elev_marker(sh, v(rm["x"] + W * 0.5, rm["y"] + Dd * 0.25), ref, 3.4)
+    # the sections ① ②: a dash-dot cut line across the room and its mark,
+    # looking at the wall the section shows (the original's)
+    ref = sheet_ref(sheets, "รูปตัดห้องน้ำ")
+    xi0_, yi0_, xi1_, yi1_ = inner
+    for i, side in enumerate(bath_sides(E, k, rm)):
+        look = {0: (0.0, -1.0), 1: (1.0, 0.0), 2: (0.0, 1.0), 3: (-1.0, 0.0)}[side]
+        if side in (0, 2):                       # a line along x, near the far wall
+            yc = yi1_ - 0.35 * (yi1_ - yi0_) if side == 0 else yi0_ + 0.35 * (yi1_ - yi0_)
+            a, b = v(rm["x"] - 0.4, yc), v(rm["x"] + W + 0.4, yc)
+            q = (b[0] + 4.5, b[1])
+        else:
+            xc = xi0_ + 0.35 * (xi1_ - xi0_) if side == 1 else xi1_ - 0.35 * (xi1_ - xi0_)
+            a, b = v(xc, rm["y"] + Dd + 0.4), v(xc, rm["y"] - 0.4)
+            q = (b[0], b[1] - 4.5)
+        sh.line(a, b, "grid", 0.3, True)
+        section_mark(sh, q, str(i + 1), ref, look)
     # the title and the floor levels
     names = " , ".join(f"WC.{first_no + i}" for i in range(len(group)))
     capx = cx - 50
@@ -1295,46 +1325,435 @@ def clip_items(items, box):
 
 
 def a_bath_sections(sh, E, group, first_no):
-    """รูปตัดห้องน้ำ WC.n — two of its walls at 1:25 side by side (the two
-    with the most fittings), each with its floor below, as the standard."""
+    """รูปตัดห้องน้ำ WC.n ① ② — the two sections of the original, side by
+    side, each through the room looking at a wall with its fittings."""
     k, rm = group[0]
     x0, y0, x1, y1 = D.drawing_area()
     mid = (x0 + x1) / 2
     sh.line((mid, y0), (mid, y1), "frame", 0.25)
-    ix0, iy0, ix1, iy1 = B.room_inner(E, rm, k)
-    fx = [f for f in E["fixtures"] if f["floor"] == k and D._inside(f["fx"], rm)]
-
-    def wall_of(f):
-        x, y = float(f["fx"]["x"]), float(f["fx"]["y"])
-        d_ = [y - iy0, ix1 - x, iy1 - y, x - ix0]
-        return d_.index(min(d_))
-    count = [sum(1 for f in fx if wall_of(f) == s_) for s_ in range(4)]
-    sides = sorted(range(4), key=lambda s_: -count[s_])[:2]
+    ix0, iy0, ix1, iy1 = _inner(E, k, rm)
     zc = B.ceiling_z(E, k) - k * E["H"]
     names = ",".join(f"WC.{first_no + i}" for i in range(len(group)))
     used = 25
-    for i, side in enumerate(sides):
+    for i, side in enumerate(bath_sides(E, k, rm)):
         Wm = (ix1 - ix0) if side in (0, 2) else (iy1 - iy0)
-        sc = next((s_ for s_ in (25, 30, 40, 50) if Wm * 1000 / s_ <= (mid - x0) - 50
-                   and zc * 1000 / s_ <= (y1 - y0) - 90), 50)
+        t_ = float(E["settings"].get("wall_t") or 0.1)
+        span = Wm + 2 * t_ + 1.6
+        sc = next((s_ for s_ in (25, 30, 40, 50, 60) if span * 1000 / s_ + 26 <= (mid - x0) - 4
+                   and (E["H"] + 0.5) * 1000 / s_ <= (y1 - y0) - 80), 75)
         used = max(used, sc)
         kk = 1000.0 / sc
         bx0 = x0 + i * (mid - x0)
-        ox = bx0 + ((mid - x0) - Wm * kk) / 2 + 6
-        oy = y0 + 70
-        D.bath_elevation(sh, E, k, rm, side, ox, oy, sc)
-        # the slab under the floor and the wall stubs, cut
-        sh.fill([(ox - 4, oy - 1.5 * kk / 10), (ox + Wm * kk + 4, oy - 1.5 * kk / 10), (ox + Wm * kk + 4, oy),
-                 (ox - 4, oy)], "hatch", 0.72)
-        sh.rect(ox - 4, oy - 1.5 * kk / 10, ox + Wm * kk + 4, oy, "cut", 0.35)
-        sl = next(s_ for s_ in E["slabs"] if s_["room"] is rm)
-        room_tag(sh, (ox - 20, oy + 16.0), E, rm, sl, D.finish_codes(E))    # beside it, clear of the fittings
-        sh.line((ox - 9, oy + 13.0), (ox + 3, oy + 6.0), "text", 0.13)
-        sh.circle((ox + 3, oy + 6.0), 0.45, "text", 0.18)
-        caption_marks(sh, (bx0 + 18, y0 + 28), f"รูปตัดห้องน้ำ {names}", f"1:{sc}", None, None, 110.0)
-        hex_ = (bx0 + 18 + 110 + 6, y0 + 30)
-        sh.poly([(hex_[0] - 4.5, hex_[1] - 2.5), (hex_[0] + 4.5, hex_[1] - 2.5), (hex_[0], hex_[1] + 4.5)],
-                "text", 0.3)
-        sh.text((hex_[0], hex_[1] - 1.6), str(i + 1), 2.6, "center", "text", True)
+        ox = bx0 + 26 + ((mid - x0) - 30 - span * kk) / 2 + (1.15 + t_) * kk
+        oy = y0 + 62 + max(0.0, ((y1 - y0) - 80 - (E["H"] + 0.5) * kk) * 0.5)
+        bath_section(sh, E, k, rm, side, ox, oy, sc, i + 1, None, names)
     sh.scale = f"1:{used}"
     return used
+
+
+# ---------------------------------------------------------------------------
+# A5-2 (round 2) — the bathroom as the original draws it
+# ---------------------------------------------------------------------------
+
+def _inner(E, k, rm):
+    return B.room_inner(E, rm, k)
+
+
+def back_side(fx, inner) -> int:
+    """The wall a fitting stands against: 0 S (y0), 1 E (x1), 2 N (y1), 3 W (x0)."""
+    x0, y0, x1, y1 = inner
+    x, y = float(fx["x"]), float(fx["y"])
+    d_ = [y - y0, x1 - x, y1 - y, x - x0]
+    return d_.index(min(d_))
+
+
+_OUT = {0: (0.0, 1.0), 1: (-1.0, 0.0), 2: (0.0, -1.0), 3: (1.0, 0.0)}      # into the room
+_ALONG = {0: (1.0, 0.0), 1: (0.0, 1.0), 2: (-1.0, 0.0), 3: (0.0, -1.0)}
+
+
+def _ellipse(c, ra, ro, al, ou, n=28):
+    import math as _m
+    return [(c[0] + al[0] * ra * _m.cos(2 * _m.pi * i / n) + ou[0] * ro * _m.sin(2 * _m.pi * i / n),
+             c[1] + al[1] * ra * _m.cos(2 * _m.pi * i / n) + ou[1] * ro * _m.sin(2 * _m.pi * i / n))
+            for i in range(n)]
+
+
+def fixture_plan(sh, v, fx, inner):
+    """A fitting in plan as the original draws it (tank and bowl, basin in
+    its counter, shower head and valve, drain grate, rail, mirror …)."""
+    t = str(fx.get("type", ""))
+    spec = D.fixture_spec(t) or ("", "", 0, 0.4, 0.4, 0, 0)
+    w, d = float(spec[3]), float(spec[4])
+    side = back_side(fx, inner)
+    al, ou = _ALONG[side], _OUT[side]
+    x0, y0, x1, y1 = inner
+    cx, cy = float(fx["x"]), float(fx["y"])
+    # its back on the wall face
+    if side == 0:
+        cy = y0 + d / 2
+    elif side == 2:
+        cy = y1 - d / 2
+    elif side == 1:
+        cx = x1 - d / 2
+    else:
+        cx = x0 + d / 2
+
+    def L(a, o):                         # along, out (m) from the back centre
+        return (cx + al[0] * a + ou[0] * (o - d / 2), cy + al[1] * a + ou[1] * (o - d / 2))
+
+    def poly(pts, wt=0.25, closed=True):
+        sh.poly([v(*p) for p in pts], "fixture", wt, closed)
+    if t.startswith("WC1") or t.startswith("UR"):
+        poly([L(-w * 0.55, 0), L(w * 0.55, 0), L(w * 0.55, 0.2), L(-w * 0.55, 0.2)])     # tank
+        c = L(0, 0.2 + (d - 0.2) / 2)
+        poly(_ellipse(c, w / 2, (d - 0.2) / 2, al, ou))
+        poly(_ellipse(c, w / 2 - 0.05, (d - 0.2) / 2 - 0.07, al, ou), 0.13)
+    elif t.startswith("WC2"):
+        poly([L(-w / 2, 0.05), L(w / 2, 0.05), L(w / 2, d), L(-w / 2, d)])
+        poly(_ellipse(L(0, d * 0.45), w * 0.22, d * 0.3, al, ou), 0.13)
+    elif t == "LV" or t.startswith("SK"):
+        poly([L(-w / 2, 0), L(w / 2, 0), L(w / 2, d), L(-w / 2, d)])
+        poly(_ellipse(L(0, d * 0.55), w * 0.36, d * 0.30, al, ou), 0.18)
+        sh.circle(v(*L(0, d * 0.55)), v.len(0.02), "fixture", 0.13)
+        sh.circle(v(*L(0, 0.07)), v.len(0.025), "fixture", 0.18)
+    elif t == "LV2":
+        poly([L(-w / 2, 0), L(w / 2, 0), L(w / 2, d), L(-w / 2, d)])
+        for a_ in (-w / 4, w / 4):
+            poly(_ellipse(L(a_, d * 0.55), 0.2, d * 0.3, al, ou), 0.18)
+    elif t.startswith("SH"):
+        sh.circle(v(*L(0, 0.12)), v.len(0.07), "fixture", 0.25)
+        sh.line(v(*L(0, 0.0)), v(*L(0, 0.12)), "fixture", 0.18)
+        poly([L(-0.06, 0.0), L(0.06, 0.0), L(0.06, 0.05), L(-0.06, 0.05)], 0.18)
+    elif t == "SP":
+        poly([L(-0.04, 0), L(0.04, 0), L(0.04, 0.06), L(-0.04, 0.06)], 0.18)
+        sh.arc(v(*L(0.0, 0.10)), v.len(0.05), 0, 300, "fixture", 0.13)
+    elif t == "FD":
+        c = v(cx, cy)
+        sh.circle(c, v.len(0.07), "fixture", 0.25)
+        for dd_ in (-0.04, 0.0, 0.04):
+            sh.line(v(cx - 0.06, cy + dd_), v(cx + 0.06, cy + dd_), "fixture", 0.1)
+    elif t == "TR":
+        sh.line(v(*L(-w / 2, 0.06)), v(*L(w / 2, 0.06)), "fixture", 0.35)
+        for a_ in (-w / 2, w / 2):
+            sh.line(v(*L(a_, 0)), v(*L(a_, 0.06)), "fixture", 0.25)
+    elif t == "TP":
+        poly([L(-0.07, 0), L(0.07, 0), L(0.07, 0.1), L(-0.07, 0.1)], 0.18)
+    elif t == "MR":
+        sh.line(v(*L(-w / 2, 0.02)), v(*L(w / 2, 0.02)), "fixture", 0.5)
+    elif t == "BT2":
+        c = L(0, d / 2)
+        poly(_ellipse(c, w / 2, d / 2, al, ou))
+        poly(_ellipse(c, w / 2 - 0.07, d / 2 - 0.07, al, ou), 0.13)
+    elif t == "GP":
+        sh.line(v(*L(-w / 2, 0.01)), v(*L(w / 2, 0.01)), "fixture", 0.13)
+        sh.line(v(*L(-w / 2, 0.03)), v(*L(w / 2, 0.03)), "fixture", 0.13)
+    elif t == "PL":
+        sh.circle(v(cx, cy), v.len(min(w, d) / 2), "fixture", 0.18)
+    else:
+        poly([L(-w / 2, 0), L(w / 2, 0), L(w / 2, d), L(-w / 2, d)], 0.18)
+    lab = FIX_LABEL.get(t, t)
+    q = v(*L(w / 2 + 0.05, d * 0.6 if t not in ("FD",) else 0.0))
+    sh.text((q[0] + 0.5, q[1] - 0.8), lab, 1.8, "left", "fixture")
+
+
+def fixture_front(sh, P, t, a, b, spec):
+    """A fitting seen from the front on the wall it stands against."""
+    zb, hh = float(spec[5]), float(spec[6])
+    m = (a + b) / 2
+    w = b - a
+    if t.startswith("WC1"):
+        sh.poly([P(m - 0.22, 0.40), P(m + 0.22, 0.40), P(m + 0.22, 0.75), P(m - 0.22, 0.75)], "fixture", 0.25)
+        sh.line(P(m - 0.23, 0.72), P(m + 0.23, 0.72), "fixture", 0.13)
+        sh.poly([P(m - 0.12, 0.0), P(m + 0.12, 0.0), P(m + 0.19, 0.38), P(m - 0.19, 0.38)], "fixture", 0.25)
+        sh.poly([P(m - 0.20, 0.38), P(m + 0.20, 0.38), P(m + 0.20, 0.42), P(m - 0.20, 0.42)], "fixture", 0.18)
+        sh.circle(P(m + 0.15, 0.68), 0.6, "fixture", 0.13)
+    elif t.startswith("WC2"):
+        sh.poly([P(a, 0.0), P(b, 0.0), P(b, 0.15), P(a, 0.15)], "fixture", 0.25)
+    elif t == "LV" or t.startswith("SK"):
+        top = zb + hh
+        sh.poly([P(a, top - 0.05), P(b, top - 0.05), P(b, top), P(a, top)], "fixture", 0.25)
+        sh.poly([P(m - w * 0.38, top - 0.05), P(m - w * 0.25, top - 0.20), P(m + w * 0.25, top - 0.20),
+                 P(m + w * 0.38, top - 0.05)], "fixture", 0.2, closed=False)
+        sh.line(P(m, top - 0.20), P(m, top - 0.32), "fixture", 0.18)
+        sh.arc(P(m + 0.04, top - 0.32), 1.0, 180, 360, "fixture", 0.18)
+        sh.poly([P(m - 0.02, top), P(m - 0.02, top + 0.15), P(m + 0.08, top + 0.15)], "fixture", 0.2, closed=False)
+    elif t == "LV2":
+        top = zb + hh
+        sh.poly([P(a, 0.0), P(b, 0.0), P(b, top), P(a, top)], "fixture", 0.25)
+        sh.line(P(m, 0.08), P(m, top - 0.08), "fixture", 0.13)
+        sh.line(P(a, top - 0.06), P(b, top - 0.06), "fixture", 0.13)
+    elif t == "MR":
+        sh.poly([P(a, zb), P(b, zb), P(b, zb + hh), P(a, zb + hh)], "fixture", 0.3)
+        sh.line(P(m - 0.06, zb + hh * 0.55), P(m + 0.04, zb + hh * 0.70), "fixture", 0.1)
+        sh.line(P(m - 0.03, zb + hh * 0.50), P(m + 0.07, zb + hh * 0.65), "fixture", 0.1)
+    elif t.startswith("SH"):
+        sh.circle(P(m, 1.95), 1.8, "fixture", 0.25)
+        sh.line(P(m, 1.95), P(m, 1.10), "fixture", 0.2)
+        sh.poly([P(m - 0.06, 1.05), P(m + 0.06, 1.05), P(m + 0.06, 1.15), P(m - 0.06, 1.15)], "fixture", 0.25)
+    elif t == "SP":
+        sh.poly([P(m - 0.03, 0.5), P(m + 0.03, 0.5), P(m + 0.03, 0.62), P(m - 0.03, 0.62)], "fixture", 0.2)
+        sh.poly([P(m, 0.5), P(m - 0.05, 0.35), P(m + 0.03, 0.25), P(m + 0.06, 0.40)], "fixture", 0.13, closed=False)
+    elif t == "TR":
+        sh.line(P(a, zb + 0.03), P(b, zb + 0.03), "fixture", 0.35)
+        for x_ in (a, b):
+            sh.poly([P(x_ - 0.02, zb - 0.02), P(x_ + 0.02, zb - 0.02), P(x_ + 0.02, zb + 0.06), P(x_ - 0.02, zb + 0.06)],
+                    "fixture", 0.2)
+    elif t == "TP":
+        sh.poly([P(a, zb), P(b, zb), P(b, zb + hh), P(a, zb + hh)], "fixture", 0.2)
+        sh.circle(P(m, zb + hh / 2), 1.0, "fixture", 0.13)
+    elif t == "BT2":
+        sh.poly([P(a + 0.05, 0.0), P(b - 0.05, 0.0), P(b, hh), P(a, hh)], "fixture", 0.25)
+    elif t == "UR":
+        sh.poly(_ellipse(P(m, 0.75), (b - a) / 2 * (P(1, 0)[0] - P(0, 0)[0]), 0.30 * (P(0, 1)[1] - P(0, 0)[1]),
+                         (1, 0), (0, 1)), "fixture", 0.25)
+    elif t == "GP":
+        sh.poly([P(a, 0.0), P(b, 0.0), P(b, hh), P(a, hh)], "fixture", 0.13)
+    else:
+        sh.poly([P(a, zb), P(b, zb), P(b, zb + max(hh, 0.05)), P(a, zb + max(hh, 0.05))], "fixture", 0.2)
+
+
+def fixture_side(sh, P, t, s_wall, sgn, spec):
+    """A fitting against a cut wall, seen from its side (it sticks out
+    toward the viewer's middle by ``sgn``)."""
+    zb, hh, d = float(spec[5]), float(spec[6]), float(spec[4])
+
+    def Q(o, z):
+        return P(s_wall + sgn * o, z)
+    if t.startswith("WC1"):
+        sh.poly([Q(0, 0.40), Q(0.2, 0.40), Q(0.2, 0.75), Q(0, 0.75)], "fixture", 0.25)
+        sh.poly([Q(0.12, 0.0), Q(0.42, 0.0), Q(0.66, 0.36), Q(0.68, 0.42), Q(0.16, 0.42), Q(0.16, 0.30)], "fixture", 0.25)
+    elif t == "LV" or t.startswith("SK"):
+        top = zb + hh
+        sh.poly([Q(0, top - 0.05), Q(d, top - 0.05), Q(d, top), Q(0, top)], "fixture", 0.25)
+        sh.poly([Q(0.06, top - 0.05), Q(0.12, top - 0.20), Q(d - 0.08, top - 0.20), Q(d - 0.04, top - 0.05)],
+                "fixture", 0.2, closed=False)
+        sh.line(Q(0.25, top - 0.20), Q(0.25, top - 0.30), "fixture", 0.18)
+        sh.poly([Q(0.25, top - 0.30), Q(0.15, top - 0.36), Q(0.0, top - 0.36)], "fixture", 0.18, closed=False)
+    elif t == "MR":
+        sh.poly([Q(0, zb), Q(0.03, zb), Q(0.03, zb + hh), Q(0, zb + hh)], "fixture", 0.25)
+    elif t.startswith("SH"):
+        sh.line(Q(0, 1.95), Q(0.15, 1.95), "fixture", 0.2)
+        sh.circle(Q(0.17, 1.93), 1.4, "fixture", 0.2)
+    elif t == "TR":
+        sh.poly([Q(0, zb), Q(0.07, zb), Q(0.07, zb + 0.05), Q(0, zb + 0.05)], "fixture", 0.2)
+    elif t == "BT2":
+        sh.poly([Q(0.0, 0.0), Q(d, 0.0), Q(d, hh), Q(0.0, hh)], "fixture", 0.25)
+    else:
+        sh.poly([Q(0, zb), Q(min(d, 0.15), zb), Q(min(d, 0.15), zb + max(hh, 0.05)), Q(0, zb + max(hh, 0.05))],
+                "fixture", 0.18)
+
+
+def bath_sides(E, k, rm) -> list:
+    """The two walls the bathroom sections look at: the ones with the most
+    fittings (the original: one across the room, one along it)."""
+    inner = _inner(E, k, rm)
+    fx = [f for f in E["fixtures"] if f["floor"] == k and D._inside(f["fx"], rm)]
+    cnt = [sum(1 for f in fx if back_side(f["fx"], inner) == s_) for s_ in range(4)]
+    first = max(range(4), key=lambda s_: cnt[s_])
+    across = [s_ for s_ in range(4) if s_ % 2 != first % 2]
+    second = max(across, key=lambda s_: cnt[s_])
+    return [first, second]
+
+
+def _brick_band(sh, a, b, step=1.1, layer="hatch"):
+    """45° hatch inside the paper rectangle a–b (masonry cut)."""
+    (xa, ya), (xb, yb) = a, b
+    x0, x1, y0, y1 = min(xa, xb), max(xa, xb), min(ya, yb), max(ya, yb)
+    s_ = x0 - (y1 - y0)
+    while s_ < x1:
+        p = (s_, y0)
+        q = (s_ + (y1 - y0), y1)
+        c = _clip_seg(p, q, (x0, y0, x1, y1))
+        if c:
+            sh.line(c[0], c[1], layer, 0.1)
+        s_ += step
+
+
+def _concrete(sh, a, b):
+    (xa, ya), (xb, yb) = a, b
+    x0, x1, y0, y1 = min(xa, xb), max(xa, xb), min(ya, yb), max(ya, yb)
+    sh.fill([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "hatch", 0.82)
+    import random as _r
+    rnd = _r.Random(int(x0 * 7 + y0 * 13))
+    for _i in range(int((x1 - x0) * (y1 - y0) / 6) + 1):
+        px, py = x0 + rnd.random() * (x1 - x0), y0 + rnd.random() * (y1 - y0)
+        sh.poly([(px, py), (px + 0.5, py + 0.2), (px + 0.15, py + 0.5)], "hatch", 0.1)
+    sh.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "cut", 0.35)
+
+
+def bath_section(sh, E, k, rm, side, ox, oy, sc, num, ref_sheet, names):
+    """รูปตัดห้องน้ำ as the original: the cut walls (hatched, plastered,
+    the beam over them), the floor slab and the beams under it, the back
+    wall's tiles, its door / window, the fittings (front and side views),
+    the ceiling, the heights on the left, the sizes and axes below, the
+    room tags — and its title with the section number."""
+    kk = 1000.0 / sc
+    inner = _inner(E, k, rm)
+    x0, y0, x1, y1 = inner
+    H = E["H"]
+    t = float(E["settings"].get("wall_t") or 0.1)
+    zc = B.ceiling_z(E, k) - k * H
+    bh = float((E["lib"].get("B1") or {}).get("h", 0.4) or 0.4)
+    fin = CAT.finish_of(rm)
+    th = min(float(fin.get("tile_h") or 2.0), zc)
+    ends = {0: ((x1, y0), (x0, y0)), 1: ((x1, y1), (x1, y0)), 2: ((x0, y1), (x1, y1)), 3: ((x0, y0), (x0, y1))}
+    # seen from inside, looking at the wall: left → right
+    a_, b_ = ends[side]
+    a_, b_ = b_, a_
+    import math as _m
+    W = _m.dist(a_, b_)
+    u = ((b_[0] - a_[0]) / W, (b_[1] - a_[1]) / W)
+
+    def P(s_, z):
+        return (ox + s_ * kk, oy + z * kk)
+
+    def S(x, y):
+        return (x - a_[0]) * u[0] + (y - a_[1]) * u[1]
+    drop = 0.05
+    # floor: the room's slab, the next rooms' slabs a step higher, beams under the walls
+    _concrete(sh, P(-0.05, -0.10), P(W + 0.05, 0.0))
+    for s0, s1 in ((-t - 1.15, -t), (W + t, W + t + 0.45)):
+        _concrete(sh, P(s0, drop - 0.10), P(s1, drop))
+    for s0, s1 in ((-t - 0.05, 0.05), (W - 0.05, W + t + 0.05)):
+        _concrete(sh, P(s0, -0.45), P(s1, drop))
+    # the cut walls: masonry hatched between the plaster, the beam over them
+    for s0, s1 in ((-t, 0.0), (W, W + t)):
+        sh.rect(*P(s0, drop), *P(s1, H - bh), "cut", 0.5)
+        _brick_band(sh, P(s0, drop), P(s1, H - bh))
+        _concrete(sh, P(s0 - 0.02, H - bh), P(s1 + 0.02, H))
+    # the slab / roof beam band over the room
+    _concrete(sh, P(-0.05, H - 0.12), P(W + 0.05, H))
+    # the back wall: tiles 0.30 to their height, plain above, the ceiling
+    z = 0.30
+    while z < th - 0.01:
+        sh.line(P(0, z), P(W, z), "hatch", 0.1)
+        z += 0.30
+    sh.line(P(0, th), P(W, th), "wall", 0.25)
+    s_ = 0.30
+    while s_ < W - 0.01:
+        sh.line(P(s_, 0), P(s_, th), "hatch", 0.1)
+        s_ += 0.30
+    sh.poly([P(0, zc), P(W, zc), P(W, zc + 0.012), P(0, zc + 0.012)], "cut", 0.35)
+    ct = E["settings"].get("ceiling_type", "cline")
+    keys = list(B.CEILING_TYPES)
+    if ct in keys:
+        _ceiling_mark(sh, (P(W / 2, 0)[0], P(0, zc + 0.15)[1] + 2), str(keys.index(ct) + 1))
+    # the door / window in the back wall
+    codes = D.opening_codes(E)
+    p0w, p1w = (a_, b_)
+    for el in E["openings"]:
+        if el["floor"] != k:
+            continue
+        ox_, oy_ = float(el["op"]["x"]), float(el["op"]["y"])
+        dist = abs((ox_ - a_[0]) * (-u[1]) + (oy_ - a_[1]) * u[0])
+        if dist > t / 2 + 0.06 or not (-0.05 < S(ox_, oy_) < W + 0.05):
+            continue
+        sc_ = S(ox_, oy_)
+        lo = el["sill"] if el["type"] == "window" else 0.0
+        sh.fill([P(sc_ - el["w"] / 2, lo), P(sc_ + el["w"] / 2, lo), P(sc_ + el["w"] / 2, lo + el["h"]),
+                 P(sc_ - el["w"] / 2, lo + el["h"])], "mask", 1.0)
+        elev_opening(sh, P, sc_, lo, el, D.op_code(el, codes))
+    # the fittings: on the back wall from the front, on the cut walls from the side
+    fx = [f for f in E["fixtures"] if f["floor"] == k and D._inside(f["fx"], rm)]
+    keyz = set()
+    left_side, right_side = (side + 3) % 4, (side + 1) % 4
+    for f in fx:
+        tt = str(f["fx"].get("type", ""))
+        spec = D.fixture_spec(tt)
+        if not spec or tt == "FD":
+            continue
+        bs = back_side(f["fx"], inner)
+        w_ = float(spec[3])
+        sc_ = S(float(f["fx"]["x"]), float(f["fx"]["y"]))
+        if bs == side:
+            fixture_front(sh, P, tt, sc_ - w_ / 2, sc_ + w_ / 2, spec)
+            lab_z = float(spec[5]) + float(spec[6]) + 0.05 if not tt.startswith("SH") else 2.05
+            q = P(sc_ + w_ / 2, lab_z)
+            sh.text((q[0] + 0.6, q[1]), FIX_LABEL.get(tt, tt), 1.9, "left", "fixture")
+        elif bs in (left_side, right_side):
+            s_wall, sgn = (0.0, 1) if bs == left_side else (W, -1)
+            fixture_side(sh, P, tt, s_wall, sgn, spec)
+        else:
+            continue
+        if tt.startswith("LV") or tt.startswith("SK"):
+            keyz.add(round(float(spec[5]) + float(spec[6]), 2))
+        if tt == "MR":
+            keyz |= {round(float(spec[5]), 2), round(float(spec[5]) + float(spec[6]), 2)}
+    # the heights on the left: the fittings' heights, the tiles, the ceiling
+    def chain(xmm, zs):
+        zs = sorted(set(zs))
+        for za, zb in zip(zs, zs[1:]):
+            pa, pb = P(0, za)[1], P(0, zb)[1]
+            sh.line((xmm, pa), (xmm, pb), "dim", 0.13)
+            for yq in (pa, pb):
+                sh.line((xmm - 0.7, yq - 0.7), (xmm + 0.7, yq + 0.7), "dim", 0.25)
+                sh.line((xmm - 1.2, yq), (xmm + 1.2, yq), "dim", 0.13)
+            sh.text((xmm - 0.9, (pa + pb) / 2), f"{zb - za:.2f}", 2.0, "center", "dim", angle=90)
+    xl = P(-t - 1.15, 0)[0]
+    chain(xl - 8, [0.0] + [z_ for z_ in keyz if 0 < z_ < zc] + [th, zc])
+    chain(xl - 15, [0.0, th, zc])
+    chain(xl - 22, [0.0, zc])
+    # sizes and axes below
+    yb = P(0, -0.45)[1] - 6
+    xs_ = [P(-t, 0)[0], P(0, 0)[0], P(W, 0)[0], P(W + t, 0)[0]]
+    for xa, xb, val in zip(xs_, xs_[1:], (t, W, t)):
+        sh.line((xa, yb), (xb, yb), "dim", 0.13)
+        sh.text(((xa + xb) / 2, yb + 0.9), f"{val:.2f}", 1.9, "center", "dim")
+    for x_ in xs_:
+        sh.line((x_ - 0.7, yb - 0.7), (x_ + 0.7, yb + 0.7), "dim", 0.25)
+        sh.line((x_, yb - 1.2), (x_, yb + 1.2), "dim", 0.13)
+    yb2 = yb - 5.5
+    xa, xb = P(-t / 2, 0)[0], P(W + t / 2, 0)[0]
+    sh.line((xa, yb2), (xb, yb2), "dim", 0.13)
+    for x_ in (xa, xb):
+        sh.line((x_ - 0.7, yb2 - 0.7), (x_ + 0.7, yb2 + 0.7), "dim", 0.25)
+        sh.line((x_, yb2 - 1.2), (x_, yb2 + 1.2), "dim", 0.13)
+    sh.text(((xa + xb) / 2, yb2 + 0.9), f"{W + t:.2f}", 1.9, "center", "dim")
+    gx, gy = D.grids(E)
+    axes = []
+    for s_w, pt in ((-t / 2, a_), (W + t / 2, b_)):
+        px, py = pt[0] - u[0] * t / 2 * (1 if s_w < 0 else -1), pt[1] - u[1] * t / 2 * (1 if s_w < 0 else -1)
+        for i, g in enumerate(gx):
+            if abs(u[0]) > 0.5 and abs(px - g) < 0.03:
+                axes.append((s_w, str(i + 1)))
+        for j, g in enumerate(gy):
+            if abs(u[1]) > 0.5 and abs(py - g) < 0.03:
+                axes.append((s_w, D.axis_name(j)))
+    for s_w, nm in axes:
+        x_ = P(s_w, 0)[0]
+        sh.line((x_, yb2 - 2), (x_, yb2 - 7), "grid", 0.13, True)
+        sh.circle((x_, yb2 - 10.2), 3.2, "grid", 0.25)
+        sh.text((x_, yb2 - 11.3), nm, 2.6, "center", "grid")
+    # wall tags on the cut walls, the room tags
+    for s_w in (0.25, W - 0.25):
+        D.wall_tag(sh, P(s_w, 2.25), 3, 1.9)
+    sl = next(s_ for s_ in E["slabs"] if s_["room"] is rm)
+    busy = []
+    for f in fx:
+        tt = str(f["fx"].get("type", ""))
+        sp_ = D.fixture_spec(tt)
+        if sp_ and back_side(f["fx"], inner) == side and float(sp_[5]) < 1.0:
+            c_ = S(float(f["fx"]["x"]), float(f["fx"]["y"]))
+            busy.append((c_ - float(sp_[3]) / 2 - 0.1, c_ + float(sp_[3]) / 2 + 0.1))
+    free, s0 = [], 0.35
+    for lo_b, hi_b in sorted(busy) + [(W - 0.35, W)]:
+        free.append((lo_b - s0, (s0 + lo_b) / 2))
+        s0 = max(s0, hi_b)
+    best = max(free) if free else (0, W / 2)
+    room_tag(sh, P(best[1] if best[0] > 0.9 else W * 0.5, 0.42), E, rm, sl, D.finish_codes(E), knockout=True)
+    # the next room's tag outside the left wall, on its floor
+    mid_l = (a_[0] - u[0] * (t + 0.6) , a_[1] - u[1] * (t + 0.6))
+    nb = next((r_ for r_ in E["floors"][k]["rooms"] if r_ is not rm and
+               r_["x"] - 0.01 <= mid_l[0] <= r_["x"] + r_["w"] + 0.01 and
+               r_["y"] - 0.01 <= mid_l[1] <= r_["y"] + r_["d"] + 0.01), None)
+    if nb is not None:
+        sl_n = next((s_ for s_ in E["slabs"] if s_["room"] is nb), None)
+        if sl_n is not None:
+            room_tag(sh, P(-t - 0.6, drop + 0.45), E, nb, sl_n, D.finish_codes(E))
+    # the title: name, rule, scale and the section number in its triangle
+    cx = P(W / 2, 0)[0] - 45
+    caption_marks(sh, (cx, yb2 - 22), f"รูปตัดห้องน้ำ {names}", f"1:{sc}", None, None, 90.0)
+    tx, ty = cx + 96, yb2 - 20
+    sh.poly([(tx - 5, ty - 2.5), (tx + 5, ty - 2.5), (tx, ty + 5.5)], "text", 0.35)
+    sh.circle((tx, ty - 2.5), 3.4, "text", 0.25)
+    sh.text((tx, ty - 1.9), str(num), 2.6, "center", "text", True)
