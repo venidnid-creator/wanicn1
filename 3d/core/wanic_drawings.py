@@ -45,7 +45,7 @@ LAYERS = {
     "frame": 7, "title": 7, "wall": 7, "cut": 7, "column": 7, "grid": 1,
     "dim": 3, "text": 7, "door": 4, "window": 4, "fixture": 6, "roof": 5,
     "struct": 2, "rebar": 1, "hidden": 8, "pipe": 4, "elec": 6, "hatch": 8,
-    "mech": 5,
+    "mech": 5, "mask": 7,
     # the site map (road set): road yellow, PI cyan, start/end red, labels white
     "sat": 2, "satpi": 4, "satred": 1, "sattext": 7, "satgrid": 8, "halo": 8, "photo": 8,
 }
@@ -1678,15 +1678,15 @@ def section_detail(sh, E, L, cut, box):
     grid_u = ys if axis == "x" else xs
     ov = float(s.get("overhang") or 0)
     umin, umax = grid_u[0] - ov - 1.2, grid_u[-1] + ov + 1.2
-    lab_mm = 42.0                        # room for the level words on the left
+    lab_mm = 62.0                        # the level ruler on the left (the standard)
     ridge = max((p[2] for poly in (L or {}).get("skin", []) for p in poly), default=n * H + 1)
     gl0 = float(E.get("GL", 0.0))
     zmin, ztop = min(-1.8, gl0 - 1.6), ridge + 0.8
-    bw, bh = box[2] - box[0] - 40 - lab_mm, box[3] - box[1] - 26
-    sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), (50, 75, 100, 125, 150, 200))
+    bw, bh = box[2] - box[0] - 70 - lab_mm, box[3] - box[1] - 40
+    sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), (100, 125, 150, 200))   # 1:100 as the standard
     k = 1000.0 / sc
-    ox = box[0] + 28 + lab_mm + (bw - (umax - umin) * k) / 2
-    oy = box[1] + 22
+    ox = box[0] + 10 + lab_mm + (bw - (umax - umin) * k) / 2
+    oy = box[1] + 34
 
     def P(u, z):
         return (ox + (u - umin) * k, oy + (z - zmin) * k)
@@ -1699,9 +1699,10 @@ def section_detail(sh, E, L, cut, box):
     # ground and earth hatch
     gl = gl0 if gl0 < -0.05 else -0.30
     sh.line(P(umin, gl), P(umax, gl), "cut", 0.5)
-    for i in range(int((umax - umin) / 0.6)):
-        u = umin + 0.3 + i * 0.6
-        sh.line(P(u, gl), P(u - 0.25, gl - 0.25), "hatch", 0.13)
+    for i in range(int((umax - umin) / 0.3)):           # the earth: cross-hatched band
+        u = umin + 0.15 + i * 0.3
+        sh.line(P(u, gl), P(u + 0.3, gl - 0.3), "hatch", 0.1)
+        sh.line(P(u + 0.3, gl), P(u, gl - 0.3), "hatch", 0.1)
     # footings, stumps on the cut line (within half a footing)
     for ft in E["footings"]:
         spec = lib.get(ft["mark"], {})
@@ -1812,23 +1813,44 @@ def section_detail(sh, E, L, cut, box):
                 continue
             uc = U(ox_, oy_)
             lo_ = z + (el["sill"] if el["type"] == "window" else 0.0)
-            rect(uc - el["w"] / 2, lo_, uc + el["w"] / 2, lo_ + el["h"],
-                 "window" if el["type"] == "window" else "door", 0.18)
-            if el["type"] == "window":
-                sh.line(P(uc, lo_), P(uc, lo_ + el["h"]), "window", 0.13)
+            from core import wanic_std_sheets as STD
+            STD.elev_opening(sh, P, uc, lo_, el, op_code(el, opening_codes(E)))
         zc = B.ceiling_z(E, kf)
         if B.ceiling_type(s, rm) != "none":
             x0r, y0r, x1r, y1r = B.room_inner(E, rm, kf)
             ua, ub = (y0r, y1r) if axis == "x" else (x0r, x1r)
             rect(ua, zc - 0.009, ub, zc, "cut", 0.25)
-            sh.text(P((ua + ub) / 2, zc - 0.25), f"ฝ้า +{zc - z:.2f}", 1.9, "center", "dim")
-        sh.text(P((a + b) / 2, z + 1.25), rm.get("name") or "ห้อง", 2.6, "center", "text", True)
-        if B.is_wet(rm):
-            sh.text(P((a + b) / 2, z + 0.95), f"พื้นต่ำ {float(s.get('wet_drop') or 0) * 100:.0f} ซม.",
-                    1.8, "center", "dim")
+            # the clear height, floor to ceiling (as the standard)
+            ud = ub - 0.35
+            za_, zb_ = P(ud, z), P(ud, zc)
+            sh.line(za_, zb_, "dim", 0.13)
+            for q in (za_, zb_):
+                sh.line((q[0] - 0.7, q[1] - 0.7), (q[0] + 0.7, q[1] + 0.7), "dim", 0.25)
+            sh.text((za_[0] - 0.8, (za_[1] + zb_[1]) / 2), f"{zc - z:.2f}", 1.9, "center", "dim", angle=90)
+        from core import wanic_std_sheets as STD
+        sl_ = next((x for x in E["slabs"] if x["room"] is rm), sl)
+        # the tag clear of the doors and windows on the far wall
+        busy = []
+        for el in E["openings"]:
+            if el["floor"] == kf and abs(C(float(el["op"]["x"]), float(el["op"]["y"])) - far) <= 0.06:
+                ue = U(float(el["op"]["x"]), float(el["op"]["y"]))
+                if a < ue < b:
+                    busy.append((ue - el["w"] / 2 - 0.15, ue + el["w"] / 2 + 0.15))
+        ut = (a + b) / 2
+        if busy:                                   # the middle of the widest free stretch
+            free, s0 = [], a + 0.25
+            for lo_b, hi_b in sorted(busy) + [(b - 0.25, b)]:
+                free.append((lo_b - s0, (s0 + lo_b) / 2))
+                s0 = max(s0, hi_b)
+            best = max(free)
+            ut = best[1] if best[0] >= 2.1 else (a + b) / 2
+        STD.room_tag(sh, P(ut, z + 0.62), E, rm, sl_, finish_codes(E), knockout=True)
     # roof: the skin cut, the frame beyond (rafters, ties, posts), the
     # purlins and the wall plates cut
     if L:
+        for poly in L["skin"]:                    # the roof beyond the cut, seen
+            if sum(C(p[0], p[1]) for p in poly) / len(poly) > at + 0.05:
+                sh.poly([P(U(p[0], p[1]), p[2]) for p in poly], "roof", 0.18)
         for poly in L["skin"]:
             seg = _cut_poly(poly, axis, at)
             if seg:
@@ -1864,44 +1886,47 @@ def section_detail(sh, E, L, cut, box):
             if min(ca, cb) - 1e-6 <= at <= max(ca, cb) + 1e-6:
                 u = U(a_[0], a_[1])
                 rect(u - 0.0125, a_[2] - 0.20, u + 0.0125, a_[2], "cut", 0.35, 0.6)
-    # levels on the left
-    xl = umin + 0.2
+    # levels on the left: the standard's ruler
+    from core import wanic_std_sheets as STD
     marks = [(gl, "ระดับดินเดิม"), (0.0, "ระดับพื้นชั้น 1")]
-    for f in range(n):
-        marks.append((B.ceiling_z(E, f), f"ระดับฝ้าชั้น {f + 1}"))
-        if f > 0:
-            marks.append((f * H, f"ระดับพื้นชั้น {f + 1}"))
-    marks.append((n * H, "ระดับหลังคาน"))
+    for f in range(1, n):
+        marks.append((f * H, f"ระดับพื้นชั้น {f + 1}"))
+    marks.append((n * H, "ระดับหลังคานหลังคา"))
     if L:
-        marks.append((ridge, "ระดับสันหลังคา"))
-    _levels(sh, P, xl, marks, left=True)
-    # vertical dimensions on the right
+        marks.append((ridge, "ระดับหลังอกไก่"))
+    STD.level_ruler(sh, P, grid_u[0], ox - lab_mm + 16, marks)
     xr = P(umax - 0.3, 0)[0]
-    zs = sorted({0.0} | {B.ceiling_z(E, f) for f in range(n)} | {f * H for f in range(n + 1)}
-                | ({ridge} if L else set()))
-    for za, zb in zip(zs, zs[1:]):
-        pa, pb = (xr, P(0, za)[1]), (xr, P(0, zb)[1])
-        sh.line(pa, pb, "dim", 0.13)
-        for q in (pa, pb):
-            sh.line((q[0] - 1, q[1] - 1), (q[0] + 1, q[1] + 1), "dim", 0.18)
-        sh.text((xr + 1.5, (pa[1] + pb[1]) / 2 - 1), f"{zb - za:.2f}", 2.0, "left", "dim")
     if L:
         roof_leaders(sh, E, L, P, U, C, axis, at, xr + 12)
-    # grid: dimension chain and bubbles below
-    yb = P(0, zmin + 0.35)[1]
-    for g0, g1 in zip(grid_u, grid_u[1:]):
-        a_, b_ = P(g0, 0)[0], P(g1, 0)[0]
-        sh.line((a_, yb + 6), (b_, yb + 6), "dim", 0.13)
-        for q in (a_, b_):
-            sh.line((q - 1, yb + 5), (q + 1, yb + 7), "dim", 0.18)
-        sh.text(((a_ + b_) / 2, yb + 7), f"{g1 - g0:.2f}", 2.0, "center", "dim")
+    # under it: the eaves and the axes, the overall, then the bubbles
+    _segs = [sg for sg in (_cut_poly(poly, axis, at) for poly in (L or {}).get("skin", [])) if sg]
+    ru = [q[0] for sg in _segs for q in sg]
+    yb = STD.bottom_chain(sh, P, list(grid_u), zmin + 0.1, min(ru) if ru else grid_u[0],
+                          max(ru) if ru else grid_u[-1], y_off=5.0)
     names = [str(i + 1) for i in range(len(xs))] if axis == "y" else \
         [axis_name(i) for i in range(len(ys))]
     for g, nm in zip(grid_u, names):
         q = P(g, 0)[0]
-        sh.line((q, yb + 3.5), (q, P(0, gl)[1]), "grid", 0.13, True)
-        sh.circle((q, yb), 3.0, "grid", 0.25)
-        sh.text((q, yb - 1.2), nm, 2.6, "center", "grid")
+        sh.line((q, yb - 3.5), (q, P(0, gl)[1]), "grid", 0.13, True)
+        sh.circle((q, yb - 7.0), 3.0, "grid", 0.25)
+        sh.text((q, yb - 8.2), nm, 2.6, "center", "grid")
+    # the wall tags beside the cut walls, and the slope at the left eave
+    for wl in E["walls"]:
+        (x0_, y0_), (x1_, y1_) = wl["p0"], wl["p1"]
+        if axis == "x":
+            cross = abs(y0_ - y1_) < 1e-6 and min(x0_, x1_) < at < max(x0_, x1_)
+        else:
+            cross = abs(x0_ - x1_) < 1e-6 and min(y0_, y1_) < at < max(y0_, y1_)
+        if cross:
+            u = U(x0_, y0_)
+            side_ = -1 if u > (grid_u[0] + grid_u[-1]) / 2 else 1
+            wall_tag(sh, P(u + side_ * 0.45, wl["floor"] * H + 1.75), wall_type(E, wl), 1.9)
+    if L and ru:
+        segs = [sg for sg in (_cut_poly(poly, axis, at) for poly in L["skin"]) if sg]
+        lo_z = min(min(sg[0][1], sg[1][1]) for sg in segs)
+        hi_z = max(max(sg[0][1], sg[1][1]) for sg in segs)
+        if hi_z - lo_z > 0.3:
+            STD.slope_angle(sh, P, min(ru), lo_z, float(s.get("pitch") or 0), 1, k)
     return sc
 
 
@@ -1951,22 +1976,15 @@ def roof_leaders(sh, E, L, P, U, C, axis, at, lx):
         sh.line(pt, (lx - 1, ty + 0.7), "text", 0.13)
         sh.line((lx - 1, ty + 0.7), (lx + 1, ty + 0.7), "text", 0.13)
         sh.text((lx + 1.5, ty), text, 1.9, "left", "text")
-    # the slope symbol over the LEFT slope (the labels take the right)
-    left = [sg for sg in segs if (sg[1][1] - sg[0][1]) * (sg[1][0] - sg[0][0]) > 0]
-    if left:
-        (ua, za), (ub, zb) = min(left, key=lambda sg: min(sg[0][0], sg[1][0]))
-        if ua > ub:
-            (ua, za), (ub, zb) = (ub, zb), (ua, za)
-    m = on(0.5, 0.45)
-    run = 6.0
-    k_ = abs((zb - za) / (ub - ua)) if ub != ua else 0
-    rise = run * k_
-    sgn = -1 if zb < za else 1
-    a_ = (m[0] - run / 2, m[1])
-    b_ = (m[0] + run / 2, m[1])
-    c_ = (b_[0], m[1] + sgn * rise) if sgn > 0 else (a_[0], m[1] + rise)
-    sh.poly([a_, b_, c_], "dim", 0.18)
-    sh.text((m[0], m[1] + rise + 1.2), f"ลาดเอียง {float(s['pitch']):g}°", 1.9, "center", "dim")
+
+
+def a_section_one(sh, E, L, cut):
+    """One section on its sheet at 1:100 (the standard sets)."""
+    x0, y0, x1, y1 = drawing_area()
+    sc = section_detail(sh, E, L, cut, (x0, y0 + 14, x1, y1))
+    caption(sh, ((x0 + x1) / 2, y0 + 6), f"รูปตัด {cut[2]}", f"1:{sc}")
+    sh.scale = f"1:{sc}"
+    return sc
 
 
 def a_section_sheet(sh, E, L, k):
@@ -2801,10 +2819,9 @@ def build_set(data, info=None,
         for side in ((0, -1), (1, 0), (0, 1), (-1, 0)):     # one to a sheet, as the standard sets
             add("A", ELEV_NAMES[side],
                 lambda sh, _a, side=side: a_elevations(sh, E, L, [side]))
-        for k in floors:
-            cuts = section_cuts(E, k)
-            title = " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด"
-            add("A", title, lambda sh, _a, k=k: _set_scale(sh, a_section_sheet(sh, E, L, k)))
+        for k in floors:                              # one section to a sheet, as the standard sets
+            for cut in section_cuts(E, k):
+                add("A", f"รูปตัด {cut[2]}", lambda sh, _a, cut=cut: _set_scale(sh, a_section_one(sh, E, L, cut)))
         if info.get("axo_sections"):
             for title, paint in axo_sheets(data):
                 add("A", title, paint, "-")

@@ -2129,7 +2129,7 @@ def paint_sheet(painter, sh, P, k, font):
                 painter.drawImage(QRectF(P(x0, y1), P(x1, y0)), img)
     for it in sh.items:
         kind = it[0]
-        if kind == "fill":
+        if kind == "fill" and it[2] != "mask":
             g = int(255 * it[3])
             rgb = it[4] if len(it) > 4 else (g, g, g)
             painter.setPen(Qt.NoPen)
@@ -2139,6 +2139,12 @@ def paint_sheet(painter, sh, P, k, font):
     for it in sh.items:
         kind = it[0]
         colors = getattr(sh, "colors", None) or {}
+        if kind == "fill" and it[2] == "mask":         # a white patch over what is drawn before it
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            painter.drawPolygon(QPolygonF([P(*p) for p in it[1]]))
+            painter.setBrush(Qt.NoBrush)
+            continue
         if kind in ("line", "poly"):
             dash = it[4] if kind == "line" else it[5]
             pen = QPen(QColor(*colors.get(it[2], (0, 0, 0))),

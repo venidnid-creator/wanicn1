@@ -416,8 +416,14 @@ def sheet_ref(sheets, *starts) -> str:
     return ""
 
 
-def room_tag(sh, p, E, rm, sl, fcodes):
-    """ชื่อห้อง over □ floor number · level · ○ ceiling number."""
+def room_tag(sh, p, E, rm, sl, fcodes, knockout=False):
+    """ชื่อห้อง over □ floor number · level · ○ ceiling number
+    (``knockout``: on a white patch, over the lines behind it)."""
+    if knockout:
+        name = rm.get("name") or "ห้อง"
+        hw = max(len(name) * 1.25, 11.0)
+        sh.fill([(p[0] - hw, p[1] - 5.4), (p[0] + hw, p[1] - 5.4), (p[0] + hw, p[1] + 4.6),
+                 (p[0] - hw, p[1] + 4.6)], "mask", 1.0)
     sh.text((p[0], p[1] + 1.2), rm.get("name") or "ห้อง", 2.8, "center", "text", True)
     pc, _wc, cc = D.room_codes(E, rm, fcodes).split()
     lv = f"±{sl['z']:.2f}" if sl["z"] == 0 else f"+{sl['z']:.2f}"

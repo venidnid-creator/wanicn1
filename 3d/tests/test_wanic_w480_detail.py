@@ -453,8 +453,11 @@ def test_building_sections_and_the_front_matter():
     assert len(S) == E["n"] and S[0].title == "รูปตัด ก-ก รูปตัด ข-ข"
     t = " ".join(S[0].texts())
     for want in ("รูปตัด ก-ก (ตัดผ่านห้องน้ำ)", "รูปตัด ข-ข", "ระดับพื้นชั้น 1",
-                 "ระดับฝ้าชั้น 1", "ระดับสันหลังคา", "ห้องน้ำ", "ฝ้า +2.60", "ระดับดินเดิม"):
+                 "ระดับหลังคานหลังคา", "ระดับหลังอกไก่", "ห้องน้ำ", "2.60", "ระดับดินเดิม"):
         assert want in t, want
+    one = [s for s in D.build_set(d, {"project": "บ้านทดสอบ"}, ("A",)) if s.title.startswith("รูปตัด")]
+    assert [s.title for s in one][:2] == ["รูปตัด ก-ก", "รูปตัด ข-ข"]      # one to a sheet, 1:100
+    assert all(s.scale == "1:100" for s in one)
     full = D.build_set(d, {"project": "บ้านทดสอบ"})
     assert [s.code for s in full[:2]] == ["ปก", "สารบัญ"]
     toc = " ".join(full[1].texts())
