@@ -543,3 +543,122 @@ def tag_spot(E, k, rm):
                 return spot
         return max(strips)[1]
     return cx, cy
+
+
+# ---------------------------------------------------------------------------
+# A3 — elevations as the standard draws them
+# ---------------------------------------------------------------------------
+
+def level_ruler(sh, P, u_wall, x_rule, marks):
+    """The levels on the left as the standard: ▽ +3.00 ระดับพื้นชั้น 2 on a
+    dash-dot line from the building, and the chain of heights with the
+    total beside them."""
+    zs = sorted({round(z, 3): lab for z, lab in marks}.items())
+    last = None
+    for z, lab in zs:
+        y = P(u_wall, z)[1]
+        x_b = P(u_wall, z)[0]
+        sh.line((x_rule, y), (x_b - 1.0, y), "grid", 0.13, True)
+        tx = x_rule + 5.0
+        ty = y + 0.8 if last is None or y + 0.8 >= last + 3.2 else last + 3.2
+        sh.poly([(tx, y), (tx - 1.5, y + 2.2), (tx + 1.5, y + 2.2)], "dim", 0.18)
+        t = f"{'±' if abs(z) < 1e-6 else ('+' if z > 0 else '')}{z:.2f}"
+        sh.text((tx + 2.4, ty), f"{t} {lab}", 2.0, "left", "dim")
+        last = ty
+    # the chain of heights, and the total on its left
+    ys = [P(u_wall, z)[1] for z, _l in zs]
+    for x, pairs in ((x_rule - 2.0, list(zip(zs, zs[1:]))), (x_rule - 8.0, [(zs[0], zs[-1])])):
+        if len(zs) < 2:
+            break
+        for (za, _a), (zb, _b) in pairs:
+            ya, yb = P(u_wall, za)[1], P(u_wall, zb)[1]
+            sh.line((x, ya), (x, yb), "dim", 0.13)
+            for yy in (ya, yb):
+                sh.line((x - 0.8, yy - 0.8), (x + 0.8, yy + 0.8), "dim", 0.25)
+                sh.line((x - 1.2, yy), (x + 1.2, yy), "dim", 0.13)
+            sh.text((x - 0.9, (ya + yb) / 2), f"{zb - za:.2f}", 2.0, "center", "dim", angle=90)
+    return ys
+
+
+def bottom_chain(sh, P, us, z, umin_roof, umax_roof, y_off=7.0):
+    """Under the elevation: the eaves overhangs and the axis spacings, then
+    the overall size between the outer axes (as the standard)."""
+    y = P(0, z)[1] - y_off
+    stops = sorted(set([round(u, 3) for u in us] + [round(umin_roof, 3), round(umax_roof, 3)]))
+    xs = [P(u, z)[0] for u in stops]
+    for (a, ua), (b, ub) in zip(zip(xs, stops), zip(xs[1:], stops[1:])):
+        sh.line((a, y), (b, y), "dim", 0.13)
+        sh.text(((a + b) / 2, y + 0.9), f"{ub - ua:.2f}", 2.0, "center", "dim")
+    for x in xs:
+        sh.line((x, y - 1.2), (x, y + 1.2), "dim", 0.13)
+        sh.line((x - 0.8, y - 0.8), (x + 0.8, y + 0.8), "dim", 0.25)
+    g = sorted(us)
+    if len(g) >= 2:
+        a, b = P(g[0], z)[0], P(g[-1], z)[0]
+        y2 = y - 5.5
+        sh.line((a, y2), (b, y2), "dim", 0.13)
+        for x in (a, b):
+            sh.line((x, y2 - 1.2), (x, y2 + 1.2), "dim", 0.13)
+            sh.line((x - 0.8, y2 - 0.8), (x + 0.8, y2 + 0.8), "dim", 0.25)
+        sh.text(((a + b) / 2, y2 + 0.9), f"{g[-1] - g[0]:.2f}", 2.0, "center", "dim")
+    return y - 5.5
+
+
+def roof_hatch(sh, poly2d, step):
+    """Tile lines down the slope seen from the front: vertical lines kept
+    inside the projected roof face."""
+    if len(poly2d) < 3:
+        return
+    xs = [p[0] for p in poly2d]
+    area = 0.0
+    for (x0, y0), (x1, y1) in zip(poly2d, poly2d[1:] + poly2d[:1]):
+        area += x0 * y1 - x1 * y0
+    if abs(area) < 4.0:                                  # seen edge-on
+        return
+    x = min(xs) + step / 2
+    while x < max(xs):
+        hits = []
+        for (x0, y0), (x1, y1) in zip(poly2d, poly2d[1:] + poly2d[:1]):
+            if (x0 - x) * (x1 - x) < 0 and abs(x1 - x0) > 1e-9:
+                hits.append(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
+        hits.sort()
+        for a, b in zip(hits[::2], hits[1::2]):
+            if b - a > 0.6:
+                sh.line((x, a + 0.2), (x, b - 0.2), "hatch", 0.1)
+        x += step
+
+
+def roof_notes(sh, P, L, u_of, label, pitch, wall_u, z_eave):
+    """The roof's label on a leader (right of the roof), the eaves overhang
+    dimensions and, where the roof is seen from its end, the slope angle."""
+    pts = [(u_of(p[0], p[1]), p[2]) for poly in L["skin"] for p in poly]
+    u0, u1 = min(p[0] for p in pts), max(p[0] for p in pts)
+    zt = max(p[1] for p in pts)
+    ze = min(p[1] for p in pts)
+    # the label
+    tip = P(u1 - 0.25 * (u1 - u0), ze + 0.55 * (zt - ze))
+    lab = (P(u1, 0)[0] + 8, P(0, zt)[1] + 2)
+    sh.circle(tip, 0.5, "text", 0.18)
+    sh.line(tip, (lab[0], lab[1] - 1.2), "text", 0.13)
+    sh.line((lab[0], lab[1] - 1.2), (lab[0] + len(label) * 1.05 + 2, lab[1] - 1.2), "text", 0.13)
+    sh.text((lab[0] + 1, lab[1]), label, 2.0)
+    # the overhangs, measured from the wall faces at the eaves
+    if wall_u:
+        w0, w1 = min(wall_u), max(wall_u)
+        y = P(0, ze)[1] + 4.0
+        for a, b in ((u0, w0), (w1, u1)):
+            if b - a < 0.05:
+                continue
+            pa, pb = P(a, ze)[0], P(b, ze)[0]
+            sh.line((pa, y), (pb, y), "dim", 0.13)
+            for x in (pa, pb):
+                sh.line((x, y - 1.2), (x, y + 1.2), "dim", 0.13)
+                sh.line((x - 0.7, y - 0.7), (x + 0.7, y + 0.7), "dim", 0.25)
+                sh.line((x, y - 1.2), (x, P(0, ze)[1]), "dim", 0.1, True)
+            sh.text(((pa + pb) / 2, y + 0.9), f"{b - a:.2f}", 1.9, "center", "dim")
+    # the slope, when the ridge is seen end-on (gable / hip end)
+    tops = [p[0] for p in pts if p[1] > zt - 0.02]
+    if pitch and tops and (max(tops) - min(tops)) < 0.5 * (u1 - u0):
+        for u, sgn in ((u0, 1), (u1, -1)):
+            q = P(u + sgn * 1.9, ze + 1.9 * __import__("math").tan(__import__("math").radians(pitch)) + 0.25)
+            sh.text((q[0], q[1] + 1.5), f"{pitch:.0f}°", 2.0, "center", "dim")

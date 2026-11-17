@@ -1283,13 +1283,13 @@ def elevation(sh, E, L, side, box):
     ztop = n * H + 3.0
     gl = float(E.get("GL", 0.0))
     zmin = gl - 0.6
-    lm = 30.0                       # room on the left for the wall note
-    bw, bh = box[2] - box[0] - 40 - lm, box[3] - box[1] - 40
+    lm = 62.0                       # room on the left for the levels (the standard)
+    bw, bh = box[2] - box[0] - 10 - lm, box[3] - box[1] - 52
     sc = fit_scale((umax - umin, ztop - zmin), (bw, bh), PLAN_SCALES)
     sh.scale = f"1:{sc}"
     k = 1000.0 / sc
     ox = box[0] + 4 + lm + (bw - (umax - umin) * k) / 2
-    oy = box[1] + 28 + max(0.0, (bh - (ztop - zmin) * k) / 2) * 0.25
+    oy = box[1] + 44 + max(0.0, (bh - (ztop - zmin) * k) / 2) * 0.25
 
     def P(u, z):
         return (ox + (u - umin) * k, oy + (z - zmin) * k)
@@ -1328,9 +1328,16 @@ def elevation(sh, E, L, side, box):
                             P(uc + el["w"] / 2 - 0.1, lo + el["h"] * 0.55),
                             "door", 0.25)
     # roof: the skin's outline seen from this side
+    from core import wanic_std_sheets as STD
     if L:
         for poly in L["skin"]:
-            sh.poly([P(u_of(p[0], p[1]), p[2]) for p in poly], "roof", 0.25)
+            pp = [P(u_of(p[0], p[1]), p[2]) for p in poly]
+            sh.poly(pp, "roof", 0.25)
+            # only the faces that slope toward the viewer show their tiles
+            vis = sum((p[0] * nx + p[1] * ny) for p in poly) / max(len(poly), 1)
+            far = max(p_[0] * nx + p_[1] * ny for q in L["skin"] for p_ in q)
+            if vis > far - 0.6 * (far - min(p_[0] * nx + p_[1] * ny for q in L["skin"] for p_ in q)):
+                STD.roof_hatch(sh, pp, max(1.2, 0.22 * k))
     # ground, columns at the corners of the faces, glazing bars
     for i in range(int((umax - umin) / 0.6)):
         uu = umin + 0.3 + i * 0.6
@@ -1355,15 +1362,17 @@ def elevation(sh, E, L, side, box):
     for f in range(n):
         if f:
             marks.append((f * H, f"ระดับพื้นชั้น {f + 1}"))
-    marks.append((n * H, "ระดับหลังคาน"))
+    marks.append((n * H, "ระดับหลังคานหลังคา"))
     if L and L.get("skin"):
-        marks.append((max(p[2] for poly in L["skin"] for p in poly), "ระดับสันหลังคา"))
-    _levels(sh, P, umax - 0.2, marks)
+        marks.append((max(p[2] for poly in L["skin"] for p in poly), "ระดับหลังอกไก่"))
+    face_u = [u for f in range(n) for w in _ext_walls(E, f, side) for u in (u_of(*w["p0"]), u_of(*w["p1"]))]
+    STD.level_ruler(sh, P, min(face_u) if face_u else umin + 0.5, ox - lm + 16, marks)
     # notes
-    if L:
+    if L and L.get("skin"):
         tile = CAT.roof_tile(E["settings"])[1]["name"]
-        top = max(p[2] for poly in L["skin"] for p in poly) if L.get("skin") else n * H
-        sh.text(P((umin + umax) / 2, top + 0.45), f"หลังคา{tile[:38]}", 2.0, "center", "text")
+        STD.roof_notes(sh, P, L, u_of, f"หลังคา{tile[:38]}", float(E["settings"].get("pitch") or 0),
+                       [u for f in range(n) for w in _ext_walls(E, f, side)
+                        for u in (u_of(*w["p0"]), u_of(*w["p1"]))], n * H)
     # the wall note outside the building, its leader to the wall face
     wall_u = [u for f in range(n) for w in _ext_walls(E, f, side)
               for u in (u_of(*w["p0"]), u_of(*w["p1"]))]
@@ -1405,11 +1414,45 @@ def elevation(sh, E, L, side, box):
     xs_, ys_ = grids(E)
     names = [(x, str(i + 1)) for i, x in enumerate(xs_)] if ax[1] == 0 else \
         [(y, axis_name(i)) for i, y in enumerate(ys_)]
+    gu = [g * (ax[0] or ax[1]) for g, _nm in names]
+    roof_u = [u_of(p[0], p[1]) for poly in (L or {}).get("skin") or [] for p in poly]
+    yb = STD.bottom_chain(sh, P, gu, gl, min(roof_u) if roof_u else min(gu or [0]),
+                          max(roof_u) if roof_u else max(gu or [0]))
     for g, nm in names:
-        q = P(g * (ax[0] or ax[1]), 0)
-        sh.line((q[0], q[1] - 1), (q[0], q[1] - 5), "grid", 0.13, True)
-        sh.circle((q[0], q[1] - 8), 3.0, "grid", 0.25)
-        sh.text((q[0], q[1] - 9.2), nm, 2.6, "center", "grid")
+        q = P(g * (ax[0] or ax[1]), gl)
+        sh.line((q[0], q[1] - 1), (q[0], yb - 3.5), "grid", 0.13, True)
+        sh.circle((q[0], yb - 7.0), 3.0, "grid", 0.25)
+        sh.text((q[0], yb - 8.2), nm, 2.6, "center", "grid")
+    # the door and window codes, and a wall tag on each storey's face
+    codes = opening_codes(E)
+    for f in range(n):
+        gaps = []
+        for w in _ext_walls(E, f, side):
+            a, b = sorted((u_of(*w["p0"]), u_of(*w["p1"])))
+            cuts = []
+            for op in w["openings"]:
+                el = next((o for o in E["openings"] if o["op"] is op), None)
+                if el is None:
+                    continue
+                uc = u_of(float(op["x"]), float(op["y"]))
+                cuts.append((uc - el["w"] / 2, uc + el["w"] / 2))
+                hi = f * H + el["sill"] + el["h"]
+                tag = op_code(el, codes)
+                if el["type"] == "window":
+                    q = P(uc, hi + 0.35)
+                    sh.circle((q[0], q[1] + 1.4), 2.2, "window", 0.2)
+                    sh.text((q[0], q[1] + 0.6), tag, 1.8, "center", "window")
+                else:
+                    q = P(uc, hi - 0.35)
+                    sh.text((q[0], q[1] - 1.0), tag, 2.0, "center", "door", True)
+            s0 = a
+            for c0, c1 in sorted(cuts) + [(b, b)]:
+                gaps.append((c0 - s0, (s0 + c0) / 2))
+                s0 = max(s0, c1)
+        if gaps:
+            wdt, um = max(gaps)
+            if wdt > 0.6:
+                wall_tag(sh, P(um, f * H + H * 0.55), 1, 2.2)
     return sc
 
 
@@ -2778,15 +2821,9 @@ def build_set(data, info=None,
                                                              fcodes, all_)))
         if L:
             add("A", "แปลนหลังคา", lambda sh, _a: a_roof(sh, E, L))
-        if elevations_fit(E, L):
-            add("A", "รูปด้านหน้า รูปด้านขวา",
-                lambda sh, _a: a_elevations(sh, E, L, [(0, -1), (1, 0)]))
-            add("A", "รูปด้านหลัง รูปด้านซ้าย",
-                lambda sh, _a: a_elevations(sh, E, L, [(0, 1), (-1, 0)]))
-        else:
-            for side in ((0, -1), (1, 0), (0, 1), (-1, 0)):
-                add("A", ELEV_NAMES[side],
-                    lambda sh, _a, side=side: a_elevations(sh, E, L, [side]))
+        for side in ((0, -1), (1, 0), (0, 1), (-1, 0)):     # one to a sheet, as the standard sets
+            add("A", ELEV_NAMES[side],
+                lambda sh, _a, side=side: a_elevations(sh, E, L, [side]))
         for k in floors:
             cuts = section_cuts(E, k)
             title = " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด"
