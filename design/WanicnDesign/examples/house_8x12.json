@@ -1,0 +1,63 @@
+{
+ "name": "บ้านพักอาศัย 2 ชั้น 8x12 ม. (ตัวอย่าง)",
+ "floors": [
+  {"name": "FL0", "level": 0.0},
+  {"name": "FL1", "level": 0.6},
+  {"name": "FL2", "level": 3.8},
+  {"name": "ROOF", "level": 7.0}
+ ],
+ "grid_x": [4, 4, 4],
+ "grid_y": [4, 4],
+ "footings": [
+  {"name": "F1", "count": 12, "width": 1.0, "length": 1.0, "thickness": 0.40, "depth": 1.50,
+   "bars": "DB12@0.15", "piles": 1, "pile_type": "I-Pile 22x16 ม."}
+ ],
+ "columns": [
+  {"name": "C1 (ฐาน–FL1)", "count": 12, "width": 0.20, "depth": 0.20, "height": 1.70,
+   "main_bars": "4-DB12", "stirrup": "RB6@0.20"},
+  {"name": "C1 (FL1–FL2)", "count": 12, "width": 0.20, "depth": 0.20, "height": 3.20,
+   "main_bars": "4-DB12", "stirrup": "RB6@0.20"},
+  {"name": "C1 (FL2–ROOF)", "count": 12, "width": 0.20, "depth": 0.20, "height": 3.20,
+   "main_bars": "4-DB12", "stirrup": "RB6@0.20"}
+ ],
+ "beams": [
+  {"name": "B1", "floor": "FL1", "width": 0.20, "depth": 0.40, "length": 3.80, "count": 17,
+   "top_bars": "2-DB12", "bottom_bars": "2-DB12", "stirrup": "RB6@0.15"},
+  {"name": "B1", "floor": "FL2", "width": 0.20, "depth": 0.50, "length": 3.80, "count": 17,
+   "top_bars": "2-DB16", "bottom_bars": "3-DB12", "stirrup": "RB6@0.15"},
+  {"name": "RB1", "floor": "ROOF", "width": 0.15, "depth": 0.40, "length": 3.80, "count": 17,
+   "top_bars": "2-DB12", "bottom_bars": "2-DB12", "stirrup": "RB6@0.20"}
+ ],
+ "slabs": [
+  {"name": "GS1", "floor": "FL1", "area": 96.0, "thickness": 0.10, "bars": "RB9@0.20",
+   "on_ground": true, "short_span": 4.0},
+  {"name": "S1", "floor": "FL2", "area": 96.0, "thickness": 0.10, "bars": "RB9@0.20",
+   "on_ground": false, "short_span": 4.0}
+ ],
+ "openings": [
+  {"kind": "door", "name": "D1", "width": 1.80, "height": 2.10, "count": 1, "material": "wood"},
+  {"kind": "door", "name": "D2", "width": 0.90, "height": 2.00, "count": 5, "material": "wood"},
+  {"kind": "window", "name": "W1", "width": 1.20, "height": 1.10, "count": 8, "material": "aluminium"}
+ ],
+ "walls": [
+  {"name": "ผนังภายนอก FL1 (ประตูหน้า)", "floor": "FL1", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.5, "paint": "P1", "openings": ["D1"]},
+  {"name": "ผนังภายนอก FL1 (หน้าต่าง)", "floor": "FL1", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.5, "paint": "P1", "openings": ["W1"], "count": 4},
+  {"name": "ผนังภายนอก FL1 (ทึบ)", "floor": "FL1", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.5, "paint": "P1", "count": 5},
+  {"name": "ผนังภายใน FL1", "floor": "FL1", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.5, "paint": "P0", "openings": ["D2"], "count": 2},
+  {"name": "ผนังภายนอก FL2 (หน้าต่าง)", "floor": "FL2", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.4, "paint": "P1", "openings": ["W1"], "count": 4},
+  {"name": "ผนังภายนอก FL2 (ทึบ)", "floor": "FL2", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.4, "paint": "P1", "count": 6},
+  {"name": "ผนังภายใน FL2", "floor": "FL2", "length": 4.0, "height": 3.2,
+   "beam_depth": 0.4, "paint": "P0", "openings": ["D2"], "count": 3},
+  {"name": "ผนังห้องน้ำ (ฉาบด้านเดียว)", "floor": "FL2", "length": 2.0, "height": 3.2,
+   "beam_depth": 0.4, "mortar": "M1", "paint": "P0", "count": 1}
+ ],
+ "roof": {"plan_area": 140.0, "slope_deg": 30, "shape": "hip", "material": "concrete_tile",
+          "ridge_length": 4.0, "hip_length": 22.6, "valley_length": 0, "eave_length": 48.0,
+          "steel_kg": 1450}
+}

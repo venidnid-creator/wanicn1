@@ -1,0 +1,4 @@
+openpyxl>=3.1      # BOQ Excel export
+ezdxf>=1.4.4       # DXF drawing export
+pywin32>=306; sys_platform == "win32"   # drive a running AutoCAD (optional)
+pytest>=8.0        # tests
