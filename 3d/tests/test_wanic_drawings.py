@@ -55,8 +55,10 @@ def test_the_whole_set_numbered_like_the_standard_drawings():
     for t in ("ผังบริเวณ", "แปลนพื้นชั้น 1", "แปลนพื้นชั้น 2", "แปลนหลังคา",
               "รูปตัด ก-ก", "รูปตัด ข-ข", "แปลนฐานราก", "แปลนโครงหลังคา",
               "ตารางฐานราก เสา คาน พื้น", "แปลนระบบสุขาภิบาลชั้น 1",
-              "แปลนระบบไฟฟ้าชั้น 2", "แบบขยายห้องน้ำ"):
+              "แปลนระบบไฟฟ้าชั้น 2"):
         assert t in titles, t
+    assert any(t.startswith("แบบขยายห้องน้ำ WC.1") for t in titles)       # the standard's WC.n
+    assert any(t.startswith("รูปตัดห้องน้ำ WC.1") for t in titles)
     # Elevations: all four faces.
     joined = " ".join(titles)
     for t in ("รูปด้านหน้า", "รูปด้านหลัง", "รูปด้านซ้าย", "รูปด้านขวา"):

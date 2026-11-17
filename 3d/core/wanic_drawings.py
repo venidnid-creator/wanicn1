@@ -2856,6 +2856,12 @@ def build_set(data, info=None,
         f"ลาด {float(E['settings'].get('pitch') or 0):.0f}°"])
     codes = opening_codes(E)
     fcodes = finish_codes(E)
+    # a bathroom with no fittings placed is drawn with the standard set for
+    # its size (the drawings only — the model and the BOQ keep what is placed)
+    from core import wanic_std_sheets as STD
+    for k_, rm_ in bathrooms(E):
+        if not any(f["floor"] == k_ and _inside(f["fx"], rm_) for f in E["fixtures"]):
+            E["fixtures"] = list(E["fixtures"]) + STD.bath_fixtures(E, k_, rm_)
     plan: list = []                                  # (Sheet, painter)
 
     def add(group, title, fn, scale="1:100"):
@@ -2898,8 +2904,14 @@ def build_set(data, info=None,
                 lambda sh, _a: a_schedules(sh, E, codes, fcodes), "1:50")
         if any((s["room"].get("name") or "").startswith("ห้องน้ำ")
                for s in E["slabs"]):
-            add("A", "แบบขยายห้องน้ำ", lambda sh, _a: a_bathrooms(sh, E),
-                "1:50")
+            n_wc = 1
+            for grp in STD.bath_groups(E):              # one sheet per kind of bathroom, 1:25
+                names = ", ".join(f"WC.{n_wc + i}" for i in range(len(grp)))
+                add("A", f"แบบขยายห้องน้ำ {names}",
+                    lambda sh, _a, g=grp, n0=n_wc: _set_scale(sh, STD.a_bath_plan(sh, E, g, codes, n0, _a)), "1:25")
+                add("A", f"รูปตัดห้องน้ำ {names}",
+                    lambda sh, _a, g=grp, n0=n_wc: _set_scale(sh, STD.a_bath_sections(sh, E, g, n0)), "1:25")
+                n_wc += len(grp)
             baths = bathrooms(E)
             for i in range(0, len(baths), 2):
                 add("A", "รูปด้านภายในห้องน้ำ" + (f" ({i // 2 + 1})" if len(baths) > 2 else ""),
@@ -3810,8 +3822,10 @@ def bath_elevation(sh, E, k, rm, side, ox, oy, sc=50):
                         1.6, "center", "fixture")
         else:
             sh.rect(*P(lo, zb), *P(hi, zb + max(hh, 0.1)), "fixture", 0.3)
-        name = next((v for kk_, v in _FX_FACE.items() if t.startswith(kk_)), t)
-        sh.text(P((lo + hi) / 2, -0.16), f"{t} {name}", 1.5, "center", "fixture")
+        from core import wanic_std_sheets as STD
+        lab = STD.FIX_LABEL.get(t, t)                 # the standard's mark beside the fitting
+        z_lab = 0.45 if t.startswith("WC") else (zb + max(hh, 0.1) + 0.06 if not t.startswith("SH") else 2.05)
+        sh.text(P(hi + 0.03, z_lab), lab, 1.7, "left", "fixture")
     # outline, floor and ceiling
     sh.rect(*P(0, 0), *P(W, zc), "cut", 0.5)
     sh.line(P(-0.15, 0), P(W + 0.15, 0), "cut", 0.7)

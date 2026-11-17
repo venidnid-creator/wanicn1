@@ -1087,3 +1087,254 @@ def a_openings(sh, E, codes, cards):
                 sh.text((cx0 + 23, yb + rh / 2 - 0.8 - m * 2.3 + (1.15 if len(parts) > 1 else 0)),
                         part, 1.9 if len(parts) > 1 else 2.1)
         sh.line((cx0 + 21, ry), (cx0 + 21, cy1 - ch), "text", 0.13)
+
+
+# ---------------------------------------------------------------------------
+# A5-2 — แบบขยายห้องน้ำ WC.n (the standard's bathroom plan at 1:25)
+# ---------------------------------------------------------------------------
+
+def bath_fixtures(E, k, rm):
+    """The room's own fittings, or — when none are placed — the standard
+    set for its size (so the detail is never an empty box)."""
+    own = [f for f in E["fixtures"] if f["floor"] == k and D._inside(f["fx"], rm)]
+    if own:
+        return own
+    from core import wanic_catalog as CAT_
+    return [{"floor": k, "fx": {"type": c, "x": rm["x"] + px, "y": rm["y"] + py, "dir": d_}}
+            for c, px, py, d_ in CAT_.bathroom_layout(float(rm["w"]), float(rm["d"]))]
+
+
+def bath_groups(E) -> list:
+    """Bathrooms of the same size drawn once: [[(floor, room), …], …]."""
+    groups: list = []
+    for k, rm in D.bathrooms(E):
+        key = (round(float(rm["w"]), 2), round(float(rm["d"]), 2))
+        for g in groups:
+            if g[0] == key:
+                g[1].append((k, rm))
+                break
+        else:
+            groups.append([key, [(k, rm)]])
+    return [g[1] for g in groups]
+
+
+FIX_LABEL = {"WC1": "WC.1", "WC2": "WC.1", "LV": "LAV.1", "LV2": "LAV.2", "SH": "SH.", "SP": "SP.",
+             "FD": "FD.", "TR": "TR.", "TP": "PH.", "MR": "M.", "PL": "PL.", "GP": "GP.", "BT2": "BT."}
+
+
+def a_bath_plan(sh, E, group, codes, first_no, sheets=None):
+    """แปลนห้องน้ำ WC.n at 1:25: the walls round it (doors, windows, hatch),
+    the floor tiles, the fittings with their marks, the fall to the drain,
+    the room tag, the dimension chains and axes, the interior-elevation
+    marker — and the floor levels underneath, as the standard."""
+    k, rm = group[0]
+    t = float(E["settings"].get("wall_t") or 0.1)
+    x0, y0, x1, y1 = D.drawing_area()
+    W, Dd = float(rm["w"]), float(rm["d"])
+    sc = next((s_ for s_ in (25, 30, 40, 50) if (W + 2.4) * 1000 / s_ <= (x1 - x0) * 0.62
+               and (Dd + 2.6) * 1000 / s_ <= (y1 - y0) - 60), 50)
+    kk = 1000.0 / sc
+    cx = x0 + (x1 - x0) * 0.40
+    origin = (cx - W * kk / 2, y0 + 60 + max(0.0, ((y1 - y0 - 60) - Dd * kk) / 2 - 10))
+    v = D.View(sh, sc, (rm["x"], rm["y"]), origin)
+    # only the walls round this room, with their doors and windows
+    near = []
+    for w in E["walls"]:
+        if w["floor"] != k:
+            continue
+        (ax, ay), (bx, by) = w["p0"], w["p1"]
+        if (min(ax, bx) <= rm["x"] + W + 0.01 and max(ax, bx) >= rm["x"] - 0.01 and
+                min(ay, by) <= rm["y"] + Dd + 0.01 and max(ay, by) >= rm["y"] - 0.01):
+            near.append(w)
+    E2 = dict(E, walls=near, columns=[c for c in E["columns"] if c["floor"] == k and
+                                      rm["x"] - 0.3 <= c["x"] <= rm["x"] + W + 0.3 and
+                                      rm["y"] - 0.3 <= c["y"] <= rm["y"] + Dd + 0.3])
+    # the floor tiles, 0.30 m
+    step = 0.30
+    xi0, yi0, xi1, yi1 = rm["x"] + t / 2, rm["y"] + t / 2, rm["x"] + W - t / 2, rm["y"] + Dd - t / 2
+    xx = xi0 + step
+    while xx < xi1 - 0.02:
+        sh.line(v(xx, yi0), v(xx, yi1), "hatch", 0.1)
+        xx += step
+    yy = yi0 + step
+    while yy < yi1 - 0.02:
+        sh.line(v(xi0, yy), v(xi1, yy), "hatch", 0.1)
+        yy += step
+    n0 = len(sh.items)
+    D.draw_walls(sh, v, E2, k, t, codes, tags=False)
+    bx0, by0 = v(rm["x"] - 0.55, rm["y"] - 0.55)
+    bx1, by1 = v(rm["x"] + W + 0.55, rm["y"] + Dd + 0.55)
+    sh.items[n0:] = clip_items(sh.items[n0:], (bx0, by0, bx1, by1))
+    # the fittings and their marks
+    fx = bath_fixtures(E, k, rm)
+    for f in fx:
+        pts = D.fixture_rect(f["fx"])
+        q = [v(*p) for p in pts]
+        sh.fill(q, "mask", 1.0)
+    D.draw_fixtures(sh, v, {"fixtures": fx}, k, labels=False)
+    for f in fx:
+        c = v(float(f["fx"]["x"]), float(f["fx"]["y"]))
+        lab = FIX_LABEL.get(f["fx"].get("type", ""), f["fx"].get("type", ""))
+        sh.text((c[0], c[1] - 0.8), lab, 1.9, "center", "fixture")
+    # the fall to the floor drain
+    fd = next((f["fx"] for f in fx if f["fx"].get("type") == "FD"), None)
+    if fd is not None:
+        far = max(((xi0, yi0), (xi1, yi0), (xi0, yi1), (xi1, yi1)),
+                  key=lambda p: (p[0] - float(fd["x"])) ** 2 + (p[1] - float(fd["y"])) ** 2)
+        a = (far[0] + (float(fd["x"]) - far[0]) * 0.25, far[1] + (float(fd["y"]) - far[1]) * 0.25)
+        b = (far[0] + (float(fd["x"]) - far[0]) * 0.80, far[1] + (float(fd["y"]) - far[1]) * 0.80)
+        pa, pb = v(*a), v(*b)
+        sh.line(pa, pb, "dim", 0.18)
+        import math as _m
+        ang = _m.degrees(_m.atan2(pb[1] - pa[1], pb[0] - pa[0]))
+        ux, uy = (pb[0] - pa[0]), (pb[1] - pa[1])
+        L = _m.hypot(ux, uy) or 1
+        ux, uy = ux / L, uy / L
+        sh.line(pb, (pb[0] - ux * 2 + uy * 0.8, pb[1] - uy * 2 - ux * 0.8), "dim", 0.18)
+        sh.line(pb, (pb[0] - ux * 2 - uy * 0.8, pb[1] - uy * 2 + ux * 0.8), "dim", 0.18)
+        if ang > 90 or ang < -90:
+            ang += 180
+        sh.text(((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2 + 1.0), "ลาดเอียง 1:200", 2.0, "center", "dim",
+                angle=ang)
+    # the room tag
+    sl = next(s_ for s_ in E["slabs"] if s_["room"] is rm)
+    room_tag(sh, v(rm["x"] + W * 0.5, rm["y"] + Dd * 0.5), E, rm, sl, D.finish_codes(E), knockout=True)
+    # the chains: wall | inside | wall, and the overall between the axes
+    D.dim_chain(sh, v, [rm["x"] - t / 2, rm["x"] + t / 2, rm["x"] + W - t / 2, rm["x"] + W + t / 2],
+                rm["y"] + Dd + 0.55, "x")
+    D.dim_chain(sh, v, [rm["x"], rm["x"] + W], rm["y"] + Dd + 0.95, "x")
+    D.dim_chain(sh, v, [rm["y"] - t / 2, rm["y"] + t / 2, rm["y"] + Dd - t / 2, rm["y"] + Dd + t / 2],
+                rm["x"] + W + 0.55, "y")
+    D.dim_chain(sh, v, [rm["y"], rm["y"] + Dd], rm["x"] + W + 0.95, "y")
+    # the axes through the room's sides, with their names
+    xs, ys = D.grids(E)
+    for i, gx in enumerate(xs):
+        if rm["x"] - 0.01 <= gx <= rm["x"] + W + 0.01:
+            a, b = v(gx, rm["y"] - 0.5), v(gx, rm["y"] + Dd + 1.5)
+            sh.line(a, b, "grid", 0.13, True)
+            sh.circle((b[0], b[1] + 3.2), 3.2, "grid", 0.25)
+            sh.text((b[0], b[1] + 2.1), str(i + 1), 2.6, "center", "grid")
+    for j, gy in enumerate(ys):
+        if rm["y"] - 0.01 <= gy <= rm["y"] + Dd + 0.01:
+            a, b = v(rm["x"] - 1.3, gy), v(rm["x"] + W + 0.5, gy)
+            sh.line(a, b, "grid", 0.13, True)
+            sh.circle((a[0] - 3.2, a[1]), 3.2, "grid", 0.25)
+            sh.text((a[0] - 3.2, a[1] - 1.0), D.axis_name(j), 2.6, "center", "grid")
+    # the interior elevations: A B C D and their sheet
+    ref = sheet_ref(sheets, "รูปด้านภายในห้องน้ำ")
+    D.elev_marker(sh, v(rm["x"] + W * 0.5, rm["y"] + Dd * 0.25), ref, 3.4)
+    # the title and the floor levels
+    names = " , ".join(f"WC.{first_no + i}" for i in range(len(group)))
+    capx = cx - 50
+    caption_marks(sh, (capx, y0 + 40), f"แปลนห้องน้ำ {names}", f"1:{sc}", None, None, 100.0)
+    sh.text((capx, y0 + 22), "หมายเหตุ", 2.4)
+    for i, (kf, r_) in enumerate(group):
+        s_ = next(x_ for x_ in E["slabs"] if x_["room"] is r_)
+        lv = f"±{s_['z']:.2f}" if abs(s_["z"]) < 1e-6 else f"+{s_['z']:.2f}"
+        sh.text((capx + 16, y0 + 22 - i * 4.2),
+                f"- ระดับพื้นห้องน้ำ WC.{first_no + i} (ชั้น {kf + 1}) = {lv} ม. (ต่ำกว่าห้องข้างเคียง 0.05 ม.)", 2.3)
+    sh.scale = f"1:{sc}"
+    return sc
+
+
+def _clip_seg(a, b, box):
+    """Liang–Barsky: the part of a–b inside box, or None."""
+    x0, y0, x1, y1 = box
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t0, t1 = 0.0, 1.0
+    for p_, q_ in ((-dx, a[0] - x0), (dx, x1 - a[0]), (-dy, a[1] - y0), (dy, y1 - a[1])):
+        if abs(p_) < 1e-12:
+            if q_ < 0:
+                return None
+            continue
+        r = q_ / p_
+        if p_ < 0:
+            t0 = max(t0, r)
+        else:
+            t1 = min(t1, r)
+        if t0 > t1:
+            return None
+    return (a[0] + dx * t0, a[1] + dy * t0), (a[0] + dx * t1, a[1] + dy * t1)
+
+
+def clip_items(items, box):
+    """Drawing items kept to ``box`` (paper mm): lines and outlines cut at
+    its edge, fills / circles / arcs / text kept only when inside."""
+    x0, y0, x1, y1 = box
+    inside = lambda p: x0 <= p[0] <= x1 and y0 <= p[1] <= y1     # noqa: E731
+    out = []
+    for it in items:
+        kind = it[0]
+        if kind == "line":
+            ax, ay, bx, by = it[1]
+            c = _clip_seg((ax, ay), (bx, by), box)
+            if c:
+                out.append(("line", (c[0][0], c[0][1], c[1][0], c[1][1])) + tuple(it[2:]))
+        elif kind == "poly":
+            pts, closed = it[1], it[4]
+            segs = list(zip(pts, pts[1:] + (pts[:1] if closed else [])))
+            if all(inside(p) for p in pts):
+                out.append(it)
+                continue
+            for a, b in segs:
+                c = _clip_seg(a, b, box)
+                if c:
+                    out.append(("line", (c[0][0], c[0][1], c[1][0], c[1][1]), it[2], it[3], it[5]))
+        elif kind == "fill":
+            if all(inside(p) for p in it[1]):
+                out.append(it)
+        elif kind in ("circle", "arc"):
+            if inside(it[1][:2]):
+                out.append(it)
+        elif kind == "text":
+            if inside(it[1]):
+                out.append(it)
+        else:
+            out.append(it)
+    return out
+
+
+def a_bath_sections(sh, E, group, first_no):
+    """รูปตัดห้องน้ำ WC.n — two of its walls at 1:25 side by side (the two
+    with the most fittings), each with its floor below, as the standard."""
+    k, rm = group[0]
+    x0, y0, x1, y1 = D.drawing_area()
+    mid = (x0 + x1) / 2
+    sh.line((mid, y0), (mid, y1), "frame", 0.25)
+    ix0, iy0, ix1, iy1 = B.room_inner(E, rm, k)
+    fx = [f for f in E["fixtures"] if f["floor"] == k and D._inside(f["fx"], rm)]
+
+    def wall_of(f):
+        x, y = float(f["fx"]["x"]), float(f["fx"]["y"])
+        d_ = [y - iy0, ix1 - x, iy1 - y, x - ix0]
+        return d_.index(min(d_))
+    count = [sum(1 for f in fx if wall_of(f) == s_) for s_ in range(4)]
+    sides = sorted(range(4), key=lambda s_: -count[s_])[:2]
+    zc = B.ceiling_z(E, k) - k * E["H"]
+    names = ",".join(f"WC.{first_no + i}" for i in range(len(group)))
+    used = 25
+    for i, side in enumerate(sides):
+        Wm = (ix1 - ix0) if side in (0, 2) else (iy1 - iy0)
+        sc = next((s_ for s_ in (25, 30, 40, 50) if Wm * 1000 / s_ <= (mid - x0) - 50
+                   and zc * 1000 / s_ <= (y1 - y0) - 90), 50)
+        used = max(used, sc)
+        kk = 1000.0 / sc
+        bx0 = x0 + i * (mid - x0)
+        ox = bx0 + ((mid - x0) - Wm * kk) / 2 + 6
+        oy = y0 + 70
+        D.bath_elevation(sh, E, k, rm, side, ox, oy, sc)
+        # the slab under the floor and the wall stubs, cut
+        sh.fill([(ox - 4, oy - 1.5 * kk / 10), (ox + Wm * kk + 4, oy - 1.5 * kk / 10), (ox + Wm * kk + 4, oy),
+                 (ox - 4, oy)], "hatch", 0.72)
+        sh.rect(ox - 4, oy - 1.5 * kk / 10, ox + Wm * kk + 4, oy, "cut", 0.35)
+        sl = next(s_ for s_ in E["slabs"] if s_["room"] is rm)
+        room_tag(sh, (ox - 20, oy + 16.0), E, rm, sl, D.finish_codes(E))    # beside it, clear of the fittings
+        sh.line((ox - 9, oy + 13.0), (ox + 3, oy + 6.0), "text", 0.13)
+        sh.circle((ox + 3, oy + 6.0), 0.45, "text", 0.18)
+        caption_marks(sh, (bx0 + 18, y0 + 28), f"รูปตัดห้องน้ำ {names}", f"1:{sc}", None, None, 110.0)
+        hex_ = (bx0 + 18 + 110 + 6, y0 + 30)
+        sh.poly([(hex_[0] - 4.5, hex_[1] - 2.5), (hex_[0] + 4.5, hex_[1] - 2.5), (hex_[0], hex_[1] + 4.5)],
+                "text", 0.3)
+        sh.text((hex_[0], hex_[1] - 1.6), str(i + 1), 2.6, "center", "text", True)
+    sh.scale = f"1:{used}"
+    return used

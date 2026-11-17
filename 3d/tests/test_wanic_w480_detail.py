@@ -455,7 +455,7 @@ def test_building_sections_and_the_front_matter():
     for want in ("รูปตัด ก-ก (ตัดผ่านห้องน้ำ)", "รูปตัด ข-ข", "ระดับพื้นชั้น 1",
                  "ระดับหลังคานหลังคา", "ระดับหลังอกไก่", "ห้องน้ำ", "2.60", "ระดับดินเดิม"):
         assert want in t, want
-    one = [s for s in D.build_set(d, {"project": "บ้านทดสอบ"}, ("A",)) if s.title.startswith("รูปตัด")]
+    one = [s for s in D.build_set(d, {"project": "บ้านทดสอบ"}, ("A",)) if s.title.startswith("รูปตัด") and "ห้องน้ำ" not in s.title]
     assert [s.title for s in one][:2] == ["รูปตัด ก-ก", "รูปตัด ข-ข"]      # one to a sheet, 1:100
     assert all(s.scale == "1:100" for s in one)
     full = D.build_set(d, {"project": "บ้านทดสอบ"})
@@ -609,7 +609,7 @@ def test_bath_elevations_and_rebar_details_in_the_set():
     el = titles["รูปด้านภายในห้องน้ำ"]
     txt = " ".join(el.texts())
     assert "รูปด้านภายใน A" in txt and "รูปด้านภายใน D" in txt
-    assert "WC1 โถส้วม" in txt and "กระจกเงา" in txt
+    assert "WC.1" in txt and "กระจกเงา" in txt                     # the standard marks
     rb = titles["แบบขยายเหล็กเสริมฐานรากและคาน"]
     txt = " ".join(rb.texts())
     assert "รูปตัดฐานราก F1" in txt and "รูปตัด A-A (ที่หัวเสา)" in txt
