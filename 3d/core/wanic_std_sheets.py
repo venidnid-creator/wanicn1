@@ -881,3 +881,63 @@ def caption_marks(sh, p, title, scale_txt, mark, ref, width=95.0):
     if mark:
         for i in range(2 if mark != "elev" else 1):
             section_mark(sh, (x + width - 12 + i * 10, y + 2.0), ref[0], ref[1], (0.0, 1.0))
+
+
+def section_stairs(sh, E, P, U, C, at, rect):
+    """The stairs on a section: the flight the plane cuts as a hatched
+    waist slab with its steps, the flights and landings beyond in outline,
+    the landings cut, and the railing (rail and balusters) — as the
+    standard section through the stair."""
+    s = E["settings"]
+    for e in E["stairs"]:
+        lay = B.stair_layout(e["st"], s)
+        z_f = e["floor"] * E["H"]
+        R, g = lay["R"], lay["g"]
+        t = float(s.get("stair_t") or 0.15)
+        for fl in lay["flights"]:
+            (px, py), (dx, dy), n, w = fl["p0"], fl["d"], fl["n"], fl["w"]
+            c_mid = C(px, py)
+            du = U(dx, dy)
+            if abs(du) < 0.5:
+                continue                               # runs across the plane: not in profile
+            u0 = U(px, py)
+            z0 = z_f + fl["z0"]
+            pts = [(u0, z0 + 0.0)]
+            for i in range(n):
+                u, z = u0 + du * g * i, z0 + R * (i + 1)
+                pts += [(u, z), (u + du * g, z)]
+            top = [P(*q) for q in pts]
+            cut = abs(c_mid - at) <= w / 2 + 1e-6
+            beyond = c_mid - w / 2 > at
+            if cut:
+                # the waist slab under the nosings
+                import math as _m
+                L_ = g * n
+                ang = _m.atan2(R * n, L_)
+                off = t / _m.cos(ang)
+                ue = u0 + du * g * n
+                poly = top + [P(ue, z0 + R * n - off), P(u0 + du * min(g, off * 1.7), z0)]
+                sh.fill(poly, "hatch", 0.72)
+                sh.poly(poly, "cut", 0.35)
+            elif beyond:
+                sh.poly(top, "wall", 0.18, closed=False)
+                ue = u0 + du * g * n
+                sh.line(P(ue, z0 + R * n - t * 1.15), P(u0, z0 - t * 1.15), "wall", 0.18)
+        for ld in lay["landings"]:
+            xs_ = [q[0] for q in ld["pts"]]
+            ys_ = [q[1] for q in ld["pts"]]
+            c0, c1 = (min(xs_), max(xs_)) if C(1, 0) else (min(ys_), max(ys_))
+            u_a, u_b = (min(ys_), max(ys_)) if C(1, 0) else (min(xs_), max(xs_))
+            z = z_f + ld["z"]
+            if c0 - 1e-6 <= at <= c1 + 1e-6:
+                rect(u_a, z - t, u_b, z, "cut", 0.35, 0.72)
+            elif c0 > at:
+                sh.rect(*P(u_a, z - t), *P(u_b, z), "wall", 0.18)
+        # the railing seen: the rail, the balusters
+        rl = B.stair_railing(e["st"], s)
+        for a_, b_ in rl["rails"]:
+            if min(C(a_[0], a_[1]), C(b_[0], b_[1])) >= at - 0.6:
+                sh.line(P(U(a_[0], a_[1]), z_f + a_[2]), P(U(b_[0], b_[1]), z_f + b_[2]), "door", 0.35)
+        for a_, b_ in rl["posts"]:
+            if C(a_[0], a_[1]) >= at - 0.6:
+                sh.line(P(U(a_[0], a_[1]), z_f + a_[2]), P(U(b_[0], b_[1]), z_f + b_[2]), "door", 0.13)

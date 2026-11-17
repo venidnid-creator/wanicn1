@@ -1622,8 +1622,18 @@ def section_cuts(E, k):
     at2 = off_centre(float(r2["y"]), float(r2["y"]) + float(r2["d"])) if ax2 == "y" else \
         off_centre(float(r2["x"]), float(r2["x"]) + float(r2["w"]))
     a, b = THAI_CUTS[(2 * k) % 10], THAI_CUTS[(2 * k + 1) % 10]
-    return [(ax1, at1, f"{a}-{a}", first.get("name") or "ห้อง"),
-            (ax2, at2, f"{b}-{b}", r2.get("name") or "ห้อง")]
+    cuts = [[ax1, at1, f"{a}-{a}", first.get("name") or "ห้อง"],
+            [ax2, at2, f"{b}-{b}", r2.get("name") or "ห้อง"]]
+    # through the stair along its run, so the flights show in profile
+    sts = [e for e in E["stairs"] if e["floor"] in (k, k - 1)]
+    if sts:
+        lay = B.stair_layout(sts[0]["st"], E["settings"])
+        f0 = lay["flights"][0]
+        ax_s = "x" if abs(f0["d"][1]) > abs(f0["d"][0]) else "y"
+        at_s = f0["p0"][0] if ax_s == "x" else f0["p0"][1]
+        i = 0 if cuts[0][0] == ax_s else 1
+        cuts[i][1], cuts[i][3] = at_s, "บันได"
+    return [tuple(c) for c in cuts]
 
 
 def _level(sh, p, z, label, left=True, ty=None):
@@ -1658,7 +1668,7 @@ def _levels(sh, P, u, marks, left=False):
         last = ty
 
 
-def section_detail(sh, E, L, cut, box):
+def section_detail(sh, E, L, cut, box, sheets=None):
     """One building section drawn in detail: footings, ground beams,
     slabs, cut walls (masonry hatched, plaster), cut beams, the doors and
     windows and columns beyond, ceilings, the roof frame (ties, posts,
@@ -1727,7 +1737,15 @@ def section_detail(sh, E, L, cut, box):
         a, b = (rm["y"], rm["y"] + rm["d"]) if axis == "x" else (rm["x"], rm["x"] + rm["w"])
         t = float(lib.get(sl["mark"], {}).get("t", 0.1))
         top = sl["z"] - sl.get("drop", 0.0)
-        rect(float(a), top - t, float(b), top, fill=0.70)
+        spans = [(float(a), float(b))]
+        for hx0, hy0, hx1, hy1 in B.holes_by_floor(E).get(sl["floor"], []):
+            c0, c1 = (hx0, hx1) if axis == "x" else (hy0, hy1)
+            u0, u1 = (hy0, hy1) if axis == "x" else (hx0, hx1)
+            if c0 - 1e-6 <= at <= c1 + 1e-6:          # the stair opening: no slab there
+                spans = [q for sp in spans for q in ((sp[0], min(sp[1], u0)), (max(sp[0], u1), sp[1]))
+                         if q[1] - q[0] > 0.01]
+        for a_s, b_s in spans:
+            rect(a_s, top - t, b_s, top, fill=0.70)
     # beams cut (running across the plane) and beams beyond (along it)
     for bm in E["beams"]:
         (x0_, y0_), (x1_, y1_) = bm["p0"], bm["p1"]
@@ -1837,6 +1855,25 @@ def section_detail(sh, E, L, cut, box):
                 if a < ue < b:
                     busy.append((ue - el["w"] / 2 - 0.15, ue + el["w"] / 2 + 0.15))
         ut = (a + b) / 2
+        stair_here = False
+        for e_ in E["stairs"]:
+            if e_["floor"] not in (kf, kf - 1):
+                continue
+            rx = B.stair_layout(e_["st"], s)["rect"]
+            cc = [C(q[0], q[1]) for q in rx]
+            uu = [U(q[0], q[1]) for q in rx]
+            if min(cc) - 0.05 <= at <= max(cc) + 0.05 and min(max(uu), b) - max(min(uu), a) > 0.3:
+                stair_here = True
+        if stair_here:
+            # the stair fills the room: the tag outside, on a leader (as the standard)
+            tip = P(b - 0.3, z + 1.5)
+            q = (P(grid_u[-1], 0)[0] + 16, tip[1])
+            sh.circle(tip, 0.45, "text", 0.18)
+            sh.line(tip, (q[0] - 14, q[1]), "text", 0.13)
+            STD_ = __import__("core.wanic_std_sheets", fromlist=["x"])
+            STD_.room_tag(sh, (q[0], q[1]), E, rm, next((x for x in E["slabs"] if x["room"] is rm), sl),
+                          finish_codes(E))
+            continue
         if busy:                                   # the middle of the widest free stretch
             free, s0 = [], a + 0.25
             for lo_b, hi_b in sorted(busy) + [(b - 0.25, b)]:
@@ -1845,6 +1882,8 @@ def section_detail(sh, E, L, cut, box):
             best = max(free)
             ut = best[1] if best[0] >= 2.1 else (a + b) / 2
         STD.room_tag(sh, P(ut, z + 0.62), E, rm, sl_, finish_codes(E), knockout=True)
+    from core import wanic_std_sheets as STD
+    STD.section_stairs(sh, E, P, U, C, at, rect)
     # roof: the skin cut, the frame beyond (rafters, ties, posts), the
     # purlins and the wall plates cut
     if L:
@@ -1931,6 +1970,21 @@ def section_detail(sh, E, L, cut, box):
         hi_z = max(max(sg[0][1], sg[1][1]) for sg in segs)
         if hi_z - lo_z > 0.3:
             STD.slope_angle(sh, P, min(ru), lo_z, float(s.get("pitch") or 0), 1, k)
+            # the eaves' overhangs above the roof (as the standard) and the eave detail tag
+            wt = float(s.get("wall_t") or 0.1) / 2
+            for ue, uw in ((min(ru), grid_u[0] - wt), (max(ru), grid_u[-1] + wt)):
+                y = P(0, lo_z + 1.0)[1]
+                a_, b_ = sorted((P(ue, 0)[0], P(uw, 0)[0]))
+                sh.line((a_, y), (b_, y), "dim", 0.13)
+                for xq in (a_, b_):
+                    sh.line((xq, y - 1.2), (xq, y + 1.2), "dim", 0.13)
+                    sh.line((xq - 0.7, y - 0.7), (xq + 0.7, y + 0.7), "dim", 0.25)
+                    sh.line((xq, y - 1.2), (xq, P(0, lo_z)[1]), "dim", 0.1, True)
+                sh.text(((a_ + b_) / 2, y + 0.9), f"{abs(uw - ue):.2f}", 1.9, "center", "dim")
+            ref = STD.sheet_ref(sheets, "แบบขยายเชิงชาย")
+            if ref:
+                q = P(min(ru), lo_z + 1.9)
+                STD.detail_ref(sh, (q[0] - 4, q[1] + 3), "R1", ref, "เชิงชาย")
     return sc
 
 
@@ -1982,10 +2036,10 @@ def roof_leaders(sh, E, L, P, U, C, axis, at, lx):
         sh.text((lx + 1.5, ty), text, 1.9, "left", "text")
 
 
-def a_section_one(sh, E, L, cut):
+def a_section_one(sh, E, L, cut, sheets=None):
     """One section on its sheet at 1:100 (the standard sets)."""
     x0, y0, x1, y1 = drawing_area()
-    sc = section_detail(sh, E, L, cut, (x0, y0 + 14, x1, y1))
+    sc = section_detail(sh, E, L, cut, (x0, y0 + 14, x1, y1), sheets)
     from core import wanic_std_sheets as STD
     STD.caption_marks(sh, ((x0 + x1) / 2 - 50, y0 + 10), f"รูปตัด {cut[2]}", f"1:{sc}", "section",
                       (cut[2].split("-")[0], sh.code))
@@ -2827,7 +2881,7 @@ def build_set(data, info=None,
                 lambda sh, _a, side=side: a_elevations(sh, E, L, [side]))
         for k in floors:                              # one section to a sheet, as the standard sets
             for cut in section_cuts(E, k):
-                add("A", f"รูปตัด {cut[2]}", lambda sh, _a, cut=cut: _set_scale(sh, a_section_one(sh, E, L, cut)))
+                add("A", f"รูปตัด {cut[2]}", lambda sh, _a, cut=cut: _set_scale(sh, a_section_one(sh, E, L, cut, _a)))
         if info.get("axo_sections"):
             for title, paint in axo_sheets(data):
                 add("A", title, paint, "-")
