@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLis
                                QWidget)
 
 from ..structure.building import Building, Foundation, Level, Roof
-from .pages import FoundationPage, GridPage, LevelsPage, ProjectPage, ResultsPage, RoofPage
+from .pages import FoundationPage, GridPage, LevelsPage, ProjectPage, ResultsPage, RoofPage, SeismicPage
 from .plan_view import PlanView
 from .view3d import View3D
 
@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
         self.steps.setMaximumWidth(240)
         self.pages = QStackedWidget()
         self.page_list = [ProjectPage(), GridPage(), LevelsPage(), FoundationPage(), RoofPage(),
-                          ResultsPage()]
+                          SeismicPage(), ResultsPage()]
         for p in self.page_list:
             self.steps.addItem(p.title)
             self.pages.addWidget(p)

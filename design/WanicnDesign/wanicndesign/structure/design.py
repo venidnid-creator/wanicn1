@@ -154,6 +154,7 @@ class BeamResult:
     refs: str = ""
     line_xy: tuple = ()            # (x0, y0, x1, y1) in plan, m
     kind: str = "beam"             # beam, secondary
+    m_neg_live: float = 0.0        # live-load share of m_neg (earthquake combinations)
 
 
 @dataclass
@@ -172,6 +173,7 @@ class ColumnResult:
     note: str = ""
     live_reduced: float = 0.0      # kg of live load taken off [MR6-16]
     refs: str = ""
+    live: float = 0.0              # live-load share of ``load`` (after reduction), kg
 
 
 @dataclass
@@ -204,12 +206,14 @@ class DesignResult:
     columns: list = field(default_factory=list)
     footings: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    seismic: object = None         # seismic.SeismicResult when the earthquake check ran
 
     @property
     def ok(self) -> bool:
         groups = [self.slabs, self.beams, self.columns, self.footings]
         return all(x.ok for g in groups for x in g) and \
-            (self.roof is None or (self.roof.purlin.ok and self.roof.rafter.ok))
+            (self.roof is None or (self.roof.purlin.ok and self.roof.rafter.ok)) and \
+            (self.seismic is None or self.seismic.ok)
 
     def total_piles(self) -> int:
         return sum(f.piles for f in self.footings)
@@ -221,6 +225,11 @@ class DesignResult:
             items += [self.roof.purlin, self.roof.rafter]
         for x in items + self.slabs + self.beams + self.columns + self.footings:
             for c in (x.refs or "").split(","):
+                c = c.strip()
+                if c and c not in out:
+                    out.append(c)
+        if self.seismic:
+            for c in self.seismic.refs.split(",") + ["MR-EQ2564"]:
                 c = c.strip()
                 if c and c not in out:
                     out.append(c)
@@ -646,8 +655,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
                 break
             h = need
-        _sp, lreac = continuous_beam(lengths, [sg["w"] for sg in lsegs],
-                                     [_local(sg, fl, L) for sg, fl, L in zip(lsegs, flips, lengths)])
+        lspans, lreac = continuous_beam(lengths, [sg["w"] for sg in lsegs],
+                                        [_local(sg, fl, L) for sg, fl, L in zip(lsegs, flips, lengths)])
         for k, ((a, c), sp) in enumerate(zip(zip(run, run[1:]), spans)):
             m_neg = max(0.0, -sp.m_left, -sp.m_right)
             d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, m_neg, sp.m_pos,
@@ -665,7 +674,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             xy = (b.xs[a[0]], b.ys[a[1]], b.xs[c[0]], b.ys[c[1]])
             results.append(BeamResult(lv.name, line, f"{b.node_name(*a)}-{b.node_name(*c)}", "", bw, h,
                                       sp.length, sp.w, m_neg, sp.m_pos, max(sp.v_left, sp.v_right), d_req,
-                                      at, ab, top, bot, stir, ok, " ; ".join(notes), hmin, refs, xy))
+                                      at, ab, top, bot, stir, ok, " ; ".join(notes), hmin, refs, xy,
+                                      m_neg_live=max(0.0, -lspans[k].m_left, -lspans[k].m_right)))
         for node, rx, lx in zip(run, reac, lreac):
             reactions[node] = reactions.get(node, 0.0) + rx
             live_reac[node] = live_reac.get(node, 0.0) + lx
@@ -857,15 +867,17 @@ def design(b: Building) -> DesignResult:
     elev = [lv.elevation for lv in b.levels]
     stub = b.foundation.depth - 0.40 + elev[0]
     col_refs = cite(mat.ref, "EIT1007-COL", "EIT1007-TIE", "UNIT-WT", "MR6-16" if reduce else "")
+    col_at = {}
     for i, j in b.nodes():
         name = b.node_name(i, j)
-        above = reduced = 0.0
+        above = reduced = live = 0.0
         bw, h = b.column_width, b.column_depth
         segs = []
         for li in reversed(range(n_lv)):
             r = ll_reduction(n_lv - 1 - li) if reduce else 0.0           # [MR6-16]
             cut = node_live[li].get((i, j), 0.0) * r
             above += node_reac[li].get((i, j), 0.0) - cut
+            live += node_live[li].get((i, j), 0.0) - cut
             reduced += cut
             if li == 0:
                 hgt, seg = stub, f"ฐานราก–{b.levels[0].name}"
@@ -877,9 +889,19 @@ def design(b: Building) -> DesignResult:
             if reduced:
                 note = (note + " ; " if note else "") + f"ลดน้ำหนักจร {reduced:,.0f} กก."
             segs.append(ColumnResult(name, seg, hgt, above, cb, ch, pg, bars, ties, ok=ok, note=note,
-                                     live_reduced=reduced, refs=col_refs))
+                                     live_reduced=reduced, refs=col_refs, live=live))
+            col_at[(i, j, li)] = segs[-1]
         res.columns.extend(reversed(segs))
         res.footings.append(design_footing(b, mat, name, above, bw, h))
+    if b.seismic.enabled and n_lv > 1:
+        from .seismic import run as seismic_run
+        node_dead = [{n: node_reac[li][n] - node_live[li].get(n, 0.0) for n in node_reac[li]}
+                     for li in range(n_lv)]
+        res.seismic = seismic_run(b, res, mat, node_dead, node_live, col_at, elev[0] - stub)
+        res.warnings += [w[3:] if w.startswith("NG ") else w for w in res.seismic.warnings]
+        for s in res.seismic.storeys:
+            if not s.ok:
+                res.warnings.append(f"แผ่นดินไหว ชั้น {s.level}: {s.note}")
     _assign_marks(res.columns, lambda c: (c.b, c.h, c.bars, c.ties), "C", lambda c: c.load)
     _assign_marks(res.footings, lambda f: (f.piles, f.pile, f.width, f.length, f.thickness,
                                            f.bars_x, f.bars_y), "F", lambda f: f.load)

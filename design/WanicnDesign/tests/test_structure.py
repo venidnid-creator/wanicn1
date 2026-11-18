@@ -276,3 +276,130 @@ def test_floor_equilibrium_whole_building():
     perim = 2 * (b.xs[-1] + b.ys[-1])
     total = W * area + 2400 * lv.beam_width * lv.beam_depth * beam_len + 180 * wall_h * perim
     assert sum(reac.values()) == pytest.approx(total, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Earthquake — มยผ. 1301/1302-61 (ASCE 7-05 basis), hand checks
+# ---------------------------------------------------------------------------
+
+def test_site_coefficients_and_design_category():
+    from wanicndesign.structure.seismic import design_category, site_coefficients
+    fa, fv = site_coefficients(0.30, 0.10, "C")
+    assert (fa, fv) == pytest.approx((1.2, 1.7))
+    fa, fv = site_coefficients(0.625, 0.15, "D")          # midway between table columns
+    assert fa == pytest.approx(1.3) and fv == pytest.approx(2.2)
+    assert design_category(0.10, 0.05, "II") == "A"
+    assert design_category(0.24, 0.113, "II") == "B"
+    assert design_category(0.24, 0.113, "IV") == "C"
+    assert design_category(0.40, 0.10, "II") == "C"
+    assert design_category(0.20, 0.25, "II") == "D"
+
+
+def test_plane_frame_against_closed_form():
+    from wanicndesign.structure.frame2d import Member, solve_frame
+    E, I, h, P = 2.0e9, 1e-4, 3.0, 1000.0
+    # cantilever column: δ = P h³ / 3EI
+    disp, f = solve_frame([(0, 0), (0, h)], [Member(0, 1, E, 1.0, I)], {0}, {1: (P, 0, 0)})
+    assert disp[1][0] == pytest.approx(P * h ** 3 / (3 * E * I), rel=1e-6)
+    assert abs(f[0][2]) == pytest.approx(P * h, rel=1e-6)                  # base moment
+    # portal with a very stiff beam: δ = P h³ / 24EI, each column takes P/2
+    nodes = [(0, 0), (0, h), (4, h), (4, 0)]
+    mem = [Member(0, 1, E, 1.0, I), Member(1, 2, E, 1.0, I * 1e6), Member(3, 2, E, 1.0, I)]
+    disp, f = solve_frame(nodes, mem, {0, 3}, {1: (P, 0, 0)})
+    assert disp[1][0] == pytest.approx(P * h ** 3 / (24 * E * I), rel=1e-3)
+    assert abs(f[0][1]) == pytest.approx(P / 2, rel=1e-3)
+
+
+def test_column_interaction_points():
+    from wanicndesign.structure.seismic import column_bars, phi_mn_at, phi_mn_beam, pm_curve
+    fc, fy = 210.0, 4000.0
+    bars = column_bars(4, "DB16", 30.0, 30.0)
+    ast = sum(a for _y, a in bars)
+    curve = pm_curve(30.0, 30.0, bars, fc, fy)
+    p0 = 0.80 * 0.65 * (0.85 * fc * (900 - ast) + fy * ast)
+    assert curve[1] == pytest.approx(p0)
+    assert phi_mn_at(curve, p0 * 1.01) == 0.0
+    # pure bending: about the beam value of the tension bars (compression bars add a little)
+    d = 30.0 - (4.0 + 0.6 + 0.8)
+    m_beam = phi_mn_beam(ast / 2, 30.0, d, fc, fy)
+    assert m_beam * 0.98 <= phi_mn_at(curve, 0.0) <= m_beam * 1.12
+    # a moderate axial load raises the moment capacity (below the balance point)
+    assert phi_mn_at(curve, 20000.0) > phi_mn_at(curve, 0.0)
+
+
+def _quake_building():
+    b = Building.load(BUILDING)
+    b.seismic.enabled = True
+    b.seismic.ss, b.seismic.s1, b.seismic.site_class = 0.30, 0.10, "C"
+    return b
+
+
+def test_equivalent_static_forces():
+    res = design(_quake_building())
+    q = res.seismic
+    assert q.sds == pytest.approx(2 / 3 * 1.2 * 0.30)
+    assert q.sd1 == pytest.approx(2 / 3 * 1.7 * 0.10)
+    assert q.category == "B"
+    assert q.period == pytest.approx(0.02 * 6.2)
+    assert q.cs == pytest.approx(q.sds * 1.0 / 5.0)                       # Sa = SDS, I = 1, R = 5
+    assert q.base_shear == pytest.approx(q.cs * q.weight)
+    assert sum(s.fx for s in q.storeys) == pytest.approx(q.base_shear)
+    wh = [s.wx * s.hx for s in q.storeys]                                  # k = 1
+    for s, x in zip(q.storeys, wh):
+        assert s.fx == pytest.approx(q.base_shear * x / sum(wh))
+    assert q.storeys[0].vx == pytest.approx(q.base_shear)
+    assert "DPT1301" in res.all_refs() and "MR-EQ2564" in res.all_refs()
+    assert any(c.kind == "footing" for c in q.checks) and any(c.kind == "beam" for c in q.checks)
+
+
+def test_seismic_weight_is_the_dead_load_above_the_base():
+    b = _quake_building()
+    res = design(b)
+    dead_cols = sum(2400 * c.b * c.h * c.height for c in res.columns if not c.segment.startswith("ฐานราก"))
+    # beams' dead reactions at FL2 and ROOF plus all columns above GB; half of the GB–FL2 columns
+    # belong to GB (the base), so W lies between these bounds
+    assert res.seismic.weight > 0
+    w_gb_half = sum(2400 * c.b * c.h * c.height / 2 for c in res.columns if c.segment.startswith("GB"))
+    assert res.seismic.weight + w_gb_half > dead_cols
+
+
+def test_strong_shaking_adds_steel_or_fails_clearly():
+    b = _quake_building()
+    b.seismic.mode, b.seismic.sds, b.seismic.sd1 = "direct", 0.49, 0.19     # category C, IMF allowed
+    b.seismic.category = "III"                                                # Δa = 0.015 h
+    res = design(b)
+    q = res.seismic
+    assert q.category == "C"
+    assert not any(w.startswith("NG") for w in q.warnings)
+    changed = [c for c in res.columns if "แผ่นดินไหว" in c.note] + \
+              [x for x in res.beams if "แผ่นดินไหว" in x.note]
+    assert changed                               # something was strengthened
+    assert all(c.ratio <= 1.0 for c in q.checks if c.ok)
+    assert all(max(s.drift_x, s.drift_y) <= s.limit for s in q.storeys)    # columns grew for drift
+    assert any("การเคลื่อนตัว" in c.note for c in res.columns)
+
+
+def test_category_d_needs_a_special_frame():
+    b = _quake_building()
+    b.seismic.mode, b.seismic.sds, b.seismic.sd1 = "direct", 0.60, 0.30
+    res = design(b)
+    assert res.seismic.category == "D" and not res.seismic.ok and not res.ok
+
+
+def test_seismic_off_by_default_and_round_trip(tmp_path):
+    b = Building.load(BUILDING)
+    assert design(b).seismic is None
+    b2 = _quake_building()
+    p = tmp_path / "b.json"
+    b2.save(str(p))
+    assert Building.load(str(p)).seismic.ss == pytest.approx(0.30)
+
+
+def test_seismic_report_sheets(tmp_path):
+    from openpyxl import load_workbook
+    from wanicndesign.structure.report import write_report
+    res = design(_quake_building())
+    p = tmp_path / "r.xlsx"
+    write_report(res, str(p))
+    names = load_workbook(p).sheetnames
+    assert {"แผ่นดินไหว", "แผ่นดินไหว-ชั้น", "แผ่นดินไหว-ชิ้นส่วน"} <= set(names)

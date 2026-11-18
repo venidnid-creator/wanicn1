@@ -61,6 +61,21 @@ class Foundation:
 
 
 @dataclass
+class Seismic:
+    """Earthquake data of the site — มยผ. 1301/1302-61 (see seismic.py)."""
+    enabled: bool = False
+    mode: str = "map"              # "map": Ss, S1 and site class; "direct": SDS, SD1 (and Sa) entered
+    ss: float = 0.0                # spectral acceleration at 0.2 s, g (map of the standard)
+    s1: float = 0.0                # at 1.0 s, g
+    site_class: str = "D"
+    sds: float = 0.0               # direct mode
+    sd1: float = 0.0
+    sa: float = 0.0                # direct mode, optional: Sa at the building period (Bangkok basin)
+    category: str = "II"           # risk category I–IV → importance factor
+    system: str = "IMF"            # "OMF" or "IMF" reinforced concrete moment frame
+
+
+@dataclass
 class Building:
     name: str
     grid_x: list = field(default_factory=list)     # spacings 1-2, 2-3, … (m)
@@ -77,6 +92,7 @@ class Building:
     design_code: str = "EIT1007"   # "EIT1007" (วสท. 1007-34) or "MR6" (กฎกระทรวง ฉบับที่ 6)
     occupancy: str = "house"       # standards.LIVE_LOADS key
     ll_reduction: bool = True      # กฎกระทรวง ฉบับที่ 6 ข้อ 16, columns and footings
+    seismic: Seismic = field(default_factory=Seismic)
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -270,6 +286,7 @@ class Building:
             design_code=d.get("design_code", "EIT1007"),
             occupancy=d.get("occupancy", "house"),
             ll_reduction=d.get("ll_reduction", True),
+            seismic=Seismic(**d.get("seismic", {})),
         )
 
     @classmethod

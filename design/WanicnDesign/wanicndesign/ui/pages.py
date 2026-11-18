@@ -370,8 +370,84 @@ class RoofPage(Page):
         r.rafter_spacing = self.rafter.value()
 
 
+class SeismicPage(Page):
+    title = "6. แผ่นดินไหว"
+    hint = ("วิธีแรงสถิตเทียบเท่าตาม มยผ. 1301/1302-61 · ค่า Ss, S1 อ่านจากตารางท้ายมาตรฐานตามอำเภอที่ตั้ง "
+            "· ในแอ่งกรุงเทพฯ ให้เลือก 'กรอก SDS, SD1 เอง' และใส่ Sa จากสเปกตรัมของโซน "
+            "· ตรวจกับกฎกระทรวงแผ่นดินไหว พ.ศ. 2564 ว่าอาคารนี้อยู่ในบังคับหรือไม่")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from ..structure.seismic import RISK_CATEGORIES, SITE_CLASSES, SYSTEMS
+        f = QFormLayout()
+        self.enabled = QCheckBox("ออกแบบต้านทานแผ่นดินไหว")
+        self.mode = _combo([("map", "Ss, S1 จากตาราง + ประเภทชั้นดิน"), ("direct", "กรอก SDS, SD1 เอง")], "map")
+        self.ss = _spin(0.0, 0, 3, 0.01, 3, "g")
+        self.s1 = _spin(0.0, 0, 2, 0.01, 3, "g")
+        self.site = _combo(SITE_CLASSES, "D")
+        self.sds = _spin(0.0, 0, 3, 0.01, 3, "g")
+        self.sd1 = _spin(0.0, 0, 2, 0.01, 3, "g")
+        self.sa = _spin(0.0, 0, 3, 0.01, 3, "g")
+        self.category = _combo(RISK_CATEGORIES, "II")
+        self.system = _combo([(k, f"{v[0]} (R = {v[1]:g})") for k, v in SYSTEMS.items()], "IMF")
+        f.addRow(self.enabled)
+        for label, w in (("ข้อมูลพื้นที่", self.mode), ("Ss (คาบ 0.2 วินาที)", self.ss),
+                         ("S1 (คาบ 1 วินาที)", self.s1), ("ประเภทชั้นดิน", self.site),
+                         ("SDS", self.sds), ("SD1", self.sd1), ("Sa ที่คาบอาคาร (ถ้ามี)", self.sa),
+                         ("ประเภทความสำคัญ", self.category), ("ระบบโครงสร้าง", self.system)):
+            f.addRow(label, w)
+        self.lay.addLayout(f)
+        self.preview = QLabel()
+        self.preview.setWordWrap(True)
+        self.lay.addWidget(self.preview)
+        for w in (self.ss, self.s1, self.sds, self.sd1, self.sa):
+            w.valueChanged.connect(self._update)
+        for w in (self.mode, self.site, self.category, self.system):
+            w.currentIndexChanged.connect(self._update)
+        self.enabled.toggled.connect(self._update)
+        self.add_apply()
+
+    def _update(self, *_):
+        from ..structure.seismic import IMPORTANCE, SYSTEMS, design_category, site_coefficients
+        direct = self.mode.currentData() == "direct"
+        for w in (self.ss, self.s1, self.site):
+            w.setEnabled(not direct)
+        for w in (self.sds, self.sd1, self.sa):
+            w.setEnabled(direct)
+        if direct:
+            sds, sd1 = self.sds.value(), self.sd1.value()
+        else:
+            fa, fv = site_coefficients(self.ss.value(), self.s1.value(), self.site.currentData())
+            sds, sd1 = 2 / 3 * fa * self.ss.value(), 2 / 3 * fv * self.s1.value()
+        cat = design_category(sds, sd1, self.category.currentData())
+        name, R, _o, cd, allowed = SYSTEMS[self.system.currentData()]
+        text = (f"SDS = {sds:.3f} g · SD1 = {sd1:.3f} g · ประเภทการออกแบบ {cat} · "
+                f"I = {IMPORTANCE[self.category.currentData()]:g} · R = {R:g} · Cd = {cd:g}")
+        if cat not in allowed:
+            text += f"<br><span style='color:#c62828'>ประเภท {cat} ไม่อนุญาตให้ใช้{name}</span>"
+        self.preview.setText(text if self.enabled.isChecked() else "ไม่คิดแรงแผ่นดินไหว")
+
+    def load(self):
+        s = self.building.seismic
+        self.enabled.setChecked(s.enabled)
+        for c, v in ((self.mode, s.mode), (self.site, s.site_class), (self.category, s.category),
+                     (self.system, s.system)):
+            c.setCurrentIndex(max(0, c.findData(v)))
+        for w, v in ((self.ss, s.ss), (self.s1, s.s1), (self.sds, s.sds), (self.sd1, s.sd1), (self.sa, s.sa)):
+            w.setValue(v)
+        self._update()
+
+    def apply(self):
+        s = self.building.seismic
+        s.enabled = self.enabled.isChecked()
+        s.mode, s.site_class = self.mode.currentData(), self.site.currentData()
+        s.category, s.system = self.category.currentData(), self.system.currentData()
+        s.ss, s.s1, s.sds, s.sd1, s.sa = (self.ss.value(), self.s1.value(), self.sds.value(),
+                                          self.sd1.value(), self.sa.value())
+
+
 class ResultsPage(Page):
-    title = "6. ผลคำนวณและส่งออก"
+    title = "7. ผลคำนวณและส่งออก"
     run_requested = Signal()
     export_requested = Signal(str)
 
@@ -406,6 +482,10 @@ class ResultsPage(Page):
         lines.append(f"เกณฑ์ {CODES.get(res.building.design_code, '')} · fc = {res.concrete.fc:.1f} ksc")
         lines.append(f"พื้น {len(res.slabs)} แผ่น · คาน {len(res.beams)} ช่วง · เสา {len(res.columns)} ท่อน · "
                      f"ฐานราก {len(res.footings)} ฐาน · เสาเข็มรวม {res.total_piles()} ต้น")
+        q = res.seismic
+        if q:
+            lines.append(f"แผ่นดินไหว: SDS {q.sds:.3f} SD1 {q.sd1:.3f} · ประเภท {q.category} · T {q.period:.2f} วินาที · "
+                         f"Cs {q.cs:.4f} · W {q.weight:,.0f} กก. · V {q.base_shear:,.0f} กก.")
         lines.append("ผล: ผ่านทุกรายการ" if res.ok else "ผล: มีรายการไม่ผ่าน (สีแดง)")
         lines += ["⚠ " + w for w in res.warnings]
         lines.append("ผลคำนวณเบื้องต้น ต้องให้วิศวกรผู้มีใบอนุญาตตรวจสอบและลงนาม")
@@ -428,6 +508,17 @@ class ResultsPage(Page):
                     [(f.node, f.mark, f"{f.load:,.0f}", f.pile, f.piles,
                       f"{f.width:.2f}×{f.length:.2f}×{f.thickness:.2f}", f.bars_x, f.bars_y, ok(f.ok),
                       f.note, f.refs) for f in res.footings])
+        if q:
+            rows = [(f"ชั้น {st.level}", f"hx {st.hx:.2f} ม.", f"W {st.wx:,.0f}", f"F {st.fx:,.0f}",
+                     f"V {st.vx:,.0f}", f"Δx {st.drift_x * 1000:.1f} Δy {st.drift_y * 1000:.1f} มม.",
+                     f"≤ {st.limit * 1000:.0f} มม. θ {st.theta:.3f}", "", ok(st.ok), st.note)
+                    for st in q.storeys]
+            kinds = {"column": "เสา", "beam": "คาน", "footing": "ฐานราก"}
+            rows += [(kinds[c.kind], c.where, c.direction, c.demand, c.capacity, f"{c.ratio:.2f}", c.detail, "",
+                      ok(c.ok), c.note) for c in q.checks]
+            rows += [("หมายเหตุ", w, "", "", "", "", "", "", "", "") for w in q.warnings]
+            self._table("แผ่นดินไหว", ["ชิ้นส่วน", "ตำแหน่ง", "ทิศ", "แรง", "กำลัง", "อัตราส่วน", "รายละเอียดเหล็กปลอก",
+                                        "", "ผล", "หมายเหตุ"], rows)
         from ..standards import REFS, STATUS_TEXT
         self._table("มาตรฐานและที่มา", ["รหัส", "มาตรฐาน / เอกสาร", "ข้อ / ค่าที่ใช้", "สถานะ"],
                     [(REFS[c].code, REFS[c].title, REFS[c].clause, STATUS_TEXT[REFS[c].status])

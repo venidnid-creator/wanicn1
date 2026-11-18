@@ -101,3 +101,18 @@ def test_add_secondary_beam_and_cantilever_from_plan(win, app):
     assert "FL2:1-2/A-B:y" in keys and "1A-2A" in keys
     win.plan.toggle("sub", "FL2:1-2/A-B:y")         # click removes it
     assert not win.building.level("FL2").sub_beams
+
+
+def test_seismic_page_applies_and_results_tab(win, app):
+    page = next(p for p in win.page_list if p.title.endswith("แผ่นดินไหว"))
+    page.enabled.setChecked(True)
+    page.ss.setValue(0.30)
+    page.s1.setValue(0.10)
+    page.site.setCurrentIndex(page.site.findData("C"))
+    page._apply()
+    assert win.building.seismic.enabled and win.building.seismic.ss == pytest.approx(0.30)
+    assert "ประเภทการออกแบบ B" in page.preview.text()
+    win.calculate()
+    assert win.result.seismic is not None
+    tabs = win.page_list[-1].tabs
+    assert any(tabs.tabText(i).startswith("แผ่นดินไหว") for i in range(tabs.count()))

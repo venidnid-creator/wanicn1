@@ -112,8 +112,48 @@ def write_report(res: DesignResult, path: str) -> None:
            [(f.node, f.mark, f.kind, round(f.load), f.pile, f.piles, f.pile_capacity, f.width,
              f.length, f.thickness, f.bars_x, f.bars_y, ok(f.ok), f.note, f.refs) for f in res.footings],
            [9, 6, 7, 10, 8, 7, 10, 7, 7, 7, 10, 10, 5, 36, 40])
+    if res.seismic:
+        _seismic_sheet(wb, res)
     references_sheet(wb, res.all_refs())
     wb.save(path)
+
+
+def _seismic_sheet(wb, res):
+    from .seismic import IMPORTANCE, SYSTEMS
+    q, s = res.seismic, res.building.seismic
+    rows = [
+        ("มาตรฐาน", "มยผ. 1301/1302-61 วิธีแรงสถิตเทียบเท่า", "", "DPT1301"),
+        ("ข้อมูลพื้นที่", f"Ss {s.ss:g} g, S1 {s.s1:g} g, ชั้นดิน {s.site_class} → Fa {q.fa:.2f}, Fv {q.fv:.2f}"
+         if s.mode == "map" else "กรอก SDS, SD1 (และ Sa) จากมาตรฐานโดยตรง", "", "DPT1301, ASCE7"),
+        ("SDS = ⅔·Fa·Ss", round(q.sds, 4), "g", "DPT1301"),
+        ("SD1 = ⅔·Fv·S1", round(q.sd1, 4), "g", "DPT1301"),
+        ("ประเภทความสำคัญ / I", f"{s.category} / {IMPORTANCE[s.category]:g}", "", "DPT1301"),
+        ("ประเภทการออกแบบต้านทานแผ่นดินไหว", q.category, "", "DPT1301, ASCE7"),
+        ("ระบบโครงสร้าง", f"{SYSTEMS[q.system][0]} R = {q.R:g}, Cd = {q.cd:g}", "", "DPT1301"),
+        ("คาบการสั่น T = 0.02·H", round(q.period, 3), "วินาที", "DPT1301"),
+        ("Sa", round(q.sa, 4), "g", "DPT1301"),
+        ("Cs = Sa·I/R ≥ 0.044·SDS·I ≥ 0.01", round(q.cs, 4), "", "DPT1301, ASCE7"),
+        ("น้ำหนักอาคารประสิทธิผล W", round(q.weight), "กก.", "DPT1301"),
+        ("แรงเฉือนที่ฐาน V = Cs·W", round(q.base_shear), "กก.", "DPT1301"),
+        ("k (การกระจายแรงตามความสูง)", round(q.k, 3), "", "DPT1301"),
+        ("การวิเคราะห์", "โครงข้อแข็งระนาบทุกแนวกริด พื้นแข็งเกร็ง แรงบิดโดยบังเอิญ 5% "
+         "เสา 0.70Ig คาน 0.35Ig", "", "STATICS, ACI318-STIFF"),
+        ("การรวมน้ำหนัก (กำลัง)", "(1.2+0.2SDS)D + 1.0L + E ; (0.9−0.2SDS)D + E", "", "DPT1301, ASCE7, EIT1008"),
+        ("การรวมน้ำหนัก (หน่วยแรงใช้งาน) เสาเข็ม/ดิน",
+         "(1+0.14SDS)D + 0.7E ; (1+0.105SDS)D + 0.75L + 0.525E ; (0.6−0.14SDS)D + 0.7E", "", "ASCE7"),
+    ]
+    rows += [("⚠", w, "", "") for w in q.warnings]
+    _sheet(wb, "แผ่นดินไหว", ["รายการ", "ค่า", "หน่วย", "อ้างอิง"], rows, [42, 70, 10, 26])
+    _sheet(wb, "แผ่นดินไหว-ชั้น", ["ชั้น", "hx ม.", "wx กก.", "Fx กก.", "Vx กก.", "Δx มม.", "Δy มม.",
+                                   "Δa มม.", "θ", "ผล", "หมายเหตุ"],
+           [(st.level, st.hx, round(st.wx), round(st.fx), round(st.vx), round(st.drift_x * 1000, 1),
+             round(st.drift_y * 1000, 1), round(st.limit * 1000), round(st.theta, 4), ok(st.ok), st.note)
+            for st in q.storeys], [8, 8, 10, 10, 10, 8, 8, 8, 8, 5, 40])
+    kinds = {"column": "เสา", "beam": "คาน", "footing": "ฐานราก"}
+    _sheet(wb, "แผ่นดินไหว-ชิ้นส่วน", ["ชิ้นส่วน", "ตำแหน่ง", "ทิศ", "แรง", "กำลัง", "อัตราส่วน",
+                                        "รายละเอียดเหล็กปลอก", "ผล", "หมายเหตุ"],
+           [(kinds[c.kind], c.where, c.direction, c.demand, c.capacity, c.ratio, c.detail, ok(c.ok), c.note)
+            for c in q.checks], [8, 18, 5, 34, 26, 9, 40, 5, 40])
 
 
 def references_sheet(wb, codes):
