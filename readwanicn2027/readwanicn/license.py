@@ -33,6 +33,20 @@ except ImportError:                    # running from source
     _KEY = "readwanicn-development-key"
 
 
+THAI_MONTHS = ("มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม",
+               "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม")
+THAI_MONTHS_SHORT = ("ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.")
+
+
+def thai_date(d: dt.date | None, short: bool = False) -> str:
+    """18 พฤศจิกายน 2570 / 18 พ.ย. 70"""
+    if d is None:
+        return "—"
+    if short:
+        return f"{d.day} {THAI_MONTHS_SHORT[d.month - 1]} {(d.year + 543) % 100:02d}"
+    return f"{d.day} {THAI_MONTHS[d.month - 1]} {d.year + 543}"
+
+
 def state_file() -> Path:
     base = os.environ.get("APPDATA") or os.path.join(Path.home(), ".config")
     return Path(base) / "ReadWanicn2027" / "license.json"
@@ -77,6 +91,25 @@ class License:
     @property
     def until(self) -> dt.date:
         return dt.date.fromisoformat(self.data["until"])
+
+    @property
+    def start(self) -> dt.date | None:
+        try:
+            return dt.date.fromisoformat(self.data.get("start", ""))
+        except ValueError:
+            return None
+
+    @property
+    def renewals(self) -> int:
+        return int(self.data.get("n", 0))
+
+    @property
+    def status(self) -> str:
+        if self.expired:
+            return "หมดอายุการใช้งาน"
+        if self.days_left <= WARN_DAYS:
+            return "ใกล้หมดอายุ"
+        return "ใช้งานได้"
 
     @property
     def days_left(self) -> int:

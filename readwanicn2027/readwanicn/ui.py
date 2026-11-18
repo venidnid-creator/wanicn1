@@ -493,6 +493,122 @@ class ExpiredDialog(QDialog):
             self.error.setText("รหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบกับผู้พัฒนา")
 
 
+class LicenseDialog(QDialog):
+    """อายุการใช้งาน: everything about this installation's year, and the place to type a renewal code
+    at any time (before the year is up the new year starts from the old end — no day is lost)."""
+
+    def __init__(self, lic: "license.License", parent=None):
+        super().__init__(parent)
+        self.lic = lic
+        self.setWindowTitle(f"{APP_NAME} — อายุการใช้งาน")
+        self.setWindowIcon(QIcon(asset("logo.ico")))
+        self.setMinimumWidth(500)
+        self.setStyleSheet("QDialog, QLabel { background: white; color: #0F2A44; }"
+                           "QLineEdit { background:white; color:#0F2A44; border:1px solid #C9CED6; border-radius:5px;"
+                           " padding:5px; font-size:13pt; }"
+                           "QPushButton { background:#EEF2F8; color:#0F2A44; border:1px solid #C9CED6;"
+                           " border-radius:6px; padding:6px 12px; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 18, 24, 16)
+        logo = QLabel()
+        logo.setPixmap(logo_pixmap(64))
+        logo.setAlignment(Qt.AlignCenter)
+        lay.addWidget(logo)
+        self.head = QLabel()
+        self.head.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.head)
+        from PySide6.QtWidgets import QGridLayout
+        box = QWidget()
+        self.grid = QGridLayout(box)
+        self.grid.setContentsMargins(4, 6, 4, 6)
+        self.grid.setVerticalSpacing(6)
+        self.values = {}
+        for r, key in enumerate(("รหัสเครื่อง", "เริ่มใช้งาน", "ใช้งานได้ถึง", "ต่ออายุแล้ว", "ครั้งที่ต่ออายุถัดไป",
+                                 "รุ่นโปรแกรม")):
+            k = QLabel(key)
+            k.setStyleSheet("color:#555;")
+            v = QLabel()
+            v.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            for w_ in (k, v):
+                w_.setMinimumHeight(34 if key == "รหัสเครื่อง" else 26)
+            self.grid.addWidget(k, r, 0)
+            self.grid.addWidget(QLabel(":"), r, 1)
+            self.grid.addWidget(v, r, 2)
+            self.values[key] = v
+        self.grid.setColumnStretch(2, 1)
+        lay.addWidget(box)
+        copy = QPushButton("📋 คัดลอกรหัสเครื่อง")
+        copy.clicked.connect(self._copy)
+        lay.addWidget(copy, 0, Qt.AlignLeft)
+        note = QLabel("โปรแกรมใช้งานได้ครั้งละ 1 ปี (365 วัน) · เตือนล่วงหน้า 30 วัน · ต่ออายุครั้งละ 1 ปี "
+                      "ต่อก่อนหมดอายุได้โดยไม่เสียวันที่เหลือ — แจ้งรหัสเครื่องและครั้งที่ต่ออายุกับผู้พัฒนาเพื่อขอรหัสผ่าน")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#555;")
+        lay.addWidget(note)
+        lay.addWidget(contact_row())
+        lay.addWidget(QLabel("รหัสผ่านต่ออายุ (จากผู้พัฒนา):"))
+        self.code = QLineEdit()
+        self.code.setPlaceholderText("XXXX-XXXX-XXXX")
+        self.code.returnPressed.connect(self.try_code)
+        lay.addWidget(self.code)
+        self.error = QLabel("")
+        self.error.setStyleSheet("color:#DC2626;")
+        lay.addWidget(self.error)
+        row = QHBoxLayout()
+        ok = QPushButton("ยืนยันรหัสผ่าน")
+        ok.setStyleSheet("background:#C9A14A; color:white; border:none; border-radius:6px; padding:7px 14px;")
+        ok.clicked.connect(self.try_code)
+        row.addWidget(ok)
+        row.addStretch(1)
+        close = QPushButton("ปิด")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.refresh()
+
+    def refresh(self):
+        lic = self.lic
+        color = {"ใช้งานได้": "#15803D", "ใกล้หมดอายุ": "#B45309"}.get(lic.status, "#DC2626")
+        left = f"เหลือ {lic.days_left:,} วัน" if not lic.expired else f"เกินกำหนด {-lic.days_left:,} วัน"
+        self.head.setText(f"<span style='font-size:17pt; font-weight:bold; color:{color}'>{lic.status}</span>"
+                          f"<br><span style='font-size:13pt'>{left}</span>")
+        vals = {"รหัสเครื่อง": f"<b style='font-size:14pt'>{lic.install_id}</b>",
+                "เริ่มใช้งาน": license.thai_date(lic.start),
+                "ใช้งานได้ถึง": f"<b>{license.thai_date(lic.until)}</b>",
+                "ต่ออายุแล้ว": f"{lic.renewals} ครั้ง",
+                "ครั้งที่ต่ออายุถัดไป": f"<b>{lic.renewals + 1}</b>",
+                "รุ่นโปรแกรม": VERSION}
+        for k, v in vals.items():
+            self.values[k].setText(v)
+
+    def text(self) -> str:
+        return " ".join(v.text() for v in self.values.values())
+
+    def _copy(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(self.lic.install_id)
+        self.error.setStyleSheet("color:#15803D;")
+        self.error.setText("คัดลอกรหัสเครื่องแล้ว")
+
+    def try_code(self):
+        if self.lic.renew(self.code.text()):
+            self.code.clear()
+            self.error.setStyleSheet("color:#15803D;")
+            self.error.setText(f"ต่ออายุแล้ว ใช้งานได้ถึง {license.thai_date(self.lic.until)}")
+            self.refresh()
+        else:
+            self.error.setStyleSheet("color:#DC2626;")
+            self.error.setText("รหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบกับผู้พัฒนา")
+
+
+def license_badge_text(lic: "license.License") -> tuple:
+    """(text, colour) of the badge in the top bar."""
+    if lic.expired:
+        return "🔑 หมดอายุการใช้งาน", "#DC2626"
+    color = "#B45309" if lic.days_left <= license.WARN_DAYS else "#15803D"
+    return f"🔑 ใช้ได้ถึง {license.thai_date(lic.until, short=True)} · เหลือ {lic.days_left:,} วัน", color
+
+
 def check_license(parent=None, lic: "license.License | None" = None) -> bool:
     """False when the year is up and no renewal code was given."""
     lic = lic or license.License()
@@ -621,6 +737,11 @@ class MainWindow(QMainWindow):
         self.subtitle.setObjectName("Subtitle")
         col.addWidget(self.subtitle)
         lay.addWidget(titles)
+        self.lic_btn = QPushButton()
+        self.lic_btn.setToolTip("อายุการใช้งาน รหัสเครื่อง และต่ออายุการใช้งาน")
+        self.lic_btn.clicked.connect(self.open_license)
+        lay.addWidget(self.lic_btn)
+        self._show_license()
         self.stats = QLabel("📊 ดาวน์โหลดสะสม — ")
         self.stats.setToolTip("จำนวนครั้งที่ดาวน์โหลดตัวติดตั้งจากหน้า Releases")
         lay.addWidget(self.stats)
@@ -955,6 +1076,19 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, APP_NAME, f"ทำงานไม่สำเร็จ:\n{type(e).__name__}: {e}")
+
+    def _show_license(self):
+        try:
+            text, color = license_badge_text(license.License())
+        except OSError:
+            text, color = "🔑 อายุการใช้งาน", "#555555"
+        self.lic_btn.setText(text)
+        self.lic_btn.setStyleSheet(f"QPushButton {{ color:white; background:{color}; border:none; "
+                                   f"border-radius:12px; padding:4px 12px; font-weight:bold; }}")
+
+    def open_license(self):
+        LicenseDialog(license.License(), self).exec()
+        self._show_license()
 
     def open_procure(self):
         from .procure_view import ProcureDialog

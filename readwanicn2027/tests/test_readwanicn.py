@@ -233,3 +233,27 @@ def test_theme_pills_and_language(tmp_path):
     assert open_btn.text().endswith("เปิดไฟล์") and w.tabs.tabText(0) == "เอกสาร PDF"
     assert w.theme_pills["มืด"].text() == "มืด" and lang.current() == "th"
     w.apply_theme(themes.DEFAULT)
+
+
+def test_license_badge_and_window(tmp_path):
+    import datetime as dt
+
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from readwanicn import license
+    from readwanicn.ui import LicenseDialog, license_badge_text
+    day = dt.date(2026, 11, 18)
+    lic = license.License(tmp_path / "l.json", today=day)
+    assert lic.start == day and lic.renewals == 0 and lic.status == "ใช้งานได้"
+    text, color = license_badge_text(lic)
+    assert text == "🔑 ใช้ได้ถึง 18 พ.ย. 70 · เหลือ 365 วัน" and color == "#15803D"
+    assert license.thai_date(lic.until) == "18 พฤศจิกายน 2570"
+    late = license.License(tmp_path / "l.json", today=day + dt.timedelta(days=350))
+    assert late.status == "ใกล้หมดอายุ" and license_badge_text(late)[1] == "#B45309"
+    d = LicenseDialog(late)
+    assert lic.install_id in d.text() and "18 พฤศจิกายน 2570" in d.text()
+    d.code.setText(license.renewal_code(lic.install_id, 1))
+    d.try_code()
+    assert late.until == dt.date(2028, 11, 17) and late.renewals == 1 and "ต่ออายุแล้ว" in d.error.text()
+    gone = license.License(tmp_path / "l.json", today=dt.date(2029, 1, 1))
+    assert gone.expired and license_badge_text(gone)[0] == "🔑 หมดอายุการใช้งาน"
