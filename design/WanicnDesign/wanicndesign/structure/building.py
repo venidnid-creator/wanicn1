@@ -18,9 +18,8 @@ from dataclasses import asdict, dataclass, field
 WALL_LOAD = {"brick": 180, "qcon": 90, "gypsum": 40, "concrete": 240, "metal": 0}
 #: Roof covering dead load, kg/m² of roof slope (QuickDesign appendix).
 ROOF_COVER_LOAD = {"concrete_tile": 50, "ceramic_tile": 50, "asbestos": 30, "metal_sheet": 20}
-#: Live load by building type, kg/m² (QuickDesign Draft ▸ Live Load).
-LIVE_LOAD = {"house": 150, "condominium": 200, "office": 250, "plaza": 300, "school": 300,
-             "factory": 500}
+#: Live load by use, kg/m² — กฎกระทรวง ฉบับที่ 6 ข้อ 15 (see standards.py).
+from ..standards import LIVE_LOAD  # noqa: E402,F401
 
 
 @dataclass
@@ -73,6 +72,9 @@ class Building:
     roof: Roof = field(default_factory=Roof)
     foundation: Foundation = field(default_factory=Foundation)
     fc_prime: float = 210.0
+    design_code: str = "EIT1007"   # "EIT1007" (วสท. 1007-34) or "MR6" (กฎกระทรวง ฉบับที่ 6)
+    occupancy: str = "house"       # standards.LIVE_LOADS key
+    ll_reduction: bool = True      # กฎกระทรวง ฉบับที่ 6 ข้อ 16, columns and footings
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -208,6 +210,9 @@ class Building:
             roof=Roof(**d.get("roof", {})),
             foundation=Foundation(**d.get("foundation", {})),
             fc_prime=d.get("fc_prime", 210.0),
+            design_code=d.get("design_code", "EIT1007"),
+            occupancy=d.get("occupancy", "house"),
+            ll_reduction=d.get("ll_reduction", True),
         )
 
     @classmethod

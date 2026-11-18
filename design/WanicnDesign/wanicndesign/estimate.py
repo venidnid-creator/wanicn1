@@ -140,6 +140,8 @@ class Estimate:
             lab.append([code, item["name"], item["unit"], item["rate"], item.get("condition", "")])
         for col, wdt in zip("ABCDE", (10, 50, 8, 12, 50)):
             lab.column_dimensions[col].width = wdt
+        from .structure.report import references_sheet
+        references_sheet(wb, ["CGD2569", "W480"])
         wb.save(path)
 
 

@@ -106,3 +106,74 @@ def test_removing_a_column_and_a_panel():
     assert not any(c.node == "4C" for c in res.columns)
     assert not any(s.panel == "1-2/A-B" and s.level == "FL2" for s in res.slabs)
     assert res.ok, res.warnings
+
+
+def test_slab_case_follows_continuity():
+    # 3 × 3 bays of 4 m: corner panel has 2 free edges (case 3), edge panel
+    # 1 (case 2), the middle panel none (case 1).
+    b = Building("t", grid_x=[4.0] * 3, grid_y=[4.0] * 3, levels=[Level("FL2", 3.0)])
+    c = Concrete()
+    W = 2400 * 0.10 + 50 + 150
+    corner = design_slab(b, c, b.levels[0], 0, 0)
+    edge = design_slab(b, c, b.levels[0], 1, 0)
+    middle = design_slab(b, c, b.levels[0], 1, 1)
+    assert (corner.case, edge.case, middle.case) == (3, 2, 1)
+    assert middle.m_pos == pytest.approx(0.025 * W * 16)
+    assert edge.m_neg == pytest.approx(0.041 * W * 16)
+    assert "EIT1007-SLAB" in middle.refs
+
+
+def test_mr6_criteria_are_more_conservative():
+    eit = Concrete(fc_prime=210, code="EIT1007")
+    mr6 = Concrete(fc_prime=210, code="MR6")
+    assert mr6.fc == pytest.approx(65.0)          # 0.375 × 210 = 78.75 → capped at 65
+    assert mr6.fs("DB") == 1500 and eit.fs("DB") == 1700
+    assert mr6.R(mr6.fs("DB")) < eit.R(eit.fs("DB"))
+
+
+def test_live_load_reduction_lowers_column_loads():
+    # 4 floors: FL4 is the 1st floor below the roof (0 %), FL3 the 2nd (10 %),
+    # FL2 the 3rd (20 %) [MR6-16]. A two-storey house gets no reduction.
+    b = Building.load(BUILDING)
+    fl = b.levels[1]
+    b.levels = [b.levels[0]] + [Level(f"FL{k}", 3.2 * (k - 1), "suspended", fl.slab_thickness,
+                                      fl.live_load, fl.finish_load, fl.beam_width, 0.45, "B", "perimeter")
+                                for k in (2, 3, 4)] + [b.levels[2]]
+    b.levels[-1].elevation = 12.6
+    b.ll_reduction = False
+    plain = {(c.node, c.segment): c.load for c in design(b).columns}
+    b.ll_reduction = True
+    reduced = design(b).columns
+    below_fl2 = [c for c in reduced if c.segment == "GB–FL2"]
+    assert below_fl2 and all(c.live_reduced > 0 for c in below_fl2)
+    assert all(c.load < plain[(c.node, c.segment)] for c in below_fl2)
+    assert all("MR6-16" in c.refs for c in below_fl2)
+    top = [c for c in reduced if c.segment == "FL4–ROOF"]
+    assert all(c.live_reduced == 0 for c in top)
+    b.occupancy = "industrial"                    # no reduction for warehouses/factories
+    assert all(c.live_reduced == 0 for c in design(b).columns)
+
+
+def test_two_storey_house_gets_no_reduction():
+    res = design(Building.load(BUILDING))
+    assert all(c.live_reduced == 0 for c in res.columns)
+
+
+def test_every_result_has_references():
+    res = design(Building.load(BUILDING))
+    for group in (res.slabs, res.beams, res.columns, res.footings):
+        assert all(x.refs for x in group)
+    from wanicndesign.standards import REFS
+    assert set(res.all_refs()) <= set(REFS)
+
+
+def test_report_lists_standards(tmp_path):
+    import openpyxl
+    from wanicndesign.structure.report import write_report
+    out = tmp_path / "calc.xlsx"
+    write_report(design(Building.load(BUILDING)), str(out))
+    wb = openpyxl.load_workbook(out)
+    refs = wb["มาตรฐานและที่มา"]
+    codes = [r[0] for r in refs.iter_rows(min_row=2, values_only=True)]
+    assert "EIT1007-COL" in codes and "MR6-15" in codes
+    assert [c.value for c in wb["คาน"][1]][-1] == "อ้างอิง"

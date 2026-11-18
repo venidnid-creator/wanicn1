@@ -8,9 +8,13 @@ from dataclasses import dataclass
 ES = 2.04e6            # steel modulus, ksc
 CONCRETE_KG_M3 = 2400
 
-#: Allowable tensile stress fs (ksc) by grade — วสท. WSD.
+#: Allowable tensile stress fs (ksc) by grade — วสท. 1007-34 [EIT1007].
 FS = {"SR24": 1200, "SD30": 1500, "SD40": 1700, "SD50": 1700}
 FY = {"SR24": 2400, "SD30": 3000, "SD40": 4000, "SD50": 5000}
+
+#: Design criteria the user can choose (standards.REFS codes).
+CODES = {"EIT1007": "วสท. 1007-34 (fc = 0.45 fc')",
+         "MR6": "กฎกระทรวง ฉบับที่ 6 (fc = 0.375 fc' ≤ 65, fs ≤ 0.5 fy ≤ 1,500)"}
 
 
 @dataclass
@@ -18,9 +22,16 @@ class Concrete:
     fc_prime: float = 210.0      # cylinder strength, ksc (≈ 240 ksc cube)
     main_grade: str = "SD40"     # deformed bars DB
     tie_grade: str = "SR24"      # round bars RB (stirrups, slab RB9)
+    code: str = "EIT1007"        # "EIT1007" or "MR6"
+
+    @property
+    def ref(self) -> str:
+        return "MR6-21" if self.code == "MR6" else "EIT1007"
 
     @property
     def fc(self) -> float:
+        if self.code == "MR6":
+            return min(0.375 * self.fc_prime, 65.0)
         return 0.45 * self.fc_prime
 
     @property
@@ -39,7 +50,10 @@ class Concrete:
         return 0.5 * self.fc * self.k(fs) * self.j(fs)
 
     def fs(self, bar: str) -> float:
-        return FS[self.tie_grade if bar.upper().startswith("RB") else self.main_grade]
+        grade = self.tie_grade if bar.upper().startswith("RB") else self.main_grade
+        if self.code == "MR6":
+            return min(0.5 * FY[grade], 1500.0)
+        return FS[grade]
 
     @property
     def vc_beam(self) -> float:

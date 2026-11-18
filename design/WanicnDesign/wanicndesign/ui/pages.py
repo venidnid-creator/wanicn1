@@ -6,11 +6,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
                                QTabWidget, QTextEdit, QVBoxLayout, QWidget)
 
-from ..structure.building import LIVE_LOAD, ROOF_COVER_LOAD, Level
+from ..standards import LIVE_LOAD, LIVE_LOADS
+from ..structure.building import ROOF_COVER_LOAD, Level
+from ..structure.materials import CODES
 from ..structure.sections import load_piles
 
 SLAB_KINDS = [("suspended", "พื้นแขวน (บนคาน)"), ("on_ground", "พื้นวางบนดิน"),
@@ -112,7 +114,14 @@ class ProjectPage(Page):
         self.fc = _spin(210, 100, 500, 5, 0, "ksc")
         self.cw = _spin(0.20, 0.15, 1.0, 0.05, 2, "ม.")
         self.cd = _spin(0.20, 0.15, 1.0, 0.05, 2, "ม.")
+        self.code = _combo(list(CODES.items()), "EIT1007")
+        self.use = _combo([(k, f"{t} ({v})") for k, t, v in LIVE_LOADS if k not in ("roof", "canopy")],
+                          "house")
+        self.reduce = QCheckBox("ลดน้ำหนักจรสำหรับเสาและฐานราก (กฎกระทรวง ฉบับที่ 6 ข้อ 16)")
         f.addRow("ชื่อโครงการ", self.name)
+        f.addRow("เกณฑ์การออกแบบ", self.code)
+        f.addRow("ประเภทการใช้อาคาร", self.use)
+        f.addRow("", self.reduce)
         f.addRow("กำลังอัดคอนกรีต fc' (ทรงกระบอก)", self.fc)
         f.addRow("เสา กว้าง", self.cw)
         f.addRow("เสา ลึก", self.cd)
@@ -125,10 +134,15 @@ class ProjectPage(Page):
         self.fc.setValue(b.fc_prime)
         self.cw.setValue(b.column_width)
         self.cd.setValue(b.column_depth)
+        self.code.setCurrentIndex(max(0, self.code.findData(b.design_code)))
+        self.use.setCurrentIndex(max(0, self.use.findData(b.occupancy)))
+        self.reduce.setChecked(b.ll_reduction)
 
     def apply(self):
         b = self.building
         b.name = self.name.text().strip() or b.name
+        b.design_code, b.occupancy = self.code.currentData(), self.use.currentData()
+        b.ll_reduction = self.reduce.isChecked()
         b.fc_prime = self.fc.value()
         b.column_width, b.column_depth = self.cw.value(), self.cd.value()
 
@@ -218,8 +232,9 @@ class LevelsPage(Page):
         add.clicked.connect(self._add)
         rem = QPushButton("ลบชั้นที่เลือก")
         rem.clicked.connect(self._remove)
-        self.ll = _combo([(k, f"{k} ({v})") for k, v in LIVE_LOAD.items()], "house")
-        use = QPushButton("ใช้น้ำหนักจรตามประเภทอาคาร")
+        self.ll = _combo([(k, f"{t[:28]} ({v})") for k, t, v in LIVE_LOADS
+                          if k not in ("roof", "canopy")], "house")
+        use = QPushButton("ใช้น้ำหนักจรตามกฎกระทรวง ฉบับที่ 6 ข้อ 15")
         use.clicked.connect(self._use_ll)
         for w in (add, rem, self.ll, use):
             row.addWidget(w)
@@ -388,6 +403,7 @@ class ResultsPage(Page):
         if res.roof:
             r = res.roof
             lines.append(f"หลังคา {r.load_plan:.0f} กก./ตร.ม. · แป {r.purlin.section} · จันทัน {r.rafter.section}")
+        lines.append(f"เกณฑ์ {CODES.get(res.building.design_code, '')} · fc = {res.concrete.fc:.1f} ksc")
         lines.append(f"พื้น {len(res.slabs)} แผ่น · คาน {len(res.beams)} ช่วง · เสา {len(res.columns)} ท่อน · "
                      f"ฐานราก {len(res.footings)} ฐาน · เสาเข็มรวม {res.total_piles()} ต้น")
         lines.append("ผล: ผ่านทุกรายการ" if res.ok else "ผล: มีรายการไม่ผ่าน (สีแดง)")
@@ -395,19 +411,27 @@ class ResultsPage(Page):
         lines.append("ผลคำนวณเบื้องต้น ต้องให้วิศวกรผู้มีใบอนุญาตตรวจสอบและลงนาม")
         self.summary.setPlainText("\n".join(lines))
         ok = lambda v: "OK" if v else "NG"
-        self._table("พื้น", ["ชั้น", "แผ่น", "Mark", "ชนิด", "หนา", "เหล็กสั้น", "เหล็กยาว", "บน", "ผล"],
-                    [(s.level, s.panel, s.mark, s.kind, s.thickness, s.bars_short, s.bars_long, s.bars_top,
-                      ok(s.ok)) for s in res.slabs])
-        self._table("คาน", ["ชั้น", "ช่วง", "Mark", "b×h", "M-", "M+", "บน", "ล่าง", "ปลอก", "ผล"],
+        self._table("พื้น", ["ชั้น", "แผ่น", "Mark", "ชนิด", "หนา", "เหล็กสั้น", "เหล็กยาว", "บน", "ผล",
+                             "หมายเหตุ", "อ้างอิง"],
+                    [(s.level, s.panel, s.mark, f"{s.kind} กรณี {s.case}" if s.case else s.kind, s.thickness,
+                      s.bars_short, s.bars_long, s.bars_top, ok(s.ok), s.note, s.refs) for s in res.slabs])
+        self._table("คาน", ["ชั้น", "ช่วง", "Mark", "b×h", "M-", "M+", "บน", "ล่าง", "ปลอก", "ผล",
+                            "หมายเหตุ", "อ้างอิง"],
                     [(x.level, x.span, x.mark, f"{x.b:.2f}×{x.h:.2f}", f"{x.m_neg:,.0f}", f"{x.m_pos:,.0f}",
-                      x.top, x.bottom, x.stirrup, ok(x.ok)) for x in res.beams])
-        self._table("เสา", ["ตำแหน่ง", "ช่วง", "Mark", "P กก.", "ขนาด", "เหล็ก", "ปลอก", "ผล"],
+                      x.top, x.bottom, x.stirrup, ok(x.ok), x.note, x.refs) for x in res.beams])
+        self._table("เสา", ["ตำแหน่ง", "ช่วง", "Mark", "P กก.", "ขนาด", "เหล็ก", "ปลอก", "ผล",
+                            "หมายเหตุ", "อ้างอิง"],
                     [(c.node, c.segment, c.mark, f"{c.load:,.0f}", f"{c.b:.2f}×{c.h:.2f}", c.bars, c.ties,
-                      ok(c.ok)) for c in res.columns])
-        self._table("ฐานราก", ["ตำแหน่ง", "Mark", "P กก.", "เข็ม", "จำนวน", "ขนาดฐาน", "เหล็ก X", "เหล็ก Y", "ผล"],
+                      ok(c.ok), c.note, c.refs) for c in res.columns])
+        self._table("ฐานราก", ["ตำแหน่ง", "Mark", "P กก.", "เข็ม", "จำนวน", "ขนาดฐาน", "เหล็ก X", "เหล็ก Y",
+                               "ผล", "หมายเหตุ", "อ้างอิง"],
                     [(f.node, f.mark, f"{f.load:,.0f}", f.pile, f.piles,
-                      f"{f.width:.2f}×{f.length:.2f}×{f.thickness:.2f}", f.bars_x, f.bars_y, ok(f.ok))
-                     for f in res.footings])
+                      f"{f.width:.2f}×{f.length:.2f}×{f.thickness:.2f}", f.bars_x, f.bars_y, ok(f.ok),
+                      f.note, f.refs) for f in res.footings])
+        from ..standards import REFS, STATUS_TEXT
+        self._table("มาตรฐานและที่มา", ["รหัส", "มาตรฐาน / เอกสาร", "ข้อ / ค่าที่ใช้", "สถานะ"],
+                    [(REFS[c].code, REFS[c].title, REFS[c].clause, STATUS_TEXT[REFS[c].status])
+                     for c in res.all_refs()])
 
     def _table(self, name, headers, rows):
         t = QTableWidget(len(rows), len(headers))
