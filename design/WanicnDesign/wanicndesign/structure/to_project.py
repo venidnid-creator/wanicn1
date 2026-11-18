@@ -25,14 +25,22 @@ def to_project(res: DesignResult) -> Project:
     for (mark, seg, cw, ch, hgt, bars, ties), n in Counter(
             (c.mark, c.segment, c.b, c.h, round(c.height, 2), c.bars, c.ties) for c in res.columns).items():
         p.columns.append(Column(f"{mark} ({seg})", n, cw, ch, hgt, bars, ties))
-    for (lvl, mark, bw, h, length, top, bot, stir), n in Counter(
-            (x.level, x.mark, x.b, x.h, round(x.length, 2), x.top, x.bottom, x.stirrup)
+    for (lvl, mark, bw, h, length, top, bot, stir, kind), n in Counter(
+            (x.level, x.mark, x.b, x.h, round(x.length, 2), x.top, x.bottom, x.stirrup, x.kind)
             for x in res.beams).items():
-        clear = round(length - b.column_width, 2)
+        # clear length: a cantilever beam leaves one column face, a secondary beam sits between beam faces
+        cut = {"cantilever": b.column_width / 2, "secondary": bw}.get(kind, b.column_width)
+        clear = round(length - cut, 2)
         p.beams.append(Beam(mark, lvl, bw, h, clear, n, top, bot, stir))
     for s in res.slabs:
         p.slabs.append(Slab(f"{s.mark} {s.panel}", s.level, round(s.lx * s.ly, 3), s.thickness,
                             s.bars_short, s.kind == "on-ground", min(s.lx, s.ly)))
+    from .stairs import concrete_volume
+    for st in res.stairs:
+        vol = concrete_volume(st)
+        if vol > 0:
+            p.slabs.append(Slab(f"บันได {st.name}", st.level, round(vol / st.thickness, 3), st.thickness,
+                                st.bars_main, False, st.width))
     for li, lv in enumerate(b.levels):
         if li + 1 >= len(b.levels) or lv.walls == "none":
             continue

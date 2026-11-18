@@ -403,3 +403,137 @@ def test_seismic_report_sheets(tmp_path):
     write_report(res, str(p))
     names = load_workbook(p).sheetnames
     assert {"แผ่นดินไหว", "แผ่นดินไหว-ชั้น", "แผ่นดินไหว-ชิ้นส่วน"} <= set(names)
+
+
+# ---------------------------------------------------------------------------
+# Cantilever beams and stairs — hand checks
+# ---------------------------------------------------------------------------
+
+def test_overhang_moment_on_a_continuous_beam():
+    # one span L = 4, w = 1000, right overhang moment 1125: R_A = wL/2 − M/L (statics)
+    spans, r = continuous_beam([4.0], [1000.0], None, (0.0, 1125.0))
+    assert spans[0].m_right == pytest.approx(-1125.0)
+    assert r[0] == pytest.approx(2000 - 1125 / 4)
+    # two equal spans, left overhang moment 500: three-moment equation gives M_B
+    spans, _r = continuous_beam([4.0, 4.0], [1000.0, 1000.0], None, (500.0, 0.0))
+    assert spans[0].m_right == pytest.approx(-(2 * 1000 * 4 ** 3 / 4 - 500 * 4) / 16)
+
+
+def test_cantilever_beam_statics_and_line_effect():
+    from wanicndesign.structure.design import design_level_beams, design_roof
+    b = Building.load(BUILDING)
+    fl2 = b.level("FL2")
+    li = b.levels.index(fl2)
+    mat = Concrete()
+    roof = design_roof(b)
+    _r0, reac0, _l0 = design_level_beams(b, mat, li, roof)
+    b.toggle_cant_beam(fl2, (0, 0), "-y", 1.5, 500.0, False)
+    beams, reac1, _l1 = design_level_beams(b, mat, li, roof)
+    cb = next(x for x in beams if x.kind == "cantilever")
+    w = 2400 * cb.b * cb.h
+    assert cb.m_neg == pytest.approx(w * 1.5 ** 2 / 2 + 500 * 1.5)        # M = wL²/2 + PL
+    assert cb.v == pytest.approx(w * 1.5 + 500)
+    # the whole cantilever load reaches the columns
+    assert sum(reac1.values()) - sum(reac0.values()) == pytest.approx(cb.v, rel=1e-6)
+    # the back span carries the cantilever moment at its end
+    back = next(x for x in beams if x.kind == "beam" and x.span == "1A-1B")
+    assert back.m_neg >= cb.m_neg - 1e-6 and "คานยื่น" in back.note
+
+
+def _stair_building(kind="landing", occupancy="house"):
+    from wanicndesign.structure.building import Stair
+    b = Building.load(BUILDING)
+    b.occupancy = occupancy
+    b.stairs.append(Stair("ST1", "3-4/A-B", "GB", "y", kind, 0.25, 0.12))
+    return b
+
+
+def test_stair_geometry_and_load():
+    from wanicndesign.structure.stairs import geometry, strip
+    b = _stair_building()
+    st = b.stairs[0]
+    g = geometry(b, st)
+    assert (g.risers, g.riser) == (16, pytest.approx(0.20))               # 3.20 m / 0.20 m
+    assert [f.risers for f in g.flights] == [8, 8]
+    assert g.flights[0].going == pytest.approx(7 * 0.25)
+    assert g.landing_z == pytest.approx(1.60)
+    t, L, a = 0.20, 4.0, 1.75
+    cos = 0.25 / math.hypot(0.25, 0.20)
+    w1 = 2400 * (t / cos + 0.10) + 50 + 300                               # waist + half riser + finish + LL
+    w2 = 2400 * t + 50 + 300
+    m, r0, r1, wi, wf = strip(g, g.flights[0], t, 50, 300)
+    assert (wi, wf) == (pytest.approx(w1), pytest.approx(w2))
+    R0 = (w1 * a * (L - a / 2) + w2 * (L - a) ** 2 / 2) / L
+    assert r0 == pytest.approx(R0, rel=2e-3)
+    assert r0 + r1 == pytest.approx(w1 * a + w2 * (L - a), rel=1e-6)
+    if R0 <= w1 * a:                                                       # zero shear on the flight
+        x = R0 / w1
+        m_hand = R0 * x - w1 * x * x / 2
+    else:                                                                  # … or on the landing
+        x = a + (R0 - w1 * a) / w2
+        m_hand = R0 * x - w1 * a * (x - a / 2) - w2 * (x - a) ** 2 / 2
+    assert m == pytest.approx(m_hand, rel=5e-3)
+
+
+def test_stair_design_and_bt_beam():
+    res = design(_stair_building())
+    st = res.stairs[0]
+    assert st.ok, st.note
+    assert st.thickness == pytest.approx(0.20)                             # 4.0/20 × 0.971 → 0.20
+    bt = [x for x in res.beams if x.kind == "stair"]
+    assert len(bt) == 1 and bt[0].mark == "BT1" and bt[0].z_top == pytest.approx(1.60)
+    assert "MR55-STAIR" in res.all_refs() and "QD-STAIR" in res.all_refs()
+    # the stair bay is open on FL2
+    assert not any(s.panel.startswith("3-4/A-B") for s in res.slabs if s.level == "FL2")
+    assert any("บันได" in x.note for x in res.beams if x.level == "GB")
+
+
+def test_stair_rules_of_ministerial_regulation_55():
+    res = design(_stair_building("straight"))
+    st = res.stairs[0]
+    assert not st.ok and "ชานพัก" in st.note                                # one flight 3.20 m > 3.00 m
+    res = design(_stair_building("landing", "office"))
+    st = res.stairs[0]
+    assert st.risers == 18 and st.riser <= 0.18                            # other buildings: riser ≤ 18 cm
+
+
+def test_stairs_and_cantilever_beams_round_trip(tmp_path):
+    b = _stair_building()
+    b.toggle_cant_beam(b.level("FL2"), (0, 0), "-y", 1.2, 0.0, True)
+    p = tmp_path / "b.json"
+    b.save(str(p))
+    b2 = Building.load(str(p))
+    assert b2.stairs[0].panel == "3-4/A-B"
+    assert b2.cant_beams(b2.level("FL2"))[0][2:] == (1.2, 0.0, True)
+
+
+def test_balcony_on_cantilever_beams():
+    """Slab 4.0 × 1.5 on the edge beam, two cantilever beams and a tip beam:
+    one-way (m = 0.375), W·S/2 to each long edge; the tip beam is simply
+    supported on the cantilever beam tips."""
+    from wanicndesign.structure.design import _slab_load, design_level_beams, design_roof
+    b = Building.load(BUILDING)
+    fl2 = b.level("FL2")
+    li = b.levels.index(fl2)
+    mat, roof = Concrete(), design_roof(b)
+    _r, reac0, live0 = design_level_beams(b, mat, li, roof)
+    for n in ((0, 0), (1, 0)):
+        b.toggle_cant_beam(fl2, n, "-y", 1.5, 0.0, False)
+    b.toggle_cantilever(fl2, (0, 0), (1, 0), 1.5)
+    beams, reac1, live1 = design_level_beams(b, mat, li, roof)
+    W, LL = _slab_load(fl2)
+    tip = next(x for x in beams if "ปลาย" in x.span)
+    sw = 2400 * tip.b * tip.h
+    R_tip = (W * 1.5 / 2 + sw) * 4.0 / 2
+    assert tip.m_pos == pytest.approx((W * 1.5 / 2 + sw) * 4.0 ** 2 / 8, rel=2e-3)
+    for cb in (x for x in beams if x.kind == "cantilever"):
+        w = 2400 * cb.b * cb.h
+        assert cb.m_neg == pytest.approx(w * 1.5 ** 2 / 2 + R_tip * 1.5, rel=2e-3)
+    # every kilogram of the balcony reaches the columns
+    cbs = [x for x in beams if x.kind == "cantilever"]
+    total = W * 4.0 * 1.5 + sw * 4.0 + sum(2400 * x.b * x.h * x.length for x in cbs)
+    assert sum(reac1.values()) - sum(reac0.values()) == pytest.approx(total, rel=1e-3)
+    assert sum(live1.values()) - sum(live0.values()) == pytest.approx(LL * 4.0 * 1.5, rel=1e-3)
+    res = design(b)
+    bal = next(s for s in res.slabs if "ยื่น" in s.panel)
+    assert bal.kind == "one-way" and bal.ok

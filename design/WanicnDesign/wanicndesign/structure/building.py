@@ -37,6 +37,7 @@ class Level:
     wall_type: str = "brick"
     sub_beams: list = field(default_factory=list)    # ["1-2/A-B:x@0.5"] secondary beam in a panel
     cantilevers: list = field(default_factory=list)  # ["1A-2A@1.50"] cantilever slab off an edge beam
+    cant_beams: list = field(default_factory=list)   # ["1A:-x@1.50:P=500:wall"] cantilever beam off a column
 
 
 @dataclass
@@ -58,6 +59,21 @@ class Foundation:
     pile: str = "I22"
     pile_length: float = 16.0
     soil_qa: float = 15000.0       # kg/m², spread footings only
+
+
+@dataclass
+class Stair:
+    """A reinforced concrete stair in one grid bay, from ``level`` to the
+    next level up (see structure/stairs.py)."""
+    name: str = "ST1"
+    panel: str = "1-2/A-B"
+    level: str = "GB"              # bottom level
+    direction: str = "y"           # travel of the first flight: "x", "-x", "y", "-y"
+    kind: str = "landing"          # "straight" (one flight) or "landing" (two flights, landing on beam BT)
+    tread: float = 0.25            # m
+    thickness: float = 0.12        # waist slab, m (thickened when below the minimum)
+    live_load: float = 0.0         # kg/m²; 0 = by occupancy (กฎกระทรวง ฉบับที่ 6 ข้อ 15)
+    finish_load: float = 50.0      # kg/m²
 
 
 @dataclass
@@ -93,6 +109,7 @@ class Building:
     occupancy: str = "house"       # standards.LIVE_LOADS key
     ll_reduction: bool = True      # กฎกระทรวง ฉบับที่ 6 ข้อ 16, columns and footings
     seismic: Seismic = field(default_factory=Seismic)
+    stairs: list = field(default_factory=list)      # [Stair]
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -178,7 +195,7 @@ class Building:
                 if not all(self.has_node(*n) for n in c):
                     continue
                 if level is not None:
-                    if self.panel_key(level, i, j) in skip:
+                    if self.panel_key(level, i, j) in skip or (i, j) in self.stair_openings(level):
                         continue
                     if not all(self.has_beam(level, c[k], c[(k + 1) % 4]) for k in range(4)):
                         continue
@@ -252,6 +269,73 @@ class Building:
         if length:
             level.cantilevers.append(f"{key}@{length:.2f}")
 
+    # -- cantilever beams ---------------------------------------------------------
+    DIRS = {"x": (1, 0), "-x": (-1, 0), "y": (0, 1), "-y": (0, -1)}
+
+    def cant_beams(self, level: Level):
+        """``(node, (dx, dy), length, tip_load, wall)`` per cantilever beam."""
+        out = []
+        for entry in level.cant_beams:
+            parts = entry.split(":")
+            node = self.parse_node(parts[0])
+            d, _, length = parts[1].partition("@")
+            P, wall = 0.0, False
+            for extra in parts[2:]:
+                if extra.startswith("P="):
+                    P = float(extra[2:])
+                elif extra == "wall":
+                    wall = True
+            if self.has_node(*node) and d in self.DIRS:
+                out.append((node, self.DIRS[d], float(length or 1.0), P, wall))
+        return out
+
+    def toggle_cant_beam(self, level: Level, node, direction: str, length: float | None,
+                         tip_load: float = 0.0, wall: bool = False):
+        name = self.node_name(*node)
+        level.cant_beams[:] = [e for e in level.cant_beams if not e.startswith(f"{name}:{direction}@")]
+        if length:
+            e = f"{name}:{direction}@{length:.2f}"
+            if tip_load:
+                e += f":P={tip_load:g}"
+            if wall:
+                e += ":wall"
+            level.cant_beams.append(e)
+
+    def outward_dirs(self, node) -> list[str]:
+        """Directions in which a cantilever beam can leave this column: away
+        from the building along a grid line."""
+        i, j = node
+        out = []
+        if i == 0 or not self.has_node(i - 1, j):
+            out.append("-x")
+        if i == len(self.xs) - 1 or not self.has_node(i + 1, j):
+            out.append("x")
+        if j == 0 or not self.has_node(i, j - 1):
+            out.append("-y")
+        if j == len(self.ys) - 1 or not self.has_node(i, j + 1):
+            out.append("y")
+        return out
+
+    # -- stairs ---------------------------------------------------------------------
+    def stair_top(self, st: Stair) -> str | None:
+        names = [lv.name for lv in self.levels]
+        k = names.index(st.level) if st.level in names else -1
+        return names[k + 1] if 0 <= k < len(names) - 1 else None
+
+    def stair_ij(self, st: Stair) -> tuple[int, int]:
+        xpart, ypart = st.panel.split("/")
+        return int(xpart.split("-")[0]) - 1, ord(ypart.split("-")[0].upper()) - ord("A")
+
+    def stair_openings(self, level: str) -> set:
+        """Bays left open on ``level`` because a stair comes up through them."""
+        return {self.stair_ij(st) for st in self.stairs if self.stair_top(st) == level}
+
+    def stair_in(self, i: int, j: int, level: str | None = None):
+        for st in self.stairs:
+            if self.stair_ij(st) == (i, j) and (level is None or level in (st.level, self.stair_top(st))):
+                return st
+        return None
+
     def toggle(self, kind: str, key: str) -> bool:
         """Remove or restore one element; returns True when it now exists."""
         lst = {"node": self.skip_nodes, "beam": self.skip_beams, "panel": self.skip_panels}[kind]
@@ -287,6 +371,7 @@ class Building:
             occupancy=d.get("occupancy", "house"),
             ll_reduction=d.get("ll_reduction", True),
             seismic=Seismic(**d.get("seismic", {})),
+            stairs=[Stair(**x) for x in d.get("stairs", [])],
         )
 
     @classmethod

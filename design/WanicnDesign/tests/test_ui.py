@@ -116,3 +116,20 @@ def test_seismic_page_applies_and_results_tab(win, app):
     assert win.result.seismic is not None
     tabs = win.page_list[-1].tabs
     assert any(tabs.tabText(i).startswith("แผ่นดินไหว") for i in range(tabs.count()))
+
+
+def test_plan_adds_stair_and_cantilever_beam(win, app):
+    win.level_box.setCurrentText("GB")
+    win.plan.add_stair(2, 0, "landing", "y", 0.25)
+    assert win.building.stairs and win.building.stairs[0].panel == "3-4/A-B"
+    win.level_box.setCurrentText("FL2")
+    win.plan.add_cant_beam((0, 0), "-y", 1.5)
+    assert win.building.cant_beams(win.building.level("FL2"))
+    kinds = {it.data(0) for it in win.plan.scene().items()}
+    assert {"stair", "cbeam"} <= kinds
+    win.calculate()
+    assert win.result.stairs and any(x.kind == "cantilever" for x in win.result.beams)
+    win.plan.toggle("cbeam", "FL2:1A-y")
+    assert not win.building.cant_beams(win.building.level("FL2"))
+    win.plan.toggle("stair", "ST1")
+    assert not win.building.stairs

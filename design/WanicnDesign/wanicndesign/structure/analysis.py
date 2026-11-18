@@ -67,8 +67,14 @@ def _fem(L: float, w: float, pts) -> tuple[float, float]:
     return fa, fb
 
 
-def continuous_beam(lengths: list[float], loads: list[float], points: list | None = None):
-    """Return ``(spans, reactions)``; ``points[k]`` lists ``(a, P)`` on span k."""
+def continuous_beam(lengths: list[float], loads: list[float], points: list | None = None,
+                    end_moments: tuple[float, float] = (0.0, 0.0)):
+    """Return ``(spans, reactions)``; ``points[k]`` lists ``(a, P)`` on span k.
+
+    ``end_moments`` are the hogging moments (kg-m, positive) that overhangs
+    beyond the first and the last support put on the line, e.g. a
+    cantilever beam: w·c²/2 + P·c. The overhang's own load is not in the
+    reactions returned; add it to that support."""
     n = len(lengths)
     if n == 0:
         return [], []
@@ -87,7 +93,10 @@ def continuous_beam(lengths: list[float], loads: list[float], points: list | Non
         fems.append((fa, fb))
         f[s] += fa
         f[s + 1] += fb
-    theta = _solve(k, [-v for v in f])
+    rhs = [-v for v in f]
+    rhs[0] += end_moments[0]           # a load left of the first support turns it counter-clockwise
+    rhs[-1] -= end_moments[1]
+    theta = _solve(k, rhs)
     spans, reactions = [], [0.0] * dof
     for s, (L, w) in enumerate(zip(lengths, loads)):
         c = 1.0 / L

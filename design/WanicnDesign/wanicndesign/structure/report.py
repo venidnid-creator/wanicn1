@@ -95,6 +95,15 @@ def write_report(res: DesignResult, path: str) -> None:
              round(s.d_req, 1), s.bars_short, s.bars_long, s.bars_top, ok(s.ok), s.note, s.refs)
             for s in res.slabs],
            [7, 12, 6, 16, 6, 6, 6, 10, 10, 10, 7, 10, 14, 14, 12, 5, 30, 40])
+    if res.stairs:
+        _sheet(wb, "บันได", ["ชื่อ", "ชั้นล่าง", "ช่อง", "ชนิด", "จำนวนลูกตั้ง", "ลูกตั้ง ม.", "ลูกนอน ม.",
+                             "ช่วง ม.", "กว้างต่อช่วง ม.", "หนา ม.", "W ช่วงลาด กก./ตร.ม.", "M กก.-ม./ม.",
+                             "d ต้องการ ซม.", "เหล็กหลัก (ล่าง)", "เหล็กบนที่ปลาย", "เหล็กกันร้าว", "ผล",
+                             "หมายเหตุ", "อ้างอิง"],
+               [(st.name, st.level, st.panel, st.kind, st.risers, round(st.riser, 3), st.tread, round(st.span, 2),
+                 round(st.width, 2), st.thickness, round(st.load), round(st.moment), round(st.d_req, 1),
+                 st.bars_main, st.bars_top, st.bars_temp, ok(st.ok), st.note, st.refs) for st in res.stairs],
+               [6, 8, 10, 9, 8, 8, 8, 7, 9, 7, 11, 10, 9, 12, 12, 12, 5, 44, 40])
     _sheet(wb, "คาน", ["ชั้น", "แนว", "ช่วง", "Mark", "b ม.", "h ม.", "ยาว ม.", "w กก./ม.",
                        "M- กก.-ม.", "M+ กก.-ม.", "V กก.", "d ต้องการ ซม.", "As บน ซม.²", "As ล่าง ซม.²",
                        "เหล็กบน", "เหล็กล่าง", "ปลอก", "h ไม่ตรวจแอ่น ม.", "ผล", "หมายเหตุ", "อ้างอิง"],

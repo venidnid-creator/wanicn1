@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QWidget
 
 COLOURS = {"footing": QColor("#c8a165"), "column": QColor("#a9a9a9"), "beam": QColor("#7f9fbf"),
            "slab": QColor(170, 200, 230, 150), "roof": QColor(190, 80, 60, 170),
-           "ng": QColor("#d32f2f")}
+           "stair": QColor("#b39b7d"), "ng": QColor("#d32f2f")}
 
 
 def _box(x0, y0, z0, x1, y1, z1):
@@ -61,9 +61,9 @@ def model_faces(b, res=None):
         lv_z = {lv.name: lv.elevation for lv in b.levels}
         for x in res.beams:
             x0, y0, x1, y1 = x.line_xy
-            z, hw = lv_z[x.level], x.b / 2
-            box = _box(x0, y0 - hw, z - x.h, x1, y0 + hw, z) if abs(y1 - y0) < 1e-9 else \
-                _box(x0 - hw, y0, z - x.h, x0 + hw, y1, z)
+            z, hw = (x.z_top if x.z_top is not None else lv_z[x.level]), x.b / 2
+            box = _box(min(x0, x1), y0 - hw, z - x.h, max(x0, x1), y0 + hw, z) if abs(y1 - y0) < 1e-9 else \
+                _box(x0 - hw, min(y0, y1), z - x.h, x0 + hw, max(y0, y1), z)
             colour = COLOURS["beam"] if x.ok else COLOURS["ng"]
             faces.extend((face, colour) for face in box)
         for s in res.slabs:
@@ -71,6 +71,10 @@ def model_faces(b, res=None):
             z = lv_z[s.level]
             colour = COLOURS["slab"] if s.ok else COLOURS["ng"]
             faces.extend((face, colour) for face in _box(x0, y0, z - s.thickness, x1, y1, z))
+        for st in res.stairs:
+            if st.geom is not None:
+                faces.extend(_stair_faces(b, st.geom, st.kind, st.thickness,
+                                          COLOURS["stair"] if st.ok else COLOURS["ng"]))
         for lv in b.levels:
             if lv.slab == "roof":
                 faces.extend(_roof_faces(b, lv.elevation))
@@ -106,9 +110,29 @@ def model_faces(b, res=None):
                 faces.extend((face, COLOURS["slab"]) for face in _box(
                     min(x0, x1, x0 + dx * length), min(y0, y1, y0 + dy * length), z - lv.slab_thickness,
                     max(x0, x1, x0 + dx * length), max(y0, y1, y0 + dy * length), z))
+        for node, (dx, dy), length, _p, _w in b.cant_beams(lv):
+            x0, y0 = xs[node[0]], ys[node[1]]
+            x1, y1 = x0 + dx * length, y0 + dy * length
+            box = _box(min(x0, x1), y0 - hw, z - lv.beam_depth, max(x0, x1), y0 + hw, z) if dx else \
+                _box(x0 - hw, min(y0, y1), z - lv.beam_depth, x0 + hw, max(y0, y1), z)
+            faces.extend((face, COLOURS["beam"]) for face in box)
         if lv.slab == "roof":
             faces.extend(_roof_faces(b, z))
+    from ..structure.stairs import geometry
+    for st in b.stairs:
+        g = geometry(b, st)
+        if g is not None:
+            faces.extend(_stair_faces(b, g, st.kind, st.thickness, COLOURS["stair"]))
     return faces
+
+
+def _stair_faces(b, g, kind, t, colour):
+    from ..structure.stairs import flight_surfaces
+    out = []
+    for quad in flight_surfaces(b, g, kind):
+        out.append((quad, colour))
+        out.append(([(x, y, z - t) for x, y, z in reversed(quad)], colour))
+    return out
 
 
 def _roof_faces(b, z):

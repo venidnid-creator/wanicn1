@@ -46,6 +46,15 @@ def write_dxf(res: DesignResult, path: str) -> None:
             msp.add_line((ox - 1.0, y), (ox + xs[-1] + 1.0, y), dxfattribs={"layer": "S-GRID"})
             msp.add_text(b.y_name(j), height=0.25, dxfattribs={"layer": "S-GRID"}).set_placement(
                 (ox - 1.5, y))
+        from .stairs import tread_lines
+        for st in res.stairs:
+            if st.geom is None or lv.name not in (st.level, b.levels[st.geom.li1].name):
+                continue
+            for (pa, pc) in tread_lines(b, st.geom):
+                msp.add_line((ox + pa[0], pa[1]), (ox + pc[0], pc[1]), dxfattribs={"layer": "S-STAIR"})
+            cx, cy = (b.xs[st.geom.i] + b.xs[st.geom.i + 1]) / 2, (b.ys[st.geom.j] + b.ys[st.geom.j + 1]) / 2
+            msp.add_text(f"{st.mark} t={st.thickness:.2f} {st.bars_main}", height=0.15,
+                         dxfattribs={"layer": "S-TEXT"}).set_placement((ox + cx, cy))
         for x in (bm for bm in res.beams if bm.level == lv.name):
             x0, y0, x1, y1 = x.line_xy
             pa, pc = (x0, y0), (x1, y1)
@@ -87,12 +96,20 @@ def write_dxf(res: DesignResult, path: str) -> None:
         _box(msp, x - c.b / 2, y - c.h / 2, top - c.height, x + c.b / 2, y + c.h / 2, top, "S-COLUMN")
     for x in res.beams:
         lv = next(l for l in b.levels if l.name == x.level)
+        z = x.z_top if x.z_top is not None else lv.elevation
         x0, y0, x1, y1 = x.line_xy
+        x0, x1, y0, y1 = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
         hw = x.b / 2
         if abs(y1 - y0) < 1e-9:
-            _box(msp, x0, y0 - hw + oy, lv.elevation - x.h, x1, y0 + hw + oy, lv.elevation, "S-BEAM")
+            _box(msp, x0, y0 - hw + oy, z - x.h, x1, y0 + hw + oy, z, "S-BEAM")
         else:
-            _box(msp, x0 - hw, y0 + oy, lv.elevation - x.h, x0 + hw, y1 + oy, lv.elevation, "S-BEAM")
+            _box(msp, x0 - hw, y0 + oy, z - x.h, x0 + hw, y1 + oy, z, "S-BEAM")
+    from .stairs import flight_surfaces
+    for st in res.stairs:
+        if st.geom is None:
+            continue
+        for quad in flight_surfaces(b, st.geom, st.kind):
+            msp.add_3dface([(x, y + oy, z) for x, y, z in quad], dxfattribs={"layer": "S-STAIR"})
     for s in res.slabs:
         lv = next(l for l in b.levels if l.name == s.level)
         x0, y0, x1, y1 = s.rect

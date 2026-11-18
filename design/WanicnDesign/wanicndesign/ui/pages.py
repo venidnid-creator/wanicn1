@@ -495,6 +495,13 @@ class ResultsPage(Page):
                              "หมายเหตุ", "อ้างอิง"],
                     [(s.level, s.panel, s.mark, f"{s.kind} กรณี {s.case}" if s.case else s.kind, s.thickness,
                       s.bars_short, s.bars_long, s.bars_top, ok(s.ok), s.note, s.refs) for s in res.slabs])
+        if res.stairs:
+            self._table("บันได", ["ชื่อ", "ชั้น", "ช่อง", "ชนิด", "ลูกตั้ง×ลูกนอน", "ช่วง", "หนา", "M กก.-ม./ม.",
+                                  "เหล็กหลัก", "เหล็กบน", "เหล็กกันร้าว", "ผล", "หมายเหตุ", "อ้างอิง"],
+                        [(st.name, st.level, st.panel, "มีชานพัก" if st.kind == "landing" else "ช่วงเดียว",
+                          f"{st.risers}×{st.riser * 100:.1f}/{st.tread * 100:.0f} ซม.", f"{st.span:.2f}",
+                          f"{st.thickness:.2f}", f"{st.moment:,.0f}", st.bars_main, st.bars_top, st.bars_temp,
+                          ok(st.ok), st.note, st.refs) for st in res.stairs])
         self._table("คาน", ["ชั้น", "ช่วง", "Mark", "b×h", "M-", "M+", "บน", "ล่าง", "ปลอก", "ผล",
                             "หมายเหตุ", "อ้างอิง"],
                     [(x.level, x.span, x.mark, f"{x.b:.2f}×{x.h:.2f}", f"{x.m_neg:,.0f}", f"{x.m_pos:,.0f}",

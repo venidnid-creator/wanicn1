@@ -2,15 +2,16 @@
 """Clickable structural plan of one level.
 
 Click a column, beam or slab panel to remove it; click its dashed outline
-to bring it back. Right-click a panel to add a secondary beam, or an edge
-beam to add a cantilever slab. After a calculation the elements are coloured by result
+to bring it back. Right-click a panel to add a secondary beam or a stair,
+an edge beam to add a cantilever slab, or an edge column to add a
+cantilever beam. After a calculation the elements are coloured by result
 (green = passes, red = fails) and carry their marks.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QInputDialog, QMenu
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QInputDialog, QMenu, QMessageBox
 
 S = 60.0                      # pixels per metre
 KIND, KEY = 0, 1              # item data slots
@@ -75,6 +76,14 @@ class PlanView(QGraphicsView):
             for x in (r.beams if kind == "sub" else r.slabs):
                 if x.level == lvl and (x.span if kind == "sub" else x.panel) == name:
                     return (C_OK if x.ok else C_NG), x.mark
+        elif kind == "cbeam":
+            for x in r.beams:
+                if x.kind == "cantilever" and f"{x.level}:{x.span}" == key:
+                    return (C_OK if x.ok else C_NG), x.mark
+        elif kind == "stair":
+            for st in r.stairs:
+                if st.name == key:
+                    return (C_OK if st.ok else C_NG), st.mark
         elif kind == "node":
             for c in r.columns:
                 if c.node == key and c.segment.endswith(self.level or ""):
@@ -170,6 +179,39 @@ class PlanView(QGraphicsView):
                 it.setToolTip(f"พื้นยื่น {length:.2f} ม. (คลิกเพื่อลบ)")
                 t = sc.addSimpleText(f"{mark}  ยื่น {length:.2f}".strip(), font)
                 t.setPos(QRectF(r0, r1).center() - QPointF(18, 6))
+        # stairs (on their bottom and top levels)
+        from ..structure.stairs import geometry, tread_lines
+        for st in b.stairs:
+            g = geometry(b, st)
+            if g is None or lvl not in (st.level, b.levels[g.li1].name):
+                continue
+            colour, mark = self._status("stair", st.name)
+            pen = QPen(colour or QColor("#8d6e63"), 1.2)
+            for pa, pc in tread_lines(b, g):
+                it = sc.addLine(pa[0] * S, -pa[1] * S, pc[0] * S, -pc[1] * S, pen)
+                it.setData(KIND, "stair")
+                it.setData(KEY, st.name)
+                it.setToolTip(f"บันได {st.name} (คลิกเพื่อลบ)")
+                it.setZValue(1)
+            cx, cy = (xs[g.i] + xs[g.i + 1]) / 2, (ys[g.j] + ys[g.j + 1]) / 2
+            t = sc.addSimpleText(f"{st.name} {'ขึ้น' if lvl == st.level else 'ลง'}", font)
+            t.setPos(self._p(cx, cy) - QPointF(14, 6))
+            t.setZValue(1)
+        # cantilever beams
+        lv_obj = b.level(lvl)
+        for node, (dx, dy), length, _p, _w in (b.cant_beams(lv_obj) if lv_obj else []):
+            x0, y0 = xs[node[0]], ys[node[1]]
+            p1, p2 = self._p(x0, y0), self._p(x0 + dx * length, y0 + dy * length)
+            d_name = {(1, 0): "x", (-1, 0): "-x", (0, 1): "y", (0, -1): "-y"}[(dx, dy)]
+            key = f"{lvl}:{b.node_name(*node)}{d_name}"
+            colour, mark = self._status("cbeam", key)
+            it = sc.addLine(p1.x(), p1.y(), p2.x(), p2.y(), QPen(colour or C_BEAM, 7, Qt.SolidLine, Qt.FlatCap))
+            it.setData(KIND, "cbeam")
+            it.setData(KEY, key)
+            it.setToolTip(f"คานยื่น {length:.2f} ม. (คลิกเพื่อลบ)")
+            it.setZValue(2)
+            t = sc.addSimpleText(f"{mark} ยื่น {length:.2f}".strip(), font)
+            t.setPos((p1 + p2) / 2 + QPointF(6, -6))
         # beams
         for j, y in enumerate(ys):
             for i in range(len(xs) - 1):
@@ -236,6 +278,12 @@ class PlanView(QGraphicsView):
         elif kind == "cant":
             na, nc = key.split("-")
             b.toggle_cantilever(lv, b.parse_node(na), b.parse_node(nc), None)
+        elif kind == "stair":
+            b.stairs[:] = [st for st in b.stairs if st.name != key]
+        elif kind == "cbeam":
+            spec = key.split(":", 1)[1]
+            k = next(n for n, ch in enumerate(spec) if ch in "-xy" and n > 0)
+            b.toggle_cant_beam(lv, b.parse_node(spec[:k]), spec[k:], None)
         else:
             b.toggle(kind, key)
         self._done()
@@ -257,6 +305,43 @@ class PlanView(QGraphicsView):
         self.building.toggle_cantilever(self.building.level(self.level), a, c, length)
         self._done()
 
+    def add_stair(self, i: int, j: int, kind: str = "landing", direction: str = "y", tread: float = 0.25):
+        from ..structure.building import Stair
+        b = self.building
+        n = 1
+        while any(st.name == f"ST{n}" for st in b.stairs):
+            n += 1
+        b.stairs[:] = [st for st in b.stairs if not (b.stair_ij(st) == (i, j) and st.level == self.level)]
+        b.stairs.append(Stair(f"ST{n}", b.panel_name(i, j), self.level, direction, kind, tread))
+        self._done()
+
+    def add_cant_beam(self, node, direction: str, length: float, tip: float = 0.0, wall: bool = False):
+        self.building.toggle_cant_beam(self.building.level(self.level), node, direction, length, tip, wall)
+        self._done()
+
+    def _ask_stair(self, i, j):
+        kinds = ["สองช่วงมีชานพัก (คานบันได BT)", "ช่วงเดียว"]
+        k, ok = QInputDialog.getItem(self, "บันได", "ชนิด", kinds, 0, False)
+        if not ok:
+            return
+        dirs = {"ขึ้นไปทาง +Y": "y", "ขึ้นไปทาง −Y": "-y", "ขึ้นไปทาง +X": "x", "ขึ้นไปทาง −X": "-x"}
+        d, ok = QInputDialog.getItem(self, "บันได", "ทิศทางช่วงแรก", list(dirs), 0, False)
+        if not ok:
+            return
+        t, ok = QInputDialog.getDouble(self, "บันได", "ลูกนอน (ม.)", 0.25, 0.20, 0.40, 3)
+        if ok:
+            self.add_stair(i, j, "landing" if k == kinds[0] else "straight", dirs[d], t)
+
+    def _ask_cant_beam(self, node, direction):
+        length, ok = QInputDialog.getDouble(self, "คานยื่น", "ยื่นจากศูนย์เสา (ม.)", 1.5, 0.3, 4.0, 2)
+        if not ok:
+            return
+        tip, ok = QInputDialog.getDouble(self, "คานยื่น", "แรงจุดที่ปลาย (กก.) เช่นคานขอบ", 0.0, 0.0, 20000, 0)
+        if not ok:
+            return
+        wall = QMessageBox.question(self, "คานยื่น", "มีผนังบนคานยื่นหรือไม่") == QMessageBox.Yes
+        self.add_cant_beam(node, direction, length, tip, wall)
+
     def contextMenuEvent(self, event):
         it = self.item_at(event.pos())
         b = self.building
@@ -271,6 +356,8 @@ class PlanView(QGraphicsView):
             menu.addAction("เพิ่มคานซอยแนว Y (กลางแผ่น)", lambda: self.add_sub_beam(i, j, "y"))
             if b.sub_beam(lv, i, j):
                 menu.addAction("ลบคานซอย", lambda: self.add_sub_beam(i, j, ""))
+            if self.level != b.levels[-1].name:
+                menu.addAction("เพิ่มบันไดขึ้นชั้นถัดไป…", lambda: self._ask_stair(i, j))
             menu.addAction("ลบแผ่นพื้น (ช่องเปิด)", lambda: self.toggle("panel", key))
         elif kind == "beam" and lv is not None and lv.slab == "suspended":
             na, nc = key.split(":")[1].split("-")
@@ -283,7 +370,14 @@ class PlanView(QGraphicsView):
                 menu.addAction("เพิ่มพื้นยื่น (ระเบียง)…", ask)
                 menu.addAction("ลบพื้นยื่น", lambda: self.add_cantilever(a, c, None))
             menu.addAction("ลบคาน", lambda: self.toggle("beam", key))
+        elif kind == "stair":
+            menu.addAction("ลบบันได", lambda: self.toggle("stair", key))
         elif kind == "node":
+            node = b.parse_node(key)
+            if lv is not None and lv.slab in ("suspended", "roof") and b.has_node(*node):
+                names = {"x": "+X", "-x": "−X", "y": "+Y", "-y": "−Y"}
+                for d in b.outward_dirs(node):
+                    menu.addAction(f"เพิ่มคานยื่นทาง {names[d]}…", lambda d=d: self._ask_cant_beam(node, d))
             menu.addAction("ลบ/คืนเสา", lambda: self.toggle("node", key))
         if not menu.isEmpty():
             menu.exec(event.globalPos())

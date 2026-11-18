@@ -155,6 +155,7 @@ class BeamResult:
     line_xy: tuple = ()            # (x0, y0, x1, y1) in plan, m
     kind: str = "beam"             # beam, secondary
     m_neg_live: float = 0.0        # live-load share of m_neg (earthquake combinations)
+    z_top: float | None = None     # top of beam when not at its level (stair beam BT)
 
 
 @dataclass
@@ -206,11 +207,12 @@ class DesignResult:
     columns: list = field(default_factory=list)
     footings: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    stairs: list = field(default_factory=list)
     seismic: object = None         # seismic.SeismicResult when the earthquake check ran
 
     @property
     def ok(self) -> bool:
-        groups = [self.slabs, self.beams, self.columns, self.footings]
+        groups = [self.slabs, self.beams, self.columns, self.footings, self.stairs]
         return all(x.ok for g in groups for x in g) and \
             (self.roof is None or (self.roof.purlin.ok and self.roof.rafter.ok)) and \
             (self.seismic is None or self.seismic.ok)
@@ -223,7 +225,7 @@ class DesignResult:
         items = [self.roof] if self.roof else []
         if self.roof:
             items += [self.roof.purlin, self.roof.rafter]
-        for x in items + self.slabs + self.beams + self.columns + self.footings:
+        for x in items + self.slabs + self.stairs + self.beams + self.columns + self.footings:
             for c in (x.refs or "").split(","):
                 c = c.strip()
                 if c and c not in out:
@@ -469,6 +471,19 @@ def _shift(pts, offset: float):
     return [(a + offset, P) for a, P in pts]
 
 
+def balconies(b: Building, lv):
+    """Cantilever slabs of a level as ``(a, c, length, outward, supported)``.
+    ``supported`` when cantilever beams leave both ends of the edge in the
+    outward direction at least as far as the slab: the slab then rests on
+    four beams (edge beam, two cantilever beams, an edge beam at the tip)."""
+    cbs = {(node, d): L for node, d, L, _p, _w in b.cant_beams(lv)}
+    out = []
+    for a, c, length, outward in b.cantilevers(lv):
+        ok = all(cbs.get((n, outward), 0.0) + 1e-6 >= length for n in (a, c))
+        out.append((a, c, length, outward, ok))
+    return out
+
+
 @dataclass
 class SubBeam:
     level: str
@@ -556,9 +571,29 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
             for a, c in zip(run, run[1:]):
                 if b.is_perimeter(a, c, lv.name):
                     add_w(a, c, per_m)
+    from .stairs import beam_loads as stair_beam_loads
+    for (a, c), pts in stair_beam_loads(b, li, part).items():
+        if b.has_beam(lv.name, a, c):
+            add_p(a, c, pts)
+            seg(a, c)["stair"] = True
     if lv.slab == "suspended":
-        for a, c, length, _out in b.cantilevers(lv):
-            add_w(a, c, W * length)                    # [STATICS], torsion not included
+        for a, c, length, (dx, dy), supported in balconies(b, lv):
+            if not supported:
+                add_w(a, c, W * length)                # [STATICS], torsion not included
+                continue
+            E = abs(b.xs[c[0]] - b.xs[a[0]]) + abs(b.ys[c[1]] - b.ys[a[1]])
+            if a[1] == c[1]:                           # edge along X, slab out in ±Y
+                along, side = _tributary(W, E, length)
+            else:
+                side, along = _tributary(W, length, E)
+            add_p(a, c, along)                         # 45° areas [EIT1007-SLAB]
+            (x0, y0), (x1, y1) = (b.xs[a[0]], b.ys[a[1]]), (b.xs[c[0]], b.ys[c[1]])
+            lo, hi = _seg(a, c)
+            loads[("tip", lo, hi)] = {"p": along, "len": E, "nodes": (lo, hi),
+                                      "xy": (min(x0, x1) + dx * length, min(y0, y1) + dy * length,
+                                             max(x0, x1) + dx * length, max(y0, y1) + dy * length)}
+            for n in (a, c):
+                loads.setdefault(("cb", n, (dx, dy)), []).extend(side)
     if part != "live" and li + 1 < len(b.levels) and lv.walls != "none":
         above = b.levels[li + 1]
         hgt = above.elevation - lv.elevation - above.beam_depth
@@ -597,7 +632,9 @@ def _beam_design(mat: Concrete, bw: float, h: float, m_neg: float, m_pos: float,
 
 def _min_depth(mat: Concrete, length: float, n_spans: int, k: int) -> float:
     """Depth that needs no deflection check [EIT1007-DEFL]."""
-    if n_spans == 1:
+    if n_spans == 0:
+        ratio = 8.0                      # cantilever
+    elif n_spans == 1:
         ratio = 16.0
     elif k in (0, n_spans - 1):
         ratio = 18.5
@@ -635,6 +672,81 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
         results.append(BeamResult(lv.name, "คานซอย", sb.name, "", bw, h, L, w, 0.0, sp.m_pos,
                                   max(sp.v_left, sp.v_right), d_req, at, ab, top, bot, stir, ok, " ; ".join(notes), hmin,
                                   refs, sb.line_xy, "secondary"))
+    # edge beams at the tip of supported cantilever slabs: simply supported on the cantilever beams
+    tip_p, tip_live = {}, {}
+    for key, tl in ext.items():
+        if not (isinstance(key, tuple) and key and key[0] == "tip"):
+            continue
+        lo, hi = tl["nodes"]
+        bw, h = lv.beam_width, lv.beam_depth
+        L = tl["len"]
+        for _it in range(4):
+            (sp,), (r0, r1) = continuous_beam([L], [CONCRETE_KG_M3 * bw * h], [tl["p"]])
+            d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, 0.0, sp.m_pos,
+                                                             max(sp.v_left, sp.v_right))
+            need = _round_up((d_req + 5.0) / 100, 0.05)
+            if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
+                break
+            h = need
+        live_tl = ext_live.get(key, {"p": []})
+        (_s,), (l0, l1) = continuous_beam([L], [0.0], [live_tl["p"]])
+        hmin = _min_depth(mat, L, 1, 0)
+        notes = ["คานขอบปลายพื้นยื่น วางบนคานยื่น"]
+        if not ok:
+            notes.append("หน้าตัดไม่พอ ต้องเพิ่มขนาด")
+        results.append(BeamResult(lv.name, "คานขอบ", f"{b.node_name(*lo)}-{b.node_name(*hi)} ปลาย", "", bw, h, L,
+                                  sp.w, 0.0, sp.m_pos, max(sp.v_left, sp.v_right), d_req, at, ab, top, bot, stir,
+                                  ok, " ; ".join(notes), hmin, refs, tl["xy"], "secondary"))
+        for n, r, lr in ((lo, r0, l0), (hi, r1, l1)):
+            tip_p[n] = tip_p.get(n, 0.0) + r
+            tip_live[n] = tip_live.get(n, 0.0) + lr
+    # cantilever beams: designed alone, their support moment and shear go to the line
+    over = {}                                    # (node, direction sign) -> (M, V, axis, V_live)
+    cb_refs = cite(mat.ref, "STATICS", "EIT1007-SHEAR", "EIT1007-MIN", "EIT1007-DEFL", "UNIT-WT")
+    for node, (dx, dy), L, P, wall in b.cant_beams(lv):
+        bw, h = lv.beam_width, lv.beam_depth
+        wl = 0.0
+        if wall and li + 1 < len(b.levels):
+            above = b.levels[li + 1]
+            wl = WALL_LOAD.get(lv.wall_type, 180) * max(0.0, above.elevation - lv.elevation - above.beam_depth)
+        hmin = _min_depth(mat, L, 0, 0)
+        notes = []
+        if h + 1e-9 < hmin:
+            h = _round_up(hmin, 0.05)
+            notes.append(f"เพิ่มความลึกเป็น {h:.2f} ม. (คานยื่น L/8)")
+        side = ext.get(("cb", node, (dx, dy)), [])
+        side_live = ext_live.get(("cb", node, (dx, dy)), [])
+        pt = tip_p.get(node, 0.0)
+        slab_len = max((a for a, _P in side), default=0.0) * 2 if side else 0.0
+        pts = side + ([(min(L, slab_len or L), pt)] if pt else [])
+        lpts = side_live + ([(min(L, slab_len or L), tip_live.get(node, 0.0))] if pt else [])
+        for _it in range(6):
+            w = CONCRETE_KG_M3 * bw * h + wl
+            M = w * L * L / 2 + P * L + sum(Pi * a for a, Pi in pts)      # [STATICS]
+            V = w * L + P + sum(Pi for _a, Pi in pts)
+            d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, M, 0.0, V)
+            need = _round_up((d_req + 5.0) / 100, 0.05)
+            if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
+                break
+            h = need
+            notes = [f"เพิ่มความลึกเป็น {h:.2f} ม."]
+        if wl:
+            notes.append(f"รับผนัง {wl:,.0f} กก./ม.")
+        if P:
+            notes.append(f"แรงจุดปลาย {P:,.0f} กก.")
+        if side or pt:
+            notes.append("รับพื้นยื่นและคานขอบปลาย")
+        if not ok:
+            notes.append("หน้าตัดไม่พอ ต้องเพิ่มขนาด")
+        x0, y0 = b.xs[node[0]], b.ys[node[1]]
+        d_name = {(1, 0): "x", (-1, 0): "-x", (0, 1): "y", (0, -1): "-y"}[(dx, dy)]
+        results.append(BeamResult(lv.name, "คานยื่น", f"{b.node_name(*node)}{d_name}", "", bw, h, L, w, M, 0.0, V,
+                                  d_req, at, ab, top, bot, stir, ok, " ; ".join(notes), hmin, cb_refs,
+                                  (x0, y0, x0 + dx * L, y0 + dy * L), "cantilever"))
+        m_live = sum(Pi * a for a, Pi in lpts)
+        results[-1].m_neg_live = m_live
+        over[(node, dx + dy)] = (M, V, "x" if dx else "y", sum(Pi for _a, Pi in lpts), m_live)
+    used = set()
     for direction, run in b.beam_lines(lv.name):
         lengths = [abs((b.xs[c[0]] - b.xs[a[0]]) if direction == "x" else (b.ys[c[1]] - b.ys[a[1]]))
                    for a, c in zip(run, run[1:])]
@@ -644,9 +756,18 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
         pts = [_local(sg, fl, L) for sg, fl, L in zip(segs, flips, lengths)]
         line = b.y_name(run[0][1]) if direction == "x" else b.x_name(run[0][0])
         h, bw = lv.beam_depth, lv.beam_width
+        left, right = over.get((run[0], -1)), over.get((run[-1], 1))
+        left = left if left and left[2] == direction else None
+        right = right if right and right[2] == direction else None
+        ends = ((left[0] if left else 0.0), (right[0] if right else 0.0))
+        for node, ov, sg in ((run[0], left, -1), (run[-1], right, 1)):
+            if ov:
+                used.add((node, sg))
+                reactions[node] = reactions.get(node, 0.0) + ov[1]
+                live_reac[node] = live_reac.get(node, 0.0) + ov[3]
         for _it in range(4):                     # re-run when the depth grows
             sw = CONCRETE_KG_M3 * bw * h
-            spans, reac = continuous_beam(lengths, [sg["w"] + sw for sg in segs], pts)
+            spans, reac = continuous_beam(lengths, [sg["w"] + sw for sg in segs], pts, ends)
             need = h
             for sp in spans:
                 m_neg = max(0.0, -sp.m_left, -sp.m_right)
@@ -656,7 +777,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
                 break
             h = need
         lspans, lreac = continuous_beam(lengths, [sg["w"] for sg in lsegs],
-                                        [_local(sg, fl, L) for sg, fl, L in zip(lsegs, flips, lengths)])
+                                        [_local(sg, fl, L) for sg, fl, L in zip(lsegs, flips, lengths)],
+                                        ((left[4] if left else 0.0), (right[4] if right else 0.0)))
         for k, ((a, c), sp) in enumerate(zip(zip(run, run[1:]), spans)):
             m_neg = max(0.0, -sp.m_left, -sp.m_right)
             d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, m_neg, sp.m_pos,
@@ -666,6 +788,10 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
                 notes.append(f"เพิ่มความลึกจาก {lv.beam_depth:.2f} เป็น {h:.2f} ม.")
             if segs[k].get("sub"):
                 notes.append("รับแรงจุดจากคานซอย")
+            if segs[k].get("stair"):
+                notes.append("รับน้ำหนักบันได")
+            if (k == 0 and left) or (k == len(spans) - 1 and right):
+                notes.append("รับโมเมนต์จากคานยื่น")
             if not ok:
                 notes.append("หน้าตัดไม่พอ ต้องเพิ่มขนาด")
             hmin = _min_depth(mat, sp.length, len(spans), k)
@@ -679,7 +805,61 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
         for node, rx, lx in zip(run, reac, lreac):
             reactions[node] = reactions.get(node, 0.0) + rx
             live_reac[node] = live_reac.get(node, 0.0) + lx
+    for (node, sg), (M, V, d, V_live, _ml) in over.items():
+        if (node, sg) not in used:               # no beam line behind it: straight into the column
+            reactions[node] = reactions.get(node, 0.0) + V
+            live_reac[node] = live_reac.get(node, 0.0) + V_live
+            for x in results:
+                if x.kind == "cantilever" and x.span.startswith(b.node_name(*node)):
+                    x.note = (x.note + " ; " if x.note else "") + "ไม่มีคานต่อเนื่องด้านใน โมเมนต์ลงเสา"
     return results, reactions, live_reac
+
+
+# ---------------------------------------------------------------------------
+# Stairs and the stair beam BT
+# ---------------------------------------------------------------------------
+
+def design_stairs(b: Building, mat: Concrete, res, node_reac, node_live):
+    """Design every stair; a ``landing`` stair also gets its beam BT,
+    simply supported on the two far-edge columns at landing height, whose
+    reactions go into those columns [STATICS], [QD-STAIR]."""
+    from .stairs import design_stair, landing_line
+    refs = cite(mat.ref, "STATICS", "EIT1007-SHEAR", "EIT1007-MIN", "EIT1007-DEFL", "UNIT-WT", "QD-STAIR")
+    for st in b.stairs:
+        r = design_stair(b, mat, st)
+        res.stairs.append(r)
+        line = landing_line(b, st)
+        if line is None or r.geom is None:
+            continue
+        g, L, pts = line
+        _g, _L, lpts = landing_line(b, st, "live")
+        a, c = g.far
+        lv0 = b.levels[g.li0]
+        bw, h = lv0.beam_width, lv0.beam_depth
+        notes = [f"คานบันได {st.name} ระดับชานพัก +{g.landing_z:.2f}"]
+        hmin = _min_depth(mat, L, 1, 0)
+        for _it in range(6):
+            sw = CONCRETE_KG_M3 * bw * h
+            (sp,), (r0, r1) = continuous_beam([L], [sw], [pts])
+            d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, 0.0, sp.m_pos,
+                                                             max(sp.v_left, sp.v_right))
+            need = max(_round_up((d_req + 5.0) / 100, 0.05), _round_up(hmin, 0.05))
+            if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
+                break
+            h = need
+        if h != lv0.beam_depth:
+            notes.append(f"ความลึก {h:.2f} ม.")
+        if not ok:
+            notes.append("หน้าตัดไม่พอ ต้องเพิ่มขนาด")
+        (_lsp,), (l0, l1) = continuous_beam([L], [0.0], [lpts])
+        xy = (b.xs[a[0]], b.ys[a[1]], b.xs[c[0]], b.ys[c[1]])
+        res.beams.append(BeamResult(lv0.name, "คานบันได", f"{b.node_name(*a)}-{b.node_name(*c)} BT", "", bw, h, L,
+                                    sp.w, 0.0, sp.m_pos, max(sp.v_left, sp.v_right), d_req, at, ab, top, bot,
+                                    stir, ok, " ; ".join(notes), hmin, refs, xy, "stair", z_top=g.landing_z))
+        lower, upper = (a, c) if a <= c else (c, a)
+        for node, rx, lx in ((lower, r0, l0), (upper, r1, l1)):
+            node_reac[g.li1][node] = node_reac[g.li1].get(node, 0.0) + rx
+            node_live[g.li1][node] = node_live[g.li1].get(node, 0.0) + lx
 
 
 # ---------------------------------------------------------------------------
@@ -853,16 +1033,31 @@ def design(b: Building) -> DesignResult:
             for i, j in b.panels(lv.name):
                 res.slabs.extend(design_slabs(b, mat, lv, i, j))
         if lv.slab == "suspended":
-            for a, c, length, (dx, dy) in b.cantilevers(lv):
+            bal = balconies(b, lv)
+            ends = {}
+            for a, c, _l, out, sup in bal:
+                if sup:
+                    for n in (a, c):
+                        ends[(n, out)] = ends.get((n, out), 0) + 1
+            for a, c, length, (dx, dy), supported in bal:
                 (x0, y0), (x1, y1) = (b.xs[a[0]], b.ys[a[1]]), (b.xs[c[0]], b.ys[c[1]])
                 rect = (min(x0, x1, x0 + dx * length), min(y0, y1, y0 + dy * length),
                         max(x0, x1, x0 + dx * length), max(y0, y1, y0 + dy * length))
                 width = abs(x1 - x0) + abs(y1 - y0)
-                res.slabs.append(design_cantilever_slab(mat, lv, f"{b.node_name(*a)}-{b.node_name(*c)} ยื่น",
-                                                        length, width, rect))
+                name = f"{b.node_name(*a)}-{b.node_name(*c)} ยื่น"
+                if supported:
+                    # resting on four beams: edge beam (continuous with the floor), tip beam (free),
+                    # cantilever beams (continuous when the next balcony shares them) [EIT1007-SLAB]
+                    free = 1 + sum(1 for n in (a, c) if ends[(n, (dx, dy))] < 2)
+                    sl = _panel_slab(mat, lv, name, rect[2] - rect[0], rect[3] - rect[1], free, rect)
+                    sl.note = (sl.note + " ; " if sl.note else "") + "พื้นยื่นวางบนคานยื่นและคานขอบปลาย"
+                    res.slabs.append(sl)
+                else:
+                    res.slabs.append(design_cantilever_slab(mat, lv, name, length, width, rect))
         beams, reac, live = design_level_beams(b, mat, li, res.roof)
         res.beams.extend(beams)
         node_reac[li], node_live[li] = reac, live
+    design_stairs(b, mat, res, node_reac, node_live)
     reduce = b.ll_reduction and b.occupancy not in NO_REDUCTION
     elev = [lv.elevation for lv in b.levels]
     stub = b.foundation.depth - 0.40 + elev[0]
@@ -905,7 +1100,13 @@ def design(b: Building) -> DesignResult:
     _assign_marks(res.columns, lambda c: (c.b, c.h, c.bars, c.ties), "C", lambda c: c.load)
     _assign_marks(res.footings, lambda f: (f.piles, f.pile, f.width, f.length, f.thickness,
                                            f.bars_x, f.bars_y), "F", lambda f: f.load)
+    _assign_marks([x for x in res.beams if x.kind == "stair"],
+                  lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), "BT", lambda x: x.m_pos)
+    for st in res.stairs:
+        st.mark = st.name
     for lv in b.levels:
+        _assign_marks([x for x in res.beams if x.level == lv.name and x.kind == "cantilever"],
+                      lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), lv.beam_mark + "C", lambda x: x.m_neg)
         _assign_marks([x for x in res.beams if x.level == lv.name and x.kind == "beam"],
                       lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), lv.beam_mark, lambda x: x.m_pos)
         _assign_marks([x for x in res.beams if x.level == lv.name and x.kind == "secondary"],
@@ -915,7 +1116,7 @@ def design(b: Building) -> DesignResult:
                       "GS" if lv.slab == "on_ground" else "S", lambda x: x.m_pos)
         _assign_marks([x for x in res.slabs if x.level == lv.name and x.kind == "cantilever"],
                       lambda x: (x.lx, x.thickness, x.bars_top), "CS", lambda x: x.m_neg)
-    for group in (res.slabs, res.beams, res.columns, res.footings):
+    for group in (res.slabs, res.stairs, res.beams, res.columns, res.footings):
         for x in group:
             if not x.ok:
                 where = getattr(x, "span", "") or getattr(x, "panel", "") or x.node
