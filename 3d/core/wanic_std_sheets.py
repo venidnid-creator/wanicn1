@@ -1747,7 +1747,7 @@ def bath_section(sh, E, k, rm, side, ox, oy, sc, num, ref_sheet, names):
     chain(xl - 15, [0.0, th, zc])
     chain(xl - 22, [0.0, zc])
     # sizes and axes below
-    yb = P(0, -0.45)[1] - 6
+    yb = P(0, -0.45)[1] - 9
     xs_ = [P(-t, 0)[0], P(0, 0)[0], P(W, 0)[0], P(W + t, 0)[0]]
     for xa, xb, val in zip(xs_, xs_[1:], (t, W, t)):
         sh.line((xa, yb), (xb, yb), "dim", 0.13)
@@ -1873,8 +1873,8 @@ def stair_plan_view(sh, E, e, k, box, sc, upper, sec_ref, num):
     sh.items[n0:] = clip_items(sh.items[n0:], clip)
     # tread numbers and the chain along the first flight (ground) / second (upper)
     fl = lay["flights"]
-    show = fl[1:] if upper and len(fl) > 1 else fl[:1]
-    first_no = 1 + (fl[0]["n"] if upper and len(fl) > 1 else 0)
+    show = fl                                     # every flight numbered and dimensioned (the original)
+    first_no = 1
     g = lay["g"]
     no = first_no
     for f in show:
@@ -2082,15 +2082,26 @@ def a_stair_section(sh, E, e, idx):
         sh.poly([(q[0] + 3, q[1]), (q[0] + 1.6, q[1] + 2.2), (q[0] + 4.4, q[1] + 2.2)], "dim", 0.25)
         sh.text((q[0] + 5.2, q[1] + 0.8), f"{'±' if zq == 0 else '+'}{zq:.2f} {lab}", 2.2, "left", "dim")
     # the tread chain below and the overall
-    yb = P(0, -0.45)[1] - 6
+    yb = P(0, -0.45)[1] - 9
     for i in range(n1 + 1):
         xq = P(i * g, 0)[0]
         sh.line((xq - 0.6, yb - 0.6), (xq + 0.6, yb + 0.6), "dim", 0.2)
         sh.line((xq, yb - 1.2), (xq, yb + 1.2), "dim", 0.13)
     sh.line(P(0, 0)[0:1] + (yb,), (P(L1, 0)[0], yb), "dim", 0.13)
-    for i in range(n1):
-        sh.text((P((i + 0.5) * g, 0)[0], yb + 0.9), f"{g:.2f}", 1.6, "center", "dim")
-    sh.text((P(L1 / 2, 0)[0], yb - 4), f"{n1} @ {g:.2f} = {L1:.2f}", 2.0, "center", "dim")
+    for i in range(n1):                              # each going written up the chain (the original)
+        sh.text((P((i + 0.5) * g, 0)[0] + 0.7, yb + 1.2), f"{g:.2f}", 1.8, "left", "dim", angle=90)
+    for i in range(n1 + 1):                          # the treads' edges dashed down to the chain
+        top_z = i * R_ if i else 0.0
+        sh.line(P(i * g, top_z), (P(i * g, 0)[0], yb + 1.2), "grid", 0.1, True)
+    # flight 2's treads too (beyond), dashed to a second chain
+    if len(fl) > 1:
+        n2 = fl[1]["n"]
+        yb2_ = yb + 0.0
+        u0_ = L1 - n2 * g
+        for j in range(n2 + 1):
+            xq = P(L1 - j * g, 0)[0]
+            sh.line((xq, P(0, n1 * R_ + j * R_)[1]), (xq, P(0, n1 * R_ - ts - 0.05)[1]), "grid", 0.08, True)
+    sh.text((P(L1 / 2, 0)[0], yb - 4.2), f"{n1} @ {g:.2f} = {L1:.2f}", 2.2, "center", "dim")
     if land:
         sh.line((P(L1, 0)[0], yb), (P(L1 + land, 0)[0], yb), "dim", 0.13)
         sh.text((P(L1 + land / 2, 0)[0], yb + 0.9), f"{land:.2f}", 1.8, "center", "dim")
