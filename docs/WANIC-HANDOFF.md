@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 — แจ้งเวอร์ชันใหม่ + อายุใช้งานไม่นับใหม่เมื่ออัปเดต (18 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
+## ReadWanicn2027 — แจ้งเวอร์ชันใหม่ + อายุใช้งานไม่นับใหม่เมื่ออัปเดต (18 พ.ย. 2569, อนุมัติแล้ว — รุ่น 2027.4.5 ไม่ release)
 - `update.ReleaseInfo.installer_url/notes` จาก Release ล่าสุด · `UpdateDialog` เด้งเองเมื่อเปิดโปรแกรมแล้วพบรุ่นใหม่ (ปุ่ม ⬇ มีเวอร์ชันใหม่ ก็เปิดได้):
   ข้อความรุ่นใหม่, «อัปเดตแล้วยังใช้ได้ถึง … นับจากติดตั้งครั้งแรก ไม่เริ่มนับใหม่», ดาวน์โหลดตัวติดตั้งตรง, ไม่ต้องเตือนรุ่นนี้ (`update/skip`)
 - ใช้ได้เฉพาะรุ่นที่เผยแพร่ใน GitHub Releases (`readwanicn-v*`) — ตอนนี้ล่าสุด v2027.3.0; รุ่น 2027.4.x ยังไม่ release
