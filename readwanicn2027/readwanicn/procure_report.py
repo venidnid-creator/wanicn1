@@ -811,7 +811,7 @@ def report_124(p: P.Project) -> list:
                 + [C("") for _m in range(n)])
 
     def line(name, vals, money_=False, bold=False):
-        small = fs - (1.5 if n > 6 else 0.5)          # the baht of a month fits its column on one line
+        small = fs - (1.0 if n > 6 else 0.5)          # the baht of a month fits its column on one line
         return [C(name, align="right", bold=True, colspan=7)] + [
             (Q(v, 0, bold=bold, size=small) if money_ else Q(v, 2, bold=bold)) if v is not None else C("")
             for v in vals]
