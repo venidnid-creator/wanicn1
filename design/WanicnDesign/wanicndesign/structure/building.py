@@ -50,6 +50,8 @@ class Roof:
     frame_load: float = 15.0       # purlins + rafters, kg/m² slope
     purlin_spacing: float = 0.32   # battens for tiles
     rafter_spacing: float = 1.00
+    solar_load: float = 0.0        # rooftop solar panels, kg/m² (dead load, ประกาศ มท. 2567 ข้อ 11)
+    ceiling: str = "board"         # "plaster", "board", "none": deflection limits of ประกาศ มท. 2567 ตาราง 1
 
 
 @dataclass
@@ -97,6 +99,7 @@ class Wind:
     enabled: bool = True
     terrain: str = "urban"         # "urban" (table 1) or "open" (table 2, open country / coast)
     public: str = "auto"           # "auto", "yes", "no": public building of 1,000 m² or more (+15%)
+    importance: str = "normal"     # ประกาศ มท. 2567 ตาราง 6: "low", "normal", "high", "very_high" (+15%)
 
 
 @dataclass
@@ -117,6 +120,7 @@ class Building:
     occupancy: str = "house"       # standards.LIVE_LOADS key
     ll_reduction: bool = True      # กฎกระทรวง พ.ศ. 2566 ข้อ 13–14, columns and footings
     quality_control: bool = True   # construction standard and quality control specified (ข้อ 8 φ)
+    province: str = ""             # site province: wind group and seismic zone (ประกาศ มท. 2567 ผนวก ก, ข)
     seismic: Seismic = field(default_factory=Seismic)
     wind: Wind = field(default_factory=Wind)
     stairs: list = field(default_factory=list)      # [Stair]
@@ -381,6 +385,7 @@ class Building:
             occupancy=d.get("occupancy", "house"),
             ll_reduction=d.get("ll_reduction", True),
             quality_control=d.get("quality_control", True),
+            province=d.get("province", ""),
             seismic=Seismic(**d.get("seismic", {})),
             wind=Wind(**d.get("wind", {})),
             stairs=[Stair(**x) for x in d.get("stairs", [])],

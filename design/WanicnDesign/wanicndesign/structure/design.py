@@ -15,6 +15,8 @@ from ..standards import LL_REDUCTION_MR6, NO_REDUCTION, NO_REDUCTION_ABOVE, cite
 from .analysis import continuous_beam, partial_udl
 from .building import ROOF_COVER_LOAD, WALL_LOAD, Building
 from .materials import CONCRETE_KG_M3, ES, FY, Concrete
+from .rules import (SLAB_MIN_THICKNESS, beam_deflection, beam_offset, beam_rho_min, footing_offset, slab_max_spacing,
+                    slab_min_ratio, slab_offset, stirrup_max_spacing, tie_bar, tie_spacing_max)
 from .sections import BAR_DIA, bar_area, load_c_sections, load_piles, pick_bars, pick_spacing
 
 PURLIN_FB = 1400.0          # ksc [QD-PURLIN]; ≈ 0.6 Fy of SS400 [AISC-ASD]
@@ -154,6 +156,8 @@ class BeamResult:
     refs: str = ""
     line_xy: tuple = ()            # (x0, y0, x1, y1) in plan, m
     kind: str = "beam"             # beam, secondary
+    d_off: float = 5.0             # top of beam to the main bars, cm
+    deflection: float = 0.0        # long-term total deflection, cm (ประกาศ มท. 2567 ตาราง 1)
     m_neg_live: float = 0.0        # live-load share of m_neg (earthquake combinations)
     z_top: float | None = None     # top of beam when not at its level (stair beam BT)
     load_w: float = 0.0            # gravity loads on a frame beam (total; self weight included), kg/m
@@ -253,7 +257,9 @@ class DesignResult:
                     out.append(c)
         extra = (self.frames.refs.split(",") if self.frames else []) + \
             (self.wind.refs.split(",") if self.wind else []) + \
-            (["MR2566-23"] if self.fire and (self.fire.applies or self.fire.notes) else []) + \
+            (["MR2566-23", "MI2567-32"] if self.fire and self.fire.applies else
+             ["MR2566-23"] if self.fire and self.fire.notes else []) + \
+            (["MI2567-3", "MI2567-29", "MI2567-29C", "MI2567-29D"]) + \
             (self.seismic.refs.split(",") + ["MR-EQ2564"] if self.seismic else [])
         if extra:
             for c in extra:
@@ -267,24 +273,33 @@ class DesignResult:
 # Roof
 # ---------------------------------------------------------------------------
 
-def _pick_c(mx: float, my: float, role: str, span: float, w_perp: float | None = None) -> SteelMember:
-    """Lightest C section with Sx, Sy ≥ M/Fb [QD-PURLIN] and, when the load
-    ``w_perp`` (kg/m, normal to the slope) is given, deflection ≤ L/240."""
+#: Deflection limits of roof structures (live / dead + live) by ceiling — ประกาศ มท. 2567 ตาราง 1.
+ROOF_DEFL = {"plaster": (360, 240), "board": (240, 180), "none": (180, 120)}
+
+
+def _pick_c(mx: float, my: float, role: str, span: float, w_perp: float | None = None,
+            w_live: float | None = None, limits: tuple = (PURLIN_DEFL, PURLIN_DEFL)) -> SteelMember:
+    """Lightest C section with Sx, Sy ≥ M/Fb (Fb = 1,400 ksc ≤ 0.6 Fy [MI2567-27]) whose
+    deflection under ``w_perp`` (total, kg/m normal to the slope) is within
+    L/limits[1] and under ``w_live`` within L/limits[0] [MI2567-8]."""
     sx_req = mx * 100 / PURLIN_FB
     sy_req = my * 100 / PURLIN_FB
-    limit = span * 100 / PURLIN_DEFL
+    limit = span * 100 / limits[1]
+    limit_live = span * 100 / limits[0]
     table = load_c_sections()
-    refs = cite("QD-PURLIN", "AISC-ASD", "STEEL-TABLE")
+    refs = cite("QD-PURLIN", "MI2567-27", "MI2567-8", "AISC-ASD", "STEEL-TABLE")
 
-    def defl(s):
-        if not w_perp or not s.get("ix_cm4"):
+    def defl(s, w=None):
+        w = w_perp if w is None else w
+        if not w or not s.get("ix_cm4"):
             return 0.0
         L = span * 100
-        return 5 * (w_perp / 100) * L ** 4 / (384 * ES * s["ix_cm4"])
+        return 5 * (w / 100) * L ** 4 / (384 * ES * s["ix_cm4"])
 
     for s in table:                        # sorted lightest first
         d = defl(s)
-        if s["zx_cm3"] >= sx_req and s["zy_cm3"] >= sy_req and d <= limit:
+        if s["zx_cm3"] >= sx_req and s["zy_cm3"] >= sy_req and d <= limit and \
+                (not w_live or defl(s, w_live) <= limit_live):
             return SteelMember(role, span, mx, my, sx_req, sy_req, s["name"], s["zx_cm3"],
                                s["zy_cm3"], s["kg_m"], True, s["source"], d, limit, refs)
     s = table[-1]
@@ -297,7 +312,7 @@ def design_roof(b: Building) -> RoofResult:
     th = math.radians(r.slope_deg)
     cos, sin = math.cos(th), math.sin(th)
     cover = ROOF_COVER_LOAD.get(r.cover, 50)                     # [QD-ROOF]
-    load_plan = (cover + r.frame_load) / cos + r.live_load       # live per plan [MR2566-11]
+    load_plan = (cover + r.frame_load + r.solar_load) / cos + r.live_load   # live per plan [MR2566-11]
     X, Y = b.plan_size()
     a, c = X + 2 * r.overhang, Y + 2 * r.overhang
     long_, short = max(a, c), min(a, c)
@@ -311,17 +326,21 @@ def design_roof(b: Building) -> RoofResult:
         ridge = long_ - short
         hips = 4 * math.sqrt(2 * (short / 2) ** 2 + rise ** 2)
         eave = 2 * (a + c)
-    w_p = (cover + r.live_load) * r.purlin_spacing
+    w_p = (cover + r.solar_load + r.live_load) * r.purlin_spacing
     L = r.rafter_spacing
-    purlin = _pick_c(w_p * cos * L * L / 8, w_p * sin * L * L / 8, "แป", L, w_p * cos)
+    # purlins carry no ceiling; rafters take the limits of the ceiling hung from the roof [MI2567-8]
+    purlin = _pick_c(w_p * cos * L * L / 8, w_p * sin * L * L / 8, "แป", L, w_p * cos,
+                     r.live_load * r.purlin_spacing * cos, ROOF_DEFL["none"])
     span = (short / 2 - r.overhang) / cos if short / 2 > r.overhang else short / 2 / cos
-    w_r = (cover + r.frame_load + r.live_load) * r.rafter_spacing
-    rafter = _pick_c(w_r * cos * span * span / 8, 0.0, "จันทัน", span, w_r * cos)
+    w_r = (cover + r.frame_load + r.solar_load + r.live_load) * r.rafter_spacing
+    rafter = _pick_c(w_r * cos * span * span / 8, 0.0, "จันทัน", span, w_r * cos,
+                     r.live_load * r.rafter_spacing * cos, ROOF_DEFL.get(r.ceiling, ROOF_DEFL["board"]))
     steel = (slope_area / r.purlin_spacing) * purlin.kg_m + \
             (slope_area / r.rafter_spacing) * rafter.kg_m + \
             (ridge + hips) * 2 * rafter.kg_m
     return RoofResult(load_plan, r.live_load, plan_area, slope_area, ridge, hips, eave, purlin, rafter,
-                      steel, cite("QD-ROOF", "MR2566-11", "QD-PURLIN"))
+                      steel, cite("QD-ROOF", "MR2566-11", "QD-PURLIN", "MI2567-11" if r.solar_load else "",
+                                  "MR72" if r.solar_load else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -346,22 +365,23 @@ def _panel_slab(mat: Concrete, lv, name: str, lx: float, ly: float, discontinuou
     t = lv.slab_thickness
     fs = mat.fs("RB9")
     R, jj = mat.R(fs), mat.j(fs)
-    d = t * 100 - 2.5
-    as_min = 0.0025 * 100 * t * 100           # cm²/m [EIT1007-TEMP]
-    smax = min(3 * t * 100, 45.0)
-    if lv.slab == "on_ground":
+    d = t * 100 - slab_offset(mat)                                     # cover, ตาราง 13 [MI2567-29C]
+    on_ground = lv.slab == "on_ground"
+    as_min = slab_min_ratio(mat.tie_grade, on_ground) * 100 * t * 100  # cm²/m [MI2567-29D]
+    smax = slab_max_spacing(t, False)                                  # ≤ 3t ≤ 30 cm
+    if on_ground:
         bars = f"RB9@{pick_spacing(as_min, 'RB9', smax):.2f}"
         return SlabResult(lv.name, name, "", "on-ground", lx, ly, m, 0.0, 0, 0, 0, t, 0.0,
-                          bars, bars, "-", True, "พื้นวางบนดิน ใช้เหล็กกันร้าว",
-                          refs=cite("EIT1007-TEMP"), rect=rect)
+                          bars, bars, "-", True, "พื้นวางบนดิน ใช้เหล็กกันร้าว 0.0015",
+                          refs=cite("MI2567-29D"), rect=rect)
     W, _live = _slab_load(lv)
-    refs = [mat.ref, "UNIT-WT", "MR2566-11", "EIT1007-TEMP"]
+    refs = [mat.ref, "UNIT-WT", "MR2566-11", "MI2567-29D", "MI2567-29C"]
     if m < 0.5:
         kind, case = "one-way", 0
         m_pos = W * S * S / 8
         m_neg = W * S * S / 24
         m_long = 0.0
-        t_min = S / 20
+        t_min = max(SLAB_MIN_THICKNESS, S / 20)
         refs.append("QD-SLAB5")
     else:
         case = discontinuous + 1          # case 1 = all four edges continuous
@@ -370,7 +390,8 @@ def _panel_slab(mat: Concrete, lv, name: str, lx: float, ly: float, discontinuou
         m_pos = _interp(m, SLAB_M, pos) * W * S * S
         m_neg = max(_interp(m, SLAB_M, neg_c), _interp(m, SLAB_M, neg_d)) * W * S * S
         m_long = l_pos * W * S * S
-        t_min = max(0.08, 2 * (lx + ly) / 180)
+        t_min = max(SLAB_MIN_THICKNESS, 2 * (lx + ly) / 180)
+        smax = slab_max_spacing(t, True)                               # ≤ 2t at critical sections
         refs.append("EIT1007-SLAB")
         if case == 5:
             refs.append("QD-SLAB5")
@@ -432,21 +453,22 @@ def design_cantilever_slab(mat: Concrete, lv, name: str, length: float, width: f
     t = lv.slab_thickness
     fs = mat.fs("RB9")
     R, jj = mat.R(fs), mat.j(fs)
-    d = t * 100 - 2.5
+    d = t * 100 - slab_offset(mat)
     W, _live = _slab_load(lv)
     mom = W * length * length / 2
     d_req = math.sqrt(mom * 100 / (R * 100))
-    as_min = 0.0025 * 100 * t * 100
-    smax = min(3 * t * 100, 45.0)
+    as_min = slab_min_ratio(mat.tie_grade) * 100 * t * 100
+    smax = slab_max_spacing(t, False)
     as_ = max(mom * 100 / (fs * jj * d), as_min)
-    t_min = length / 10
+    t_min = max(SLAB_MIN_THICKNESS, length / 10)
     ok = d_req <= d and t + 1e-9 >= t_min
     note = "ไม่รวมแรงบิดในคานขอบ" if ok else (f"ความหนาน้อยกว่า {t_min:.2f} ม." if t < t_min
                                             else "ความลึกไม่พอ")
     temp = f"RB9@{pick_spacing(as_min, 'RB9', smax):.2f}"
     return SlabResult(lv.name, name, "", "cantilever", length, width, 0.0, W, 0.0, mom, 0.0, t, d_req,
                       temp, temp, f"RB9@{pick_spacing(as_, 'RB9', smax):.2f}", ok, note, 0,
-                      cite(mat.ref, "STATICS", "EIT1007-SLABMIN", "UNIT-WT", "MR2566-11", "EIT1007-TEMP"),
+                      cite(mat.ref, "STATICS", "EIT1007-SLABMIN", "UNIT-WT", "MR2566-11", "MI2567-29D",
+                           "MI2567-29C"),
                       rect)
 
 
@@ -630,12 +652,15 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
     return loads, subs
 
 
-def _beam_design(mat: Concrete, bw: float, h: float, m_neg: float, m_pos: float, v: float):
+def _beam_design(mat: Concrete, bw: float, h: float, m_neg: float, m_pos: float, v: float,
+                 off: float | None = None):
+    """``off``: top of beam to the main bars, cm (ตาราง 13 cover + stirrup + ½ bar)."""
     fs = mat.fs("DB")
     R, j = mat.R(fs), mat.j(fs)
-    b_cm, d = bw * 100, h * 100 - 5.0
+    off = beam_offset(mat, False) if off is None else off
+    b_cm, d = bw * 100, h * 100 - off
     d_req = math.sqrt(max(m_neg, m_pos, 1.0) * 100 / (R * b_cm))
-    rho_min = 14.0 / FY[mat.main_grade]                               # [EIT1007-MIN]
+    rho_min = beam_rho_min(mat.fc_prime, FY[mat.main_grade])          # [MI2567-29D] (ญ) 1)
 
     def as_of(mom):
         req = mom * 100 / (fs * j * d)
@@ -649,7 +674,8 @@ def _beam_design(mat: Concrete, bw: float, h: float, m_neg: float, m_pos: float,
     av = 2 * bar_area(STIRRUP)
     fv = mat.fs(STIRRUP)
     s = av * fv / ((vv - vc) * b_cm) if vv > vc else d / 2
-    s = max(5.0, _round_down(min(s, d / 2, 20.0), 2.5))
+    s_max = stirrup_max_spacing(av, FY[mat.tie_grade], b_cm, d, mat.fc_prime)   # (ญ) 3) minimum stirrups
+    s = max(5.0, _round_down(min(s, s_max, 20.0), 2.5))
     ok = d_req <= d and vv <= 1.32 * math.sqrt(mat.fc_prime) + vc
     stir = f"{STIRRUP}@{s / 100:.3f}".rstrip("0")
     return d_req, as_top, as_bot, f"{nt}-{st}", f"{nb}-{sb}", stir, ok
@@ -677,6 +703,7 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
     ext, subs = level_line_loads(b, li, roof)
     ext_live, subs_live = level_line_loads(b, li, roof, "live")
     empty = {"w": 0.0, "p": []}
+    off = beam_offset(mat, lv.slab == "on_ground")          # ground beams: exposed to earth [MI2567-29C]
     results, reactions, live_reac = [], {}, {}
     refs = cite(mat.ref, "EIT1007-SHEAR", "EIT1007-MIN", "EIT1007-DEFL", "UNIT-WT", "QD-WALL",
                 "EIT1007-SLAB", "STATICS")
@@ -687,7 +714,7 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
         L = sb.length
         (sp,), _r = continuous_beam([L], [CONCRETE_KG_M3 * bw * h], [sb.pts])
         d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, 0.0, sp.m_pos,
-                                                         max(sp.v_left, sp.v_right))
+                                                         max(sp.v_left, sp.v_right), off)
         hmin = _min_depth(mat, L, 1, 0)
         notes = ["คานซอยวางบนคานหลัก (ช่วงเดียว)"]
         if not ok:
@@ -708,8 +735,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
         for _it in range(4):
             (sp,), (r0, r1) = continuous_beam([L], [CONCRETE_KG_M3 * bw * h], [tl["p"]])
             d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, 0.0, sp.m_pos,
-                                                             max(sp.v_left, sp.v_right))
-            need = _round_up((d_req + 5.0) / 100, 0.05)
+                                                             max(sp.v_left, sp.v_right), off)
+            need = _round_up((d_req + off) / 100, 0.05)
             if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
                 break
             h = need
@@ -749,8 +776,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             w = CONCRETE_KG_M3 * bw * h + wl
             M = w * L * L / 2 + P * L + sum(Pi * a for a, Pi in pts)      # [STATICS]
             V = w * L + P + sum(Pi for _a, Pi in pts)
-            d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, M, 0.0, V)
-            need = _round_up((d_req + 5.0) / 100, 0.05)
+            d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, M, 0.0, V, off)
+            need = _round_up((d_req + off) / 100, 0.05)
             if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
                 break
             h = need
@@ -796,8 +823,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             need = h
             for sp in spans:
                 m_neg = max(0.0, -sp.m_left, -sp.m_right)
-                d_req = _beam_design(mat, bw, h, m_neg, sp.m_pos, max(sp.v_left, sp.v_right))[0]
-                need = max(need, _round_up((d_req + 5.0) / 100, 0.05))
+                d_req = _beam_design(mat, bw, h, m_neg, sp.m_pos, max(sp.v_left, sp.v_right), off)[0]
+                need = max(need, _round_up((d_req + off) / 100, 0.05))
             if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
                 break
             h = need
@@ -807,7 +834,7 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
         for k, ((a, c), sp) in enumerate(zip(zip(run, run[1:]), spans)):
             m_neg = max(0.0, -sp.m_left, -sp.m_right)
             d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, m_neg, sp.m_pos,
-                                                             max(sp.v_left, sp.v_right))
+                                                             max(sp.v_left, sp.v_right), off)
             notes = []
             if h != lv.beam_depth:
                 notes.append(f"เพิ่มความลึกจาก {lv.beam_depth:.2f} เป็น {h:.2f} ม.")
@@ -840,7 +867,53 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             for x in results:
                 if x.kind == "cantilever" and x.span.startswith(b.node_name(*node)):
                     x.note = (x.note + " ; " if x.note else "") + "ไม่มีคานต่อเนื่องด้านใน โมเมนต์ลงเสา"
+    for x in results:
+        x.d_off = off
     return results, reactions, live_reac
+
+
+def _bars_area(text: str) -> float:
+    n, size = text.split("-", 1)
+    return int(n) * bar_area(size.strip())
+
+
+def check_deflections(res, mat):
+    """Deflection of every beam against ประกาศ มท. 2567 ตาราง 1 [MI2567-8];
+    a beam that deflects too much is deepened by 5 cm at a time (its
+    bars are then re-chosen for the same moments)."""
+    for x in res.beams:
+        L = x.length
+        cant = x.kind == "cantilever"
+        m = x.m_neg if cant else x.m_pos
+        if L <= 0 or m <= 0:
+            continue
+        total_w = x.load_w * L + sum(P for _a, P in x.load_pts)
+        live_w = x.load_w_live * L + sum(P for _a, P in x.load_pts_live)
+        share = min(1.0, live_w / total_w) if total_w > 0 and x.kind == "beam" else \
+            (min(1.0, x.m_neg_live / x.m_neg) if cant and x.m_neg else 0.3)
+        grown = False
+        for _ in range(8):
+            d = x.h * 100 - x.d_off
+            As_t = _bars_area(x.top if cant else x.bottom)
+            As_c = _bars_area(x.bottom if cant else x.top)
+            dl, dt, ll, lt = beam_deflection(mat, x.b, x.h, d, As_t, As_c, L, m, share, cant)
+            if (dl <= ll and dt <= lt) or x.h >= MAX_BEAM_DEPTH:
+                break
+            x.h = round(x.h + 0.05, 2)
+            grown = True
+            d_req, at, ab, top, bot, stir, ok = _beam_design(mat, x.b, x.h, x.m_neg, x.m_pos, x.v, x.d_off)
+            x.as_top, x.as_bot, x.top, x.bottom, x.stirrup = at, ab, top, bot, stir
+        x.note = " ; ".join(p for p in (x.note or "").split(" ; ") if "ตรวจการแอ่นตัว" not in p)
+        text = f"แอ่น {dt * 10:.1f}/{lt * 10:.1f} มม. (จร {dl * 10:.1f}/{ll * 10:.1f})"
+        if grown:
+            text = f"เพิ่มความลึกเป็น {x.h:.2f} ม. ตามระยะแอ่นตัว ; " + text
+        if dl > ll or dt > lt:
+            x.ok = False
+            text += " เกินเกณฑ์"
+        x.note = (x.note + " ; " if x.note else "") + text
+        x.deflection = dt
+        if "MI2567-8" not in x.refs:
+            x.refs += ", MI2567-8"
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +944,7 @@ def design_stairs(b: Building, mat: Concrete, res, node_reac, node_live):
             (sp,), (r0, r1) = continuous_beam([L], [sw], [pts])
             d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, 0.0, sp.m_pos,
                                                              max(sp.v_left, sp.v_right))
-            need = max(_round_up((d_req + 5.0) / 100, 0.05), _round_up(hmin, 0.05))
+            need = max(_round_up((d_req + beam_offset(mat, False)) / 100, 0.05), _round_up(hmin, 0.05))
             if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
                 break
             h = need
@@ -883,7 +956,8 @@ def design_stairs(b: Building, mat: Concrete, res, node_reac, node_live):
         xy = (b.xs[a[0]], b.ys[a[1]], b.xs[c[0]], b.ys[c[1]])
         res.beams.append(BeamResult(lv0.name, "คานบันได", f"{b.node_name(*a)}-{b.node_name(*c)} BT", "", bw, h, L,
                                     sp.w, 0.0, sp.m_pos, max(sp.v_left, sp.v_right), d_req, at, ab, top, bot,
-                                    stir, ok, " ; ".join(notes), hmin, refs, xy, "stair", z_top=g.landing_z))
+                                    stir, ok, " ; ".join(notes), hmin, refs, xy, "stair", z_top=g.landing_z,
+                                    d_off=beam_offset(mat, False)))
         lower, upper = (a, c) if a <= c else (c, a)
         for node, rx, lx in ((lower, r0, l0), (upper, r1, l1)):
             node_reac[g.li1][node] = node_reac[g.li1].get(node, 0.0) + rx
@@ -912,11 +986,17 @@ def _column_design(mat: Concrete, P: float, bw: float, h: float):
         n += n % 2
         if n <= 12:
             break
-    ties = _round_down(min(16 * BAR_DIA[size], 48 * BAR_DIA["RB6"], min(bw, h) * 100), 5.0)  # [EIT1007-TIE]
-    ok = pg <= 0.08
-    if not ok:
-        note = "ปริมาณเหล็กเกิน 8% ต้องเพิ่มหน้าตัด"
-    return bw, h, pg, f"{n}-{size}", f"RB6@{ties / 100:.2f}", ok, note
+    return bw, h, pg, f"{n}-{size}", column_ties(f"{n}-{size}", bw, h), pg <= 0.08, \
+        (note if pg <= 0.08 else "ปริมาณเหล็กเกิน 8% ต้องเพิ่มหน้าตัด")
+
+
+def column_ties(bars: str, b: float, h: float) -> str:
+    """Tie size by the main bar and spacing ≤ 16db, 48dt, least side — ประกาศ มท. 2567
+    ข้อ 29 (11) (จ) 3) [MI2567-29D], [EIT1007-TIE]."""
+    size = bars.split("-", 1)[1]
+    tie = tie_bar(size)
+    s = _round_down(tie_spacing_max(size, tie, min(b, h) * 100), 2.5)
+    return f"{tie}@{s / 100:.3f}".rstrip("0").rstrip(".")
 
 
 # ---------------------------------------------------------------------------
@@ -969,10 +1049,10 @@ def design_footing(b: Building, mat: Concrete, node: str, P: float, col_b: float
         for _ in range(5):
             side = _round_up(math.sqrt((P + W) / f.soil_qa), 0.05)
             d = (-c + math.sqrt(c * c + P / vp)) / 2
-            t = max(0.30, _round_up((d + 7.5 + 1.6) / 100, 0.05))
+            t = max(0.30, _round_up((d + footing_offset(mat)) / 100, 0.05))
             q = P / (side * side)
             while t < 1.5:                      # one-way shear
-                d = t * 100 - 9.1
+                d = t * 100 - footing_offset(mat)
                 V = q * side * max(0.0, (side - c / 100) / 2 - d / 100)
                 if V <= mat.vc_beam * side * 100 * d:
                     break
@@ -980,10 +1060,10 @@ def design_footing(b: Building, mat: Concrete, node: str, P: float, col_b: float
             W = CONCRETE_KG_M3 * side * side * t
         arm = max(0.0, (side - c / 100) / 2)
         mom = q * side * arm * arm / 2
-        d = t * 100 - 7.5 - 1.6
+        d = t * 100 - footing_offset(mat)
         bars = _footing_bars(mat, mom, side, t, d)
         return FootingResult(node, P, "spread", 0, "-", f.soil_qa, round(side, 2), round(side, 2),
-                             round(t, 2), bars, bars, W, refs=cite("EIT1007-FOOT", mat.ref, "SOIL"))
+                             round(t, 2), bars, bars, W, refs=cite("EIT1007-FOOT", mat.ref, "SOIL", "MI2567-29D", "MI2567-29C"))
     piles = load_piles()
     family = f.pile[0]
     order = sorted((k for k in piles if k[0] == family), key=lambda k: piles[k]["capacity_kg"])
@@ -1003,10 +1083,10 @@ def design_footing(b: Building, mat: Concrete, node: str, P: float, col_b: float
             B = _round_up(max(xs) - min(xs) + 2 * e, 0.05)
             L = _round_up(max(ys) - min(ys) + 2 * e, 0.05)
             d = (-c + math.sqrt(c * c + P / vp)) / 2
-            t = max(0.40, _round_up((d + 7.5 + 1.6) / 100, 0.05))
+            t = max(0.40, _round_up((d + footing_offset(mat)) / 100, 0.05))
             R = P / len(pts)
-            while t < 1.5 and not (_one_way_ok(mat, pts, R, c / 100, t * 100 - 9.1, L, 0) and
-                                   _one_way_ok(mat, pts, R, c / 100, t * 100 - 9.1, B, 1)):
+            while t < 1.5 and not (_one_way_ok(mat, pts, R, c / 100, t * 100 - footing_offset(mat), L, 0) and
+                                   _one_way_ok(mat, pts, R, c / 100, t * 100 - footing_offset(mat), B, 1)):
                 t = round(t + 0.05, 2)
             W = CONCRETE_KG_M3 * B * L * t
         if n <= MAX_PILES:
@@ -1018,7 +1098,7 @@ def design_footing(b: Building, mat: Concrete, node: str, P: float, col_b: float
         pile = order[bigger]
         note = f"เปลี่ยนเสาเข็มเป็น {pile} เพื่อไม่ให้เกิน {MAX_PILES} ต้น"
     R = P / len(pts)
-    d = t * 100 - 7.5 - 1.6
+    d = t * 100 - footing_offset(mat)
     mx = sum(R * (x - c / 200) for x, _y in pts if x - c / 200 > 0)
     my = sum(R * (y - c / 200) for _x, y in pts if y - c / 200 > 0)
     bars_x = _footing_bars(mat, mx, L, t, d)
@@ -1026,7 +1106,7 @@ def design_footing(b: Building, mat: Concrete, node: str, P: float, col_b: float
     ok = n <= MAX_PILES
     return FootingResult(node, P, "pile", len(pts) if ok else n, pile, cap, round(B, 2), round(L, 2),
                          round(t, 2), bars_x, bars_y, W, ok=ok, note=note,
-                         refs=cite("EIT1007-FOOT", mat.ref, "QD-PILE", "SOIL", "UNIT-WT"))
+                         refs=cite("EIT1007-FOOT", mat.ref, "QD-PILE", "SOIL", "UNIT-WT", "MI2567-29D", "MI2567-29C"))
 
 
 # ---------------------------------------------------------------------------
@@ -1050,7 +1130,10 @@ def _assign_marks(items, key, prefix, load):
 def design(b: Building) -> DesignResult:
     from .seismic import use_quality_control
     use_quality_control(b.quality_control)            # φ of กฎกระทรวง พ.ศ. 2566 ข้อ 8
-    mat = Concrete(fc_prime=b.fc_prime, code=b.design_code)
+    mat = Concrete(fc_prime=b.fc_prime, code=b.design_code, qc=b.quality_control)
+    from . import seismic as _seismic
+    from .rules import column_cover, site_notes
+    _seismic.COVER = column_cover(mat)               # ties' cover, ประกาศ มท. 2567 ตาราง 13
     res = DesignResult(b, mat)
     from .fire import requirements as fire_requirements
     res.fire = fire_requirements(b)
@@ -1153,6 +1236,13 @@ def design(b: Building) -> DesignResult:
         res.warnings += combine_footings(b, res, mat, base)
         if res.seismic and len(res.footings) < before:
             res.warnings.append("ฐานรากร่วมออกแบบด้วยน้ำหนักแนวดิ่ง ยังไม่ได้ตรวจแรงแผ่นดินไหว")
+    for c in res.columns:                             # bars may have changed in the later checks
+        c.ties = column_ties(c.bars, c.b, c.h)
+        if "MI2567-29D" not in c.refs:
+            c.refs += ", MI2567-29D"
+    res.warnings += site_notes(b)
+    from .fire import check_members as fire_check
+    fire_check(res)
     _assign_marks(res.columns, lambda c: (c.b, c.h, c.bars, c.ties), "C", lambda c: c.load)
     _assign_marks([f for f in res.footings if f.kind != "combined"],
                   lambda f: (f.piles, f.pile, f.width, f.length, f.thickness, f.bars_x, f.bars_y), "F",
@@ -1160,6 +1250,7 @@ def design(b: Building) -> DesignResult:
     _assign_marks([f for f in res.footings if f.kind == "combined"],
                   lambda f: (f.piles, f.pile, f.width, f.length, f.thickness, f.bars_x, f.bars_y), "CF",
                   lambda f: f.load)
+    check_deflections(res, mat)
     _assign_marks([x for x in res.beams if x.kind == "stair"],
                   lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), "BT", lambda x: x.m_pos)
     for st in res.stairs:

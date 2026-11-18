@@ -40,7 +40,7 @@ PUBLIC_USES = {"assembly", "commercial", "school", "hospital"}
 PUBLIC_FACTOR = 1.15
 DRIFT_ADVICE = 1 / 400          # serviceability, not a rule of the law
 STIRRUP = "RB6"
-REFS = cite("MR2566-17", "MR2566-6", "MR2566-7", "MR2566-8", "STATICS", "ACI318-STIFF", "EIT1008")
+REFS = cite("MR2566-17", "MI2567-22", "MR2566-6", "MR2566-7", "MR2566-8", "STATICS", "ACI318-STIFF", "EIT1008")
 
 
 @dataclass
@@ -102,8 +102,17 @@ def roof_rise(b) -> float:
     return short / 2 * math.tan(math.radians(r.slope_deg))
 
 
+IMPORTANCE = [("low", "น้อย (อาคารเกษตร อาคารชั่วคราว)"), ("normal", "ปกติ"),
+              ("high", "มาก (ชุมนุมคน > 300 คน โรงเรียน > 250 คน ฯลฯ)"),
+              ("very_high", "สูงมาก (โรงพยาบาลฉุกเฉิน สถานีดับเพลิง โรงไฟฟ้า ฯลฯ)")]
+
+
 def is_public(b) -> bool:
+    """+15%: a public building of 1,000 m² or more [MR2566-17], or a building of
+    high or very high importance (ประกาศ มท. 2567 ข้อ 22 ตาราง 6) [MI2567-22]."""
     w = b.wind
+    if w.importance in ("high", "very_high"):
+        return True
     if w.public in ("yes", "no"):
         return w.public == "yes"
     floors = sum(1 for lv in b.levels if lv.slab in ("suspended", "on_ground"))
@@ -170,7 +179,7 @@ def _delta_s(res, li, d):
 
 
 def check_columns(b, res, out, cf, col_at, mat) -> bool:
-    fc, fy = b.fc_prime, FY[mat.main_grade]
+    fc, fy = mat.fc_usd, FY[mat.main_grade]       # ข้อ 29 (5)
     changed = False
     for (i, j, li), c in col_at.items():
         name = b.node_name(i, j)
@@ -246,12 +255,12 @@ def _ref(refs):
 
 
 def check_beams(b, res, out, bf, mat):
-    fc, fy = b.fc_prime, FY[mat.main_grade]
+    fc, fy = mat.fc_usd, FY[mat.main_grade]       # ข้อ 29 (5)
     for x in res.beams:
         if id(x) not in bf:
             continue
         MW, VW = bf[id(x)]
-        bw, d = x.b * 100, x.h * 100 - 5.0
+        bw, d = x.b * 100, x.h * 100 - x.d_off
         MD = max(0.0, x.m_neg - x.m_neg_live)
         mu_neg = 0.75 * (1.4 * MD + 1.7 * x.m_neg_live) + 1.6 * MW
         mu_pos = max(0.0, 1.6 * MW - 0.9 * MD)

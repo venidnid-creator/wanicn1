@@ -22,6 +22,7 @@ import math
 
 from ..standards import cite
 from .materials import CONCRETE_KG_M3
+from .rules import footing_offset
 from .sections import load_piles
 
 GAP = 0.10                 # clear distance below which two footings are combined, m
@@ -87,7 +88,7 @@ def design_combined(b, mat, f1, f2, c1, c2):
         q = P / (B * L)                                 # net upward pressure, kg/m²
         start = xr - L / 2                              # footing start, from column 1
         for _ in range(40):
-            d = t * 100 - 7.5 - 1.6
+            d = t * 100 - footing_offset(mat)
             up = [(start + L * (k + 0.5) / 80 - start, q * B * L / 80) for k in range(80)]
             downs = [(-start, P1), (s - start, P2)]
             V_ok = all(_one_way(abs(_shear_at(x, up, downs)), B, d, mat)
@@ -133,7 +134,7 @@ def design_combined(b, mat, f1, f2, c1, c2):
         up = [(px, R * rows) for px in pile_x]
         downs = [(-start, P1), (s - start, P2)] + [(L * (k + 0.5) / 80, W / 80) for k in range(80)]
         for _ in range(40):
-            d = t * 100 - 7.5 - 1.6
+            d = t * 100 - footing_offset(mat)
             V_ok = all(_one_way(abs(_shear_at(x, up, downs)), B, d, mat)
                        for c, xc in ((cc1, -start), (cc2, s - start))
                        for x in (xc - c / 2 - d / 100, xc + c / 2 + d / 100) if 0 < x < L)

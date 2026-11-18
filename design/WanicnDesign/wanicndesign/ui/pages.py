@@ -118,11 +118,21 @@ class ProjectPage(Page):
         self.use = _combo([(k, f"{t} ({v})") for k, t, v in LIVE_LOADS if k not in ("roof", "canopy")],
                           "house")
         self.reduce = QCheckBox("ลดน้ำหนักจรสำหรับเสาและฐานราก (กฎกระทรวง พ.ศ. 2566 ข้อ 13–14)")
+        from ..standards import provinces
+        pv = provinces()["provinces"]
+        self.province = _combo([("", "— ไม่ระบุ —")] + [
+            (n, f"{n} (ลมกลุ่ม {v['wind_group']}" + (f", แผ่นดินไหวบริเวณที่ {v['seismic_zone']}"
+                                                   if v["seismic_zone"] else "") + ")") for n, v in pv.items()], "")
+        self.qc = QCheckBox("ระบุมาตรฐานงานก่อสร้างและการควบคุมคุณภาพวัสดุในแบบ (ตัวคูณลดกำลังและหน่วยแรงเต็มค่า)")
+        self.cube = QCheckBox("ค่าที่กรอกเป็นกำลังลูกบาศก์ 15 ซม. (แปลงตามตาราง 12)")
         f.addRow("ชื่อโครงการ", self.name)
+        f.addRow("จังหวัดที่ตั้ง", self.province)
+        f.addRow("", self.qc)
         f.addRow("เกณฑ์การออกแบบ", self.code)
         f.addRow("ประเภทการใช้อาคาร", self.use)
         f.addRow("", self.reduce)
         f.addRow("กำลังอัดคอนกรีต fc' (ทรงกระบอก)", self.fc)
+        f.addRow("", self.cube)
         f.addRow("เสา กว้าง", self.cw)
         f.addRow("เสา ลึก", self.cd)
         self.lay.addLayout(f)
@@ -137,13 +147,18 @@ class ProjectPage(Page):
         self.code.setCurrentIndex(max(0, self.code.findData(b.design_code)))
         self.use.setCurrentIndex(max(0, self.use.findData(b.occupancy)))
         self.reduce.setChecked(b.ll_reduction)
+        self.province.setCurrentIndex(max(0, self.province.findData(b.province)))
+        self.qc.setChecked(b.quality_control)
+        self.cube.setChecked(False)
 
     def apply(self):
         b = self.building
         b.name = self.name.text().strip() or b.name
         b.design_code, b.occupancy = self.code.currentData(), self.use.currentData()
         b.ll_reduction = self.reduce.isChecked()
-        b.fc_prime = self.fc.value()
+        from ..structure.materials import cube_to_cylinder
+        b.fc_prime = round(cube_to_cylinder(self.fc.value()), 1) if self.cube.isChecked() else self.fc.value()
+        b.province, b.quality_control = self.province.currentData(), self.qc.isChecked()
         b.column_width, b.column_depth = self.cw.value(), self.cd.value()
 
 
@@ -351,7 +366,10 @@ class RoofPage(Page):
         self.frame = _spin(15, 0, 100, 1, 0, "กก./ตร.ม.")
         self.purlin = _spin(0.32, 0.2, 2.0, 0.01, 2, "ม.")
         self.rafter = _spin(1.0, 0.5, 3.0, 0.05, 2, "ม.")
-        for label, w in (("ทรงหลังคา", self.shape), ("วัสดุมุง", self.cover), ("ความลาด", self.slope),
+        self.solar = _spin(0, 0, 100, 1, 0, "กก./ตร.ม.")
+        self.ceiling = _combo([("plaster", "รับฝ้าเพดานที่มีการฉาบ"), ("board", "รับฝ้าเพดานไม่ฉาบ"),
+                               ("none", "ไม่รับฝ้าเพดาน")], "board")
+        for label, w in (("แผงโซลาร์เซลล์", self.solar), ("ฝ้าเพดาน (ระยะแอ่นตัว)", self.ceiling), ("ทรงหลังคา", self.shape), ("วัสดุมุง", self.cover), ("ความลาด", self.slope),
                          ("ชายคายื่น", self.overhang), ("น้ำหนักจร", self.ll),
                          ("น้ำหนักโครงเหล็ก", self.frame), ("ระยะแป", self.purlin),
                          ("ระยะจันทัน", self.rafter)):
@@ -365,8 +383,9 @@ class RoofPage(Page):
         self.cover.setCurrentIndex(max(0, self.cover.findData(r.cover)))
         for w, v in ((self.slope, r.slope_deg), (self.overhang, r.overhang), (self.ll, r.live_load),
                      (self.frame, r.frame_load), (self.purlin, r.purlin_spacing),
-                     (self.rafter, r.rafter_spacing)):
+                     (self.rafter, r.rafter_spacing), (self.solar, r.solar_load)):
             w.setValue(v)
+        self.ceiling.setCurrentIndex(max(0, self.ceiling.findData(r.ceiling)))
 
     def apply(self):
         r = self.building.roof
@@ -374,6 +393,7 @@ class RoofPage(Page):
         r.slope_deg, r.overhang, r.live_load = self.slope.value(), self.overhang.value(), self.ll.value()
         r.frame_load, r.purlin_spacing = self.frame.value(), self.purlin.value()
         r.rafter_spacing = self.rafter.value()
+        r.solar_load, r.ceiling = self.solar.value(), self.ceiling.currentData()
 
 
 class WindPage(Page):
@@ -389,7 +409,10 @@ class WindPage(Page):
         self.terrain = _combo(TERRAINS, "urban")
         self.public = _combo([("auto", "ตามประเภทอาคารและพื้นที่"), ("yes", "เป็นอาคารสาธารณะ ≥ 1,000 ตร.ม. (+15%)"),
                               ("no", "ไม่ใช่")], "auto")
+        from ..structure.wind import IMPORTANCE
+        self.importance = _combo(IMPORTANCE, "normal")
         f.addRow(self.enabled)
+        f.addRow("ความสำคัญของอาคาร (ตาราง 6)", self.importance)
         f.addRow("สภาพภูมิประเทศ", self.terrain)
         f.addRow("อาคารสาธารณะ", self.public)
         self.lay.addLayout(f)
@@ -400,10 +423,12 @@ class WindPage(Page):
         self.enabled.setChecked(w.enabled)
         self.terrain.setCurrentIndex(max(0, self.terrain.findData(w.terrain)))
         self.public.setCurrentIndex(max(0, self.public.findData(w.public)))
+        self.importance.setCurrentIndex(max(0, self.importance.findData(w.importance)))
 
     def apply(self):
         w = self.building.wind
         w.enabled, w.terrain, w.public = self.enabled.isChecked(), self.terrain.currentData(), self.public.currentData()
+        w.importance = self.importance.currentData()
 
 
 class SeismicPage(Page):

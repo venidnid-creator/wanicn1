@@ -26,6 +26,7 @@ the program only flags buildings 23 m or higher as high-rise.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 HIGH_RISE = 23.0                   # m — the usual definition of อาคารสูง (to be confirmed by the designer)
@@ -44,7 +45,7 @@ class FireResult:
     floors: list = field(default_factory=list)     # (level, hours columns/beams, hours slab)
     roof_hours: float = 0.0
     notes: list = field(default_factory=list)
-    refs: str = "MR2566-23"
+    refs: str = "MR2566-23, MI2567-32"
 
 
 def requirements(b) -> FireResult:
@@ -86,4 +87,45 @@ def requirements(b) -> FireResult:
     else:
         out.notes.append("โครงหลังคาต้องทนไฟ 1 ชม. เว้นแต่สูงจากพื้นเกิน 8 ม. และมีระบบดับเพลิงอัตโนมัติ (ข้อ 23 (4) (ข))")
     out.notes.append("ระยะหุ้มคอนกรีตให้ได้อัตราการทนไฟตามที่รัฐมนตรีประกาศ (ข้อ 24)")
+    return out
+
+
+#: ประกาศ มท. 2567 ข้อ 32 ตาราง 17: least thickness for 1/2/3 hours, mm (slabs and walls, columns).
+MIN_THICKNESS = {1: (80, 200), 2: (115, 250), 3: (145, 280)}
+#: ตาราง 18 (selected rows), cover to the reinforcement for 1/2/3 hours, mm.
+COVER_COLUMN = {1: 40, 2: 50, 3: 50}          # columns with the least side 300 mm or more
+
+
+def check_members(res) -> list[str]:
+    """Compare the designed slabs and columns with ตาราง 17 and the column
+    covers with ตาราง 18 for the ratings of ข้อ 23 [MI2567-32]; failing
+    members are marked."""
+    f = res.fire
+    if f is None or not f.applies:
+        return []
+    from .rules import column_cover
+    out = []
+    hours = {name: int(math.ceil(h)) for name, h, _s in f.floors}
+    names = [lv.name for lv in res.building.levels]
+    for s in res.slabs:
+        h = hours.get(s.level)
+        if h and s.kind != "on-ground" and s.thickness * 1000 + 1e-6 < MIN_THICKNESS[h][0]:
+            s.ok = False
+            s.note = (s.note + " ; " if s.note else "") + f"ทนไฟ {h} ชม. ต้องหนา ≥ {MIN_THICKNESS[h][0]} มม."
+    for c in res.columns:
+        top = next((n for n in names if c.segment.endswith(n)), None)
+        h = hours.get(top)
+        if not h:
+            continue
+        need = MIN_THICKNESS[h][1]
+        if min(c.b, c.h) * 1000 + 1e-6 < need:
+            c.ok = False
+            c.note = (c.note + " ; " if c.note else "") + f"ทนไฟ {h} ชม. ด้านแคบต้อง ≥ {need} มม."
+    cov = column_cover(res.concrete) * 10
+    for h in sorted(set(hours.values())):
+        if cov + 1e-6 < COVER_COLUMN[h]:
+            out.append(f"ทนไฟ {h} ชม.: ระยะหุ้มเสาต้อง ≥ {COVER_COLUMN[h]} มม. (ใช้อยู่ {cov:.0f} มม.) — ตาราง 18")
+    out.append("ระยะหุ้มคาน พื้น เพื่อการทนไฟ ตามตาราง 18 (คาน/พื้น 20 มม. สำหรับ 1 ชม.; 2–3 ชม. ขึ้นกับความกว้าง"
+               "และการยึดรั้ง) ไม่น้อยกว่าตาราง 13")
+    f.notes += out
     return out

@@ -1,0 +1,338 @@
+{
+ "source": "ประกาศกระทรวงมหาดไทย เรื่อง การออกแบบโครงสร้างอาคาร ... 2567 ผนวก ก (ตาราง ก-1) และผนวก ข",
+ "wind_groups": {
+  "1": {
+   "v50": 25,
+   "tf": 1.0
+  },
+  "2": {
+   "v50": 27,
+   "tf": 1.0
+  },
+  "3": {
+   "v50": 29,
+   "tf": 1.0
+  },
+  "4A": {
+   "v50": 25,
+   "tf": 1.2
+  },
+  "4B": {
+   "v50": 25,
+   "tf": 1.08
+  }
+ },
+ "provinces": {
+  "กระบี่": {
+   "wind_group": "4B",
+   "seismic_zone": 1
+  },
+  "กรุงเทพมหานคร": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "กาญจนบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 3
+  },
+  "กาฬสินธุ์": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "กำแพงเพชร": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "ขอนแก่น": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "จันทบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ฉะเชิงเทรา": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ชลบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ชัยนาท": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "ชัยภูมิ": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ชุมพร": {
+   "wind_group": "4A",
+   "seismic_zone": 1
+  },
+  "ตรัง": {
+   "wind_group": "4B",
+   "seismic_zone": 1
+  },
+  "ตราด": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ตาก": {
+   "wind_group": "2",
+   "seismic_zone": 3,
+   "note": "อำเภออุ้มผาง กลุ่มที่ 1; บริเวณอื่นกลุ่มที่ 2"
+  },
+  "นครนายก": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "นครปฐม": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "นครพนม": {
+   "wind_group": "1",
+   "seismic_zone": 1
+  },
+  "นครราชสีมา": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "นครศรีธรรมราช": {
+   "wind_group": "4A",
+   "seismic_zone": 1,
+   "note": "อำเภอเมือง ขนอม สิชล ท่าศาลา พิปูน พรหมคีรี ลานสกา ร่อนพิบูลย์ ปากพนัง เชียรใหญ่ หัวไทร ชะอวด กลุ่ม 4A; บริเวณอื่น 4B (โปรแกรมใช้ 4A ซึ่งมากกว่า เว้นแต่ผู้ออกแบบเลือกเอง)"
+  },
+  "นครสวรรค์": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "นนทบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "นราธิวาส": {
+   "wind_group": "4A",
+   "seismic_zone": 0
+  },
+  "น่าน": {
+   "wind_group": "2",
+   "seismic_zone": 3
+  },
+  "บึงกาฬ": {
+   "wind_group": "2",
+   "seismic_zone": 1
+  },
+  "บุรีรัมย์": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ปทุมธานี": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "ประจวบคีรีขันธ์": {
+   "wind_group": "4A",
+   "seismic_zone": 1
+  },
+  "ปราจีนบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ปัตตานี": {
+   "wind_group": "4A",
+   "seismic_zone": 0
+  },
+  "พระนครศรีอยุธยา": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "พะเยา": {
+   "wind_group": "3",
+   "seismic_zone": 3
+  },
+  "พังงา": {
+   "wind_group": "4B",
+   "seismic_zone": 2
+  },
+  "พัทลุง": {
+   "wind_group": "4A",
+   "seismic_zone": 0
+  },
+  "พิจิตร": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "พิษณุโลก": {
+   "wind_group": "1",
+   "seismic_zone": 1
+  },
+  "ภูเก็ต": {
+   "wind_group": "4B",
+   "seismic_zone": 2
+  },
+  "มหาสารคาม": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "มุกดาหาร": {
+   "wind_group": "2",
+   "seismic_zone": 0
+  },
+  "ยะลา": {
+   "wind_group": "4A",
+   "seismic_zone": 0
+  },
+  "ยโสธร": {
+   "wind_group": "2",
+   "seismic_zone": 0
+  },
+  "ระนอง": {
+   "wind_group": "4B",
+   "seismic_zone": 2
+  },
+  "ระยอง": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ราชบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "ร้อยเอ็ด": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ลพบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "ลำปาง": {
+   "wind_group": "2",
+   "seismic_zone": 3
+  },
+  "ลำพูน": {
+   "wind_group": "2",
+   "seismic_zone": 3
+  },
+  "ศรีสะเกษ": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "สกลนคร": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "สงขลา": {
+   "wind_group": "4A",
+   "seismic_zone": 1
+  },
+  "สตูล": {
+   "wind_group": "4B",
+   "seismic_zone": 1
+  },
+  "สมุทรปราการ": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "สมุทรสงคราม": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "สมุทรสาคร": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "สระบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "สระแก้ว": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "สิงห์บุรี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "สุพรรณบุรี": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "สุราษฎร์ธานี": {
+   "wind_group": "4A",
+   "seismic_zone": 1,
+   "note": "อำเภอเมือง ท่าชนะ ไชยา ท่าฉาง คีรีรัฐนิคม พุนพิน กาญจนดิษฐ์ ดอนสัก บ้านนาเดิม บ้านนาสาร เกาะสมุย เกาะพะงัน กลุ่ม 4A; บริเวณอื่น 4B (โปรแกรมใช้ 4A ซึ่งมากกว่า เว้นแต่ผู้ออกแบบเลือกเอง)"
+  },
+  "สุรินทร์": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "สุโขทัย": {
+   "wind_group": "1",
+   "seismic_zone": 3
+  },
+  "หนองคาย": {
+   "wind_group": "2",
+   "seismic_zone": 1
+  },
+  "หนองบัวลำภู": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "อำนาจเจริญ": {
+   "wind_group": "2",
+   "seismic_zone": 0
+  },
+  "อุดรธานี": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "อุตรดิตถ์": {
+   "wind_group": "1",
+   "seismic_zone": 3
+  },
+  "อุทัยธานี": {
+   "wind_group": "1",
+   "seismic_zone": 2
+  },
+  "อุบลราชธานี": {
+   "wind_group": "2",
+   "seismic_zone": 0
+  },
+  "อ่างทอง": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "เชียงราย": {
+   "wind_group": "3",
+   "seismic_zone": 3
+  },
+  "เชียงใหม่": {
+   "wind_group": "3",
+   "seismic_zone": 3
+  },
+  "เพชรบุรี": {
+   "wind_group": "4B",
+   "seismic_zone": 1
+  },
+  "เพชรบูรณ์": {
+   "wind_group": "1",
+   "seismic_zone": 0
+  },
+  "เลย": {
+   "wind_group": "1",
+   "seismic_zone": 1
+  },
+  "แพร่": {
+   "wind_group": "2",
+   "seismic_zone": 3
+  },
+  "แม่ฮ่องสอน": {
+   "wind_group": "3",
+   "seismic_zone": 3
+  }
+ }
+}

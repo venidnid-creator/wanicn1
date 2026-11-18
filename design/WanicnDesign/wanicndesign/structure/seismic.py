@@ -510,7 +510,7 @@ BAR_OPTIONS = [(n, s) for s in ("DB12", "DB16", "DB20", "DB25") for n in range(4
 def check_columns(b, res, out, col_forces, col_at, mat):
     """Strength check of every column segment; adds bars or enlarges the
     section when needed. Returns True when a section size changed."""
-    fc, fy = b.fc_prime, FY[mat.main_grade]
+    fc, fy = mat.fc_usd, FY[mat.main_grade]       # ข้อ 29 (5)
     sds = out.sds
     imf = b.seismic.system == "IMF"
     changed = False
@@ -562,11 +562,13 @@ def check_columns(b, res, out, col_forces, col_at, mat):
         dd = max(c.b, c.h) * 100 - COVER - 1.0
         s_v = tie_spacing((2.0 if imf else 1.0) * Vsh, bmin, dd, fc, 0.9 * D, c.b * c.h * 1e4)
         if imf:
-            so = min(8 * BAR_DIA[size], 24 * BAR_DIA[TIE], bmin / 2, 30.0)
+            from .rules import tie_bar
+            tb = tie_bar(size)
+            so = min(8 * BAR_DIA[size], 24 * BAR_DIA[tb], bmin / 2, 30.0)
             lo = max((c.height - 0.5) / 6, max(c.b, c.h), 0.45)
             if s_v is not None:
                 so = min(so, s_v)
-            detail = f"ปลอกปลายเสา {TIE}@{_sp(so)} ยาว {lo:.2f} ม. จากหน้าคาน/ฐาน"
+            detail = f"ปลอกปลายเสา {tb}@{_sp(so)} ยาว {lo:.2f} ม. จากหน้าคาน/ฐาน"
         elif s_v is not None and s_v < 999:
             detail = f"ปลอกรับแรงเฉือน {TIE}@{_sp(min(s_v, 30.0))}"
         if s_v is None:
@@ -611,14 +613,14 @@ def enlarge_for_drift(b, out, col_at) -> bool:
 
 
 def check_beams(b, res, out, beam_forces, mat):
-    fc, fy = b.fc_prime, FY[mat.main_grade]
+    fc, fy = mat.fc_usd, FY[mat.main_grade]       # ข้อ 29 (5)
     sds = out.sds
     imf = b.seismic.system == "IMF"
     for x in res.beams:
         if id(x) not in beam_forces:
             continue
         ME, VE = beam_forces[id(x)]
-        bw, d = x.b * 100, x.h * 100 - 5.0
+        bw, d = x.b * 100, x.h * 100 - x.d_off
         MD = max(0.0, x.m_neg - x.m_neg_live)
         mu_neg = 0.75 * (1.4 * MD + 1.7 * x.m_neg_live) + ME                # ข้อ 7 (3)
         mu_pos = max(0.0, ME - 0.9 * MD)

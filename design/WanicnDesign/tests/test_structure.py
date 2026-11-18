@@ -712,3 +712,114 @@ def test_fire_rating_rules():
     assert f.applies and all(h == 1.0 for _n, h, _s in f.floors) and f.roof_hours == 0.0   # ≤ 1,000 m²
     res = design(b)
     assert res.fire.applies and "MR2566-23" in res.all_refs()
+
+
+# ---------------------------------------------------------------------------
+# ประกาศกระทรวงมหาดไทย 2567 and กฎกระทรวง ฉบับที่ 72 (supplied by the owner)
+# ---------------------------------------------------------------------------
+
+def test_cube_to_cylinder_table_12():
+    from wanicndesign.structure.materials import cube_to_cylinder
+    assert cube_to_cylinder(240) == pytest.approx(210)
+    assert cube_to_cylinder(280) == pytest.approx(240)
+    assert cube_to_cylinder(260) == pytest.approx(225)          # between rows
+
+
+def test_allowable_stresses_and_quality_control_caps():
+    c = Concrete(fc_prime=210, qc=False)
+    assert c.fc == pytest.approx(65.0)                          # 0.45 × 210 = 94.5 → 65
+    assert c.fc_usd == pytest.approx(150.0)
+    assert Concrete(fc_prime=210).fc == pytest.approx(94.5)
+    m = Concrete(code="MI2567")
+    assert (m.fs("RB9"), m.fs("DB16")) == (1200.0, 2000.0)      # SD40: ≤ 2,000
+    assert Concrete(code="MI2567", main_grade="SD30").fs("DB12") == 1500.0
+
+
+def test_detailing_rules_of_clause_29():
+    from wanicndesign.structure import rules
+    assert [rules.tie_bar(s) for s in ("DB12", "DB16", "DB20", "DB25", "DB32")] == \
+        ["RB6", "RB9", "RB9", "DB10", "DB12"]
+    assert rules.tie_spacing_max("DB16", "RB9", 20.0) == pytest.approx(20.0)
+    assert rules.tie_spacing_max("DB12", "RB6", 30.0) == pytest.approx(16 * 1.2)
+    assert rules.slab_min_ratio("SR24") == 0.0025 and rules.slab_min_ratio("SD40") == 0.0018
+    assert rules.slab_min_ratio("SD30") == 0.0020 and rules.slab_min_ratio("SR24", True) == 0.0015
+    assert rules.slab_max_spacing(0.10, False) == pytest.approx(30.0)
+    assert rules.slab_max_spacing(0.10, True) == pytest.approx(20.0)
+    assert rules.beam_rho_min(210, 4000) == pytest.approx(14 / 4000)
+    assert rules.beam_rho_min(400, 4000) == pytest.approx(0.8 * 20 / 4000)
+    # RB6 two legs, fy 2400, bw 20 cm: s ≤ 0.565·2400/(3.5·20) = 19.4 cm
+    assert rules.stirrup_max_spacing(2 * 0.2827, 2400, 20, 40, 210) == pytest.approx(0.5655 * 2400 / 70, rel=1e-3)
+    c = Concrete()
+    assert rules.beam_offset(c, False) == pytest.approx(3.0 + 0.6 + 0.8)
+    assert rules.beam_offset(c, True) == pytest.approx(4.0 + 0.6 + 0.8)
+    assert rules.beam_offset(Concrete(qc=False), False) == pytest.approx(3.6 + 0.6 + 0.8)   # +20 %
+    res = design(Building.load(BUILDING))
+    gb = next(x for x in res.beams if x.level == "GB")
+    fl = next(x for x in res.beams if x.level == "FL2" and x.kind == "beam")
+    assert gb.d_off > fl.d_off
+    assert all(c.ties.startswith(rules.tie_bar(c.bars.split("-")[1])) for c in res.columns)
+
+
+def test_beam_deflection_hand_value():
+    from wanicndesign.structure.rules import beam_deflection
+    c = Concrete()
+    b, h, L, w = 0.20, 0.40, 4.0, 300.0
+    M = w * L * L / 8                                           # below Mcr: Ie = Ig
+    ec = 15100 * math.sqrt(210)
+    ig = 20 * 40 ** 3 / 12
+    hand = 5 * (w / 100) * 400 ** 4 / (384 * ec * ig)
+    dl, dt, ll, lt = beam_deflection(c, b, h, 35.0, 3.4, 0.0, L, M, 1.0)
+    assert dl == pytest.approx(hand, rel=1e-6) and dt == pytest.approx(hand, rel=1e-6)
+    assert (ll, lt) == (pytest.approx(400 / 360), pytest.approx(400 / 240))
+    _dl, dt0, _ll, _lt = beam_deflection(c, b, h, 35.0, 3.4, 0.0, L, M, 0.0)
+    assert dt0 == pytest.approx(3 * hand, rel=1e-6)             # dead load, λ = 2 with no top steel
+    _dl, _dt, ll_c, lt_c = beam_deflection(c, b, h, 35.0, 3.4, 0.0, 1.5, M, 0.0, cantilever=True)
+    assert lt_c == pytest.approx(2 * 150 / 240)                 # cantilever: L = 2 × length
+    res = design(Building.load(BUILDING))
+    assert all("แอ่น" in x.note and x.deflection > 0 for x in res.beams if x.kind == "beam")
+
+
+def test_provinces_wind_groups_and_seismic_zones():
+    from wanicndesign.standards import provinces
+    from wanicndesign.structure.rules import site_notes
+    d = provinces()
+    p = d["provinces"]
+    assert len(p) == 77 and sum(1 for v in p.values() if v["seismic_zone"]) == 43
+    assert (p["เชียงใหม่"]["wind_group"], p["เชียงใหม่"]["seismic_zone"]) == ("3", 3)
+    assert (p["กรุงเทพมหานคร"]["wind_group"], p["กรุงเทพมหานคร"]["seismic_zone"]) == ("1", 2)
+    assert (p["ภูเก็ต"]["wind_group"], p["ประจวบคีรีขันธ์"]["wind_group"]) == ("4B", "4A")
+    assert d["wind_groups"]["4A"] == {"v50": 25, "tf": 1.2}
+    b = Building.load(BUILDING)
+    b.province = "กรุงเทพมหานคร"
+    notes = " ".join(site_notes(b))
+    assert "บริเวณที่ 2" in notes and "ยังไม่ได้เปิด" in notes
+
+
+def test_solar_panels_regulation_72():
+    from wanicndesign.structure.design import design_roof
+    from wanicndesign.structure.rules import site_notes
+    b = Building.load(BUILDING)
+    base = design_roof(b).load_plan
+    b.roof.solar_load = 15
+    cos = math.cos(math.radians(b.roof.slope_deg))
+    assert design_roof(b).load_plan == pytest.approx(base + 15 / cos)
+    assert "ไม่ถือเป็นการดัดแปลง" in " ".join(site_notes(b))
+    b.roof.solar_load = 25
+    assert "ถือเป็นการดัดแปลงอาคาร" in " ".join(site_notes(b))
+    assert "MR72" in design(b).all_refs()
+
+
+def test_wind_importance_adds_15_percent():
+    b = Building.load(BUILDING)
+    base = design(b).wind.base_shear[0]
+    b.wind.importance = "very_high"
+    assert design(b).wind.base_shear[0] == pytest.approx(1.15 * base, rel=1e-6)
+
+
+def test_fire_tables_17_on_members():
+    b = Building.load(BUILDING)
+    b.occupancy = "hospital"                                    # 2 hours, ข้อ 23
+    res = design(b)
+    assert any("ทนไฟ 2 ชม." in s.note for s in res.slabs if s.level == "FL2")
+    assert any("ทนไฟ 2 ชม." in c.note for c in res.columns)
+    assert not res.ok and "MI2567-32" in res.all_refs()

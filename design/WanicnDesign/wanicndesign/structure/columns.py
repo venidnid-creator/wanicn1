@@ -137,7 +137,7 @@ def raise_beam_end_moments(res, mat, beam_hog) -> int:
         hog = beam_hog.get(id(x), 0.0)
         if hog > x.m_neg + 1e-6:
             x.m_neg = hog
-            d_req, at, _ab, top, _bot, stir, ok = _beam_design(mat, x.b, x.h, hog, x.m_pos, x.v)
+            d_req, at, _ab, top, _bot, stir, ok = _beam_design(mat, x.b, x.h, hog, x.m_pos, x.v, x.d_off)
             if at > x.as_top + 1e-9:
                 x.as_top, x.top = at, top
                 x.note = _add(x.note, "เหล็กบนตามโมเมนต์ปลายจากโครงข้อแข็ง")
@@ -176,7 +176,7 @@ def magnifier(pu, pd, depth_cm, width_cm, lu_cm, fc):
 def check_column(b, c, mat, lu: float):
     """Strength check of one column segment; returns ``(ratio, text)`` for
     the worse combination with the moments as magnified."""
-    fc, fy = b.fc_prime, FY[mat.main_grade]
+    fc, fy = mat.fc_usd, FY[mat.main_grade]       # ข้อ 29 (5)
     PD, PL = c.load - c.live, c.live
     worst = (0.0, "")
     # กฎกระทรวง พ.ศ. 2566 ข้อ 7 (1): นป. = 1.4นค. + 1.7นจ.
