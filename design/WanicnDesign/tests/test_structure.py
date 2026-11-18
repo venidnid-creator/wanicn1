@@ -862,3 +862,62 @@ def test_construction_sheets(tmp_path):
     write_sheets_dxf(res, str(p))
     doc = ezdxf.readfile(str(p))
     assert len(doc.modelspace().query("TEXT")) > 200 and "THAI" in doc.styles
+
+
+# ---------------------------------------------------------------------------
+# Bar cutting list (stage 6)
+# ---------------------------------------------------------------------------
+
+def test_hooks_and_stirrup_lengths_aci_7():
+    from wanicndesign.structure.cutting import bend_diameter, hook_add, stirrup_length
+    assert bend_diameter("DB12") == pytest.approx(6 * 1.2)
+    assert bend_diameter("DB28") == pytest.approx(8 * 2.8)
+    assert bend_diameter("RB6", tie=True) == pytest.approx(4 * 0.6)
+    # 90° hook on DB12: arc π/2·(3db + db/2) + 12db
+    assert hook_add("DB12", 90) == pytest.approx(math.pi / 2 * 3.5 * 1.2 + 12 * 1.2)
+    # 135° tie hook: extension 6db but not less than 75 mm
+    assert hook_add("RB6", 135, tie=True) == pytest.approx(3 * math.pi / 4 * 1.5 + 7.5)
+    # RB6 stirrup in a 20 × 40 beam with 30 mm cover: centre-line rectangle 13.4 × 33.4 cm
+    r = 1.5
+    hand = 2 * (13.4 + 33.4) + 4 * (math.pi / 2 * r - 2 * r) + 2 * (3 * math.pi / 4 * r + 7.5)
+    assert stirrup_length("RB6", 20, 40, 3.0) == pytest.approx(hand)
+
+
+def test_cutting_list_and_stock_plan(tmp_path):
+    from openpyxl import load_workbook
+    from wanicndesign.structure.cutting import STOCK, cutting_list, stock_plan, write_cutting_xlsx
+    res = design(Building.load(BUILDING))
+    items = cutting_list(res)
+    assert all(it.length <= STOCK + 1e-9 for it in items)                 # long bars are split with laps
+    # every column segment has its main bars and ties
+    for c in res.columns:
+        assert any(it.element == f"เสา {c.node}" and it.bar == f"เหล็กยืน {c.segment}" for it in items)
+    # column bars of a lower storey include the tension lap
+    from wanicndesign.structure.sheets import development
+    c = next(c for c in res.columns if c.node == "1A" and c.segment == "GB–FL2")
+    it = next(i for i in items if i.element == "เสา 1A" and i.bar == "เหล็กยืน GB–FL2")
+    assert it.length == pytest.approx(c.height + development(res.concrete, c.bars.split("-")[1])["lap"] / 100)
+    plans = stock_plan(items)
+    for p in plans:
+        assert p.bars * p.stock >= p.used - 1e-6
+        assert p.bars >= math.ceil(p.used / p.stock - 1e-9)                # never fewer than the length needs
+        assert 0 <= p.waste_pct < 30
+    path = tmp_path / "cut.xlsx"
+    write_cutting_xlsx(res, str(path))
+    wb = load_workbook(path)
+    assert wb.sheetnames == ["ตารางตัดเหล็ก", "ตัดจากเหล็กเส้น 10 ม."]
+
+
+def test_elevation_and_cutting_sheets():
+    from wanicndesign.structure.cutting import beam_runs
+    from wanicndesign.structure.sheets import build_sheets
+    res = design(Building.load(BUILDING))
+    sheets = build_sheets(res)
+    titles = [s.title for s in sheets]
+    assert "รูปด้านเสาและการต่อเหล็ก" in titles and "สรุปตารางตัดเหล็ก" in titles
+    elev = [s for s in sheets if s.title == "รูปด้านคานและการต่อเหล็ก"]
+    text = " ".join(it[3] for s in elev for it in s.items if it[0] == "text")
+    for (key, _i), spans in beam_runs(res).items():
+        assert f"{key[0]} แนว {spans[0].line}" in text                     # every beam line has an elevation
+    numbers = [s.number for s in sheets]
+    assert numbers == [f"S-{k:02d}" for k in range(1, len(sheets) + 1)]

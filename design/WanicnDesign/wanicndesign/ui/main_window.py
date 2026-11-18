@@ -200,7 +200,7 @@ class MainWindow(QMainWindow):
         if self.result is None and self.calculate() is None:
             return
         res = self.result
-        ext = {"report": "xlsx", "dxf": "dxf", "boq": "xlsx", "sheets": "pdf"}[kind]
+        ext = {"report": "xlsx", "dxf": "dxf", "boq": "xlsx", "sheets": "pdf", "cutting": "xlsx"}[kind]
         flt = "แบบก่อสร้าง PDF (*.pdf);;แบบก่อสร้าง DXF (*.dxf)" if kind == "sheets" else f"*.{ext}"
         path, _ = QFileDialog.getSaveFileName(self, "ส่งออก", "", flt)
         if not path:
@@ -216,6 +216,9 @@ class MainWindow(QMainWindow):
         elif kind == "dxf":
             from ..structure.drawing import write_dxf
             write_dxf(res, path)
+        elif kind == "cutting":
+            from ..structure.cutting import write_cutting_xlsx
+            write_cutting_xlsx(res, path)
         elif kind == "sheets":
             from ..structure.sheets import write_sheets_dxf, write_sheets_pdf
             if path.lower().endswith(".dxf"):

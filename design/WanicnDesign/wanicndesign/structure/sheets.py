@@ -601,11 +601,175 @@ def stair_section(sh, res, x, y):
             f"ลูกตั้ง {g.riser * 100:.1f} ซม., ลูกนอน {g.tread * 100:.0f} ซม.", TXT_S, "TEXT", "center")
 
 
+def beam_elevation_sheets(res, start: int) -> list[Sheet]:
+    """Elevation of every primary beam line at 1:50: supports, top bars with
+    their hooks and laps, bottom bars per span lapped over interior
+    supports, stirrup spacing and end zones [EIT1008-DEV], [EIT1008-HOOK]."""
+    from .cutting import _pieces, _stirrup_count, beam_runs, parse_count
+    out = []
+    x0, y0, x1, y1 = area()
+    runs = list(beam_runs(res).items())
+    longest = max((sum(sp.length for sp in spans) for _k, spans in runs), default=1.0)
+    scale = pick_scale(longest + 1.0, 1.0, x1 - x0 - 40, 999, [25, 50, 75, 100, 125, 150, 200])
+    s = 1000 / scale
+    band = 36.0
+    per = max(1, int((y1 - y0 - 6) // band))
+    n = start
+    for p in range(0, len(runs), per):
+        sh = Sheet(f"S-{n:02d}", "รูปด้านคานและการต่อเหล็ก", f"1:{scale}")
+        y = y1 - 8
+        for (key, _i), spans in runs[p:p + per]:
+            level, axis, _c = key
+            h = max(sp.h for sp in spans) * s
+            ox = x0 + 18
+            base = y - h - 6
+            sh.text(x0, y, f"{level} แนว {spans[0].line}: " + " / ".join(dict.fromkeys(sp.mark for sp in spans)), TXT)
+            pos = ox
+            supports = [pos]
+            for sp in spans:
+                pos += sp.length * s
+                supports.append(pos)
+            sh.line(ox, base + h, pos, base + h, "BEAM")
+            sh.line(ox, base, pos, base, "BEAM")
+            for k_, X in enumerate(supports):
+                node = spans[0].span.split("-")[0] if k_ == 0 else spans[k_ - 1].span.split("-")[1]
+                w = 0.2 * s
+                for c in res.columns:
+                    if c.node == node and c.segment.endswith(level):
+                        w = (c.b if axis == "x" else c.h) * s
+                sh.rect(X - w / 2, base - 4, w, h + 8, "COLUMN")
+                sh.text(X, base - 8.5, node, TXT_S, "GRID", "center")
+            cov = 1.5
+            nt, st, _ = parse_count(max(spans, key=lambda q: _area_spec(q.top)).top)
+            d = development(res.concrete, st)
+            L = (pos - ox) / s
+            npc, _piece = _pieces(L + 0.4, d["lap_top"] / 100)
+            yt = base + h - cov
+            sh.line(ox - 2, yt, pos + 2, yt, "BAR")
+            for X in (ox - 2, pos + 2):
+                sh.line(X, yt, X, yt - min(h - 2 * cov, 12 * BAR_DIA[st] / 100 * s), "BAR")
+            if npc > 1:
+                mid = spans[len(spans) // 2]
+                xm = supports[len(spans) // 2] + mid.length * s / 2
+                lap = d["lap_top"] / 100 * s
+                sh.line(xm - lap / 2, yt - 0.8, xm + lap / 2, yt - 0.8, "BAR")
+                sh.text(xm + lap / 2 + 1, base + h / 2 - 1, f"ทาบเหล็กบน {d['lap_top']:.0f} ซม.", TXT_S, "BAR")
+            sh.text(ox - 16, yt - 1, f"{nt}-{st}", TXT_S, "BAR")
+            for k_, sp in enumerate(spans):
+                nb, sb, _ = parse_count(sp.bottom)
+                db = development(res.concrete, sb)
+                lap = db["lap"] / 100 * s
+                a = supports[k_] - (2 if k_ == 0 else lap / 2)
+                b_ = supports[k_ + 1] + (2 if k_ == len(spans) - 1 else lap / 2)
+                yb = base + cov + (0.8 if k_ % 2 else 0)
+                sh.line(a, yb, b_, yb, "BAR")
+                if k_ == 0:
+                    sh.line(a, yb, a, yb + min(h - 2 * cov, 12 * BAR_DIA[sb] / 100 * s), "BAR")
+                if k_ == len(spans) - 1:
+                    sh.line(b_, yb, b_, yb + min(h - 2 * cov, 12 * BAR_DIA[sb] / 100 * s), "BAR")
+                xm = (supports[k_] + supports[k_ + 1]) / 2
+                _, ss, sps = parse_count(sp.stirrup)
+                count = _stirrup_count(res, sp, sp.length - 0.2, sps)
+                ticks = min(count, 40)
+                for t in range(ticks):
+                    X = supports[k_] + 2 + (supports[k_ + 1] - supports[k_] - 4) * t / max(1, ticks - 1)
+                    sh.line(X, base + 0.6, X, base + h - 0.6, "GRID")
+                sh.text(xm, base + h + 1.5, f"{sp.mark} {sp.b:.2f}×{sp.h:.2f} ยาว {sp.length:.2f}", TXT_S, "BEAM",
+                        "center")
+                sh.text(xm, base - 5, f"ล่าง {nb}-{sb} ทาบ {db['lap']:.0f} · {ss}@{sps:g} ({count})", TXT_S, "TEXT",
+                        "center")
+            y -= band
+        out.append(sh)
+        n += 1
+    return out
+
+
+def _area_spec(spec: str) -> float:
+    from .sections import bar_area
+    n_, size = spec.split("-", 1)
+    return int(n_) * bar_area(size)
+
+
+def column_elevation_sheet(res, number: str) -> Sheet:
+    """Column stacks of each distinct arrangement at 1:50: footing, floors,
+    laps above each floor, tie spacing and the end zones."""
+    b = res.building
+    sh = Sheet(number, "รูปด้านเสาและการต่อเหล็ก", "1:50")
+    x0, y0, x1, y1 = area()
+    s = 1000 / 50
+    names = [lv.name for lv in b.levels]
+    stacks: dict = {}
+    for c in res.columns:
+        stacks.setdefault(c.node, []).append(c)
+    kinds: dict = {}
+    for node, segs in stacks.items():
+        segs = sorted(segs, key=lambda c: (0 if c.segment.startswith("ฐานราก") else
+                                             1 + names.index(c.segment.split("–")[1])))
+        sig = tuple((c.mark, c.bars, c.ties) for c in segs)
+        kinds.setdefault(sig, (segs, []))[1].append(node)
+    zbase = b.levels[0].elevation - (b.foundation.depth - 0.40 + b.levels[0].elevation)
+    top = b.levels[-1].elevation
+    oy = y0 + 18
+    ox = x0 + 30
+    for lv in b.levels:
+        Y = oy + (lv.elevation - zbase) * s
+        sh.line(x0 + 5, Y, x1 - 5, Y, "GRID", True)
+        sh.text(x0 + 2, Y + 1, f"{lv.name} +{lv.elevation:.2f}", TXT_S, "GRID")
+    for segs, nodes in kinds.values():
+        if ox > x1 - 40:
+            break
+        w = max(c.b for c in segs) * s
+        sh.rect(ox - 0.6 * s / 2, oy - 0.4 * s, 0.6 * s, 0.4 * s, "FOOTING")
+        z = zbase
+        for c in segs:
+            ztop = z + c.height
+            Y0, Y1 = oy + (z - zbase) * s, oy + (ztop - zbase) * s
+            sh.rect(ox - c.b * s / 2, Y0, c.b * s, Y1 - Y0, "COLUMN")
+            size = c.bars.split("-")[1]
+            d = development(res.concrete, size)
+            if c is not segs[-1]:
+                lap = d["lap"] / 100 * s
+                sh.line(ox + c.b * s / 2 - 1.2, Y1, ox + c.b * s / 2 - 1.2, Y1 + lap, "BAR")
+                sh.text(ox + c.b * s / 2 + 1.5, Y1 + lap / 2, f"ทาบ {d['lap']:.0f}", TXT_S, "BAR")
+            sh.line(ox - c.b * s / 2 + 1.2, Y0, ox - c.b * s / 2 + 1.2, Y1, "BAR")
+            sh.text(ox - c.b * s / 2 - 2, (Y0 + Y1) / 2, f"{c.mark} {c.bars}", TXT_S, "COLUMN", "right_hint")
+            sh.text(ox - c.b * s / 2 - 2, (Y0 + Y1) / 2 - 3.5, c.ties, TXT_S, "TEXT", "right_hint")
+            z = ztop
+        sh.text(ox, oy - 0.4 * s - 5, ", ".join(nodes), TXT_S, "TEXT", "center")
+        ox += max(w, 10) + 48
+    _ = top
+    return sh
+
+
+def cutting_sheet(res, number: str) -> Sheet:
+    from ..rates import Rates
+    from .cutting import cutting_list, stock_plan
+    sh = Sheet(number, "สรุปตารางตัดเหล็ก")
+    x0, y0, x1, y1 = area()
+    items = cutting_list(res)
+    plans = stock_plan(items)
+    rates = Rates()
+    sh.text(x0, y1 - 2, "สรุปการตัดจากเหล็กเส้นยาว 10 ม. (รายละเอียดทุกท่อนในไฟล์ ตารางตัดเหล็ก.xlsx)", TXT)
+    rows = [[p.size, str(p.pieces), f"{p.used:,.1f}", str(p.bars), f"{p.waste_pct:.1f}",
+             f"{p.bars * p.stock * float(rates.rebar_kg_m.get(p.size, 0)):,.0f}"] for p in plans]
+    y = table(sh, x0, y1 - 6, ["ขนาด", "จำนวนท่อน", "ยาวรวมใช้ (ม.)", "ซื้อ 10 ม. (เส้น)", "เศษ (%)", "น้ำหนักซื้อ (กก.)"],
+              rows, [18, 24, 30, 30, 18, 30])
+    sh.text(x0, y - 8, "ตัวอย่างรายการตัด (เรียงตามชิ้นส่วน)", TXT)
+    rows = [[it.element[:22], it.mark[:8], it.bar[:20], it.size, it.shape[:24], f"{it.length:.2f}",
+             str(it.total_count)] for it in items[:28]]
+    table(sh, x0, y - 12, ["ชิ้นส่วน", "Mark", "เหล็ก", "ขนาด", "รูปร่าง", "ยาวตัด (ม.)", "จำนวน"], rows,
+          [52, 18, 44, 14, 56, 22, 16], 5.2)
+    return sh
+
+
 def build_sheets(res) -> list[Sheet]:
     sheets = [notes_sheet(res)]
     sheets += plan_sheets(res, 2)
     sheets.append(foundation_sheet(res, f"S-{len(sheets) + 1:02d}"))
     sheets += schedule_sheets(res, len(sheets) + 1)
+    sheets += beam_elevation_sheets(res, len(sheets) + 1)
+    sheets.append(column_elevation_sheet(res, f"S-{len(sheets) + 1:02d}"))
+    sheets.append(cutting_sheet(res, f"S-{len(sheets) + 1:02d}"))
     total = len(sheets)
     for sh in sheets:
         frame(sh, res.building.name, total)
@@ -657,6 +821,8 @@ def write_sheets_dxf(res, path: str) -> list[Sheet]:
                 t = msp.add_text(s, height=h, dxfattribs={"layer": f"S-{layer}", "style": "THAI"})
                 if align == "center":
                     t.set_placement((ox + x, y), align=ezdxf.enums.TextEntityAlignment.BOTTOM_CENTER)
+                elif align == "right_hint":
+                    t.set_placement((ox + x, y), align=ezdxf.enums.TextEntityAlignment.BOTTOM_RIGHT)
                 else:
                     t.set_placement((ox + x, y))
             elif kind == "poly":
@@ -711,9 +877,9 @@ def paint(sheet: Sheet, painter, scale: float, colour=True):
             painter.setFont(font)
             painter.setPen(QColor(cols.get(layer, "#000000") if colour else "#000000"))
             p = P(x, y)
-            if align == "center":
+            if align in ("center", "right_hint"):
                 w = painter.fontMetrics().horizontalAdvance(s)
-                p = QPointF(p.x() - w / 2, p.y())
+                p = QPointF(p.x() - (w / 2 if align == "center" else w), p.y())
             painter.drawText(p, s)
         elif kind == "poly":
             _, pts, layer, closed = it

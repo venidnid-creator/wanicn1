@@ -88,6 +88,9 @@ def cmd_design(args) -> int:
     from .structure.sheets import write_sheets_dxf, write_sheets_pdf
     write_sheets_dxf(res, os.path.join(out, "แบบก่อสร้าง.dxf"))
     write_sheets_pdf(res, os.path.join(out, "แบบก่อสร้าง.pdf"))
+    from .structure.cutting import write_cutting_xlsx
+    _items, plans = write_cutting_xlsx(res, os.path.join(out, "ตารางตัดเหล็ก.xlsx"))
+    print("เหล็กเส้น 10 ม.: " + ", ".join(f"{p.size} {p.bars} เส้น (เศษ {p.waste_pct:.1f}%)" for p in plans))
     project = to_project(res)
     project.save(os.path.join(out, "ปริมาณ-โครงการ.json"))
     rates = _rates(args)
