@@ -2203,3 +2203,94 @@ def a_stair_section(sh, E, e, idx):
     title(y0, 3, "1:15")
     sh.scale = "ตามระบุ"
     return 50
+
+
+# ---------------------------------------------------------------------------
+# แบบขยายราวกันตก — the guard rail round the stair opening (as the
+# original's balcony rail sheet: front elevation and section at 1:25)
+# ---------------------------------------------------------------------------
+
+def a_guardrail(sh, E):
+    s = E["settings"]
+    x0, y0, x1, y1 = D.drawing_area()
+    xm = (x0 + x1) / 2
+    sh.line((xm, y0), (xm, y1), "frame", 0.25)
+    hr = B.RAIL_H
+    k = 1000.0 / 25
+    t = float((E["lib"].get("S1") or {}).get("t", 0.12) or 0.12)
+    # ---- front elevation: a 2.40 m run between two posts --------------------
+    Lr = 2.40
+    ox, oy = x0 + 34, y0 + 110
+
+    def P(u, z):
+        return (ox + u * k, oy + z * k)
+    _concrete(sh, P(-0.3, -t), P(Lr + 0.3, 0.0))
+    for uq in (0.0, Lr):                                     # the posts 2"x2"
+        sh.rect(*P(uq - 0.025, 0.0), *P(uq + 0.025, hr), "door", 0.4)
+    sh.rect(*P(-0.05, hr), *P(Lr + 0.05, hr + 0.05), "door", 0.45)      # the rail 2"x4" laid flat
+    n = int(round(Lr / 0.20))
+    for i in range(1, n):                                    # balusters every 0.20
+        u = i * Lr / n
+        sh.line(P(u, 0.0), P(u, hr), "door", 0.25)
+    sh.line(P(0.0, 0.10), P(Lr, 0.10), "door", 0.3)          # the bottom rail
+    # sizes: heights on the left, the spacing below
+    xl = P(-0.3, 0)[0] - 6
+    for za, zb in ((0.0, 0.10), (0.10, hr), (hr, hr + 0.05)):
+        a, b = P(0, za)[1], P(0, zb)[1]
+        sh.line((xl, a), (xl, b), "dim", 0.13)
+        for yq in (a, b):
+            sh.line((xl - 0.7, yq - 0.7), (xl + 0.7, yq + 0.7), "dim", 0.25)
+        sh.text((xl - 1.0, (a + b) / 2 - 0.7), f"{zb - za:.2f}", 2.0, "right", "dim")
+    xt = xl - 12
+    sh.line((xt, P(0, 0)[1]), (xt, P(0, hr + 0.05)[1]), "dim", 0.13)
+    sh.text((xt - 1.0, P(0, hr / 2)[1]), f"{hr + 0.05:.2f}", 2.0, "center", "dim", angle=90)
+    yb = P(0, -t)[1] - 6
+    for i in range(n + 1):
+        xq = P(i * Lr / n, 0)[0]
+        sh.line((xq - 0.6, yb - 0.6), (xq + 0.6, yb + 0.6), "dim", 0.2)
+        sh.line((xq, yb - 1.2), (xq, yb + 1.2), "dim", 0.13)
+        if i < n:
+            sh.text((xq + Lr / n * k / 2, yb + 0.9), f"{Lr / n:.2f}", 1.8, "center", "dim")
+    sh.line((P(0, 0)[0], yb), (P(Lr, 0)[0], yb), "dim", 0.13)
+    # the labels stacked over the rail, each to its point (the leaders never cross)
+    lx = P(0.2, 0)[0]
+    for i, (z, lab) in enumerate(((hr + 0.025, 'ราวกันตกไม้เนื้อแข็ง 2"x4" วางนอน ทาสี'),
+                                  (hr * 0.6, 'ลูกกรงแป๊บดำ Ø 1" @0.20 ม. ทาสีน้ำมัน'),
+                                  (0.10, 'เหล็กกล่อง 1"x2" ยึดพื้นด้วยพุก'))):
+        q = P(Lr - 0.25 - i * 0.35, z)
+        ty = P(0, hr)[1] + 24 - i * 6
+        sh.circle(q, 0.45, "text", 0.18)
+        sh.line(q, (lx + len(lab) * 1.05, ty), "text", 0.13)
+        sh.line((lx, ty), (lx + len(lab) * 1.05, ty), "text", 0.13)
+        sh.text((lx + 0.5, ty + 0.8), lab, 2.0)
+    caption_marks(sh, (x0 + 20, y0 + 22), "แบบขยาย ด้านหน้าราวกันตก", "1:25", None, None, 110.0)
+    # ---- section through the slab edge ---------------------------------------
+    ox2, oy2 = xm + 60, y0 + 110
+
+    def Q(u, z):
+        return (ox2 + u * k, oy2 + z * k)
+    _concrete(sh, Q(-1.2, -t), Q(0.0, 0.0))
+    _concrete(sh, Q(-0.20, -0.40), Q(0.0, -t))              # the edge beam at the opening
+    sh.rect(*Q(-0.10, 0.0), *Q(-0.05, hr), "door", 0.4)     # post
+    sh.rect(*Q(-0.125, hr), *Q(-0.025, hr + 0.05), "door", 0.45)
+    sh.line(Q(-0.075, 0.0), Q(-0.075, hr), "door", 0.2)
+    sh.line(Q(-1.2, 0.0), Q(-1.2, hr + 0.4), "grid", 0.1, True)
+    for za, zb in ((0.0, hr), (hr, hr + 0.05)):
+        a, b = Q(0, za)[1], Q(0, zb)[1]
+        xq = Q(0.25, 0)[0]
+        sh.line((xq, a), (xq, b), "dim", 0.13)
+        for yq in (a, b):
+            sh.line((xq - 0.7, yq - 0.7), (xq + 0.7, yq + 0.7), "dim", 0.25)
+        sh.text((xq + 1.2, (a + b) / 2 - 0.7), f"{zb - za:.2f}", 2.0, "left", "dim")
+    sh.text(Q(0.10, -t - 0.35), "ช่องบันได", 2.2, "left", "text", True)
+    tx2 = Q(0.80, 0)[0]
+    for z, lab in ((hr + 0.025, 'ราวไม้ 2"x4" วางนอน'), (0.5, 'ลูกกรงแป๊บดำ Ø 1"'),
+                   (-t / 2, "พื้น ค.ส.ล. / คานขอบช่องบันได")):
+        q = Q(-0.06 if z > 0 else -0.1, z)
+        sh.circle(q, 0.45, "text", 0.18)
+        sh.line(q, (tx2, q[1]), "text", 0.13)
+        sh.line((tx2, q[1]), (tx2 + len(lab) * 1.1, q[1]), "text", 0.13)
+        sh.text((tx2 + 0.5, q[1] + 0.8), lab, 2.0)
+    caption_marks(sh, (xm + 20, y0 + 22), "แบบขยาย รูปตัดราวกันตก", "1:25", None, None, 110.0)
+    sh.scale = "1:25"
+    return 25

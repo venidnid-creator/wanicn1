@@ -2924,6 +2924,8 @@ def build_set(data, info=None,
             for i in range(0, len(baths), 2):
                 add("A", "รูปด้านภายในห้องน้ำ" + (f" ({i // 2 + 1})" if len(baths) > 2 else ""),
                     lambda sh, _a, rr=baths[i:i + 2]: a_bath_elevations(sh, E, rr), "1:50")
+        if E["n"] >= 2 and E["stairs"]:                  # the guard rail round the stair opening
+            add("A", "แบบขยายราวกันตก", lambda sh, _a: STD.a_guardrail(sh, E), "1:25")
         if L:
             add("A", "แบบขยายเชิงชาย ฝ้าชายคา โครงถักหลังคา",
                 lambda sh, _a: detail_eave_truss(sh, E, L), "1:20")
@@ -3191,7 +3193,7 @@ def detail_eave_truss(sh, E, L):
     ov = float(s.get("overhang") or 0.6)
     # --- eave detail, 1:20 -------------------------------------------------
     k = 1000.0 / 20
-    ox, oy = x0 + 95, y0 + 75
+    ox, oy = x0 + 95, y0 + 100
 
     def P(u, z):
         return (ox + u * k, oy + z * k)
@@ -3239,7 +3241,7 @@ def detail_eave_truss(sh, E, L):
         if zr > zs + 0.05:
             sh.line(P(uh, zs + 0.032), P(uh, zr), "struct", 0.25)
     notes = [((ov - 0.3, ph - (ov - 0.3) * tan + rd + 0.10),
-              "กระเบื้อง " + CAT.roof_tile(s)[1]["name"][:30]),
+              "กระเบื้อง " + CAT.roof_tile(s)[1]["name"].split(" (")[0]),
              ((-0.6, ph + 0.6 * tan + rd + 0.04), f"แป {s['purlin']} หันปากขึ้นอกไก่"),
              ((-0.9, ph + 0.9 * tan + 0.07), f"จันทัน {s['rafter']}"),
              ((ov + 0.012, ze - 0.10), "เชิงชาย + ทับเชิงชาย ไม้สำเร็จรูป 1\"×8\" + 1\"×6\""),
@@ -3249,15 +3251,34 @@ def detail_eave_truss(sh, E, L):
              ((0.08, -0.005), "เพลทหัวเสา 200×200×9 มม."),
              ((0.05, -0.40), "J-bolt 4-DB12 ฝังในเสา 0.60 ม. งอขอ 8 ซม."),
              ((-half / 2, -bh / 2), "คานรัดรอบ ค.ส.ล. (RB1)")]
-    tx_ = P(ov, 0)[0] + 22
-    ty_ = P(0, ph + 0.5 * tan + 0.3)[1]
-    for (u, z), t in sorted(notes, key=lambda n: -n[0][1]):
+    # the labels in one column, each at its point's height (pushed down to keep
+    # the gap) — the leaders never cross, as the original
+    tx_ = P(ov, 0)[0] + 30
+    last = None
+    for (u, z), t in sorted(notes, key=lambda n: -P(*n[0])[1]):
         p_ = P(u, z)
-        sh.line(p_, (tx_ - 2, ty_ + 0.8), "dim", 0.13)
-        sh.circle(p_, 0.5, "dim", 0.13)
-        sh.text((tx_, ty_), t, 2.1, "left", "text")
-        ty_ -= 6.5
-    caption(sh, (ox + 20, y0 + 8), "แบบขยายเชิงชาย ฝ้าชายคา และหัวเสา", "1:20")
+        ty_ = p_[1] if last is None else min(p_[1], last - 6.0)
+        last = ty_
+        sh.circle(p_, 0.5, "text", 0.18)
+        sh.line(p_, (tx_ - 3, ty_), "text", 0.13)
+        sh.line((tx_ - 3, ty_), (tx_ + len(t) * 1.15, ty_), "text", 0.13)
+        sh.text((tx_, ty_ + 0.8), t, 2.1, "left", "text")
+    # the overhang from the column's axis to the fascia, the axis and its bubble
+    yd = P(0, -bh - 0.8)[1] - 6
+    sh.line(P(0, ph + 0.4), (P(0, 0)[0], yd - 4), "grid", 0.13, True)
+    sh.line((P(0, 0)[0], yd), (P(ov + 0.025, 0)[0], yd), "dim", 0.13)
+    for xq in (P(0, 0)[0], P(ov + 0.025, 0)[0]):
+        sh.line((xq - 0.7, yd - 0.7), (xq + 0.7, yd + 0.7), "dim", 0.25)
+        sh.line((xq, yd - 1.2), (xq, yd + 1.2), "dim", 0.13)
+    sh.line((P(ov + 0.025, 0)[0], yd + 1.2), P(ov + 0.025, ze - 0.2), "dim", 0.1, True)
+    sh.text(((P(0, 0)[0] + P(ov, 0)[0]) / 2, yd + 0.9), f"{ov:.2f}", 2.2, "center", "dim")
+    sh.circle((P(0, 0)[0], yd - 8), 3.2, "grid", 0.25)
+    from core import wanic_std_sheets as STD
+    STD.caption_marks(sh, (ox - 60, y0 + 14), "แบบขยาย เชิงชาย ฝ้าชายคา และหัวเสา", "1:20", None, None, 120.0)
+    cxr = ox - 60 + 126
+    sh.circle((cxr, y0 + 15), 3.8, "text", 0.3)
+    sh.line((cxr - 3.8, y0 + 15), (cxr + 3.8, y0 + 15), "text", 0.2)
+    sh.text((cxr, y0 + 15.7), "R1", 2.2, "center", "text", True)
     # --- truss, 1:50 --------------------------------------------------------
     W = 0.0
     if L and L.get("tie"):
@@ -3289,7 +3310,7 @@ def detail_eave_truss(sh, E, L):
     sh.text(Q(half_in / 4, 0.55), "ค้ำยัน", 2.0)
     sh.text(Q(-half_in + 0.3, -0.35), f"ขื่อ {s['tiebeam']}", 2.0)
     sh.text(Q(-0.6, hr - ov * tan + 0.45), f"อกไก่ {s['ridge']}", 2.0)
-    caption(sh, (tx, ty - 22), "รูปโครงถักหลังคา (ดั้ง ตุ๊กตา ค้ำยัน)", "1:75")
+    STD.caption_marks(sh, (tx - 55, ty - 22), "รูปโครงถักหลังคา (ดั้ง ตุ๊กตา ค้ำยัน)", "1:75", None, None, 110.0)
 
 
 def ee_single_line(sh, E):
