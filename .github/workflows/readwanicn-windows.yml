@@ -144,6 +144,7 @@ jobs:
         shell: bash
         env:
           V: ${{ steps.prep.outputs.version }}
+          PYTHONIOENCODING: utf-8
         run: |
           python - <<'PY'
           import os, re
@@ -164,7 +165,7 @@ jobs:
                    "- ถ้า Windows ขึ้นว่า \"Windows protected your PC\" ให้กด More info ▸ Run anyway\n\n" + "\n\n".join(out)
                    + "\n\nผู้พัฒนา นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ\n")
           open("dist/release-notes.md", "w", encoding="utf-8").write(notes)
-          print(notes)
+          print(f"release notes: {len(out)} versions, {len(notes)} characters")
           PY
 
       - name: Publish the GitHub Release
