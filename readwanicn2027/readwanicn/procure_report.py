@@ -7,6 +7,7 @@ written twice: as HTML for QTextDocument → QPdfWriter, and as worksheet cells.
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -279,13 +280,15 @@ def to_xlsx(reports: list, path, family: str = XLSX_FONT) -> None:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.pagebreak import Break
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     wb = Workbook()
     wb.remove(wb.active)
+    clean = lambda v: ILLEGAL_CHARACTERS_RE.sub(" ", v) if isinstance(v, str) else v  # noqa: E731
     thin = Side(style="thin", color="555555")
     box = Border(left=thin, right=thin, top=thin, bottom=thin)
     horiz = {"center": "center", "right": "right"}
     for rep in reports:
-        ws = wb.create_sheet(rep.title[:31])
+        ws = wb.create_sheet(re.sub(r"[\\/*?:\[\]]", " ", rep.title)[:31])
         ps = ws.page_setup
         ps.orientation = "landscape" if rep.landscape else "portrait"
         ps.paperSize = ws.PAPERSIZE_A4
@@ -298,7 +301,7 @@ def to_xlsx(reports: list, path, family: str = XLSX_FONT) -> None:
         ws.oddFooter.right.text = "หน้า &P/&N"
         ws.oddFooter.right.size = 9
         if rep.footer:
-            ws.oddFooter.left.text = DEVELOPER_LINE
+            ws.oddFooter.left.text = clean(DEVELOPER_LINE)
             ws.oddFooter.left.size = 8
         ws.sheet_view.showGridLines = False
         tables = [b for b in rep.blocks if isinstance(b, Table)]
@@ -346,7 +349,7 @@ def to_xlsx(reports: list, path, family: str = XLSX_FONT) -> None:
                 ws.row_breaks.append(Break(id=r - 1))
                 continue
             if isinstance(blk, Para):
-                c = ws.cell(r, 1, blk.text if blk.text.strip() else None)
+                c = ws.cell(r, 1, clean(blk.text) if blk.text.strip() else None)
                 size = blk.size + 2
                 c.font = Font(name=family, size=size, bold=blk.bold)
                 c.alignment = Alignment(horizontal=horiz.get(blk.align, "left"), vertical="center", wrap_text=True)
@@ -391,7 +394,7 @@ def to_xlsx(reports: list, path, family: str = XLSX_FONT) -> None:
                         v = cell.value if cell.value is not None else (cell.text or None)
                         if isinstance(v, str) and cell.indent:
                             v = "   " * cell.indent + v
-                        c = ws.cell(r, g0 + 1, v)
+                        c = ws.cell(r, g0 + 1, clean(v))
                         csize = (cell.size or blk.font_pt) + 3
                         c.font = Font(name=family, size=csize, bold=cell.bold or kind == "head")
                         is_num = isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool)
@@ -1114,6 +1117,12 @@ def write(kind: str, p: P.Project, pdf_path, family: str, xlsx: bool = True) -> 
     written.append(pdf_path)
     if xlsx:
         xp = pdf_path.with_suffix(".xlsx")
-        to_xlsx(reps, xp)
-        written.append(xp)
+        try:
+            to_xlsx(reps, xp)
+            written.append(xp)
+        except Exception as e:                       # the PDF is written: report the spreadsheet's trouble
+            WRITE_ERRORS.append(f"ตารางคำนวณ {xp.name}: {type(e).__name__}: {e}")
     return written
+
+
+WRITE_ERRORS: list = []

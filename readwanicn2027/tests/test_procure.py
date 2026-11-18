@@ -429,3 +429,19 @@ def test_work_plan_and_a4_sheets(app, tmp_path):
             assert ws.page_setup.fitToWidth == 1
     assert R.write_sheet("651", p, tmp_path / "x.csv")[0].suffix == ".csv"
     assert R.write("work", p, tmp_path / "work.pdf", "Laksaman")[0].exists()
+
+
+def test_sheets_with_excel_control_characters(app, tmp_path):
+    """Names read from an Excel bill can hold \\x0b (Alt+Enter) and other control characters:
+    the .xlsx must still be written (they were refused and nothing was saved)."""
+    from readwanicn import procure_report as R
+    p = _road()
+    P.auto_plan(p, 8)
+    p.items[1].name = "งานถางป่า\x0bขุดตอ\x01"
+    assert P.text("ก\x0bข\x1f") == "ก ข"
+    for kind in ("651", "124", "work", "78"):
+        f = R.write_sheet(kind, p, tmp_path / f"{kind}.xlsx")[0]
+        assert f.exists() and f.stat().st_size > 1000
+    R.WRITE_ERRORS.clear()
+    files = R.write("651", p, tmp_path / "r651.pdf", "Laksaman")
+    assert not R.WRITE_ERRORS and any(str(f).endswith(".xlsx") for f in files)

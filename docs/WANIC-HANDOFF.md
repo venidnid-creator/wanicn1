@@ -10,6 +10,11 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
+## ReadWanicn2027 2027.4.4 (18 พ.ย. 2569) — แก้ «ส่งออกตารางคำนวณไม่ได้ ไม่มีไฟล์»
+- สาเหตุ: ชื่อรายการจาก Excel มี \x0b ฯลฯ → openpyxl IllegalCharacterError และ slot ใน dialog กลืน exception เงียบ
+- แก้: `procure.text()` ตัด CONTROL_RE ตอนอ่าน · `to_xlsx` ทำความสะอาดทุกค่าด้วย ILLEGAL_CHARACTERS_RE · `write()` เก็บ PDF ไว้แม้ xlsx พัง
+  แจ้งผ่าน `WRITE_ERRORS` · `ProcureDialog._failed()` แจ้งทุกความผิดพลาด (PermissionError = ไฟล์เปิดค้าง) · test ใหม่ · tests 49 ผ่าน
+
 ## ReadWanicn2027 2027.4.3 — แก้ตามผลทดสอบ 2027.4.2 (18 พ.ย. 2569, อนุมัติแล้ว — ตัวติดตั้ง run 44226890249 artifact 14393427570 ผ่าน, ไม่ release)
 - ว651: ตัวเลขทุกช่องไม่ตัดบรรทัด (white-space:nowrap) · ปรับความกว้างคอลัมน์ วงเงินรวมอยู่บรรทัดเดียว ·
   รายการที่รับเศษ (*) แรเงาเทาทั้งในรายงานและบนจอ + หมายเหตุ `adjust_note()` «ปรับเพิ่ม/ลดในลำดับที่ …»

@@ -847,8 +847,16 @@ class ProcureDialog(QDialog):
         if not path.lower().endswith(".pdf"):
             path += ".pdf"
         self.settings.setValue("procure/out", str(Path(path).parent))
-        files = R.write(kind, p, path, self.family)
+        R.WRITE_ERRORS.clear()
+        try:
+            files = R.write(kind, p, path, self.family)
+        except Exception as e:
+            self._failed(f"บันทึกรายงาน {names[kind]} ไม่สำเร็จ", e, path)
+            return
         self.record(f"รายงาน {names[kind]}")
+        if R.WRITE_ERRORS:
+            QMessageBox.warning(self, self.windowTitle(), "บันทึก PDF แล้ว แต่ตารางคำนวณไม่สำเร็จ:\n"
+                                + "\n".join(R.WRITE_ERRORS))
         self.save_project(quiet=True)
         msg = "บันทึกรายงานแล้ว:\n" + "\n".join(str(f) for f in files)
         if QMessageBox.question(self, self.windowTitle(), msg + "\n\nเปิดไฟล์ PDF เลยหรือไม่?") == QMessageBox.Yes:
@@ -878,7 +886,14 @@ class ProcureDialog(QDialog):
         if not path.lower().endswith((".xlsx", ".csv")):
             path += ".csv" if "csv" in flt else ".xlsx"
         self.settings.setValue("procure/out", str(Path(path).parent))
-        files = R.write_sheet(kind, p, path)
+        try:
+            files = R.write_sheet(kind, p, path)
+        except Exception as e:
+            self._failed(f"บันทึกตารางคำนวณ {names[kind]} ไม่สำเร็จ", e, path)
+            return
+        if not all(Path(f).exists() for f in files):
+            QMessageBox.warning(self, self.windowTitle(), "ไม่พบไฟล์ที่บันทึก:\n" + "\n".join(map(str, files)))
+            return
         self.record(f"ตารางคำนวณ {names[kind]}")
         self.save_project(quiet=True)
         msg = "บันทึกแล้ว:\n" + "\n".join(str(f) for f in files)
@@ -886,6 +901,15 @@ class ProcureDialog(QDialog):
             from PySide6.QtCore import QUrl
             from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(files[0])))
+
+    def _failed(self, what: str, e: Exception, path):
+        """Never silent: say what failed and why (a file open in another program is the usual cause)."""
+        import traceback
+        traceback.print_exc()
+        hint = ""
+        if isinstance(e, PermissionError):
+            hint = "\n\nไฟล์นี้อาจเปิดค้างอยู่ในโปรแกรมอื่น — ปิดไฟล์แล้วลองใหม่ หรือบันทึกเป็นชื่ออื่น"
+        QMessageBox.critical(self, self.windowTitle(), f"{what}\n{path}\n\n{type(e).__name__}: {e}{hint}")
 
     def showEvent(self, e):
         """Fit the screen it opens on (laptops, 125–175 % scaling): never larger than the

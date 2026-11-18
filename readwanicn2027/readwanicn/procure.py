@@ -76,7 +76,11 @@ def text(v) -> str:
         return ""
     if isinstance(v, float):
         return f"{v:g}"
-    return str(v).translate(THAI_DIGITS).replace("\r", " ").replace("\n", " ").strip()
+    s = str(v).translate(THAI_DIGITS).replace("\r", " ").replace("\n", " ")
+    return CONTROL_RE.sub(" ", s).strip()        # Excel's line feeds (\x0b) and other control characters
+
+
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def arabic(s) -> str:
