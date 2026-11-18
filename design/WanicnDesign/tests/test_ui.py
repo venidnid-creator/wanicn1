@@ -142,3 +142,10 @@ def test_wind_page_applies(win, app):
     assert win.building.wind.terrain == "open"
     win.calculate()
     assert win.result.wind is not None and win.result.wind.pressures[0][1] == 100
+
+
+def test_sheets_pdf_export(win, app, tmp_path):
+    win.calculate()
+    p = tmp_path / "sheets.pdf"
+    win.export_to("sheets", str(p), win.result)
+    assert p.exists() and p.read_bytes()[:4] == b"%PDF" and p.stat().st_size > 10000

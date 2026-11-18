@@ -85,6 +85,9 @@ def cmd_design(args) -> int:
     res = design(building)
     write_report(res, os.path.join(out, "รายการคำนวณ.xlsx"))
     write_dxf(res, os.path.join(out, "แบบโครงสร้าง.dxf"))
+    from .structure.sheets import write_sheets_dxf, write_sheets_pdf
+    write_sheets_dxf(res, os.path.join(out, "แบบก่อสร้าง.dxf"))
+    write_sheets_pdf(res, os.path.join(out, "แบบก่อสร้าง.pdf"))
     project = to_project(res)
     project.save(os.path.join(out, "ปริมาณ-โครงการ.json"))
     rates = _rates(args)

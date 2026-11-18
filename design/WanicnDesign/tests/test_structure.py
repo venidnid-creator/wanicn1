@@ -823,3 +823,42 @@ def test_fire_tables_17_on_members():
     assert any("ทนไฟ 2 ชม." in s.note for s in res.slabs if s.level == "FL2")
     assert any("ทนไฟ 2 ชม." in c.note for c in res.columns)
     assert not res.ok and "MI2567-32" in res.all_refs()
+
+
+# ---------------------------------------------------------------------------
+# Construction drawing sheets (stage 5)
+# ---------------------------------------------------------------------------
+
+def test_development_and_lap_lengths_aci_12_2_2():
+    from wanicndesign.structure.sheets import development
+    c = Concrete()
+    fy, fc = 4000 / 10.197, 210 / 10.197
+    d12 = development(c, "DB12")
+    assert d12["ld"] == pytest.approx(math.ceil(fy / (2.1 * math.sqrt(fc)) * 1.2 / 5) * 5)   # 41.1 db → 50 cm
+    assert d12["lap"] >= 1.3 * fy / (2.1 * math.sqrt(fc)) * 1.2
+    assert d12["hook90"] == pytest.approx(15) and d12["hook180"] == pytest.approx(6.5)
+    d25 = development(c, "DB25")
+    assert d25["ld"] == pytest.approx(math.ceil(fy / (1.7 * math.sqrt(fc)) * 2.5 / 5) * 5)   # larger bars: 1.7
+    assert d25["lap_c"] == pytest.approx(math.ceil(0.071 * fy * 2.5 / 5) * 5)
+
+
+def test_construction_sheets(tmp_path):
+    import ezdxf
+    from wanicndesign.structure.building import Stair
+    from wanicndesign.structure.sheets import build_sheets, write_sheets_dxf
+    b = Building.load(BUILDING)
+    b.stairs.append(Stair("ST1", "3-4/A-B", "GB", "y", "landing"))
+    res = design(b)
+    sheets = build_sheets(res)
+    titles = [s.title for s in sheets]
+    assert titles[0].startswith("หมายเหตุ") and any("ฐานราก" in t for t in titles)
+    assert sum(1 for t in titles if t.startswith("แปลนโครงสร้าง")) == len(b.levels)
+    texts = " ".join(it[3] for s in sheets for it in s.items if it[0] == "text")
+    for x in res.beams + res.columns + res.footings + res.slabs:
+        assert x.mark in texts                                        # every mark appears on a sheet
+    assert "กฎกระทรวง" in texts and "ตาราง 13" in texts and "ST1" in texts
+    assert all(f"/ {len(sheets)}" in " ".join(it[3] for it in s.items if it[0] == "text") for s in sheets)
+    p = tmp_path / "s.dxf"
+    write_sheets_dxf(res, str(p))
+    doc = ezdxf.readfile(str(p))
+    assert len(doc.modelspace().query("TEXT")) > 200 and "THAI" in doc.styles

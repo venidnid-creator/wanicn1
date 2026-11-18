@@ -259,7 +259,7 @@ class DesignResult:
             (self.wind.refs.split(",") if self.wind else []) + \
             (["MR2566-23", "MI2567-32"] if self.fire and self.fire.applies else
              ["MR2566-23"] if self.fire and self.fire.notes else []) + \
-            (["MI2567-3", "MI2567-29", "MI2567-29C", "MI2567-29D"]) + \
+            (["MI2567-3", "MI2567-29", "MI2567-29C", "MI2567-29D", "EIT1008-DEV", "EIT1008-HOOK"]) + \
             (self.seismic.refs.split(",") + ["MR-EQ2564"] if self.seismic else [])
         if extra:
             for c in extra:

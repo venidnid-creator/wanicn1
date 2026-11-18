@@ -519,7 +519,8 @@ class ResultsPage(Page):
         run.setStyleSheet("font-weight:bold; padding:6px;")
         run.clicked.connect(self.run_requested.emit)
         row.addWidget(run)
-        for key, label in (("report", "รายการคำนวณ Excel"), ("dxf", "แบบ DXF"), ("boq", "BOQ ปร.4")):
+        for key, label in (("report", "รายการคำนวณ Excel"), ("sheets", "แบบก่อสร้าง PDF/DXF"), ("dxf", "โมเดล DXF"),
+                           ("boq", "BOQ ปร.4")):
             b = QPushButton(label)
             b.clicked.connect(lambda _c=False, k=key: self.export_requested.emit(k))
             row.addWidget(b)
