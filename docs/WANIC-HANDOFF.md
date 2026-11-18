@@ -18,7 +18,7 @@
   โหลดเลือกบันทึกที่ต่ออายุมากสุด/เริ่มเก่าสุด (`_best`) → ติดตั้งทับ/ถอนแล้วลงใหม่/ลบ APPDATA ก็ไม่เริ่มปีใหม่
   (`License(path, backups=, registry=)`: path ที่ส่งเอง = ไม่มีสำเนาเว้นแต่ส่ง backups) · tests 51 ผ่าน
 
-## ReadWanicn2027 2027.4.4 (18 พ.ย. 2569) — แก้ «ส่งออกตารางคำนวณไม่ได้ ไม่มีไฟล์»
+## ReadWanicn2027 2027.4.4 (18 พ.ย. 2569) — แก้ «ส่งออกตารางคำนวณไม่ได้ ไม่มีไฟล์» · ตัวติดตั้ง run 44230352311 artifact 14395117238 ผ่าน, ไม่ release
 - สาเหตุ: ชื่อรายการจาก Excel มี \x0b ฯลฯ → openpyxl IllegalCharacterError และ slot ใน dialog กลืน exception เงียบ
 - แก้: `procure.text()` ตัด CONTROL_RE ตอนอ่าน · `to_xlsx` ทำความสะอาดทุกค่าด้วย ILLEGAL_CHARACTERS_RE · `write()` เก็บ PDF ไว้แม้ xlsx พัง
   แจ้งผ่าน `WRITE_ERRORS` · `ProcureDialog._failed()` แจ้งทุกความผิดพลาด (PermissionError = ไฟล์เปิดค้าง) · test ใหม่ · tests 49 ผ่าน
