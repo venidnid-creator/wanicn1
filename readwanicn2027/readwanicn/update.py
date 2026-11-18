@@ -41,6 +41,8 @@ class ReleaseInfo:
     opens: int = 0                  # openings
     published_th: str = ""          # the newest release's day, Thai style
     fetched: str = ""               # when these numbers were read
+    installer_url: str = ""         # the newest release's setup .exe, to download directly
+    notes: str = ""                 # what is new (the release's text)
 
 
 def _key(version: str) -> tuple:
@@ -75,6 +77,9 @@ def parse(releases: list, current: str = VERSION, now: dt.datetime | None = None
         info.url = best.get("html_url", "")
         info.newer = _key(info.latest) > _key(current)
         info.latest_downloads = _count(best, exe)
+        setup = [a for a in best.get("assets", []) if exe(str(a.get("name", "")))]
+        info.installer_url = str(setup[0].get("browser_download_url", "")) if setup else ""
+        info.notes = str(best.get("body") or "")[:1500]
         info.published_th = thai_day(str(best.get("published_at") or best.get("created_at") or ""))
     now = now or dt.datetime.now()
     info.fetched = f"{thai_day(now.date().isoformat())} {now:%H:%M}"

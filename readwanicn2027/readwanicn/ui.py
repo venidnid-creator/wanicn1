@@ -601,6 +601,71 @@ class LicenseDialog(QDialog):
             self.error.setText("รหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบกับผู้พัฒนา")
 
 
+class UpdateDialog(QDialog):
+    """มีเวอร์ชันใหม่: what is new, a direct download of the installer, and the promise that the
+    year of use carries on from the first installation (an update never starts a new year)."""
+
+    def __init__(self, info, lic: "license.License", parent=None):
+        super().__init__(parent)
+        self.info = info
+        self.setWindowTitle(f"{APP_NAME} — มีเวอร์ชันใหม่")
+        self.setWindowIcon(QIcon(asset("logo.ico")))
+        self.setMinimumWidth(480)
+        self.setStyleSheet("QDialog, QLabel, QCheckBox { background: white; color: #0F2A44; }"
+                           "QTextBrowser { background:#F6F8FB; color:#0F2A44; border:1px solid #DDE3EA; }"
+                           "QPushButton { background:#EEF2F8; color:#0F2A44; border:1px solid #C9CED6;"
+                           " border-radius:6px; padding:7px 14px; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 18, 24, 16)
+        logo = QLabel()
+        logo.setPixmap(logo_pixmap(64))
+        logo.setAlignment(Qt.AlignCenter)
+        lay.addWidget(logo)
+        head = QLabel(f"<span style='font-size:17pt; font-weight:bold; color:#1D4ED8'>มีเวอร์ชันใหม่ "
+                      f"v{info.latest}</span><br>รุ่นที่ใช้อยู่ v{VERSION}"
+                      + (f" · ออกเมื่อ {info.published_th}" if info.published_th else ""))
+        head.setAlignment(Qt.AlignCenter)
+        lay.addWidget(head)
+        if info.notes.strip():
+            from PySide6.QtWidgets import QTextBrowser
+            notes = QTextBrowser()
+            notes.setMarkdown(info.notes)
+            notes.setMaximumHeight(170)
+            lay.addWidget(notes)
+        keep = QLabel(f"✔ อัปเดตแล้วยังใช้งานได้ถึง <b>{license.thai_date(lic.until)}</b> เหมือนเดิม "
+                      f"(นับ 1 ปีจากวันที่ติดตั้งครั้งแรก {license.thai_date(lic.start)} ไม่เริ่มนับใหม่) "
+                      "· งานและการตั้งค่าที่บันทึกไว้อยู่ครบ")
+        keep.setWordWrap(True)
+        keep.setStyleSheet("background:#ECFDF5; color:#065F46; border-radius:6px; padding:8px;")
+        lay.addWidget(keep)
+        how = QLabel("วิธีอัปเดต: กด «ดาวน์โหลดตัวติดตั้ง» → ปิดโปรแกรม → เปิดไฟล์ที่ดาวน์โหลดแล้วกดติดตั้งทับได้เลย")
+        how.setWordWrap(True)
+        lay.addWidget(how)
+        from PySide6.QtWidgets import QCheckBox
+        self.skip = QCheckBox(f"ไม่ต้องเตือนรุ่น v{info.latest} อีก")
+        lay.addWidget(self.skip)
+        row = QHBoxLayout()
+        go = QPushButton("⬇ ดาวน์โหลดตัวติดตั้ง")
+        go.setStyleSheet("background:#C9A14A; color:white; border:none; border-radius:6px; padding:8px 16px;"
+                         " font-weight:bold;")
+        go.clicked.connect(self.download)
+        row.addWidget(go)
+        page = QPushButton("หน้ารายละเอียด")
+        page.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(info.url)) if info.url else None)
+        row.addWidget(page)
+        row.addStretch(1)
+        later = QPushButton("ภายหลัง")
+        later.clicked.connect(self.reject)
+        row.addWidget(later)
+        lay.addLayout(row)
+
+    def download(self):
+        url = self.info.installer_url or self.info.url
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+        self.accept()
+
+
 def license_badge_text(lic: "license.License") -> tuple:
     """(text, colour) of the badge in the top bar."""
     if lic.expired:
@@ -1731,11 +1796,17 @@ class MainWindow(QMainWindow):
         if info.newer:
             self.update_btn.setText(f"⬇ มีเวอร์ชันใหม่ {info.latest}")
             self.update_btn.show()
+            if str(self.settings.value("update/skip", "")) != info.latest:
+                QTimer.singleShot(800, lambda: self.open_update(auto=True))
 
-    def open_update(self):
+    def open_update(self, auto: bool = False):
         info = getattr(self, "_release", None)
-        if info and info.url:
-            QDesktopServices.openUrl(QUrl(info.url))
+        if not info or not info.newer:
+            return
+        dlg = UpdateDialog(info, license.License(), self)
+        dlg.exec()
+        if dlg.skip.isChecked():
+            self.settings.setValue("update/skip", info.latest)
 
     # -- drag and drop
     def dragEnterEvent(self, e):

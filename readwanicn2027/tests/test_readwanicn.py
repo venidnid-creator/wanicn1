@@ -257,3 +257,42 @@ def test_license_badge_and_window(tmp_path):
     assert late.until == dt.date(2028, 11, 17) and late.renewals == 1 and "ต่ออายุแล้ว" in d.error.text()
     gone = license.License(tmp_path / "l.json", today=dt.date(2029, 1, 1))
     assert gone.expired and license_badge_text(gone)[0] == "🔑 หมดอายุการใช้งาน"
+
+
+def test_update_keeps_the_year_of_first_install(tmp_path):
+    """An update (or a reinstall, or a lost settings file) never starts a new year: the backup
+    copy brings back the first installation's dates and renewals."""
+    import datetime as dt
+
+    from readwanicn import license
+    main, backup = tmp_path / "a" / "license.json", tmp_path / "b" / "license-backup.json"
+    first = dt.date(2026, 11, 18)
+    lic = license.License(main, today=first, backups=[backup])
+    assert backup.exists()
+    main.unlink()                                                   # settings cleaned by a reinstall
+    later = license.License(main, today=first + dt.timedelta(days=200), backups=[backup])
+    assert later.install_id == lic.install_id and later.until == dt.date(2027, 11, 18)
+    assert later.start == first and main.exists()
+    later.renew(license.renewal_code(lic.install_id, 1))
+    backup.unlink()
+    again = license.License(main, today=first + dt.timedelta(days=210), backups=[backup])
+    assert again.renewals == 1 and again.until == dt.date(2028, 11, 17) and backup.exists()
+
+
+def test_new_version_found_and_offered():
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from readwanicn import license, update
+    from readwanicn.ui import UpdateDialog
+    rel = [{"tag_name": "readwanicn-v2099.1.0", "html_url": "https://example.invalid/r", "body": "- ใหม่",
+            "published_at": "2026-11-18T00:00:00Z",
+            "assets": [{"name": "readwanicn2027-setup-2099.1.0.exe", "download_count": 3,
+                        "browser_download_url": "https://example.invalid/setup.exe"}]}]
+    info = update.parse(rel, current="2027.4.4")
+    assert info.newer and info.installer_url.endswith("setup.exe") and info.notes == "- ใหม่"
+    import datetime as dt
+    import tempfile
+    lic = license.License(__import__("pathlib").Path(tempfile.mkdtemp()) / "l.json", today=dt.date(2026, 11, 18))
+    d = UpdateDialog(info, lic)
+    texts = " ".join(w.text() for w in d.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
+    assert "v2099.1.0" in texts and "18 พฤศจิกายน 2570" in texts and "ไม่เริ่มนับใหม่" in texts

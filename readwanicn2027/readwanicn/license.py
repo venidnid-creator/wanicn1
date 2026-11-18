@@ -52,6 +52,52 @@ def state_file() -> Path:
     return Path(base) / "ReadWanicn2027" / "license.json"
 
 
+def backup_files(path: Path) -> list:
+    """Other places the year is kept, so that an update, a reinstall or a cleaned settings folder
+    never starts a new year: beside the local application data, and the registry on Windows."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(Path.home(), ".local", "share")
+    out = [Path(base) / "ReadWanicn2027" / "license-backup.json"]
+    return [b for b in out if b.resolve() != Path(path).resolve()]
+
+
+REG_KEY = r"Software\ReadWanicn2027"
+
+
+def _reg_read() -> dict | None:
+    if os.name != "nt" or os.environ.get("READWANICN_NO_REGISTRY"):
+        return None
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_KEY) as k:
+            return json.loads(winreg.QueryValueEx(k, "license")[0])
+    except (OSError, ValueError):
+        return None
+
+
+def _reg_write(data: dict) -> None:
+    if os.name != "nt" or os.environ.get("READWANICN_NO_REGISTRY"):
+        return
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_KEY) as k:
+            winreg.SetValueEx(k, "license", 0, winreg.REG_SZ, json.dumps(data))
+    except OSError:
+        pass
+
+
+def _valid(data) -> bool:
+    return isinstance(data, dict) and {"id", "until", "n"} <= set(data)
+
+
+def _best(records: list) -> dict | None:
+    """The record to keep: the most renewals, then the earliest start (a fresh year made by a lost
+    file never wins over the real first installation)."""
+    good = [r for r in records if _valid(r)]
+    if not good:
+        return None
+    return max(good, key=lambda r: (int(r.get("n", 0)), [-ord(c) for c in str(r.get("start", "9999"))]))
+
+
 def renewal_code(install_id: str, n: int, key: str | None = None) -> str:
     digest = hmac.new((key or _KEY).encode(), f"{install_id.upper()}:{n}".encode(),
                       hashlib.sha256).hexdigest()[:12].upper()
@@ -63,26 +109,45 @@ def _clean(code: str) -> str:
 
 
 class License:
-    def __init__(self, path: Path | None = None, today: dt.date | None = None):
+    def __init__(self, path: Path | None = None, today: dt.date | None = None, backups: list | None = None,
+                 registry: bool | None = None):
+        # the real settings file keeps backup copies (and the registry on Windows); a file given
+        # explicitly (tests) keeps only the backups given with it
+        self.backups = backups if backups is not None else (backup_files(state_file()) if path is None else [])
+        self.registry = (path is None) if registry is None else registry
         self.path = path or state_file()
         self.today = today or dt.date.today()
         self.data = self._load()
 
     def _load(self) -> dict:
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            if {"id", "until", "n"} <= set(data):
-                return data
-        except (OSError, ValueError):
-            pass
-        data = {"id": secrets.token_hex(4).upper(), "start": self.today.isoformat(),
-                "until": (self.today + dt.timedelta(days=PERIOD_DAYS)).isoformat(), "n": 0}
+        """The year as first installed: from the settings file, or — when it was lost in an update,
+        a reinstall or a clean-up — from its backup copies. Only a computer with none of them
+        starts a new year."""
+        records = []
+        for f in [self.path] + list(self.backups):
+            try:
+                records.append(json.loads(Path(f).read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+        if self.registry:
+            records.append(_reg_read())
+        data = _best(records)
+        if data is None:
+            data = {"id": secrets.token_hex(4).upper(), "start": self.today.isoformat(),
+                    "until": (self.today + dt.timedelta(days=PERIOD_DAYS)).isoformat(), "n": 0}
         self._save(data)
         return data
 
     def _save(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        text = json.dumps(data, indent=1)
+        for f in [self.path] + list(self.backups):
+            try:
+                Path(f).parent.mkdir(parents=True, exist_ok=True)
+                Path(f).write_text(text, encoding="utf-8")
+            except OSError:
+                pass
+        if self.registry:
+            _reg_write(data)
 
     @property
     def install_id(self) -> str:
