@@ -1811,3 +1811,324 @@ def bath_section(sh, E, k, rm, side, ox, oy, sc, num, ref_sheet, names):
     sh.poly([(tx - 5, ty - 2.5), (tx + 5, ty - 2.5), (tx, ty + 5.5)], "text", 0.35)
     sh.circle((tx, ty - 2.5), 3.4, "text", 0.25)
     sh.text((tx, ty - 1.9), str(num), 2.6, "center", "text", True)
+
+
+# ---------------------------------------------------------------------------
+# A5-3 — แบบขยายบันได ST.n: the plans sheet and the section + details sheet
+# ---------------------------------------------------------------------------
+
+def _region_walls(E, k, box, t):
+    """The walls of floor ``k`` near ``box`` (x0, y0, x1, y1), as an E copy."""
+    x0, y0, x1, y1 = box
+    near = [w for w in E["walls"] if w["floor"] == k and
+            min(w["p0"][0], w["p1"][0]) <= x1 and max(w["p0"][0], w["p1"][0]) >= x0 and
+            min(w["p0"][1], w["p1"][1]) <= y1 and max(w["p0"][1], w["p1"][1]) >= y0]
+    cols = [c for c in E["columns"] if c["floor"] == k and x0 - 0.3 <= c["x"] <= x1 + 0.3 and
+            y0 - 0.3 <= c["y"] <= y1 + 0.3]
+    return dict(E, walls=near, columns=cols)
+
+
+def stair_plan_view(sh, E, e, k, box, sc, upper, sec_ref, num):
+    """One floor's plan round the stair at ``sc``: walls (hatched) and doors,
+    the stair (numbered treads, ขึ้น / ลง), the tread chain «n @ g = L»,
+    the overall sizes, axes, room tags and the section's cut ①."""
+    s = E["settings"]
+    t = float(s.get("wall_t") or 0.1)
+    lay = B.stair_layout(e["st"], s)
+    rx = [p[0] for p in lay["rect"]]
+    ry = [p[1] for p in lay["rect"]]
+    m = 1.0
+    reg = (min(rx) - m, min(ry) - m, max(rx) + m, max(ry) + m)
+    for rm_ in E["floors"][k]["rooms"]:              # the whole room the stair stands in
+        cx_, cy_ = (min(rx) + max(rx)) / 2, (min(ry) + max(ry)) / 2
+        if rm_["x"] <= cx_ <= rm_["x"] + rm_["w"] and rm_["y"] <= cy_ <= rm_["y"] + rm_["d"]:
+            reg = (min(reg[0], rm_["x"] - 0.6), min(reg[1], rm_["y"] - 0.6),
+                   max(reg[2], rm_["x"] + rm_["w"] + 0.6), max(reg[3], rm_["y"] + rm_["d"] + 0.6))
+    bx0, by0, bx1, by1 = box
+    kk = 1000.0 / sc
+    cx, cy = (bx0 + bx1) / 2 - 10, (by0 + by1) / 2 - 6
+    v = D.View(sh, sc, ((reg[0] + reg[2]) / 2, (reg[1] + reg[3]) / 2), (cx, cy))
+    pa, pb = v(reg[0], reg[1]), v(reg[2], reg[3])
+    clip = (pa[0], pa[1], pb[0], pb[1])
+    E2 = _region_walls(E, k, reg, t)
+    n0 = len(sh.items)
+    D.draw_walls(sh, v, E2, k, t, D.opening_codes(E), tags=False)
+    for w in E2["walls"]:
+        (ax, ay), (bx_, by_) = w["p0"], w["p1"]
+        Lw = w["L"]
+        if Lw < 0.05:
+            continue
+        ux, uy = (bx_ - ax) / Lw, (by_ - ay) / Lw
+        _brick_band(sh, v(ax - uy * t / 2, ay + ux * t / 2), v(bx_ + uy * t / 2, by_ - ux * t / 2), 1.2)
+    D.draw_stairs(sh, v, E, k)
+    sh.items[n0:] = clip_items(sh.items[n0:], clip)
+    # tread numbers and the chain along the first flight (ground) / second (upper)
+    fl = lay["flights"]
+    show = fl[1:] if upper and len(fl) > 1 else fl[:1]
+    first_no = 1 + (fl[0]["n"] if upper and len(fl) > 1 else 0)
+    g = lay["g"]
+    no = first_no
+    for f in show:
+        (px, py), (dx, dy) = f["p0"], f["d"]
+        for i in range(f["n"]):
+            u = (i + 0.5) * g
+            q = v(px + dx * u, py + dy * u)
+            sh.text((q[0], q[1] - 0.8), str(no), 2.0, "center")
+            no += 1
+        # the chain beside the flight (on the side away from the other flight)
+        nx, ny = -dy, dx
+        side = 1.0 if (nx * (px - (min(rx) + max(rx)) / 2) + ny * (py - (min(ry) + max(ry)) / 2)) > 0 else -1.0
+        off = f["w"] / 2 + 0.45
+        bx_, by_ = px + nx * off * side, py + ny * off * side
+        pts = [(bx_ + dx * g * i, by_ + dy * g * i) for i in range(f["n"] + 1)]
+        if abs(dx) > abs(dy):
+            D.dim_chain(sh, v, sorted(p[0] for p in pts), by_, "x")
+            mid = v((pts[0][0] + pts[-1][0]) / 2, by_ + ny * side * 0.32)
+        else:
+            D.dim_chain(sh, v, sorted(p[1] for p in pts), bx_, "y")
+            mid = v(bx_ + nx * side * 0.30, (pts[0][1] + pts[-1][1]) / 2)
+        sh.text((mid[0], mid[1] - (0.8 if abs(dx) > abs(dy) else 0)), f"{f['n']} @ {g:.2f} = {f['n'] * g:.2f}",
+                2.0, "center", "dim", angle=0 if abs(dx) > abs(dy) else 90)
+    # the stair's overall sizes and the axes in the picture
+    D.dim_chain(sh, v, [min(rx), max(rx)], min(ry) - 0.6, "x")
+    xs, ys = D.grids(E)
+    for i, gx in enumerate(xs):
+        if reg[0] <= gx <= reg[2]:
+            a, b = v(gx, reg[1]), v(gx, reg[3] + 0.3)
+            sh.line(a, b, "grid", 0.13, True)
+            sh.circle((b[0], b[1] + 3.2), 3.2, "grid", 0.25)
+            sh.text((b[0], b[1] + 2.1), str(i + 1), 2.6, "center", "grid")
+    for j, gy in enumerate(ys):
+        if reg[1] <= gy <= reg[3]:
+            a, b = v(reg[0] - 0.3, gy), v(reg[2], gy)
+            sh.line(a, b, "grid", 0.13, True)
+            sh.circle((a[0] - 3.2, a[1]), 3.2, "grid", 0.25)
+            sh.text((a[0] - 3.2, a[1] - 1.0), D.axis_name(j), 2.6, "center", "grid")
+    # the room the stair stands in
+    for sl in (x for x in E["slabs"] if x["floor"] == k):
+        rm = sl["room"]
+        if rm["x"] <= (min(rx) + max(rx)) / 2 <= rm["x"] + rm["w"] and rm["y"] <= (min(ry) + max(ry)) / 2 <= rm["y"] + rm["d"]:
+            room_tag(sh, v(*tag_spot(E, k, rm)), E, rm, sl, D.finish_codes(E), knockout=True)
+            break
+    # the cut ① through the first flight, looking along the run
+    f0 = fl[0]
+    (px, py), (dx, dy) = f0["p0"], f0["d"]
+    if abs(dy) > abs(dx):
+        a, b = v(px, reg[1] + 0.2), v(px, reg[3] - 0.2)
+        sh.line(a, b, "grid", 0.3, True)
+        section_mark(sh, (b[0], b[1] + 4), "1", sec_ref, (1.0, 0.0))
+    else:
+        a, b = v(reg[0] + 0.2, py), v(reg[2] - 0.2, py)
+        sh.line(a, b, "grid", 0.3, True)
+        section_mark(sh, (b[0] + 4, b[1]), "1", sec_ref, (0.0, 1.0))
+    return v
+
+
+def a_stair_plans(sh, E, e, idx, sheets=None):
+    """แบบขยายบันได ST.n (แปลน): the floor below and the floor above, each
+    1:50, one over the other (the original)."""
+    x0, y0, x1, y1 = D.drawing_area()
+    mid = (y0 + y1) / 2
+    sh.line((x0, mid), (x1, mid), "frame", 0.25)
+    k = e["floor"]
+    ref = sheet_ref([s_ for s_ in (sheets or []) if s_.title.startswith(f"แบบขยายบันได ST.{idx} (รูปตัด")], "")
+    for j, (kf, upper, box) in enumerate(((k, False, (x0, mid, x1, y1)), (k + 1, True, (x0, y0, x1, mid)))):
+        if kf >= E["n"]:
+            continue
+        stair_plan_view(sh, E, e, kf, (box[0], box[1] + 18, box[2] - 80, box[3]), 50, upper, ref, 1)
+        caption_marks(sh, (box[2] - 120, box[1] + 22), f"แปลนชั้น {kf + 1} บันได ST.{idx}", "1:50", None, None, 95.0)
+    sh.scale = "1:50"
+    return 50
+
+
+def a_stair_section(sh, E, e, idx):
+    """แบบขยายบันได ST.n (รูปตัด): the section ① through the stair at 1:50
+    with every riser counted «n @ R = H», the landing, the floors, the
+    railing and the detail tags; beside it the details ① railing,
+    ② the rail's fixing, ③ the steps, at 1:25 (the original)."""
+    s = E["settings"]
+    lay = B.stair_layout(e["st"], s)
+    R_, g, H = lay["R"], lay["g"], lay["H"]
+    fl = lay["flights"]
+    n1 = fl[0]["n"]
+    L1 = n1 * g
+    land = lay["w"] if len(fl) > 1 else 0.0
+    ts = float(e["st"].get("t") or s.get("stair_t") or 0.15)
+    import math as _m
+    ang = _m.atan2(R_, g)
+    off = ts / _m.cos(ang)
+    x0, y0, x1, y1 = D.drawing_area()
+    xm = x0 + (x1 - x0) * 0.56
+    sh.line((xm, y0), (xm, y1), "frame", 0.25)
+    sc = next((s_ for s_ in (25, 30, 40, 50) if (L1 + land + 1.6) * 1000 / s_ <= (xm - x0) - 62
+               and (H + 1.2) * 1000 / s_ <= (y1 - y0) - 60), 50)
+    kk = 1000.0 / sc
+    ox = x0 + 40 + ((xm - x0) - 62 - (L1 + land + 1.6) * kk) / 2 + 1.0 * kk
+    oy = y0 + 52 + ((y1 - y0) - 60 - (H + 1.2) * kk) / 2 + 0.45 * kk
+
+    def P(u, z):
+        return (ox + u * kk, oy + z * kk)
+    # floors: below, the landing, above (with the opening)
+    _concrete(sh, P(-1.0, -0.12), P(0.0, 0.0))
+    _concrete(sh, P(-0.25, -0.45), P(0.05, 0.0))
+    if land:
+        _concrete(sh, P(L1 - g * 0.0, n1 * R_ - ts), P(L1 + land, n1 * R_))
+    _concrete(sh, P(L1 + land - 0.05, H - 0.12), P(L1 + land + 1.0, H))
+    if len(fl) > 1:
+        _concrete(sh, P(-1.0, H - 0.12), P(L1 - (fl[1]["n"]) * g, H))
+    # flight 1 cut (hatched), flight 2 beyond (outline)
+    top = [P(0.0, 0.0)]
+    for i in range(n1):
+        top += [P(i * g, (i + 1) * R_), P((i + 1) * g, (i + 1) * R_)]
+    poly = top + [P(L1, n1 * R_ - off), P(g * 0.6, -0.0)]
+    sh.fill(poly, "hatch", 0.72)
+    sh.poly(poly, "cut", 0.35)
+    if len(fl) > 1:
+        n2 = fl[1]["n"]
+        z = n1 * R_
+        pts = [P(L1, z)]
+        u = L1
+        for j in range(n2):
+            pts += [P(u, z + (j + 1) * R_), P(u - g, z + (j + 1) * R_)]
+            u -= g
+        sh.poly(pts, "wall", 0.25, closed=False)
+        sh.line(P(L1, z - off * 0.3), P(L1 - n2 * g, H - off), "wall", 0.18)
+    # the railing: the rail 0.90 above the nosings, a baluster on every tread
+    hr = B.RAIL_H
+    for dz in (0.0, 0.10):
+        sh.line(P(0.0, R_ + hr - dz), P(L1, n1 * R_ + R_ + hr - dz), "door", 0.3)
+    for i in range(n1):
+        u = (i + 0.5) * g
+        sh.line(P(u, (i + 1) * R_), P(u, (i + 1.5) * R_ + hr - 0.10), "door", 0.18)
+    sh.line(P(0.0, R_), P(0.0, R_ + hr), "door", 0.4)
+    sh.line(P(L1, n1 * R_), P(L1, n1 * R_ + R_ + hr), "door", 0.4)
+    # numbers on the treads
+    for i in range(n1):
+        q = P((i + 0.5) * g, (i + 1) * R_ + 0.05)
+        sh.text(q, str(i + 1), 1.8, "center")
+    if len(fl) > 1:
+        u = L1
+        for j in range(fl[1]["n"]):
+            q = P(u - 0.5 * g, n1 * R_ + (j + 1) * R_ + 0.05)
+            sh.text(q, str(n1 + j + 1), 1.8, "center")
+            u -= g
+    # every riser counted on the left, the total, the levels
+    xl = P(-1.0, 0)[0] - 4
+    n = lay["n"]
+    for i in range(n):
+        a, b = P(0, i * R_)[1], P(0, (i + 1) * R_)[1]
+        sh.line((xl, a), (xl, b), "dim", 0.13)
+        sh.line((xl - 0.6, a - 0.6), (xl + 0.6, a + 0.6), "dim", 0.2)
+        sh.text((xl - 1.0, (a + b) / 2 - 0.7), f"{R_:.4f}".rstrip("0"), 1.7, "right", "dim")
+    sh.line((xl - 0.6, P(0, H)[1] - 0.6), (xl + 0.6, P(0, H)[1] + 0.6), "dim", 0.2)
+    xt = xl - 13
+    sh.line((xt, P(0, 0)[1]), (xt, P(0, H)[1]), "dim", 0.13)
+    for zq in (0.0, H):
+        q = P(0, zq)[1]
+        sh.line((xt - 0.7, q - 0.7), (xt + 0.7, q + 0.7), "dim", 0.25)
+    sh.text((xt - 1.0, (P(0, 0)[1] + P(0, H)[1]) / 2), f"{n} @ {R_:.4f}".rstrip("0") + f" = {H:.2f}", 2.0,
+            "center", "dim", angle=90)
+    for zq, lab in ((0.0, "ระดับพื้นชั้นล่าง"), (n1 * R_, "ระดับพื้นชานพัก"), (H, "ระดับพื้นชั้นบน")):
+        q = P(L1 + land + 0.5, zq)                       # on the right, clear of the steps
+        sh.line(P(L1 + land, zq) if zq else P(0.0, zq), (q[0] + 2, q[1]), "grid", 0.1, True)
+        sh.poly([(q[0] + 3, q[1]), (q[0] + 1.6, q[1] + 2.2), (q[0] + 4.4, q[1] + 2.2)], "dim", 0.18)
+        sh.text((q[0] + 5.2, q[1] + 0.8), f"{'±' if zq == 0 else '+'}{zq:.2f} {lab}", 2.0, "left", "dim")
+    # the tread chain below and the overall
+    yb = P(0, -0.45)[1] - 6
+    for i in range(n1 + 1):
+        xq = P(i * g, 0)[0]
+        sh.line((xq - 0.6, yb - 0.6), (xq + 0.6, yb + 0.6), "dim", 0.2)
+        sh.line((xq, yb - 1.2), (xq, yb + 1.2), "dim", 0.13)
+    sh.line(P(0, 0)[0:1] + (yb,), (P(L1, 0)[0], yb), "dim", 0.13)
+    for i in range(n1):
+        sh.text((P((i + 0.5) * g, 0)[0], yb + 0.9), f"{g:.2f}", 1.6, "center", "dim")
+    sh.text((P(L1 / 2, 0)[0], yb - 4), f"{n1} @ {g:.2f} = {L1:.2f}", 2.0, "center", "dim")
+    if land:
+        sh.line((P(L1, 0)[0], yb), (P(L1 + land, 0)[0], yb), "dim", 0.13)
+        sh.text((P(L1 + land / 2, 0)[0], yb + 0.9), f"{land:.2f}", 1.8, "center", "dim")
+        sh.line((P(L1 + land, 0)[0] - 0.6, yb - 0.6), (P(L1 + land, 0)[0] + 0.6, yb + 0.6), "dim", 0.2)
+    # the detail tags ① ② ③: a circle round the place, a short leader to «ดูแบบขยาย ⓝ»
+    for no, (u, z), (dx_, dy_) in ((1, (L1 * 0.9, n1 * R_ * 0.9 + R_ + hr), (8, 8)),
+                                   (2, (L1 * 0.45, n1 * R_ * 0.45 + R_ + hr * 0.55), (-28, 10)),
+                                   (3, (g * 1.5, R_ * 1.5), (8, -8))):
+        q = P(u, z)
+        sh.circle(q, 3.2, "text", 0.2)
+        e_ = (q[0] + dx_, q[1] + dy_)
+        sh.line((q[0] + (2.3 if dx_ > 0 else -2.3), q[1] + (2.3 if dy_ > 0 else -2.3)), e_, "text", 0.13)
+        sh.line(e_, (e_[0] + 20, e_[1]), "text", 0.13)
+        sh.text((e_[0] + 0.5, e_[1] + 0.8), "ดูแบบขยาย", 1.9)
+        sh.circle((e_[0] + 17.5, e_[1] + 1.6), 2.4, "text", 0.25)
+        sh.text((e_[0] + 17.5, e_[1] + 0.8), str(no), 1.9, "center", "text", True)
+    caption_marks(sh, (x0 + 30, y0 + 16), f"รูปตัดบันได ST.{idx}", f"1:{sc}", None, None, 110.0)
+    tx, ty = x0 + 30 + 116, y0 + 18
+    sh.poly([(tx - 5, ty - 2.5), (tx + 5, ty - 2.5), (tx, ty + 5.5)], "text", 0.35)
+    sh.text((tx, ty - 1.9), "1", 2.6, "center", "text", True)
+    # ---- the details at 1:25 on the right --------------------------------------------------
+    k2 = 1000.0 / 25
+    bx = xm + 8
+    hh = (y1 - y0) / 3
+
+    def title(y, no, scale="1:25"):
+        caption_marks(sh, (bx + 10, y + 8), "แบบขยาย", scale, None, None, 100.0)
+        sh.circle((bx + 118, y + 8.5), 3.4, "text", 0.25)
+        sh.text((bx + 118, y + 7.6), str(no), 2.4, "center", "text", True)
+    # ① the railing: post, rail, balusters and their heights
+    yb1 = y0 + 2 * hh + 16
+    Q = lambda u, z: (bx + 60 + u * k2, yb1 + z * k2)          # noqa: E731
+    _concrete(sh, Q(-0.1, -0.15), Q(0.8, 0.0))
+    sh.rect(*Q(-0.02, 0.0), *Q(0.02, hr), "door", 0.35)
+    sh.rect(*Q(-0.025, hr), *Q(0.025, hr + 0.10), "door", 0.35)          # the rail 2"x4" flat
+    heights = [0.0, 0.20, 0.35, 0.50, 0.65, hr]
+    for z in heights[1:-1]:
+        sh.rect(*Q(-0.012, z - 0.012), *Q(0.012, z + 0.012), "door", 0.25)
+    for za, zb in zip(heights, heights[1:]):
+        a, b = Q(-0.35, za)[1], Q(-0.35, zb)[1]
+        xq = Q(-0.35, 0)[0]
+        sh.line((xq, a), (xq, b), "dim", 0.13)
+        sh.line((xq - 0.6, a - 0.6), (xq + 0.6, a + 0.6), "dim", 0.2)
+        sh.text((xq - 1.0, (a + b) / 2 - 0.7), f"{zb - za:.2f}", 1.8, "right", "dim")
+    xq = Q(-0.6, 0)[0]
+    sh.line((xq, Q(0, 0)[1]), (xq, Q(0, hr)[1]), "dim", 0.13)
+    sh.text((xq - 0.9, Q(0, hr / 2)[1]), f"{hr:.2f}", 1.9, "center", "dim", angle=90)
+    for z, lab in ((hr + 0.05, "ราวบันไดไม้เนื้อแข็ง 2\"x4\" วางนอน"), (0.5, "ลูกกรงเหล็กแป๊บดำ 1\" ทาสี"),
+                   (0.2, "เหล็กแป๊บ 1\" x 2\" ยึดพื้น")):
+        q = Q(0.03, z)
+        sh.line(q, (q[0] + 16, q[1]), "text", 0.13)
+        sh.text((q[0] + 17, q[1] - 0.7), lab, 1.9)
+    title(y0 + 2 * hh, 1)
+    # ② the rail fixed to a flat bar on the post, bolted
+    yb2 = y0 + hh + 18
+    Q2 = lambda u, z: (bx + 40 + u * k2 * 2.5, yb2 - 14 + z * k2 * 2.5)     # noqa: E731
+    sh.rect(*Q2(0.0, 0.30), *Q2(0.10, 0.35), "door", 0.35)
+    sh.line(Q2(0.0, 0.325), Q2(0.10, 0.325), "door", 0.1)
+    sh.rect(*Q2(0.035, 0.12), *Q2(0.065, 0.30), "door", 0.3)
+    sh.circle(Q2(0.05, 0.22), 0.9, "door", 0.2)
+    for lab, z in (("เหล็กแบน (FB) ขนาด 1\" หนา 6 มม. ทาสีน้ำมัน", 0.20), ("BOLT Ø 10 มม.", 0.14),
+                   ("ราวบันไดไม้เนื้อแข็ง 2\"x4\" วางนอน", 0.33)):
+        q = Q2(0.10, z)
+        sh.line(q, (q[0] + 14, q[1]), "text", 0.13)
+        sh.text((q[0] + 15, q[1] - 0.7), lab, 1.9)
+    D.dim_chain(sh, lambda x_, y_: Q2(x_, y_), [0.0, 0.10], 0.40, "x")
+    title(y0 + hh, 2, "1:10")
+    # ③ the steps: tread and riser finishes, the nosing
+    yb3 = y0 + 34
+    k2 = 1000.0 / 15
+    Q3 = lambda u, z: (bx + 34 + u * k2, yb3 + z * k2)            # noqa: E731
+    pts = [Q3(-0.1, 0.0)]
+    for i in range(3):
+        pts += [Q3(i * g, (i + 1) * R_), Q3((i + 1) * g, (i + 1) * R_)]
+    sh.poly(pts, "cut", 0.35, closed=False)
+    sh.line(Q3(-0.1, -off), Q3(2 * g, 3 * R_ - off), "cut", 0.35)
+    for i in range(3):
+        sh.rect(*Q3(i * g - 0.025, (i + 1) * R_), *Q3((i + 1) * g, (i + 1) * R_ + 0.025), "door", 0.18)
+        sh.rect(*Q3(i * g - 0.025, i * R_ + 0.025), *Q3(i * g, (i + 1) * R_), "door", 0.13)
+    D.dim_chain(sh, lambda x_, y_: Q3(x_, y_), [i * g for i in range(4)], -0.25, "x")
+    D.dim_chain(sh, lambda x_, y_: Q3(x_, y_), [i * R_ for i in range(4)], -0.25, "y")
+    for lab, (u, z) in (("ลูกนอน ตามรายการวัสดุ หนา 1\" จมูกยื่น 0.025 ม.", (2.5 * g, 3 * R_ + 0.03)),
+                        ("ลูกตั้ง ตามรายการวัสดุ หนา 1\"", (2 * g, 2.5 * R_))):
+        q = Q3(u, z)
+        sh.line(q, (q[0] + 10, q[1] + 4), "text", 0.13)
+        sh.text((q[0] + 11, q[1] + 3.3), lab, 1.9)
+    title(y0, 3, "1:15")
+    sh.scale = "ตามระบุ"
+    return 50

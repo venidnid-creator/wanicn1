@@ -83,7 +83,8 @@ def test_the_dialog_and_the_detail_sheets():
     assert dlg.where() == ("left", "back") and dlg.rep["ok"] and dlg.ok.isEnabled()
     SA.apply(d, dlg.stair)
     titles = [s.title for s in D.build_set(d, {"project": "x"}, ("A", "S"))]
-    assert "แบบขยายบันได" in titles and "รายละเอียดบันได คสล." in titles
+    assert "แบบขยายบันได ST.1 (แปลน)" in titles and "แบบขยายบันได ST.1 (รูปตัด)" in titles   # the standard's ST.n
+    assert "รายละเอียดบันได คสล." in titles
 
 
 def test_the_floor_above_is_opened_and_railed():

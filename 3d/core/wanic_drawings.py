@@ -2892,9 +2892,11 @@ def build_set(data, info=None,
             for title, paint in axo_sheets(data):
                 add("A", title, paint, "-")
         from core import wanic_stair_sheets as STS
-        for i, e in enumerate(STS.stairs_to_detail(E)):     # แบบขยายบันได, as the standard sets
-            add("A", "แบบขยายบันได" + (f" ({i + 1})" if i else ""),
-                lambda sh, _a, e=e: STS.a_stair_detail(sh, E, e), "ตามระบุ")
+        for i, e in enumerate(STS.stairs_to_detail(E)):     # แบบขยายบันได ST.n: plans, then section + details
+            add("A", f"แบบขยายบันได ST.{i + 1} (แปลน)",
+                lambda sh, _a, e=e, n_=i + 1: STD.a_stair_plans(sh, E, e, n_, _a), "1:50")
+            add("A", f"แบบขยายบันได ST.{i + 1} (รูปตัด)",
+                lambda sh, _a, e=e, n_=i + 1: STD.a_stair_section(sh, E, e, n_), "ตามระบุ")
         if E["openings"]:                              # the standard's cards, eight to a sheet
             cards = STD.opening_cards(E, codes)
             for i in range(0, len(cards), 8):
