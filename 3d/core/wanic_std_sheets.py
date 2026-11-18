@@ -708,11 +708,11 @@ def elev_opening(sh, P, uc, lo, el, code):
         if kind == "swing":
             hinge_left = (i % 2 == 0) if n > 1 else True
             hx, ox = (x0, x1) if hinge_left else (x1, x0)
-            sh.line(P(ox, y0), P(hx, (y0 + y1) / 2), lay, 0.1)
-            sh.line(P(ox, y1), P(hx, (y0 + y1) / 2), lay, 0.1)
-        elif kind == "awning":
-            sh.line(P(x0, y0), P((x0 + x1) / 2, y1), lay, 0.1)
-            sh.line(P(x1, y0), P((x0 + x1) / 2, y1), lay, 0.1)
+            sh.line(P(ox, y0), P(hx, (y0 + y1) / 2), lay, 0.13, True)
+            sh.line(P(ox, y1), P(hx, (y0 + y1) / 2), lay, 0.13, True)
+        elif kind == "awning":                          # opens out at the bottom: «^» dashed
+            sh.line(P(x0, y0), P((x0 + x1) / 2, y1), lay, 0.13, True)
+            sh.line(P(x1, y0), P((x0 + x1) / 2, y1), lay, 0.13, True)
         elif kind == "louvre":
             z = y0 + 0.08
             while z < y1 - 0.04:
@@ -1132,7 +1132,7 @@ def a_bath_plan(sh, E, group, codes, first_no, sheets=None):
     x0, y0, x1, y1 = D.drawing_area()
     W, Dd = float(rm["w"]), float(rm["d"])
     sc = next((s_ for s_ in (25, 30, 40, 50) if (W + 2.4) * 1000 / s_ <= (x1 - x0) * 0.80
-               and (Dd + 2.2) * 1000 / s_ <= (y1 - y0) - 40), 50)
+               and (Dd + 3.2) * 1000 / s_ <= (y1 - y0) - 45), 50)
     kk = 1000.0 / sc
     cx = x0 + (x1 - x0) * 0.40
     origin = (cx - W * kk / 2, y0 + 60 + max(0.0, ((y1 - y0 - 60) - Dd * kk) / 2 - 10))
@@ -1189,12 +1189,13 @@ def a_bath_plan(sh, E, group, codes, first_no, sheets=None):
     fx = bath_fixtures(E, k, rm)
     inner = _inner(E, k, rm)
     for f in fx:
-        q = [v(*p) for p in D.fixture_rect(f["fx"])]
-        if f["fx"].get("type") not in ("FD", "MR", "TR", "GP"):
+        ff = fit_inside(f["fx"], inner)
+        q = [v(*p) for p in D.fixture_rect(dict(ff, dir=0 if back_side(ff, inner) in (0, 2) else 1))]
+        if f["fx"].get("type") not in ("FD", "MR", "TR", "GP", "SP", "TP", "SH"):
             sh.fill(q, "mask", 1.0)
         fixture_plan(sh, v, f["fx"], inner)
     # the fall to the floor drain
-    fd = next((f["fx"] for f in fx if f["fx"].get("type") == "FD"), None)
+    fd = next((fit_inside(f["fx"], _inner(E, k, rm)) for f in fx if f["fx"].get("type") == "FD"), None)
     if fd is not None:
         far = max(((xi0, yi0), (xi1, yi0), (xi0, yi1), (xi1, yi1)),
                   key=lambda p: (p[0] - float(fd["x"])) ** 2 + (p[1] - float(fd["y"])) ** 2)
@@ -1324,29 +1325,46 @@ def clip_items(items, box):
     return out
 
 
-def a_bath_sections(sh, E, group, first_no):
-    """รูปตัดห้องน้ำ WC.n ① ② — the two sections of the original, side by
-    side, each through the room looking at a wall with its fittings."""
+def bath_section_layout(E, group):
+    """[(sides on the sheet)] — the two sections side by side when they go
+    at 1:30 or larger (the original), else one a sheet so each is big."""
     k, rm = group[0]
-    x0, y0, x1, y1 = D.drawing_area()
-    mid = (x0 + x1) / 2
-    sh.line((mid, y0), (mid, y1), "frame", 0.25)
     ix0, iy0, ix1, iy1 = _inner(E, k, rm)
-    zc = B.ceiling_z(E, k) - k * E["H"]
+    x0, y0, x1, y1 = D.drawing_area()
+    half = (x1 - x0) / 2
+    t_ = float(E["settings"].get("wall_t") or 0.1)
+    sides = bath_sides(E, k, rm)
+    ok = all((((ix1 - ix0) if s_ in (0, 2) else (iy1 - iy0)) + 2 * t_ + 1.6) * 1000 / 30 + 26 <= half - 4
+             for s_ in sides)
+    return [sides] if ok else [[sides[0]], [sides[1]]]
+
+
+def a_bath_sections(sh, E, group, first_no, sides=None, nums=None):
+    """รูปตัดห้องน้ำ WC.n ① ② — side by side as the original, or one big
+    section to a sheet for a large bathroom."""
+    k, rm = group[0]
+    sides = sides or bath_sides(E, k, rm)
+    nums = nums or list(range(1, len(sides) + 1))
+    x0, y0, x1, y1 = D.drawing_area()
+    n = len(sides)
+    cw = (x1 - x0) / n
+    if n == 2:
+        sh.line((x0 + cw, y0), (x0 + cw, y1), "frame", 0.25)
+    ix0, iy0, ix1, iy1 = _inner(E, k, rm)
     names = ",".join(f"WC.{first_no + i}" for i in range(len(group)))
-    used = 25
-    for i, side in enumerate(bath_sides(E, k, rm)):
+    used = 0
+    t_ = float(E["settings"].get("wall_t") or 0.1)
+    for i, side in enumerate(sides):
         Wm = (ix1 - ix0) if side in (0, 2) else (iy1 - iy0)
-        t_ = float(E["settings"].get("wall_t") or 0.1)
         span = Wm + 2 * t_ + 1.6
-        sc = next((s_ for s_ in (25, 30, 40, 50, 60) if span * 1000 / s_ + 26 <= (mid - x0) - 4
-                   and (E["H"] + 0.5) * 1000 / s_ <= (y1 - y0) - 80), 75)
+        sc = next((s_ for s_ in (20, 25, 30, 40, 50, 60) if span * 1000 / s_ + 26 <= cw - 4
+                   and (E["H"] + 0.6) * 1000 / s_ <= (y1 - y0) - 75), 75)
         used = max(used, sc)
         kk = 1000.0 / sc
-        bx0 = x0 + i * (mid - x0)
-        ox = bx0 + 26 + ((mid - x0) - 30 - span * kk) / 2 + (1.15 + t_) * kk
-        oy = y0 + 62 + max(0.0, ((y1 - y0) - 80 - (E["H"] + 0.5) * kk) * 0.5)
-        bath_section(sh, E, k, rm, side, ox, oy, sc, i + 1, None, names)
+        bx0 = x0 + i * cw
+        ox = bx0 + 26 + (cw - 30 - span * kk) / 2 + (1.15 + t_) * kk
+        oy = y0 + 62 + max(0.0, ((y1 - y0) - 75 - (E["H"] + 0.6) * kk) * 0.5)
+        bath_section(sh, E, k, rm, side, ox, oy, sc, nums[i], None, names)
     sh.scale = f"1:{used}"
     return used
 
@@ -1378,25 +1396,45 @@ def _ellipse(c, ra, ro, al, ou, n=28):
             for i in range(n)]
 
 
+GAP = 0.04                               # fittings stand clear of the wall face (plaster, tiles)
+
+
+def fit_inside(fx, inner):
+    """The fitting moved, if need be, so its outline stays inside the room
+    and clear of every wall face (its back GAP off the wall it stands on)."""
+    t = str(fx.get("type", ""))
+    spec = D.fixture_spec(t) or ("", "", 0, 0.4, 0.4, 0, 0)
+    w, d = float(spec[3]), float(spec[4])
+    side = back_side(fx, inner)
+    hw, hd = (w / 2, d / 2) if side in (0, 2) else (d / 2, w / 2)
+    if t in ("FD", "PL"):
+        hw = hd = max(w, d) / 2
+    x0, y0, x1, y1 = inner
+    g = GAP
+    x = min(max(float(fx["x"]), x0 + hw + g), x1 - hw - g)
+    y = min(max(float(fx["y"]), y0 + hd + g), y1 - hd - g)
+    if t not in ("FD", "PL"):                    # the back right on the wall (+ the gap)
+        if side == 0:
+            y = y0 + hd + g
+        elif side == 2:
+            y = y1 - hd - g
+        elif side == 1:
+            x = x1 - hw - g
+        else:
+            x = x0 + hw + g
+    return dict(fx, x=x, y=y)
+
+
 def fixture_plan(sh, v, fx, inner):
     """A fitting in plan as the original draws it (tank and bowl, basin in
     its counter, shower head and valve, drain grate, rail, mirror …)."""
+    fx = fit_inside(fx, inner)
     t = str(fx.get("type", ""))
     spec = D.fixture_spec(t) or ("", "", 0, 0.4, 0.4, 0, 0)
     w, d = float(spec[3]), float(spec[4])
     side = back_side(fx, inner)
     al, ou = _ALONG[side], _OUT[side]
-    x0, y0, x1, y1 = inner
     cx, cy = float(fx["x"]), float(fx["y"])
-    # its back on the wall face
-    if side == 0:
-        cy = y0 + d / 2
-    elif side == 2:
-        cy = y1 - d / 2
-    elif side == 1:
-        cx = x1 - d / 2
-    else:
-        cx = x0 + d / 2
 
     def L(a, o):                         # along, out (m) from the back centre
         return (cx + al[0] * a + ou[0] * (o - d / 2), cy + al[1] * a + ou[1] * (o - d / 2))
@@ -1662,16 +1700,31 @@ def bath_section(sh, E, k, rm, side, ox, oy, sc, num, ref_sheet, names):
         spec = D.fixture_spec(tt)
         if not spec or tt == "FD":
             continue
-        bs = back_side(f["fx"], inner)
+        ff = fit_inside(f["fx"], inner)
+        bs = back_side(ff, inner)
         w_ = float(spec[3])
-        sc_ = S(float(f["fx"]["x"]), float(f["fx"]["y"]))
+        sc_ = S(float(ff["x"]), float(ff["y"]))
         if bs == side:
+            zb_, hh_ = float(spec[5]), max(float(spec[6]), 0.05)
+            box = (sc_ - w_ / 2, zb_, sc_ + w_ / 2, zb_ + hh_)
+            if tt.startswith("WC1"):
+                box = (sc_ - 0.23, 0.0, sc_ + 0.23, 0.76)
+            elif tt == "LV" or tt.startswith("SK"):
+                box = (sc_ - w_ / 2, zb_ + hh_ - 0.22, sc_ + w_ / 2, zb_ + hh_)
+            if not tt.startswith(("SH", "SP", "TR")):     # the fitting hides the tiles behind it
+                sh.fill([P(box[0], box[1]), P(box[2], box[1]), P(box[2], box[3]), P(box[0], box[3])], "mask", 1.0)
             fixture_front(sh, P, tt, sc_ - w_ / 2, sc_ + w_ / 2, spec)
             lab_z = float(spec[5]) + float(spec[6]) + 0.05 if not tt.startswith("SH") else 2.05
             q = P(sc_ + w_ / 2, lab_z)
             sh.text((q[0] + 0.6, q[1]), FIX_LABEL.get(tt, tt), 1.9, "left", "fixture")
         elif bs in (left_side, right_side):
-            s_wall, sgn = (0.0, 1) if bs == left_side else (W, -1)
+            s_wall, sgn = (GAP, 1) if bs == left_side else (W - GAP, -1)
+            dpt = float(spec[4])
+            if tt.startswith(("WC1", "LV", "SK", "BT")):
+                ztop = 0.76 if tt.startswith("WC1") else float(spec[5]) + float(spec[6])
+                zbot = 0.0 if tt.startswith(("WC1", "BT")) else ztop - 0.36
+                ea, eb = sorted((s_wall, s_wall + sgn * (0.70 if tt.startswith("WC1") else dpt)))
+                sh.fill([P(ea, zbot), P(eb, zbot), P(eb, ztop), P(ea, ztop)], "mask", 1.0)
             fixture_side(sh, P, tt, s_wall, sgn, spec)
         else:
             continue
@@ -1732,8 +1785,9 @@ def bath_section(sh, E, k, rm, side, ox, oy, sc, num, ref_sheet, names):
     for f in fx:
         tt = str(f["fx"].get("type", ""))
         sp_ = D.fixture_spec(tt)
-        if sp_ and back_side(f["fx"], inner) == side and float(sp_[5]) < 1.0:
-            c_ = S(float(f["fx"]["x"]), float(f["fx"]["y"]))
+        ff = fit_inside(f["fx"], inner)
+        if sp_ and back_side(ff, inner) == side and float(sp_[5]) < 1.0:
+            c_ = S(float(ff["x"]), float(ff["y"]))
             busy.append((c_ - float(sp_[3]) / 2 - 0.1, c_ + float(sp_[3]) / 2 + 0.1))
     free, s0 = [], 0.35
     for lo_b, hi_b in sorted(busy) + [(W - 0.35, W)]:

@@ -2909,8 +2909,14 @@ def build_set(data, info=None,
                 names = ", ".join(f"WC.{n_wc + i}" for i in range(len(grp)))
                 add("A", f"แบบขยายห้องน้ำ {names}",
                     lambda sh, _a, g=grp, n0=n_wc: _set_scale(sh, STD.a_bath_plan(sh, E, g, codes, n0, _a)), "1:25")
-                add("A", f"รูปตัดห้องน้ำ {names}",
-                    lambda sh, _a, g=grp, n0=n_wc: _set_scale(sh, STD.a_bath_sections(sh, E, g, n0)), "1:25")
+                lay_ = STD.bath_section_layout(E, grp)
+                no_ = 1
+                for sides_ in lay_:                      # ① ② together, or a sheet each for a big room
+                    nums_ = list(range(no_, no_ + len(sides_)))
+                    add("A", f"รูปตัดห้องน้ำ {names}" + (f" ({no_})" if len(lay_) > 1 else ""),
+                        lambda sh, _a, g=grp, n0=n_wc, sd=sides_, nm=nums_: _set_scale(
+                            sh, STD.a_bath_sections(sh, E, g, n0, sd, nm)), "1:25")
+                    no_ += len(sides_)
                 n_wc += len(grp)
             baths = bathrooms(E)
             for i in range(0, len(baths), 2):
