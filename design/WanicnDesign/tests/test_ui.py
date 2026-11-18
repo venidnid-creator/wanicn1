@@ -87,3 +87,17 @@ def test_undo_restores_removed_column(win, app):
     app.processEvents()
     assert "2B" not in win.building.skip_nodes
     win.undo()                                          # nothing left: no error
+
+
+def test_add_secondary_beam_and_cantilever_from_plan(win, app):
+    win.level_box.setCurrentText("FL2")
+    win.plan.add_sub_beam(0, 0, "y")
+    win.plan.add_cantilever((0, 0), (1, 0), 1.2)
+    app.processEvents()
+    res = win.calculate()
+    assert any(x.kind == "secondary" and x.level == "FL2" for x in res.beams)
+    assert any(s.kind == "cantilever" for s in res.slabs)
+    keys = {it.data(1) for it in win.plan.scene().items() if it.data(0) in ("sub", "cant")}
+    assert "FL2:1-2/A-B:y" in keys and "1A-2A" in keys
+    win.plan.toggle("sub", "FL2:1-2/A-B:y")         # click removes it
+    assert not win.building.level("FL2").sub_beams

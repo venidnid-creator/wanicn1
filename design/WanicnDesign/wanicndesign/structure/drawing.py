@@ -47,8 +47,8 @@ def write_dxf(res: DesignResult, path: str) -> None:
             msp.add_text(b.y_name(j), height=0.25, dxfattribs={"layer": "S-GRID"}).set_placement(
                 (ox - 1.5, y))
         for x in (bm for bm in res.beams if bm.level == lv.name):
-            a, c = x.span.split("-")
-            pa, pc = _node_xy(b, a), _node_xy(b, c)
+            x0, y0, x1, y1 = x.line_xy
+            pa, pc = (x0, y0), (x1, y1)
             msp.add_line((ox + pa[0], pa[1]), (ox + pc[0], pc[1]), dxfattribs={"layer": "S-BEAM"})
             mid = (ox + (pa[0] + pc[0]) / 2, (pa[1] + pc[1]) / 2 + 0.15)
             msp.add_text(f"{x.mark} {x.b:.2f}x{x.h:.2f}", height=0.15,
@@ -65,8 +65,12 @@ def write_dxf(res: DesignResult, path: str) -> None:
             msp.add_text(seg.mark, height=0.15, dxfattribs={"layer": "S-TEXT"}).set_placement(
                 (ox + x + 0.15, y + 0.15))
         for s in (s for s in res.slabs if s.level == lv.name):
-            xa, ya = _panel_centre(b, s.panel)
-            msp.add_text(s.mark, height=0.2, dxfattribs={"layer": "S-TEXT"}).set_placement((ox + xa, ya))
+            x0, y0, x1, y1 = s.rect
+            if s.kind == "cantilever":
+                msp.add_lwpolyline([(ox + x0, y0), (ox + x1, y0), (ox + x1, y1), (ox + x0, y1)], close=True,
+                                   dxfattribs={"layer": "S-SLAB"})
+            msp.add_text(s.mark, height=0.2, dxfattribs={"layer": "S-TEXT"}).set_placement(
+                (ox + (x0 + x1) / 2, (y0 + y1) / 2))
     # 3D model, offset above the plans in Y.
     oy = ys[-1] + 6.0
     elev = [lv.elevation for lv in b.levels]
@@ -83,8 +87,7 @@ def write_dxf(res: DesignResult, path: str) -> None:
         _box(msp, x - c.b / 2, y - c.h / 2, top - c.height, x + c.b / 2, y + c.h / 2, top, "S-COLUMN")
     for x in res.beams:
         lv = next(l for l in b.levels if l.name == x.level)
-        a, c = x.span.split("-")
-        (x0, y0), (x1, y1) = _node_xy(b, a), _node_xy(b, c)
+        x0, y0, x1, y1 = x.line_xy
         hw = x.b / 2
         if abs(y1 - y0) < 1e-9:
             _box(msp, x0, y0 - hw + oy, lv.elevation - x.h, x1, y0 + hw + oy, lv.elevation, "S-BEAM")
@@ -92,9 +95,8 @@ def write_dxf(res: DesignResult, path: str) -> None:
             _box(msp, x0 - hw, y0 + oy, lv.elevation - x.h, x0 + hw, y1 + oy, lv.elevation, "S-BEAM")
     for s in res.slabs:
         lv = next(l for l in b.levels if l.name == s.level)
-        (i0, i1), (j0, j1) = _panel_ij(b, s.panel)
-        _box(msp, xs[i0], ys[j0] + oy, lv.elevation - s.thickness, xs[i1], ys[j1] + oy, lv.elevation,
-             "S-SLAB")
+        x0, y0, x1, y1 = s.rect
+        _box(msp, x0, y0 + oy, lv.elevation - s.thickness, x1, y1 + oy, lv.elevation, "S-SLAB")
     _ = elev
     doc.saveas(path)
 

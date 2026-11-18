@@ -177,3 +177,102 @@ def test_report_lists_standards(tmp_path):
     codes = [r[0] for r in refs.iter_rows(min_row=2, values_only=True)]
     assert "EIT1007-COL" in codes and "MR6-15" in codes
     assert [c.value for c in wb["คาน"][1]][-1] == "อ้างอิง"
+
+
+def test_point_load_simple_and_fixed_textbook():
+    # simple span, central point load: M = PL/4, reactions P/2
+    spans, reac = continuous_beam([4.0], [0.0], [[(2.0, 1000.0)]])
+    assert spans[0].m_pos == pytest.approx(1000 * 4 / 4)
+    assert reac == pytest.approx([500.0, 500.0])
+    # two equal spans, central point load on each: middle support −3PL/16, R = 11P/16 + 11P/16
+    spans, reac = continuous_beam([4.0, 4.0], [0.0, 0.0], [[(2.0, 1000.0)], [(2.0, 1000.0)]])
+    assert spans[0].m_right == pytest.approx(-3 * 1000 * 4 / 16)
+    assert reac[1] == pytest.approx(2 * 11 * 1000 / 16)
+
+
+def test_partial_udl_equals_its_total():
+    from wanicndesign.structure.analysis import partial_udl
+    pts = partial_udl(500.0, 1.0, 3.0)
+    assert sum(P for _a, P in pts) == pytest.approx(1000.0)
+    spans, reac = continuous_beam([4.0], [0.0], [pts])
+    assert reac == pytest.approx([500.0, 500.0])           # symmetric
+    assert spans[0].m_pos == pytest.approx(500 * 2 * (4 / 4 - 2 / 8), rel=0.01)   # w·c·(L/4 − c/8)
+
+
+def _one_bay(sub=None, cant=None):
+    fl = Level("FL2", 3.0, "suspended", 0.10, 150, 50, 0.20, 0.40, "B", "none")
+    roof = Level("ROOF", 6.0, "none", 0.0, 0, 0, 0.20, 0.40, "RB", "none")
+    b = Building("t", grid_x=[4.0], grid_y=[4.0], levels=[fl, roof])
+    if sub:
+        b.toggle_sub_beam(fl, 0, 0, sub)
+    if cant:
+        b.toggle_cantilever(fl, (0, 0), (1, 0), cant)
+    return b
+
+
+def test_secondary_beam_hand_check():
+    from wanicndesign.structure.design import design_level_beams
+    b = _one_bay(sub="x")
+    W = 2400 * 0.10 + 50 + 150                      # 440 kg/m²
+    res = design(b)
+    sb = next(x for x in res.beams if x.kind == "secondary")
+    # two 4 × 2 m pieces; each sends a trapezoid (q = W·S/2, ramps a = S/2) to
+    # the secondary beam: M = q(3L² − 4a²)/24 per piece, plus self weight wL²/8
+    q, a, L = W * 2 / 2, 1.0, 4.0
+    m_hand = 2 * q * (3 * L * L - 4 * a * a) / 24 + 2400 * 0.20 * 0.40 * L * L / 8
+    assert sb.length == 4.0 and sb.m_pos == pytest.approx(m_hand, rel=0.005)
+    assert sb.mark.endswith("S1")
+    pieces = [s for s in res.slabs if s.level == "FL2"]
+    assert len(pieces) == 2 and all(s.lx == 4.0 and s.ly == 2.0 for s in pieces)
+    # the edge beams parallel to Y carry the secondary beam's reaction at mid-span
+    y_beam = next(x for x in res.beams if x.span == "1A-1B" and x.level == "FL2")
+    assert "แรงจุด" in y_beam.note
+    # equilibrium: the four columns carry the whole floor
+    _beams, reac, _live = design_level_beams(b, Concrete(), 0, None)
+    total = W * 16 + 2400 * 0.20 * 0.40 * (4 * 4 + 4)
+    assert sum(reac.values()) == pytest.approx(total, rel=1e-6)
+
+
+def test_cantilever_slab_hand_check():
+    from wanicndesign.structure.design import design_level_beams
+    b = _one_bay(cant=1.5)
+    W = 2400 * 0.10 + 50 + 150
+    res = design(b)
+    cs = next(s for s in res.slabs if s.kind == "cantilever")
+    assert cs.m_neg == pytest.approx(W * 1.5 ** 2 / 2)
+    assert cs.mark == "CS1" and "STATICS" in cs.refs
+    assert cs.rect == pytest.approx((0.0, -1.5, 4.0, 0.0))   # outside the A edge
+    _beams, reac, _live = design_level_beams(b, Concrete(), 0, None)
+    total = W * 16 + W * 1.5 * 4 + 2400 * 0.20 * 0.40 * 16
+    assert sum(reac.values()) == pytest.approx(total, rel=1e-6)
+
+
+def test_cantilever_too_long_for_thickness():
+    b = _one_bay(cant=1.8)                         # L/10 = 0.18 > 0.10
+    cs = next(s for s in design(b).slabs if s.kind == "cantilever")
+    assert not cs.ok and "ความหนา" in cs.note
+
+
+def test_tributary_loads_conserve_the_slab_load():
+    from wanicndesign.structure.design import _tributary
+    for sx, sy in ((4.0, 4.0), (4.0, 3.0), (6.0, 2.5), (5.0, 2.0)):
+        px, py = _tributary(440.0, sx, sy)
+        total = 2 * sum(P for _a, P in px) + 2 * sum(P for _a, P in py)
+        assert total == pytest.approx(440.0 * sx * sy, rel=1e-9)
+
+
+def test_floor_equilibrium_whole_building():
+    from wanicndesign.structure.design import design_level_beams, design_roof
+    b = Building.load(BUILDING)
+    li = 1                                           # FL2
+    lv = b.levels[li]
+    _beams, reac, _live = design_level_beams(b, Concrete(), li, design_roof(b))
+    W = 2400 * lv.slab_thickness + lv.finish_load + lv.live_load
+    area = b.xs[-1] * b.ys[-1]
+    beam_len = sum(abs(b.xs[c[0]] - b.xs[a[0]]) + abs(b.ys[c[1]] - b.ys[a[1]])
+                   for _d, run in b.beam_lines(lv.name) for a, c in zip(run, run[1:]))
+    above = b.levels[li + 1]
+    wall_h = above.elevation - lv.elevation - above.beam_depth
+    perim = 2 * (b.xs[-1] + b.ys[-1])
+    total = W * area + 2400 * lv.beam_width * lv.beam_depth * beam_len + 180 * wall_h * perim
+    assert sum(reac.values()) == pytest.approx(total, rel=1e-6)

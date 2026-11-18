@@ -57,24 +57,55 @@ def model_faces(b, res=None):
             cw, cd = b.column_width, b.column_depth
             for face in _box(x - cw / 2, y - cd / 2, -df + ft, x + cw / 2, y + cd / 2, top):
                 faces.append((face, COLOURS["column"]))
+    if res:
+        lv_z = {lv.name: lv.elevation for lv in b.levels}
+        for x in res.beams:
+            x0, y0, x1, y1 = x.line_xy
+            z, hw = lv_z[x.level], x.b / 2
+            box = _box(x0, y0 - hw, z - x.h, x1, y0 + hw, z) if abs(y1 - y0) < 1e-9 else \
+                _box(x0 - hw, y0, z - x.h, x0 + hw, y1, z)
+            colour = COLOURS["beam"] if x.ok else COLOURS["ng"]
+            faces.extend((face, colour) for face in box)
+        for s in res.slabs:
+            x0, y0, x1, y1 = s.rect
+            z = lv_z[s.level]
+            colour = COLOURS["slab"] if s.ok else COLOURS["ng"]
+            faces.extend((face, colour) for face in _box(x0, y0, z - s.thickness, x1, y1, z))
+        for lv in b.levels:
+            if lv.slab == "roof":
+                faces.extend(_roof_faces(b, lv.elevation))
+        return faces
     for lv in b.levels:
         z = lv.elevation
+        hw = lv.beam_width / 2
         for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
-                span = f"{b.node_name(*a)}-{b.node_name(*c)}"
-                h = beam_h.get((lv.name, span), lv.beam_depth)
-                hw = lv.beam_width / 2
                 (x0, y0), (x1, y1) = (xs[a[0]], ys[a[1]]), (xs[c[0]], ys[c[1]])
-                if abs(y1 - y0) < 1e-9:
-                    box = _box(x0, y0 - hw, z - h, x1, y0 + hw, z)
-                else:
-                    box = _box(x0 - hw, y0, z - h, x0 + hw, y1, z)
-                colour = COLOURS["ng"] if (lv.name, span) in ng_beams else COLOURS["beam"]
-                faces.extend((face, colour) for face in box)
+                box = _box(x0, y0 - hw, z - lv.beam_depth, x1, y0 + hw, z) if abs(y1 - y0) < 1e-9 else \
+                    _box(x0 - hw, y0, z - lv.beam_depth, x0 + hw, y1, z)
+                faces.extend((face, COLOURS["beam"]) for face in box)
         if lv.slab in ("suspended", "on_ground"):
+            from ..structure.design import slab_parts
             for i, j in b.panels(lv.name):
-                faces.extend((face, COLOURS["slab"]) for face in
-                             _box(xs[i], ys[j], z - lv.slab_thickness, xs[i + 1], ys[j + 1], z))
+                for _n, x0, y0, x1, y1, _f in slab_parts(b, lv, i, j):
+                    faces.extend((face, COLOURS["slab"]) for face in
+                                 _box(x0, y0, z - lv.slab_thickness, x1, y1, z))
+                sub = b.sub_beam(lv, i, j)
+                if sub:
+                    d, f = sub
+                    if d == "x":
+                        yy = ys[j] + f * (ys[j + 1] - ys[j])
+                        box = _box(xs[i], yy - hw, z - lv.beam_depth, xs[i + 1], yy + hw, z)
+                    else:
+                        xx = xs[i] + f * (xs[i + 1] - xs[i])
+                        box = _box(xx - hw, ys[j], z - lv.beam_depth, xx + hw, ys[j + 1], z)
+                    faces.extend((face, COLOURS["beam"]) for face in box)
+        if lv.slab == "suspended":
+            for a, c, length, (dx, dy) in b.cantilevers(lv):
+                (x0, y0), (x1, y1) = (xs[a[0]], ys[a[1]]), (xs[c[0]], ys[c[1]])
+                faces.extend((face, COLOURS["slab"]) for face in _box(
+                    min(x0, x1, x0 + dx * length), min(y0, y1, y0 + dy * length), z - lv.slab_thickness,
+                    max(x0, x1, x0 + dx * length), max(y0, y1, y0 + dy * length), z))
         if lv.slab == "roof":
             faces.extend(_roof_faces(b, z))
     return faces

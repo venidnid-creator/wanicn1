@@ -12,7 +12,7 @@ import math
 from dataclasses import dataclass, field
 
 from ..standards import NO_REDUCTION, cite, ll_reduction
-from .analysis import continuous_beam
+from .analysis import continuous_beam, partial_udl
 from .building import ROOF_COVER_LOAD, WALL_LOAD, Building
 from .materials import CONCRETE_KG_M3, ES, FY, Concrete
 from .sections import BAR_DIA, bar_area, load_c_sections, load_piles, pick_bars, pick_spacing
@@ -126,6 +126,7 @@ class SlabResult:
     note: str = ""
     case: int = 0                  # two-way case 1–5
     refs: str = ""
+    rect: tuple = ()               # (x0, y0, x1, y1) in plan, m
 
 
 @dataclass
@@ -151,6 +152,8 @@ class BeamResult:
     note: str = ""
     h_min: float = 0.0             # depth needing no deflection check
     refs: str = ""
+    line_xy: tuple = ()            # (x0, y0, x1, y1) in plan, m
+    kind: str = "beam"             # beam, secondary
 
 
 @dataclass
@@ -299,12 +302,11 @@ def _slab_load(lv) -> tuple[float, float]:
     return CONCRETE_KG_M3 * lv.slab_thickness + lv.finish_load + lv.live_load, lv.live_load
 
 
-def design_slab(b: Building, mat: Concrete, lv, i: int, j: int) -> SlabResult:
-    lx = b.xs[i + 1] - b.xs[i]
-    ly = b.ys[j + 1] - b.ys[j]
+def _panel_slab(mat: Concrete, lv, name: str, lx: float, ly: float, discontinuous: int,
+                rect: tuple) -> SlabResult:
+    """One slab panel ``lx`` × ``ly`` with ``discontinuous`` free edges."""
     S, Lg = min(lx, ly), max(lx, ly)
     m = S / Lg
-    name = _panel_name(b, i, j)
     t = lv.slab_thickness
     fs = mat.fs("RB9")
     R, jj = mat.R(fs), mat.j(fs)
@@ -315,11 +317,8 @@ def design_slab(b: Building, mat: Concrete, lv, i: int, j: int) -> SlabResult:
         bars = f"RB9@{pick_spacing(as_min, 'RB9', smax):.2f}"
         return SlabResult(lv.name, name, "", "on-ground", lx, ly, m, 0.0, 0, 0, 0, t, 0.0,
                           bars, bars, "-", True, "พื้นวางบนดิน ใช้เหล็กกันร้าว",
-                          refs=cite("EIT1007-TEMP"))
+                          refs=cite("EIT1007-TEMP"), rect=rect)
     W, _live = _slab_load(lv)
-    panels = set(b.panels(lv.name))
-    neighbours = [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)]
-    discontinuous = sum(1 for p in neighbours if p not in panels)
     refs = [mat.ref, "UNIT-WT", "MR6-15", "EIT1007-TEMP"]
     if m < 0.5:
         kind, case = "one-way", 0
@@ -349,7 +348,70 @@ def design_slab(b: Building, mat: Concrete, lv, i: int, j: int) -> SlabResult:
 
     long_bars = bars(m_long) if kind == "two-way" else f"RB9@{pick_spacing(as_min, 'RB9', smax):.2f}"
     return SlabResult(lv.name, name, "", kind, lx, ly, m, W, m_pos, m_neg, m_long, t, d_req,
-                      bars(m_pos), long_bars, bars(m_neg), ok, note, case, cite(*refs))
+                      bars(m_pos), long_bars, bars(m_neg), ok, note, case, cite(*refs), rect)
+
+
+def _free_edges(b: Building, lv, i: int, j: int) -> dict:
+    """Which edges of panel (i, j) have no slab beyond them."""
+    panels = set(b.panels(lv.name))
+    return {"left": (i - 1, j) not in panels, "right": (i + 1, j) not in panels,
+            "bottom": (i, j - 1) not in panels, "top": (i, j + 1) not in panels}
+
+
+def slab_parts(b: Building, lv, i: int, j: int):
+    """The slab pieces of panel (i, j): one, or two when a secondary beam
+    splits it. Each: (name, x0, y0, x1, y1, free-edge count)."""
+    x0, x1, y0, y1 = b.xs[i], b.xs[i + 1], b.ys[j], b.ys[j + 1]
+    name = _panel_name(b, i, j)
+    free = _free_edges(b, lv, i, j)
+    sub = b.sub_beam(lv, i, j)
+    if not sub:
+        return [(name, x0, y0, x1, y1, sum(free.values()))]
+    d, f = sub
+    if d == "x":
+        ym = y0 + f * (y1 - y0)
+        return [(name + "·1", x0, y0, x1, ym, free["left"] + free["right"] + free["bottom"]),
+                (name + "·2", x0, ym, x1, y1, free["left"] + free["right"] + free["top"])]
+    xm = x0 + f * (x1 - x0)
+    return [(name + "·1", x0, y0, xm, y1, free["bottom"] + free["top"] + free["left"]),
+            (name + "·2", xm, y0, x1, y1, free["bottom"] + free["top"] + free["right"])]
+
+
+def design_slab(b: Building, mat: Concrete, lv, i: int, j: int) -> SlabResult:
+    """The first slab piece of panel (i, j) (kept for single-piece callers)."""
+    return design_slabs(b, mat, lv, i, j)[0]
+
+
+def design_slabs(b: Building, mat: Concrete, lv, i: int, j: int) -> list[SlabResult]:
+    out = []
+    for name, x0, y0, x1, y1, free in slab_parts(b, lv, i, j):
+        out.append(_panel_slab(mat, lv, name, x1 - x0, y1 - y0, free, (x0, y0, x1, y1)))
+    return out
+
+
+def design_cantilever_slab(mat: Concrete, lv, name: str, length: float, width: float,
+                           rect: tuple) -> SlabResult:
+    """Cantilever slab: M = W·L²/2 at the support, top steel [STATICS];
+    thickness at least L/10 [EIT1007-SLABMIN]."""
+    t = lv.slab_thickness
+    fs = mat.fs("RB9")
+    R, jj = mat.R(fs), mat.j(fs)
+    d = t * 100 - 2.5
+    W, _live = _slab_load(lv)
+    mom = W * length * length / 2
+    d_req = math.sqrt(mom * 100 / (R * 100))
+    as_min = 0.0025 * 100 * t * 100
+    smax = min(3 * t * 100, 45.0)
+    as_ = max(mom * 100 / (fs * jj * d), as_min)
+    t_min = length / 10
+    ok = d_req <= d and t + 1e-9 >= t_min
+    note = "ไม่รวมแรงบิดในคานขอบ" if ok else (f"ความหนาน้อยกว่า {t_min:.2f} ม." if t < t_min
+                                            else "ความลึกไม่พอ")
+    temp = f"RB9@{pick_spacing(as_min, 'RB9', smax):.2f}"
+    return SlabResult(lv.name, name, "", "cantilever", length, width, 0.0, W, 0.0, mom, 0.0, t, d_req,
+                      temp, temp, f"RB9@{pick_spacing(as_, 'RB9', smax):.2f}", ok, note, 0,
+                      cite(mat.ref, "STATICS", "EIT1007-SLABMIN", "UNIT-WT", "MR6-15", "EIT1007-TEMP"),
+                      rect)
 
 
 # ---------------------------------------------------------------------------
@@ -360,14 +422,72 @@ def _seg(a, b):
     return (a, b) if a <= b else (b, a)
 
 
-def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = "total") -> dict:
-    """Uniform load (kg/m) on every beam segment of level ``li`` without the
-    beam's own weight. ``part="live"`` gives the live load share only."""
+TRIB_PIECES = 24
+
+
+def _tributary(W: float, sx: float, sy: float):
+    """Load on the edges of an ``sx`` × ``sy`` slab piece from the areas cut
+    by 45° lines (triangles on the short edges, trapezoids on the long ones)
+    [EIT1007-SLAB]. Returns point loads ``(a, P)`` for ONE edge parallel to X
+    and ONE edge parallel to Y. One-way pieces (m < 0.5) send W·S/2 to each
+    long edge. The four edges together carry exactly W·sx·sy."""
+    S, Lg = min(sx, sy), max(sx, sy)
+    if S <= 0:
+        return [], []
+    if S / Lg < 0.5:
+        long_pts = partial_udl(W * S / 2, 0.0, Lg, TRIB_PIECES)
+        return (long_pts, []) if sx >= sy else ([], long_pts)
+    q, h = W * S / 2, S / 2
+
+    def area(x, L):
+        """∫₀ˣ min(t, L − t, h) dt, exact."""
+        if x <= h:
+            return x * x / 2
+        if x <= L - h:
+            return h * h / 2 + h * (x - h)
+        u = x - (L - h)
+        return h * h / 2 + h * (L - 2 * h) + h * u - u * u / 2
+
+    def profile(L):
+        dx = L / TRIB_PIECES
+        return [((k + 0.5) * dx, q / h * (area((k + 1) * dx, L) - area(k * dx, L)))
+                for k in range(TRIB_PIECES)]
+
+    return profile(sx), profile(sy)
+
+
+def _shift(pts, offset: float):
+    return [(a + offset, P) for a, P in pts]
+
+
+@dataclass
+class SubBeam:
+    level: str
+    name: str
+    length: float
+    w: float                      # average kg/m from the slabs (no self weight)
+    w_live: float
+    line_xy: tuple
+    pts: list = field(default_factory=list)   # (a, P) slab load along the beam
+
+
+def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = "total"):
+    """Loads on the beam segments of level ``li`` without the beams' own
+    weight: ``({segment: {"w": kg/m, "p": [(a, P)]}}, [SubBeam])``.
+    ``part="live"`` gives the live load share only."""
     lv = b.levels[li]
     loads: dict = {}
+    subs: list[SubBeam] = []
 
-    def add(seg, w):
-        loads[seg] = loads.get(seg, 0.0) + w
+    def seg(a, c):
+        k = _seg(a, c)
+        return loads.setdefault(k, {"w": 0.0, "p": []})
+
+    def add_w(a, c, w):
+        seg(a, c)["w"] += w
+
+    def add_p(a, c, pts):
+        seg(a, c)["p"].extend(pts)
 
     if lv.slab == "suspended":
         total, live = _slab_load(lv)
@@ -376,30 +496,60 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
     else:
         total = live = 0.0
     W = live if part == "live" else total
-    if W:
-        for i, j in b.panels(lv.name):
-            lx = b.xs[i + 1] - b.xs[i]
-            ly = b.ys[j + 1] - b.ys[j]
-            S, Lg = min(lx, ly), max(lx, ly)
-            m = S / Lg
-            x_edges = [_seg((i, j), (i + 1, j)), _seg((i, j + 1), (i + 1, j + 1))]
-            y_edges = [_seg((i, j), (i, j + 1)), _seg((i + 1, j), (i + 1, j + 1))]
-            if m < 0.5:
-                for e in (x_edges if lx >= ly else y_edges):
-                    add(e, W * S / 2)
-            else:                                            # [EIT1007-SLAB]
-                w_short = W * S / 3
-                w_long = W * S / 3 * (3 - m * m) / 2
-                for e in x_edges:
-                    add(e, w_short if lx <= ly else w_long)
-                for e in y_edges:
-                    add(e, w_short if ly < lx else w_long)
+    sw_sub = CONCRETE_KG_M3 * lv.beam_width * lv.beam_depth if part != "live" else 0.0
+    for i, j in (b.panels(lv.name) if W else []):
+        lx = b.xs[i + 1] - b.xs[i]
+        ly = b.ys[j + 1] - b.ys[j]
+        bl, br, bb, bt = (i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)
+        sub = b.sub_beam(lv, i, j)
+        if not sub:
+            px, py = _tributary(W, lx, ly)
+            add_p(bl, br, px)
+            add_p(bb, bt, px)
+            add_p(bl, bb, py)
+            add_p(br, bt, py)
+            continue
+        d, f = sub
+        name = f"{_panel_name(b, i, j)}:{d}"
+        if d == "x":                      # secondary beam parallel to X at y = f·ly
+            h1 = f * ly
+            px1, py1 = _tributary(W, lx, h1)
+            px2, py2 = _tributary(W, lx, ly - h1)
+            add_p(bl, br, px1)
+            add_p(bb, bt, px2)
+            sub_pts = px1 + px2
+            length = lx
+            line = (b.xs[i], b.ys[j] + h1, b.xs[i + 1], b.ys[j] + h1)
+            supports = ((bl, bb), (br, bt))
+            edge_pts = py1 + _shift(py2, h1)
+        else:                             # parallel to Y at x = f·lx
+            w1 = f * lx
+            px1, py1 = _tributary(W, w1, ly)
+            px2, py2 = _tributary(W, lx - w1, ly)
+            add_p(bl, bb, py1)
+            add_p(br, bt, py2)
+            sub_pts = py1 + py2
+            length = ly
+            line = (b.xs[i] + w1, b.ys[j], b.xs[i] + w1, b.ys[j + 1])
+            supports = ((bl, br), (bb, bt))
+            edge_pts = px1 + _shift(px2, w1)
+            h1 = w1
+        _spans, (r0, r1) = continuous_beam([length], [sw_sub], [sub_pts])
+        for (a, c), r in zip(supports, (r0, r1)):
+            add_p(a, c, edge_pts)
+            add_p(a, c, [(h1, r)])
+            seg(a, c)["sub"] = True
+        subs.append(SubBeam(lv.name, name, length, sum(P for _a, P in sub_pts) / length, 0.0, line))
+        subs[-1].pts = sub_pts
     if lv.slab == "roof" and roof is not None:
         per_m = (roof.live_plan if part == "live" else roof.load_plan) * b.roof.overhang
         for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
                 if b.is_perimeter(a, c, lv.name):
-                    add(_seg(a, c), per_m)
+                    add_w(a, c, per_m)
+    if lv.slab == "suspended":
+        for a, c, length, _out in b.cantilevers(lv):
+            add_w(a, c, W * length)                    # [STATICS], torsion not included
     if part != "live" and li + 1 < len(b.levels) and lv.walls != "none":
         above = b.levels[li + 1]
         hgt = above.elevation - lv.elevation - above.beam_depth
@@ -407,8 +557,8 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
         for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
                 if lv.walls == "all" or b.is_perimeter(a, c, lv.name):
-                    add(_seg(a, c), wl)
-    return loads
+                    add_w(a, c, wl)
+    return loads, subs
 
 
 def _beam_design(mat: Concrete, bw: float, h: float, m_neg: float, m_pos: float, v: float):
@@ -447,22 +597,47 @@ def _min_depth(mat: Concrete, length: float, n_spans: int, k: int) -> float:
     return length / ratio * (0.4 + FY[mat.main_grade] / 7000.0)
 
 
+def _local(load, flip: bool, L: float):
+    return [(L - a if flip else a, P) for a, P in load["p"]]
+
+
 def design_level_beams(b: Building, mat: Concrete, li: int, roof):
     lv = b.levels[li]
-    ext = level_line_loads(b, li, roof)
-    ext_live = level_line_loads(b, li, roof, "live")
+    ext, subs = level_line_loads(b, li, roof)
+    ext_live, subs_live = level_line_loads(b, li, roof, "live")
+    empty = {"w": 0.0, "p": []}
     results, reactions, live_reac = [], {}, {}
     refs = cite(mat.ref, "EIT1007-SHEAR", "EIT1007-MIN", "EIT1007-DEFL", "UNIT-WT", "QD-WALL",
-                "EIT1007-SLAB")
+                "EIT1007-SLAB", "STATICS")
+    # secondary beams first: simply supported on the edge beams
+    for sb, sbl in zip(subs, subs_live):
+        bw, h = lv.beam_width, lv.beam_depth
+        w = sb.w + CONCRETE_KG_M3 * bw * h
+        L = sb.length
+        (sp,), _r = continuous_beam([L], [CONCRETE_KG_M3 * bw * h], [sb.pts])
+        d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, 0.0, sp.m_pos,
+                                                         max(sp.v_left, sp.v_right))
+        hmin = _min_depth(mat, L, 1, 0)
+        notes = ["คานซอยวางบนคานหลัก (ช่วงเดียว)"]
+        if not ok:
+            notes.append("หน้าตัดไม่พอ ต้องเพิ่มขนาด")
+        if h + 1e-9 < hmin:
+            notes.append(f"ลึกน้อยกว่า {hmin:.2f} ม. ต้องตรวจการแอ่นตัว")
+        results.append(BeamResult(lv.name, "คานซอย", sb.name, "", bw, h, L, w, 0.0, sp.m_pos,
+                                  max(sp.v_left, sp.v_right), d_req, at, ab, top, bot, stir, ok, " ; ".join(notes), hmin,
+                                  refs, sb.line_xy, "secondary"))
     for direction, run in b.beam_lines(lv.name):
         lengths = [abs((b.xs[c[0]] - b.xs[a[0]]) if direction == "x" else (b.ys[c[1]] - b.ys[a[1]]))
                    for a, c in zip(run, run[1:])]
+        segs = [ext.get(_seg(a, c), empty) for a, c in zip(run, run[1:])]
+        lsegs = [ext_live.get(_seg(a, c), empty) for a, c in zip(run, run[1:])]
+        flips = [_seg(a, c)[0] != a for a, c in zip(run, run[1:])]
+        pts = [_local(sg, fl, L) for sg, fl, L in zip(segs, flips, lengths)]
         line = b.y_name(run[0][1]) if direction == "x" else b.x_name(run[0][0])
         h, bw = lv.beam_depth, lv.beam_width
         for _it in range(4):                     # re-run when the depth grows
             sw = CONCRETE_KG_M3 * bw * h
-            loads = [ext.get(_seg(a, c), 0.0) + sw for a, c in zip(run, run[1:])]
-            spans, reac = continuous_beam(lengths, loads)
+            spans, reac = continuous_beam(lengths, [sg["w"] + sw for sg in segs], pts)
             need = h
             for sp in spans:
                 m_neg = max(0.0, -sp.m_left, -sp.m_right)
@@ -471,7 +646,8 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             if need <= h + 1e-9 or need > MAX_BEAM_DEPTH:
                 break
             h = need
-        _sp, lreac = continuous_beam(lengths, [ext_live.get(_seg(a, c), 0.0) for a, c in zip(run, run[1:])])
+        _sp, lreac = continuous_beam(lengths, [sg["w"] for sg in lsegs],
+                                     [_local(sg, fl, L) for sg, fl, L in zip(lsegs, flips, lengths)])
         for k, ((a, c), sp) in enumerate(zip(zip(run, run[1:]), spans)):
             m_neg = max(0.0, -sp.m_left, -sp.m_right)
             d_req, at, ab, top, bot, stir, ok = _beam_design(mat, bw, h, m_neg, sp.m_pos,
@@ -479,14 +655,17 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             notes = []
             if h != lv.beam_depth:
                 notes.append(f"เพิ่มความลึกจาก {lv.beam_depth:.2f} เป็น {h:.2f} ม.")
+            if segs[k].get("sub"):
+                notes.append("รับแรงจุดจากคานซอย")
             if not ok:
                 notes.append("หน้าตัดไม่พอ ต้องเพิ่มขนาด")
             hmin = _min_depth(mat, sp.length, len(spans), k)
             if h + 1e-9 < hmin:
                 notes.append(f"ลึกน้อยกว่า {hmin:.2f} ม. ต้องตรวจการแอ่นตัว")
+            xy = (b.xs[a[0]], b.ys[a[1]], b.xs[c[0]], b.ys[c[1]])
             results.append(BeamResult(lv.name, line, f"{b.node_name(*a)}-{b.node_name(*c)}", "", bw, h,
                                       sp.length, sp.w, m_neg, sp.m_pos, max(sp.v_left, sp.v_right), d_req,
-                                      at, ab, top, bot, stir, ok, " ; ".join(notes), hmin, refs))
+                                      at, ab, top, bot, stir, ok, " ; ".join(notes), hmin, refs, xy))
         for node, rx, lx in zip(run, reac, lreac):
             reactions[node] = reactions.get(node, 0.0) + rx
             live_reac[node] = live_reac.get(node, 0.0) + lx
@@ -662,7 +841,15 @@ def design(b: Building) -> DesignResult:
         lv = b.levels[li]
         if lv.slab in ("suspended", "on_ground"):
             for i, j in b.panels(lv.name):
-                res.slabs.append(design_slab(b, mat, lv, i, j))
+                res.slabs.extend(design_slabs(b, mat, lv, i, j))
+        if lv.slab == "suspended":
+            for a, c, length, (dx, dy) in b.cantilevers(lv):
+                (x0, y0), (x1, y1) = (b.xs[a[0]], b.ys[a[1]]), (b.xs[c[0]], b.ys[c[1]])
+                rect = (min(x0, x1, x0 + dx * length), min(y0, y1, y0 + dy * length),
+                        max(x0, x1, x0 + dx * length), max(y0, y1, y0 + dy * length))
+                width = abs(x1 - x0) + abs(y1 - y0)
+                res.slabs.append(design_cantilever_slab(mat, lv, f"{b.node_name(*a)}-{b.node_name(*c)} ยื่น",
+                                                        length, width, rect))
         beams, reac, live = design_level_beams(b, mat, li, res.roof)
         res.beams.extend(beams)
         node_reac[li], node_live[li] = reac, live
@@ -697,11 +884,15 @@ def design(b: Building) -> DesignResult:
     _assign_marks(res.footings, lambda f: (f.piles, f.pile, f.width, f.length, f.thickness,
                                            f.bars_x, f.bars_y), "F", lambda f: f.load)
     for lv in b.levels:
-        _assign_marks([x for x in res.beams if x.level == lv.name],
+        _assign_marks([x for x in res.beams if x.level == lv.name and x.kind == "beam"],
                       lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), lv.beam_mark, lambda x: x.m_pos)
-        _assign_marks([x for x in res.slabs if x.level == lv.name],
+        _assign_marks([x for x in res.beams if x.level == lv.name and x.kind == "secondary"],
+                      lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), lv.beam_mark + "S", lambda x: x.m_pos)
+        _assign_marks([x for x in res.slabs if x.level == lv.name and x.kind != "cantilever"],
                       lambda x: (x.kind, x.case, x.thickness, x.bars_short, x.bars_long, x.bars_top),
                       "GS" if lv.slab == "on_ground" else "S", lambda x: x.m_pos)
+        _assign_marks([x for x in res.slabs if x.level == lv.name and x.kind == "cantilever"],
+                      lambda x: (x.lx, x.thickness, x.bars_top), "CS", lambda x: x.m_neg)
     for group in (res.slabs, res.beams, res.columns, res.footings):
         for x in group:
             if not x.ok:

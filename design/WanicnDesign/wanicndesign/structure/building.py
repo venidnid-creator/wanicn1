@@ -35,6 +35,8 @@ class Level:
     beam_mark: str = "B"           # mark prefix: GB, B, RB
     walls: str = "perimeter"       # "perimeter", "all", "none" — walls standing on this level
     wall_type: str = "brick"
+    sub_beams: list = field(default_factory=list)    # ["1-2/A-B:x@0.5"] secondary beam in a panel
+    cantilevers: list = field(default_factory=list)  # ["1A-2A@1.50"] cantilever slab off an edge beam
 
 
 @dataclass
@@ -178,6 +180,61 @@ class Building:
             j = min(j1, j2)
             sides = [(i1 - 1, j), (i1, j)]
         return sum(1 for p in sides if p in panels) < 2
+
+    # -- secondary beams and cantilever slabs ----------------------------------
+    def level(self, name: str) -> Level | None:
+        return next((lv for lv in self.levels if lv.name == name), None)
+
+    def parse_node(self, name: str) -> tuple[int, int]:
+        digits = "".join(ch for ch in name if ch.isdigit())
+        letters = "".join(ch for ch in name if ch.isalpha())
+        return int(digits) - 1, ord(letters.upper()) - ord("A")
+
+    def panel_name(self, i: int, j: int) -> str:
+        return f"{self.x_name(i)}-{self.x_name(i + 1)}/{self.y_name(j)}-{self.y_name(j + 1)}"
+
+    def sub_beam(self, level: Level, i: int, j: int):
+        """``(direction, fraction)`` of the secondary beam in panel (i, j):
+        ``"x"`` runs parallel to X at ``fraction`` of the bay depth in Y."""
+        name = self.panel_name(i, j)
+        for entry in level.sub_beams:
+            panel, _, rest = entry.partition(":")
+            if panel == name:
+                d, _, frac = rest.partition("@")
+                return d, float(frac or 0.5)
+        return None
+
+    def toggle_sub_beam(self, level: Level, i: int, j: int, direction: str, fraction: float = 0.5):
+        name = self.panel_name(i, j)
+        level.sub_beams[:] = [e for e in level.sub_beams if not e.startswith(name + ":")]
+        if direction:
+            level.sub_beams.append(f"{name}:{direction}@{fraction:g}")
+
+    def cantilevers(self, level: Level):
+        """``(a, c, length, outward)`` per cantilever slab; ``outward`` is the
+        unit direction (dx, dy) away from the building."""
+        out = []
+        panels = set(self.panels(level.name))
+        for entry in level.cantilevers:
+            seg, _, length = entry.partition("@")
+            na, nc = seg.split("-")
+            a, c = self.parse_node(na), self.parse_node(nc)
+            if not self.has_beam(level.name, a, c):
+                continue
+            if a[1] == c[1]:                       # along X
+                i, j = min(a[0], c[0]), a[1]
+                outward = (0, -1) if (i, j) in panels else (0, 1)
+            else:
+                i, j = a[0], min(a[1], c[1])
+                outward = (-1, 0) if (i, j) in panels else (1, 0)
+            out.append((a, c, float(length or 1.0), outward))
+        return out
+
+    def toggle_cantilever(self, level: Level, a, c, length: float | None):
+        key = self.beam_key(level.name, a, c).split(":", 1)[1]
+        level.cantilevers[:] = [e for e in level.cantilevers if not e.startswith(key + "@")]
+        if length:
+            level.cantilevers.append(f"{key}@{length:.2f}")
 
     def toggle(self, kind: str, key: str) -> bool:
         """Remove or restore one element; returns True when it now exists."""
