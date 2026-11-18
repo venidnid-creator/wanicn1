@@ -812,6 +812,37 @@ HANDOVER = ("handover", "ป้าย ครุภัณฑ์ และส่�
             ("ป้าย", "ครุภัณฑ์", "ทำความสะอาด", "ส่งมอบ", "เก็บกวาด", "เฟอร์นิเจอร์", "โต๊ะ", "เก้าอี้",
              "ตู้เก็บเอกสาร", "อุปกรณ์สำนักงาน"))
 
+# งานทาง สะพาน ท่อเหลี่ยม และชลประทาน: ลำดับก่อน–หลัง (คำที่เจาะจงกว่าอยู่ก่อน — ตัวแรกที่ตรงชนะ)
+ROAD_PHASES = (
+    ("r_prep", "งานเตรียมการ", (0.0, 0.08),
+     ("ถางป่า", "ขุดตอ", "รื้อถอน", "รื้อย้าย", "เตรียมพื้นที่", "วางผัง", "สำรวจ", "clearing", "grubbing")),
+    ("r_pile", "งานเสาเข็ม", (0.05, 0.25),
+     ("เสาเข็ม", "สกัดหัวเข็ม", "pile")),
+    ("r_sub", "งานโครงสร้างส่วนล่าง", (0.15, 0.45),
+     ("ตอม่อ", "คานรัดหัว", "กำแพงกันดิน", "หูช้าง", "abutment", "pier", "ฐานราก")),
+    ("r_super", "งานโครงสร้างส่วนบน", (0.35, 0.70),
+     ("plankgirder", "girder", "คานสะพาน", "คานอัดแรง", "วางคาน", "ยางรอง", "พื้นสะพาน", "topping", "ทับหน้า",
+      "แผ่นพื้นสำเร็จ")),
+    ("r_rail", "งานราวสะพาน รอยต่อ และแผ่นพื้นต่อเชิงลาด", (0.60, 0.90),
+     ("รอยต่อ", "expansion", "ราวสะพาน", "ราวกันตก", "approach", "เชิงลาด", "ท่อระบายน้ำสำเร็จ", "สะพาน")),
+    ("r_earth", "งานดินและคันทาง", (0.05, 0.40),
+     ("ตัดคันทาง", "ตัดดิน", "ขุดดิน", "ขุดลอก", "ถมคันทาง", "คันทาง", "วัสดุคัดเลือก", "หินผุ", "ดินถม", "ถมดิน",
+      "บดอัด", "excavation", "embankment", "earthwork", "งานดิน")),
+    ("r_drain", "งานระบายน้ำ ท่อ และดาดคอนกรีต", (0.15, 0.60),
+     ("ท่อเหลี่ยม", "ท่อลอด", "ท่อ", "คูระบาย", "รางระบาย", "รางวี", "บ่อพัก", "ระบายน้ำ", "ดาด", "หินเรียง",
+      "หินทิ้ง", "ฝาย", "ประตูระบายน้ำ", "อาคารบังคับน้ำ", "culvert", "drain")),
+    ("r_subbase", "งานรองพื้นทาง", (0.30, 0.60),
+     ("รองพื้นทาง", "subbase", "ลูกรัง", "รื้อชั้น", "ปรับปรุงชั้นทาง")),
+    ("r_base", "งานพื้นทาง", (0.45, 0.75), ("พื้นทาง", "หินคลุก", "base")),
+    ("r_surface", "งานผิวทาง", (0.65, 0.92),
+     ("ไพรม์", "แทค", "prime", "tack", "แอสฟัลต์", "แอสฟัลท์", "asphalt", "ลาดยาง", "ผิวทาง", "ผิวจราจร",
+      "ถนนคอนกรีต", "surface", "ไหล่ทาง", "ทางเท้า")),
+    ("r_mark", "งานเครื่องหมายจราจรและอุปกรณ์ความปลอดภัย", (0.85, 1.0),
+     ("ตีเส้น", "เครื่องหมายจราจร", "หลักนำทาง", "หลักกิโล", "การ์ดเรล", "guardrail", "แผ่นสะท้อน", "หมุดสะท้อน",
+      "ราวเหล็ก", "สีจราจร")),
+)
+ROAD_TYPES = ("road", "irrigation")
+
 
 def _words(s: str) -> str:
     # «ก่อสร้าง» is not masonry; «ป้ายโครงการ» is a site sign put up first
@@ -822,21 +853,28 @@ def _match(s: str, phase) -> bool:
     return any(w in s for w in phase[3])
 
 
-def phase_of(path: list):
-    """(override phase or None, building phase) for a line; `path` = its name then its headings,
-    nearest first. A heading wins over the line's own words (คอนกรีต under «ฐานราก» is foundation)."""
+def phase_of(path: list, road: bool = False):
+    """(override phase or None, phase) for a line; `path` = its name then its headings, nearest
+    first. In a building bill a heading wins over the line's own words (คอนกรีต under «ฐานราก» is
+    foundation); in a road / bridge / irrigation bill the line's own words are the surer guide.
+    The other kind's phases are tried after the ones of the bill's kind."""
     words = [_words(x) for x in path]
+    order = words if road else words[1:] + words[:1]
+    tables = (ROAD_PHASES, PHASES) if road else (PHASES, ROAD_PHASES)
     override = None
-    for w in words[1:] + words[:1]:
-        if _match(w, EXTERNAL):
+    for w in order:
+        if not road and _match(w, EXTERNAL):
             override = EXTERNAL
             break
         if _match(w, HANDOVER):
             override = HANDOVER
             break
     base = None
-    for w in words[1:] + words[:1]:
-        base = next((ph for ph in PHASES if _match(w, ph)), None)
+    for table in tables:
+        for w in order:
+            base = next((ph for ph in table if _match(w, ph)), None)
+            if base:
+                break
         if base:
             break
     return override, base
@@ -844,7 +882,8 @@ def phase_of(path: list):
 
 def plan_phases(p: Project) -> list:
     """[(item, override, phase)] for the lines of the bill (a line nobody can place follows the one before)."""
-    out, stack, last = [], [], (None, PHASES[2])
+    road = p.work_type in ROAD_TYPES
+    out, stack, last = [], [], (None, (ROAD_PHASES[5] if road else PHASES[2]))
     for it in p.items:
         while stack and it.code and stack[-1].code and stack[-1].level >= it.level:
             stack.pop()
@@ -852,7 +891,7 @@ def plan_phases(p: Project) -> list:
             stack.append(it)
             continue
         path = [it.name] + [h.name for h in reversed(stack)]
-        ov, base = phase_of(path)
+        ov, base = phase_of(path, road)
         if base is None and ov is None:
             ov, base = last
         base = base or last[1]
@@ -878,45 +917,59 @@ def _spread(lo: float, hi: float, months: int) -> list:
     return plan
 
 
+def _s_time(c: float) -> float:
+    """Time (0–1) when a share `c` of the work is done on a gentle S-curve: slower at the start
+    and at the end, faster in the middle (S(x) = ½x + ½(3x² − 2x³))."""
+    lo, hi = 0.0, 1.0
+    for _ in range(40):
+        x = (lo + hi) / 2
+        if 0.5 * x + 0.5 * (3 * x * x - 2 * x ** 3) < c:
+            lo = x
+        else:
+            hi = x
+    return (lo + hi) / 2
+
+
 def auto_plan(p: Project, months: int) -> None:
-    """Spread the lines over the months in the order of construction: preparation, earthwork and
-    foundations, structure, roof and walls, services, finishes, doors/windows and sanitary ware,
-    external works; signs, equipment (ครุภัณฑ์) and handing over in the last month. Inside a
-    group the lines follow the bill, each over its share of the group's window.
-    The owner edits the per-cent afterwards."""
+    """แผนการทำงาน: every line in the order of construction, and work — so money — in every month.
+
+    The lines are sorted by their phase (building: preparation, earthwork and foundations,
+    structure, roof and walls, services, finishes, doors/windows and sanitary ware, external works;
+    road/bridge/irrigation: preparation, earthwork, piles, substructure, drainage, subbase,
+    superstructure, base, surface, railings, markings), then laid one after another along the
+    whole contract time by their value, on an S-curve. Each line lasts at least a sixth of the
+    contract (a month or more) so neighbouring work overlaps as on site. Signs, equipment
+    (ครุภัณฑ์) and handing over fall in the last month; ค่าใช้จ่ายพิเศษ runs evenly through every
+    month. The owner edits the per-cent afterwards."""
     months = max(1, int(months))
     res = compute_651(p)
     value = {id(r.item): r.reduced for r in res.rows}
-    groups = {}
     phases = plan_phases(p)
+    work, order = [], {id(it): k for k, it in enumerate(p.items)}
     for it, ov, base in phases:
-        groups.setdefault((ov[0] if ov else "", base[0]), []).append((it, ov, base))
-    building = sum(value.get(id(it), 0.0) for it, ov, _b in phases if ov is None)
-    whole = sum(value.get(id(it), 0.0) for it, _o, _b in phases) or 1.0
-    # external works wait for the building only when there is a building to wait for
-    ext_window = EXTERNAL[2] if building >= 0.25 * whole else (0.0, 0.96)
-    for (_ok, _bk), lines in groups.items():
-        ov, base = lines[0][1], lines[0][2]
-        a, b = base[2]
-        if ov is HANDOVER:
-            for it, _o, _b in lines:
-                it.plan = [0.0] * (months - 1) + [100.0]
-            continue
-        if ov is EXTERNAL:                     # the building order, squeezed into the external window
-            A, B = ext_window
-            a, b = A + a * (B - A), A + b * (B - A)
-        total = sum(value.get(id(it), 0.0) for it, _o, _b in lines) or 1.0
-        acc = 0.0
-        span = (b - a) * months
-        for it, _o, _b in lines:
-            v = value.get(id(it), 0.0)
-            c0, c1 = acc / total, (acc + v) / total
-            acc += v
-            lo, hi = a * months + c0 * span, a * months + c1 * span
-            if hi - lo < 1.0 and span >= 1.0:     # a line takes at least a month where the window allows
-                mid = (lo + hi) / 2
-                lo, hi = max(a * months, mid - 0.5), min(b * months, mid + 0.5)
-            it.plan = _spread(lo, hi, months)
+        if it.special:                    # ค่าใช้จ่ายพิเศษ: through the whole contract
+            it.plan = _spread(0.0, float(months), months)
+        elif ov is HANDOVER and months > 1:
+            it.plan = [0.0] * (months - 1) + [100.0]
+        else:
+            a, b = (EXTERNAL[2] if ov is EXTERNAL else base[2])
+            work.append(((a + b) / 2, order[id(it)], it))
+    work.sort(key=lambda w: (w[0], w[1]))
+    vals = [max(0.0, value.get(id(it), 0.0)) for _r, _o, it in work]
+    total = sum(vals)
+    if total <= 0:
+        vals, total = [1.0] * len(vals), float(len(vals) or 1)
+    dmin = min(float(months), max(1.0, months / 6.0))
+    acc = 0.0
+    for (_r, _o, it), v in zip(work, vals):
+        c0, c1 = acc / total, (acc + v) / total
+        acc += v
+        lo, hi = _s_time(c0) * months, _s_time(c1) * months
+        if hi - lo < dmin:
+            mid = (lo + hi) / 2
+            lo = min(max(0.0, mid - dmin / 2), months - dmin)
+            hi = lo + dmin
+        it.plan = _spread(lo, hi, months)
     p.months = months
     if not p.days:
         p.days = 30 * months

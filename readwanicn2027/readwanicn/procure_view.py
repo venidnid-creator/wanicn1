@@ -25,6 +25,12 @@ IMPORT_FILTER = ("ใบแจ้งปริมาณงาน (*.xls *.xlsx *.
 PROJECT_FILTER = "งานปรับลดราคา (*.rwprice.json);;ทุกไฟล์ (*)"
 
 
+REPORT_LABEL = {"651": "รายงาน ว651", "124": "รายงาน ว124", "work": "แผนปฏิบัติงาน", "78": "รายงาน ว78"}
+SHORT_LABEL = {"651": "ว651", "124": "ว124", "work": "แผนปฏิบัติงาน", "78": "ว78"}
+REPORT_NAME = {"651": "ว651 ปรับลดราคา", "124": "ว124 แผนการทำงาน", "work": "แผนปฏิบัติงาน",
+               "78": "ว78 แผนการใช้พัสดุในประเทศ"}
+
+
 def store_dir() -> Path:
     """Where the imported bills are kept (บันทึกข้อมูลไว้)."""
     base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation) or str(Path.home() / ".readwanicn")
@@ -99,10 +105,23 @@ class ThaiDateEdit(QWidget):
         cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
         cal.setStyleSheet("QCalendarWidget QAbstractItemView { color:#111; background:#ffffff;"
                           " selection-background-color:#1f78c8; selection-color:white; }"
-                          " QCalendarWidget QWidget#qt_calendar_navigationbar { background:#1f4e79; }"
-                          " QCalendarWidget QToolButton { color:white; font-weight:bold; }")
+                          " QCalendarWidget QWidget#qt_calendar_navigationbar { background:#1f4e79; min-height:34px; }"
+                          " QCalendarWidget QToolButton { color:white; background:transparent; border:none;"
+                          " font-size:12pt; font-weight:bold; padding:2px 8px; }"
+                          " QCalendarWidget QToolButton:hover { background:#2e75b6; border-radius:4px; }"
+                          " QCalendarWidget QToolButton::menu-indicator { image:none; width:0; }"
+                          " QCalendarWidget QSpinBox { color:#111; background:white; font-size:12pt; }"
+                          " QCalendarWidget QMenu { color:#111; background:white; }")
+        month = QLabel()                    # the month in Thai with the Buddhist year, large and clear
+        month.setAlignment(Qt.AlignCenter)
+        month.setStyleSheet("font-size:15pt; font-weight:bold; color:#1f4e79; background:#fff2cc;"
+                            " border-radius:6px; padding:4px 10px;")
+        v.addWidget(month)
+        show_month = lambda y, m: month.setText(f"{P.THAI_MONTHS[m - 1]} {y + 543}")  # noqa: E731
+        cal.currentPageChanged.connect(show_month)
         d = P.iso_date(self._iso) or dt.date.today()
         cal.setSelectedDate(QDate(d.year, d.month, d.day))
+        show_month(d.year, d.month)
         v.addWidget(cal)
         note = QLabel()
         v.addWidget(note)
@@ -347,15 +366,17 @@ class ProcureDialog(QDialog):
         self.report_buttons = {}
         for col, (kind, tip) in enumerate((("651", "แบบสรุปราคากลาง + ราคาที่ปรับลดทุกรายการ + เอกสารแนบท้ายสัญญา"),
                                            ("124", "แผนการทำงานรายเดือน + กราฟแผนงานสะสม + เกณฑ์ประเมิน"),
+                                           ("work", "แผนปฏิบัติงาน (Bar Chart) ทุกรายการ ช่องละครึ่งเดือน "
+                                                    "วันเริ่ม–สิ้นสุด — ใช้ข้อมูลเดียวกับแผน ว124"),
                                            ("78", "ภาคผนวก 1 พัสดุในประเทศ · ภาคผนวก 2 เหล็ก · ภาคผนวก 3 รายงานผล"))):
-            b = QPushButton(f"📄 รายงาน ว{kind}")
+            b = QPushButton(f"📄 {REPORT_LABEL[kind]}")
             b.setObjectName("Primary")
             b.setMinimumHeight(38)
             b.setToolTip(tip + " — บันทึกเป็น PDF และตารางคำนวณ (.xlsx)")
             b.clicked.connect(lambda _=False, k=kind: self.write_report(k))
-            c = QPushButton(f"🧾 CSV ว{kind}")
+            c = QPushButton(f"🧾 ตารางคำนวณ {SHORT_LABEL[kind]}")
             c.setMinimumHeight(34)
-            c.setToolTip(tip + " — บันทึกเป็นไฟล์ข้อมูล .csv เพื่อนำไปแก้ไข")
+            c.setToolTip(tip + " — ตารางคำนวณ (.xlsx) จัดหน้าพร้อมพิมพ์ A4 แล้ว แก้ไขได้ (เลือก .csv ได้)")
             c.clicked.connect(lambda _=False, k=kind: self.write_csv(k))
             row.addWidget(b, 0, col)
             row.addWidget(c, 1, col)
@@ -363,8 +384,8 @@ class ProcureDialog(QDialog):
         close = QPushButton("ปิด")
         close.setMinimumHeight(38)
         close.clicked.connect(self.accept)
-        row.addWidget(close, 0, 4, 2, 1)
-        row.setColumnStretch(3, 1)
+        row.addWidget(close, 0, 5, 2, 1)
+        row.setColumnStretch(4, 1)
         outer.addWidget(bar)
         if project is None:
             self._open_last()
@@ -605,8 +626,14 @@ class ProcureDialog(QDialog):
                               _num_item(sub_mid.get(i), bold=True, bg=bg), _num_item(sub_red.get(i), bold=True, bg=bg),
                               _item("", bg=bg)]
                 else:
+                    adj = bool(res) and i == res.adjust_row
+                    if adj:
+                        cells = [_item(it.no, Qt.AlignCenter, bg="#d9d9d9"), _item(name, bold=True, bg="#d9d9d9"),
+                                 _item(it.unit, Qt.AlignCenter, bg="#d9d9d9")]
+                        cells[1].setToolTip(R.adjust_note(res))
                     cells += [_num_item(it.qty), _num_item(r.cost), _num_item(r.factor, 4), _num_item(r.mid_up),
-                              _num_item(r.reduced, bg="#fff2cc"), _num_item(r.unit_price)]
+                              _num_item(r.reduced, bg="#d9d9d9" if adj else "#fff2cc", bold=adj),
+                              _num_item(r.unit_price, bg="#d9d9d9" if adj else None)]
                 for c, cell in enumerate(cells):
                     t.setItem(i, c, cell)
                 for c, flag in ((9, it.equip), (10, it.special)):
@@ -809,9 +836,9 @@ class ProcureDialog(QDialog):
             self.ask_prices()
             if not p.offer:
                 return
-        if kind == "124" and not any(it.plan for it in p.leaves):
+        if kind in ("124", "work") and not any(it.plan for it in p.leaves):
             self.build_plan()
-        names = {"651": "ว651 ปรับลดราคา", "124": "ว124 แผนการทำงาน", "78": "ว78 แผนการใช้พัสดุในประเทศ"}
+        names = REPORT_NAME
         start = self.settings.value("procure/out", str(Path.home() / "Documents"))
         default = Path(start) / f"{names[kind]} {safe_name(p.title)[:40]}.pdf"
         path, _ = QFileDialog.getSaveFileName(self, f"บันทึกรายงาน {names[kind]}", str(default), "PDF (*.pdf)")
@@ -838,22 +865,27 @@ class ProcureDialog(QDialog):
             self.ask_prices()
             if not p.offer:
                 return
-        if kind == "124" and not any(it.plan for it in p.leaves):
+        if kind in ("124", "work") and not any(it.plan for it in p.leaves):
             self.build_plan()
-        names = {"651": "ว651 ปรับลดราคา", "124": "ว124 แผนการทำงาน", "78": "ว78 แผนการใช้พัสดุในประเทศ"}
+        names = REPORT_NAME
         start = self.settings.value("procure/out", str(Path.home() / "Documents"))
-        default = Path(start) / f"{names[kind]} {safe_name(P.arabic(p.title))[:40]}.csv"
-        path, _ = QFileDialog.getSaveFileName(self, f"บันทึก CSV {names[kind]}", str(default),
-                                              "ไฟล์ข้อมูลคั่นด้วยจุลภาค (*.csv)")
+        default = Path(start) / f"{names[kind]} {safe_name(P.arabic(p.title))[:40]}.xlsx"
+        path, flt = QFileDialog.getSaveFileName(
+            self, f"บันทึกตารางคำนวณ {names[kind]}", str(default),
+            "ตารางคำนวณ จัดหน้าพร้อมพิมพ์ A4 (*.xlsx);;ไฟล์ข้อมูลคั่นด้วยจุลภาค ไม่มีการจัดหน้า (*.csv)")
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
+        if not path.lower().endswith((".xlsx", ".csv")):
+            path += ".csv" if "csv" in flt else ".xlsx"
         self.settings.setValue("procure/out", str(Path(path).parent))
-        files = R.write_csv(kind, p, path)
-        self.record(f"CSV {names[kind]}")
+        files = R.write_sheet(kind, p, path)
+        self.record(f"ตารางคำนวณ {names[kind]}")
         self.save_project(quiet=True)
-        QMessageBox.information(self, self.windowTitle(), "บันทึกไฟล์ CSV แล้ว:\n" + "\n".join(str(f) for f in files))
+        msg = "บันทึกแล้ว:\n" + "\n".join(str(f) for f in files)
+        if QMessageBox.question(self, self.windowTitle(), msg + "\n\nเปิดไฟล์เลยหรือไม่?") == QMessageBox.Yes:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(files[0])))
 
     def showEvent(self, e):
         """Fit the screen it opens on (laptops, 125–175 % scaling): never larger than the

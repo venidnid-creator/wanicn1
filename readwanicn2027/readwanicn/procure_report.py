@@ -29,6 +29,8 @@ class Cell:
     rowspan: int = 1
     indent: int = 0                # ระดับย่อหน้าของรายการ
     value: object = None           # ค่าตัวเลขสำหรับตารางคำนวณ
+    size: float = 0.0              # ขนาดตัวอักษรเฉพาะช่อง (0 = ตามตาราง)
+    digits: int = 2                # ทศนิยมในตารางคำนวณ
 
 
 @dataclass
@@ -84,13 +86,17 @@ def Q(x, digits=2, **kw) -> Cell:
     kw.setdefault("align", "right")
     if x is None or x == "":
         return Cell(text="", **kw)
-    return Cell(text=f"{x:,.{digits}f}", value=x, **kw)
+    return Cell(text=f"{x:,.{digits}f}", value=x, digits=digits, **kw)
 
 
 # -- HTML / PDF -----------------------------------------------------------------------------------
 
 def _cell_html(c: Cell, tag="td", width=None) -> str:
     style = [f"text-align:{c.align}"]
+    if isinstance(c.value, (int, float)) and not isinstance(c.value, bool):
+        style.append("white-space:nowrap")           # 4,900,000.00 never breaks over two lines
+    if c.size:
+        style.append(f"font-size:{c.size}pt")
     if c.bold:
         style.append("font-weight:bold")
     if c.indent:
@@ -245,78 +251,174 @@ def number_pages(path, footer: bool = True) -> None:
 
 # -- spreadsheet ------------------------------------------------------------------------------------
 
-def to_xlsx(reports: list, path, family: str = "TH SarabunPSK") -> None:
+XLSX_FONT = "TH SarabunPSK"
+PAGE_CHARS = {False: 112.0, True: 168.0}      # column-width units across an A4 page (portrait / landscape)
+
+
+def _visible_len(t: str) -> int:
+    """Characters that take room on the line (Thai vowel and tone marks above/below do not)."""
+    import unicodedata
+    return sum(1 for ch in str(t) if not unicodedata.combining(ch) and ch not in "\u0e31\u0e34\u0e35\u0e36\u0e37"
+               "\u0e38\u0e39\u0e3a\u0e47\u0e48\u0e49\u0e4a\u0e4b\u0e4c\u0e4d")
+
+
+def _lines_needed(text: str, width_units: float, size: float) -> int:
+    per = max(1.0, width_units * 12.0 / max(size, 6.0))       # on the safe side: TH Sarabun or a wider font
+    n = 0
+    for part in str(text).split("\n"):
+        n += max(1, -(-_visible_len(part) // int(per)))
+    return n
+
+
+def to_xlsx(reports: list, path, family: str = XLSX_FONT) -> None:
+    """Every report as a sheet ready to print on A4 as it is: paper, orientation, margins and
+    fit-to-width set; column widths from the report's table; long names wrapped with the row
+    heights to match; the table header repeated on every page; page numbers in the footer;
+    the S-curve of ว124 as a picture."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.pagebreak import Break
     wb = Workbook()
     wb.remove(wb.active)
     thin = Side(style="thin", color="555555")
     box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    horiz = {"center": "center", "right": "right"}
     for rep in reports:
         ws = wb.create_sheet(rep.title[:31])
-        ws.page_setup.orientation = "landscape" if rep.landscape else "portrait"
-        ws.page_setup.paperSize = ws.PAPERSIZE_A4
-        ws.page_setup.fitToWidth = 1
-        ws.page_setup.fitToHeight = 0
+        ps = ws.page_setup
+        ps.orientation = "landscape" if rep.landscape else "portrait"
+        ps.paperSize = ws.PAPERSIZE_A4
+        ps.fitToWidth, ps.fitToHeight = 1, 0
         ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.print_options.horizontalCentered = True
+        ws.page_margins.left = ws.page_margins.right = 0.4
+        ws.page_margins.top, ws.page_margins.bottom = 0.5, 0.55
+        ws.page_margins.header, ws.page_margins.footer = 0.2, 0.25
+        ws.oddFooter.right.text = "หน้า &P/&N"
+        ws.oddFooter.right.size = 9
+        if rep.footer:
+            ws.oddFooter.left.text = DEVELOPER_LINE
+            ws.oddFooter.left.size = 8
+        ws.sheet_view.showGridLines = False
+        tables = [b for b in rep.blocks if isinstance(b, Table)]
+        main = max(tables, key=lambda t: (len(t.body) + len(t.head), len(t.widths))) if tables else None
+        page = PAGE_CHARS[rep.landscape]
+
+        def cuts(t: Table) -> list:
+            tot_ = sum(t.widths) or 1
+            x, out = 0.0, []
+            for w in t.widths:
+                x += w * page * t.width_pct / 100.0 / tot_
+                out.append(x)
+            return out
+        # one grid for the whole sheet: every table's column edges (close ones merged), so each
+        # table keeps its own columns as merged cells
+        marks = sorted({0.0, *[round(x, 1) for t in tables for x in cuts(t)]}) if tables else \
+            [page / 6 * k for k in range(7)]
+        edges = [marks[0]]
+        for x in marks[1:]:
+            if x - edges[-1] >= 1.5:
+                edges.append(x)
+            else:
+                edges[-1] = max(edges[-1], x) if len(edges) > 1 else edges[-1]
+        grid = [b_ - a_ for a_, b_ in zip(edges, edges[1:])] or [page]
+        ncols = len(grid)
+        for i, w in enumerate(grid):
+            ws.column_dimensions[get_column_letter(i + 1)].width = round(w, 2)
+
+        def spans(t: Table) -> list:
+            """Grid columns of each column of table t."""
+            out, prev = [], 0
+            for x in cuts(t):
+                end = min(range(len(edges)), key=lambda k: abs(edges[k] - x))
+                end = min(max(end, prev + 1), ncols)
+                out.append((min(prev, ncols - 1), end - 1))
+                prev = end
+            return out
+
+        def width_of(c0, c1):
+            return sum(grid[c0:c1 + 1])
+
         r = 1
-        ncols = max([len(b.widths) for b in rep.blocks if isinstance(b, Table)] or [6])
-        widths_set = False
-        for b in rep.blocks:
-            if b == "pagebreak":
-                from openpyxl.worksheet.pagebreak import Break
+        for blk in rep.blocks:
+            if blk == "pagebreak":
                 ws.row_breaks.append(Break(id=r - 1))
                 continue
-            if isinstance(b, Para):
-                c = ws.cell(r, 1, b.text)
-                c.font = Font(name=family, size=b.size + 1, bold=b.bold)
-                c.alignment = Alignment(horizontal={"center": "center", "right": "right"}.get(b.align, "left"),
-                                        vertical="center")
-                if b.align == "center":
+            if isinstance(blk, Para):
+                c = ws.cell(r, 1, blk.text if blk.text.strip() else None)
+                size = blk.size + 2
+                c.font = Font(name=family, size=size, bold=blk.bold)
+                c.alignment = Alignment(horizontal=horiz.get(blk.align, "left"), vertical="center", wrap_text=True)
+                if ncols > 1:
                     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncols)
+                n = _lines_needed(blk.text, width_of(0, ncols - 1), size) if blk.text.strip() else 1
+                ws.row_dimensions[r].height = max(8, size * 1.45 * n) if blk.text.strip() else 6
                 r += 1
                 continue
-            if isinstance(b, Chart):
-                r += 1
+            if isinstance(blk, Chart):
+                try:
+                    import tempfile
+
+                    from openpyxl.drawing.image import Image as XImage
+                    tmp = Path(tempfile.mkdtemp()) / f"{blk.name}"
+                    blk.image.save(str(tmp))
+                    img = XImage(str(tmp))
+                    scale = width_of(0, ncols - 1) * 7.0 * blk.width_pct / 100.0 / img.width
+                    img.width, img.height = img.width * scale, img.height * scale
+                    ws.add_image(img, f"{get_column_letter(max(1, int(ncols * (1 - blk.width_pct / 100) / 2)))}{r}")
+                    rows_ = int(img.height / 20) + 1
+                    for k_ in range(rows_):
+                        ws.row_dimensions[r + k_].height = 15
+                    r += rows_ + 1
+                except Exception:                  # no picture support: leave the space
+                    r += 1
                 continue
-            if not widths_set:
-                tot = sum(b.widths) or 1
-                for i, w in enumerate(b.widths):
-                    ws.column_dimensions[get_column_letter(i + 1)].width = max(6, w * 160 / tot)
-                widths_set = True
+            sp = spans(blk)
+            size = blk.font_pt + 3
+            first = r
             taken = set()
-            for kind, rows in (("head", b.head), ("body", b.body)):
+            for kind, rows in (("head", blk.head), ("body", blk.body)):
                 for row in rows:
-                    col = 1
+                    col, need = 0, 1
                     for cell in row:
                         while (r, col) in taken:
                             col += 1
-                        v = cell.value if cell.value is not None else cell.text
+                        if col >= len(sp):
+                            break
+                        last = min(len(sp) - 1, col + cell.colspan - 1)
+                        g0, g1 = sp[col][0], sp[last][1]
+                        v = cell.value if cell.value is not None else (cell.text or None)
                         if isinstance(v, str) and cell.indent:
                             v = "   " * cell.indent + v
-                        c = ws.cell(r, col, v)
-                        c.font = Font(name=family, size=b.font_pt + 3, bold=cell.bold or kind == "head")
-                        c.alignment = Alignment(horizontal={"center": "center", "right": "right"}.get(
-                            cell.align, "left"), vertical="center", wrap_text=kind == "head")
-                        c.border = box
-                        if isinstance(cell.value, float):
-                            c.number_format = "#,##0.00"
-                        bg = cell.bg or (SHADE if kind == "head" else "")
+                        c = ws.cell(r, g0 + 1, v)
+                        csize = (cell.size or blk.font_pt) + 3
+                        c.font = Font(name=family, size=csize, bold=cell.bold or kind == "head")
+                        is_num = isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool)
+                        c.alignment = Alignment(horizontal=horiz.get(cell.align, "left"), vertical="center",
+                                                wrap_text=not is_num, shrink_to_fit=is_num)
+                        if is_num:
+                            c.number_format = "#,##0" if cell.digits == 0 else "#,##0." + "0" * cell.digits
+                        bg = cell.bg or (SHADE if kind == "head" and blk.border else "")
                         if bg:
                             c.fill = PatternFill("solid", fgColor=bg.lstrip("#"))
-                        if cell.colspan > 1 or cell.rowspan > 1:
-                            ws.merge_cells(start_row=r, start_column=col, end_row=r + cell.rowspan - 1,
-                                           end_column=col + cell.colspan - 1)
-                            for rr in range(r, r + cell.rowspan):
-                                for cc in range(col, col + cell.colspan):
-                                    taken.add((rr, cc))
-                                    ws.cell(rr, cc).border = box
-                        col += cell.colspan
+                        rspan = max(1, cell.rowspan)
+                        if g1 > g0 or rspan > 1:
+                            ws.merge_cells(start_row=r, start_column=g0 + 1, end_row=r + rspan - 1, end_column=g1 + 1)
+                        for rr in range(r, r + rspan):
+                            for cc in range(col, last + 1):
+                                taken.add((rr, cc))
+                            if blk.border:
+                                for gc in range(g0, g1 + 1):
+                                    ws.cell(rr, gc + 1).border = box
+                        if not is_num and cell.text and rspan == 1:
+                            need = max(need, _lines_needed(cell.text, width_of(g0, g1), csize))
+                        col = last + 1
+                    ws.row_dimensions[r].height = max(14, size * 1.5 * need)
                     r += 1
+            if blk is main and blk.head:
+                ws.print_title_rows = f"{first}:{first + len(blk.head) - 1}"
             r += 1
-        if rep.footer:
-            ws.cell(r + 1, 1, DEVELOPER_LINE).font = Font(name=family, size=10, color="777777")
     wb.save(str(path))
 
 
@@ -371,6 +473,14 @@ def write_csv(kind: str, p: P.Project, csv_path) -> list:
     return to_csv(REPORTS[kind](p), csv_path)
 
 
+def write_sheet(kind: str, p: P.Project, path) -> list:
+    """The report as a spreadsheet ready to print on A4 (.xlsx), or as plain CSV for a .csv path."""
+    if str(path).lower().endswith(".csv"):
+        return write_csv(kind, p, path)
+    to_xlsx(REPORTS[kind](p), path)
+    return [Path(path)]
+
+
 # -- common pieces ---------------------------------------------------------------------------------
 
 def _work_name(p: P.Project) -> str:
@@ -418,6 +528,18 @@ def _group_name(it: P.Item) -> str:
     if it.code and name.startswith(it.code):
         name = name[len(it.code):].lstrip(". ")
     return name
+
+
+def adjust_note(res) -> str:
+    """Which line took the satang the even spread left over (แรเงาสีเทาในตาราง)."""
+    if res.adjust_row < 0:
+        return "การปรับลดลงตัวทุกรายการ ไม่มีส่วนต่างที่ต้องปรับ"
+    r = res.rows[res.adjust_row]
+    k = sum(1 for x in res.rows[:res.adjust_row + 1] if not x.item.header)
+    no = P.arabic(r.item.no or r.item.code) or str(k)
+    way = "เพิ่ม" if r.adjusted > 0 else "ลด"
+    return (f"ส่วนต่างที่เกลี่ยไม่ลงตัว {abs(r.adjusted):,.2f} บาท ปรับ{way}ในลำดับที่ {no} "
+            f"«{P.arabic(r.item.label)}» (แรเงาสีเทา)")
 
 
 def report_651(p: P.Project) -> list:
@@ -509,11 +631,13 @@ def report_651(p: P.Project) -> list:
                 row += [C(""), C(""), N(sub["mid"].get(i))] + ([N(sub["mid_up"].get(i))] if south else []) \
                     + [N(sub["reduced"].get(i)), C("")]
         elif kind == "line":
-            row = [C(it.no or "", align="center"), C(it.label, indent=max(0, it.level - 1)),
+            adj = i == res.adjust_row
+            row = [C(it.no or "", align="center", bg=GREY if adj else ""),
+                   C(it.label + (" (*)" if adj else ""), indent=max(0, it.level - 1), bg=GREY if adj else ""),
                    C(it.unit, align="center"), Q(it.qty), N(r.cost), Q(r.factor, 4, align="center"), N(r.mid)]
             if south:
                 row.append(N(r.mid_up))
-            row += [N(r.reduced), N(r.unit_price)]
+            row += [N(r.reduced, bg=GREY if adj else "", bold=adj), N(r.unit_price, bg=GREY if adj else "")]
         else:
             name = f"รวม {_group_name(it)}" if it.level == 1 else f"รวม{_group_name(it)}"
             row = [C(""), C(name, bold=True, align="right" if it.level == 1 else "left",
@@ -527,10 +651,11 @@ def report_651(p: P.Project) -> list:
     body.append([C("วงเงินรวม", align="right", colspan=ncol - 1)]
                 + [N(res.mid_up_total if south else res.mid_total)]
                 + [N(res.reduced_total, bold=True, bg=GREY), C("(*)", align="left")])
-    a.blocks.append(Table(head, body, [6, 38, 7, 8, 12, 8, 12] + ([12] if south else []) + [12, 10], 8.5))
+    a.blocks.append(Table(head, body, [5, 33, 6, 8, 12.5, 7, 12.5] + ([13] if south else []) + [14, 11], 8.5))
     a.p("หมายเหตุ  (*) ส่วนต่างนี้ให้ปรับเพิ่ม/ลด ในรายการใดรายการหนึ่งได้ตามความเหมาะสม ยกเว้น "
         "รายการค่าใช้จ่ายพิเศษตามข้อกำหนด\n             ทั้งนี้ วงเงินรวมของการปรับลดราคาจะต้องเท่ากับ"
         "ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง", size=9.5)
+    a.p("             " + adjust_note(res), size=9.5, bold=True)
 
     # สิ่งที่ส่งมาด้วย 2: เอกสารแนบท้ายสัญญา
     b = Report("ว651 แนบท้ายสัญญา", footer=False)
@@ -658,12 +783,13 @@ def report_124(p: P.Project) -> list:
     rep.p(_project_line(p), align="center", size=11.5)
     rep.p(f"ระยะเวลาก่อสร้างตามแผนดำเนินงานทั้งสัญญา {n} เดือน ({sum(plan.days)} วัน)"
           + (f" เริ่ม {P.thai_date(p.start)}" if p.start else ""), align="center", size=11.5)
-    fs = 9.5 if n <= 8 else 8.5 if n <= 12 else 7.0
+    fs = 9.0 if n <= 8 else 8.0 if n <= 12 else 6.5
     head = [[C("ที่", align="center", rowspan=2), C("รายการ", align="center", rowspan=2),
              C("หน่วย", align="center", rowspan=2), C("ปริมาณงาน", align="center", rowspan=2),
              C("ราคาต่อหน่วย", align="center", rowspan=2), C("เป็นเงิน", align="center", rowspan=2),
              C("%", align="center", rowspan=2)] + [C(f"เดือนที่ {m + 1}", align="center") for m in range(n)],
-            [C(plan.labels[m] if plan.labels else f"{d} วัน", align="center") for m, d in enumerate(plan.days)]]
+            [C(plan.labels[m] if plan.labels else f"{d} วัน", align="center", bold=True, bg="#fff2cc")
+             for m, d in enumerate(plan.days)]]
     lines = {id(it): (a, pc, pl) for it, a, pc, pl in plan.lines}
     res = P.compute_651(p)
     body = []
@@ -685,15 +811,17 @@ def report_124(p: P.Project) -> list:
                 + [C("") for _m in range(n)])
 
     def line(name, vals, money_=False, bold=False):
+        small = fs - (1.5 if n > 6 else 0.5)          # the baht of a month fits its column on one line
         return [C(name, align="right", bold=True, colspan=7)] + [
-            (Q(v, 0, bold=bold) if money_ else Q(v, 2, bold=bold)) if v is not None else C("") for v in vals]
+            (Q(v, 0, bold=bold, size=small) if money_ else Q(v, 2, bold=bold)) if v is not None else C("")
+            for v in vals]
     half = [v / 2 for v in plan.pct_plan]
     half_diff = [(a_ - h) if a_ is not None else None for a_, h in zip(plan.actual, half)]
     body += [line("Money", plan.money, True), line("AccMoney", plan.acc_money, True),
              line("% PLAN", plan.pct_plan), line("% ACC PLAN", plan.acc_plan, bold=True),
              line("% ACTUAL", plan.actual), line("% ACC ACTUAL", plan.acc_actual, bold=True),
              line("% ACC DIFF", plan.diff), line("% PLAN/2", half), line("% PLAN/2 DIFF", half_diff)]
-    widths = [3, 26, 4.5, 6, 7, 9.5, 5.5] + [max(4.5, 48.0 / n)] * n
+    widths = [3, 21, 4.5, 6, 7, 9.5, 5] + [max(4.5, 54.0 / n)] * n
     rep.blocks.append(Table(head, body, widths, fs))
     rep.blocks.append(Chart(s_curve(plan), "scurve.png", 80))
     rep.p("เกณฑ์การประเมินผลการทำงาน (ว124 ข้อ 2.2)", bold=True, size=12)
@@ -718,9 +846,7 @@ def report_124(p: P.Project) -> list:
     ]
     for t in notes:
         rep.p(t, size=10.5, bold=t == "หมายเหตุ")
-    rep.p("ลงชื่อ ................................................ (คู่สัญญาฝ่ายผู้รับจ้าง)", align="right", size=12)
-    rep.p(f"({p.signer or p.contractor or '................................................'})", align="right",
-          size=12)
+    _sign(rep, "คู่สัญญาฝ่ายผู้รับจ้าง", p.signer or p.contractor)
     rep.p("ตามหนังสือคณะกรรมการวินิจฉัยฯ ที่ กค (กวจ) 0405.2/ว124 — แผนการทำงานถือเป็นเอกสารส่วนหนึ่งของสัญญา",
           size=10)
     return [rep]
@@ -827,12 +953,106 @@ def report_78(p: P.Project) -> list:
 
 
 def _sign(rep: Report, role: str, name: str):
+    """ลงชื่อ / (ชื่อ) / ตำแหน่ง centred one under the other in the right half of the page."""
     rep.p(" ", size=8)
-    rep.p(f"ลงชื่อ ................................................ ({role})", align="right", size=12)
-    rep.p(f"({name or '................................................'})", align="right", size=12)
+    line = "." * 52
+    rows = [[C(""), C(f"ลงชื่อ {line}", align="center")],
+            [C(""), C(f"({P.arabic(name) or line})", align="center")],
+            [C(""), C(role, align="center")]]
+    rep.blocks.append(Table([], rows, [45, 55], 12, border=0))
 
 
-REPORTS = {"651": report_651, "124": report_124, "78": report_78}
+# -- แผนปฏิบัติงาน (Bar Chart) ----------------------------------------------------------------------
+
+BAR = "#2e75b6"
+
+
+def bar_halves(plan: list) -> list:
+    """Which half-months a line works in, from its per-cent per month: the first month of a line
+    that starts late takes only its second half, the last month of one that ends early only its
+    first half (a month counts as full at ¾ of the line's average month)."""
+    on = [m for m, v in enumerate(plan) if v > 0]
+    halves = [False] * (2 * len(plan))
+    if not on:
+        return halves
+    full = 100.0 / len(on)
+    for m in on:
+        halves[2 * m] = halves[2 * m + 1] = True
+    if len(on) > 1:
+        if plan[on[0]] < 0.75 * full:
+            halves[2 * on[0]] = False
+        if plan[on[-1]] < 0.75 * full:
+            halves[2 * on[-1] + 1] = False
+    return halves
+
+
+def report_work(p: P.Project) -> list:
+    """แผนปฏิบัติงาน: every line of the bill as a bar over the half-months it works in, with its
+    start and end dates and days, from the same plan as ว124 (so the work and the money agree)."""
+    import datetime as dt
+    plan = P.compute_124(p)
+    n = plan.months
+    rep = Report("แผนปฏิบัติงาน", landscape=True)
+    rep.p("แผนปฏิบัติงาน (Bar Chart)", align="center", bold=True, size=15)
+    rep.p(_project_line(p), align="center", size=11.5)
+    start = P.iso_date(p.start)
+    days_total = sum(plan.days)
+    rep.p(f"ระยะเวลาก่อสร้าง {days_total} วัน ({n} เดือน)"
+          + (f"  เริ่ม {P.thai_date(p.start)}  สิ้นสุด "
+             f"{P.thai_date((start + dt.timedelta(days=days_total - 1)).isoformat())}" if start else ""),
+          align="center", size=11.5)
+    cum = [0]
+    for d in plan.days:
+        cum.append(cum[-1] + d)
+    head = [[C("ที่", align="center", rowspan=2), C("รายการ", align="center", rowspan=2),
+             C("ปริมาณ", align="center", rowspan=2), C("หน่วย", align="center", rowspan=2),
+             C("เริ่ม", align="center", rowspan=2), C("สิ้นสุด", align="center", rowspan=2),
+             C("วัน", align="center", rowspan=2)]
+            + [C(f"เดือนที่ {m + 1}", align="center", colspan=2) for m in range(n)],
+            [C(plan.labels[m] if plan.labels else f"{plan.days[m]} วัน", align="center", colspan=2, bold=True,
+               bg="#fff2cc") for m in range(n)]]
+    lines = {id(it): pl for it, _a, _pc, pl in plan.lines}
+    res = P.compute_651(p)
+    body, k = [], 0
+    fs = 8.5 if n <= 8 else 7.5 if n <= 12 else 6.5
+
+    def day_of(half):                      # first day (0-based) of a half-month
+        m, h = divmod(half, 2)
+        return cum[m] + (plan.days[m] // 2 if h else 0)
+
+    def date(d):
+        if not start:
+            return f"วันที่ {d + 1}"
+        x = start + dt.timedelta(days=d)
+        return f"{x.day} {P.THAI_MONTHS_SHORT[x.month - 1]} {str(x.year + 543)[2:]}"
+    for r in res.rows:
+        it = r.item
+        if it.header:
+            body.append([C(""), _name_cell(it), C(""), C(""), C(""), C(""), C("")]
+                        + [C("") for _h in range(2 * n)])
+            continue
+        k += 1
+        halves = bar_halves(lines[id(it)])
+        on = [h for h, v in enumerate(halves) if v]
+        if on:
+            d0, d1 = day_of(on[0]), day_of(on[-1] + 1) - 1 if on[-1] + 1 < 2 * n else days_total - 1
+            when = [C(date(d0), align="center"), C(date(d1), align="center"), C(d1 - d0 + 1, align="center")]
+        else:
+            when = [C(""), C(""), C("")]
+        body.append([C(k, align="center"), C(it.label, indent=max(0, it.level - 1)), Q(it.qty),
+                     C(it.unit, align="center")] + when
+                    + [C("", bg=BAR if v else "") for v in halves])
+    acc = [C("แผนงานสะสม (%)", align="right", bold=True, colspan=7)] + [
+        Q(v, 2, bold=True, align="center", colspan=2) for v in plan.acc_plan]
+    body.append(acc)
+    rep.blocks.append(Table(head, body, [3, 27, 6, 4.5, 6.5, 6.5, 3.5] + [max(2.2, 44.0 / (2 * n))] * (2 * n), fs))
+    rep.p("หมายเหตุ  แถบสีน้ำเงิน คือ ช่วงเวลาทำงานของแต่ละรายการ (ช่องละครึ่งเดือน) จัดลำดับก่อน–หลังตามขั้นตอนการก่อสร้าง "
+          "และสอดคล้องกับแผนการทำงาน ว124 (มูลค่างานทุกเดือน)", size=10)
+    _sign(rep, "ผู้รับจ้าง", p.signer or p.contractor)
+    return [rep]
+
+
+REPORTS = {"651": report_651, "124": report_124, "78": report_78, "work": report_work}
 
 
 def write(kind: str, p: P.Project, pdf_path, family: str, xlsx: bool = True) -> list:

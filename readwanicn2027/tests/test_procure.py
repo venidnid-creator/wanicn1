@@ -359,3 +359,73 @@ def test_csv_and_arabic_digits(app, tmp_path):
     for kind, n in (("124", 1), ("78", 3)):
         assert len(R.write_csv(kind, p, tmp_path / f"w{kind}.csv")) == n
     assert "๓" not in R.to_html(R.report_651(p)[0], "Laksaman")
+
+
+def _road():
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    L = lambda c, n, u, q, cost, **k: P.Item(n, u, q, cost=cost, code=c, level=c.count(".") + 1, **k)  # noqa
+    H = lambda c, n: P.Item(n, header=True, code=c, level=c.count(".") + 1)  # noqa
+    items = [H("1", "งานทาง"), L("1.1", "งานถางป่าขุดตอ", "ตร.ม.", 2880, 5800), L("1.2", "งานตัดดิน", "ลบ.ม.", 180, 9700),
+             L("1.3", "งานพื้นทางหินคลุก", "ลบ.ม.", 406, 550000), L("1.4", "งานลาดแอสฟัลต์ไพรม์โค้ต", "ตร.ม.", 2587, 125000),
+             L("1.5", "งานชั้นผิวทางแอสฟัลต์คอนกรีต", "ตร.ม.", 2541, 1120000), L("1.6", "งานตีเส้นจราจร", "ตร.ม.", 142, 43000),
+             H("2", "งานสะพาน"), L("2.1", "ค่าตัดและสกัดหัวเสาเข็ม", "ต้น", 10, 3950),
+             L("2.2", "งานเสาตอม่อ+คาน+กำแพงกันดิน", "SET", 2, 165000),
+             L("2.3", "คานสะพานอัดแรง Plank Girder", "คาน", 8, 229000), L("2.4", "ราวสะพาน คสล.", "เมตร", 16, 38000),
+             L("3", "งานป้ายประชาสัมพันธ์โครงการ", "ป้าย", 1, 2620),
+             L("4", "ค่าใช้จ่ายพิเศษตามข้อกำหนดฯ", "", 1, 14445, special=True)]
+    p = P.Project(items=items, factor=1.2655, work_type="road")
+    p.mid_price = P.r2(sum(i.cost for i in items if not i.header and not i.special) * 1.2655) + 14445
+    p.offer, p.start = 2_700_000, "2026-11-20"
+    return p
+
+
+def test_plan_has_work_in_every_month_in_road_order():
+    p = _road()
+    P.auto_plan(p, 8)
+    plan = P.compute_124(p)
+    assert all(m > 0 for m in plan.money)                        # money in every month of the contract
+    assert abs(plan.acc_plan[-1] - 100) < 1e-6 and not plan.bad_lines
+    first = {it.code: next(m for m, v in enumerate(it.plan) if v > 0) for it in p.leaves}
+    assert first["1.1"] == 0 and first["1.2"] <= first["1.3"] <= first["1.4"] <= first["1.5"] <= first["1.6"]
+    assert first["2.1"] <= first["2.2"] <= first["2.3"] <= first["2.4"]
+    assert next(i for i in p.leaves if i.code == "3").plan[-1] == 100.0
+    assert all(abs(v - 12.5) < 0.01 for v in next(i for i in p.leaves if i.code == "4").plan)
+    k = next(c for w, c, _a, _n in plan.checks if "1 ใน 2" in w)
+    assert plan.acc_plan[k] >= 25
+
+
+def test_651_adjusted_line_grey_and_noted(app):
+    from readwanicn import procure_report as R
+    p = _road()
+    res = P.compute_651(p)
+    assert res.adjust_row >= 0
+    note = R.adjust_note(res)
+    assert "ลำดับที่" in note and "แรเงาสีเทา" in note
+    a = R.report_651(p)[0]
+    texts = [b.text for b in a.blocks if isinstance(b, R.Para)]
+    assert any("ลำดับที่" in t for t in texts)
+    rows = [row for b in a.blocks if isinstance(b, R.Table) for row in b.body]
+    assert any(any(c.bg == R.GREY and "(*)" in c.text for c in row) for row in rows)
+
+
+def test_work_plan_and_a4_sheets(app, tmp_path):
+    from openpyxl import load_workbook
+
+    from readwanicn import procure_report as R
+    p = _road()
+    P.auto_plan(p, 8)
+    rep = R.report_work(p)[0]
+    table = next(b for b in rep.blocks if isinstance(b, R.Table))
+    assert len(table.head[0]) == 7 + 8 and len(table.head[1]) == 8
+    bars = [c for row in table.body for c in row if c.bg == R.BAR]
+    assert bars
+    assert R.bar_halves([0, 30, 70, 0]) == [False, False, False, True, True, True, False, False]
+    for kind in ("651", "124", "work", "78"):
+        f = R.write_sheet(kind, p, tmp_path / f"{kind}.xlsx")[0]
+        wb = load_workbook(f)
+        for ws in wb.worksheets:
+            assert int(ws.page_setup.paperSize) == 9 and ws.sheet_properties.pageSetUpPr.fitToPage
+            assert ws.page_setup.fitToWidth == 1
+    assert R.write_sheet("651", p, tmp_path / "x.csv")[0].suffix == ".csv"
+    assert R.write("work", p, tmp_path / "work.pdf", "Laksaman")[0].exists()
