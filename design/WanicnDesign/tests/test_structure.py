@@ -83,3 +83,26 @@ def test_heavy_building_upsizes_piles():
     b.foundation = Foundation(pile="I18")
     res = design(b)
     assert any(f.pile != "I18" or f.piles > 1 for f in res.footings)
+
+
+def test_removing_a_beam_opens_its_panels():
+    b = Building.load(BUILDING)
+    full = design(b)
+    assert b.toggle("beam", "FL2:2A-2B") is False      # removed
+    assert (0, 0) not in b.panels("FL2") and (1, 0) not in b.panels("FL2")
+    assert (0, 0) in b.panels("ROOF")                  # other levels untouched
+    res = design(b)
+    assert len([s for s in res.slabs if s.level == "FL2"]) == \
+        len([s for s in full.slabs if s.level == "FL2"]) - 2
+    assert not any(x.level == "FL2" and x.span == "2A-2B" for x in res.beams)
+    assert b.toggle("beam", "FL2:2A-2B") is True       # restored
+
+
+def test_removing_a_column_and_a_panel():
+    b = Building.load(BUILDING)
+    b.toggle("node", "4C")
+    b.toggle("panel", "FL2:1-2/A-B")
+    res = design(b)
+    assert not any(c.node == "4C" for c in res.columns)
+    assert not any(s.panel == "1-2/A-B" and s.level == "FL2" for s in res.slabs)
+    assert res.ok, res.warnings

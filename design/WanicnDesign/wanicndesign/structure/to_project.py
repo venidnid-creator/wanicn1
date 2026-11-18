@@ -37,14 +37,14 @@ def to_project(res: DesignResult) -> Project:
         if li + 1 >= len(b.levels) or lv.walls == "none":
             continue
         above = b.levels[li + 1]
-        for _d, run in b.beam_lines():
+        for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
-                if lv.walls == "all" or b.is_perimeter(a, c):
+                if lv.walls == "all" or b.is_perimeter(a, c, lv.name):
                     length = abs(b.xs[c[0]] - b.xs[a[0]]) + abs(b.ys[c[1]] - b.ys[a[1]])
                     p.walls.append(Wall(f"ผนัง {lv.name} {b.node_name(*a)}-{b.node_name(*c)}", lv.name,
                                         length, above.elevation - lv.elevation, b.column_width,
                                         above.beam_depth, lv.wall_type, "M2",
-                                        "P1" if b.is_perimeter(a, c) else "P0"))
+                                        "P1" if b.is_perimeter(a, c, lv.name) else "P0"))
     if res.roof:
         r = res.roof
         cover = b.roof.cover if b.roof.cover in ("concrete_tile", "metal_sheet", "ceramic_tile") \

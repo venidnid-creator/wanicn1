@@ -68,6 +68,8 @@ class Building:
     column_width: float = 0.20
     column_depth: float = 0.20
     skip_nodes: list = field(default_factory=list)  # e.g. ["4C"] — no column there
+    skip_beams: list = field(default_factory=list)  # e.g. ["FL2:1A-2A"] — no beam on that level
+    skip_panels: list = field(default_factory=list)  # e.g. ["FL2:1-2/A-B"] — opening, no slab
     roof: Roof = field(default_factory=Roof)
     foundation: Foundation = field(default_factory=Foundation)
     fc_prime: float = 210.0
@@ -108,48 +110,65 @@ class Building:
             self.node_name(i, j) not in {s.upper() for s in self.skip_nodes}
 
     # -- auto-generated elements -------------------------------------------------
-    def beam_lines(self):
-        """Every beam line as a list of consecutive nodes: X-direction lines
-        (along each Y gridline) then Y-direction lines. A missing node
-        breaks the line into separate continuous beams."""
+    def beam_key(self, level: str, a, c) -> str:
+        a, c = sorted([a, c], key=lambda n: (n[1], n[0]))
+        return f"{level}:{self.node_name(*a)}-{self.node_name(*c)}"
+
+    def has_beam(self, level, a, c) -> bool:
+        if not (self.has_node(*a) and self.has_node(*c)):
+            return False
+        return level is None or self.beam_key(level, a, c) not in set(self.skip_beams)
+
+    def beam_lines(self, level: str | None = None):
+        """Every beam line on ``level`` as a list of consecutive nodes:
+        X-direction lines (along each Y gridline) then Y-direction lines.
+        A missing column or a removed beam breaks the line."""
         lines = []
-        for j in range(len(self.ys)):
-            run = []
-            for i in range(len(self.xs)):
-                if self.has_node(i, j):
-                    run.append((i, j))
-                else:
-                    if len(run) > 1:
-                        lines.append(("x", run))
-                    run = []
-            if len(run) > 1:
-                lines.append(("x", run))
-        for i in range(len(self.xs)):
-            run = []
-            for j in range(len(self.ys)):
-                if self.has_node(i, j):
-                    run.append((i, j))
-                else:
-                    if len(run) > 1:
-                        lines.append(("y", run))
-                    run = []
-            if len(run) > 1:
-                lines.append(("y", run))
+        nx, ny = len(self.xs), len(self.ys)
+        for direction, outer, inner in (("x", ny, nx), ("y", nx, ny)):
+            for o in range(outer):
+                run = []
+                for k in range(inner):
+                    node = (k, o) if direction == "x" else (o, k)
+                    if not self.has_node(*node):
+                        if len(run) > 1:
+                            lines.append((direction, run))
+                        run = []
+                        continue
+                    if run and not self.has_beam(level, run[-1], node):
+                        if len(run) > 1:
+                            lines.append((direction, run))
+                        run = []
+                    run.append(node)
+                if len(run) > 1:
+                    lines.append((direction, run))
         return lines
 
-    def panels(self):
-        """Slab panels: every grid bay whose four corners have columns."""
+    def panel_key(self, level: str, i: int, j: int) -> str:
+        return f"{level}:{self.x_name(i)}-{self.x_name(i + 1)}/{self.y_name(j)}-{self.y_name(j + 1)}"
+
+    def panels(self, level: str | None = None):
+        """Slab panels: grid bays whose four corners have columns and, on a
+        given level, whose four edge beams exist and which are not removed."""
         out = []
+        skip = set(self.skip_panels)
         for j in range(len(self.ys) - 1):
             for i in range(len(self.xs) - 1):
-                if all(self.has_node(a, b) for a, b in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))):
-                    out.append((i, j))
+                c = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)]
+                if not all(self.has_node(*n) for n in c):
+                    continue
+                if level is not None:
+                    if self.panel_key(level, i, j) in skip:
+                        continue
+                    if not all(self.has_beam(level, c[k], c[(k + 1) % 4]) for k in range(4)):
+                        continue
+                out.append((i, j))
         return out
 
-    def is_perimeter(self, a, b) -> bool:
-        """True when the beam segment a–b lies on the outer edge of the slab."""
+    def is_perimeter(self, a, b, level: str | None = None) -> bool:
+        """True when the beam segment a–b has slab on fewer than two sides."""
         (i1, j1), (i2, j2) = a, b
-        panels = set(self.panels())
+        panels = set(self.panels(level))
         if j1 == j2:   # along X
             i = min(i1, i2)
             sides = [(i, j1 - 1), (i, j1)]
@@ -157,6 +176,15 @@ class Building:
             j = min(j1, j2)
             sides = [(i1 - 1, j), (i1, j)]
         return sum(1 for p in sides if p in panels) < 2
+
+    def toggle(self, kind: str, key: str) -> bool:
+        """Remove or restore one element; returns True when it now exists."""
+        lst = {"node": self.skip_nodes, "beam": self.skip_beams, "panel": self.skip_panels}[kind]
+        if key in lst:
+            lst.remove(key)
+            return True
+        lst.append(key)
+        return False
 
     def plan_size(self) -> tuple[float, float]:
         return self.xs[-1], self.ys[-1]
@@ -175,6 +203,8 @@ class Building:
             column_width=d.get("column_width", 0.20),
             column_depth=d.get("column_depth", 0.20),
             skip_nodes=list(d.get("skip_nodes", [])),
+            skip_beams=list(d.get("skip_beams", [])),
+            skip_panels=list(d.get("skip_panels", [])),
             roof=Roof(**d.get("roof", {})),
             foundation=Foundation(**d.get("foundation", {})),
             fc_prime=d.get("fc_prime", 210.0),

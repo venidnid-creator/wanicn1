@@ -307,7 +307,7 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None) -> dict:
     else:
         W = 0.0
     if W:
-        for i, j in b.panels():
+        for i, j in b.panels(lv.name):
             lx = b.xs[i + 1] - b.xs[i]
             ly = b.ys[j + 1] - b.ys[j]
             S, Lg = min(lx, ly), max(lx, ly)
@@ -326,17 +326,17 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None) -> dict:
                 for e in y_edges:
                     add(e, w_short if ly < lx else w_long)
     if lv.slab == "roof" and roof is not None:
-        for _d, run in b.beam_lines():
+        for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
-                if b.is_perimeter(a, c):
+                if b.is_perimeter(a, c, lv.name):
                     add(_seg(a, c), roof.load_plan * b.roof.overhang)
     if li + 1 < len(b.levels) and lv.walls != "none":
         above = b.levels[li + 1]
         hgt = above.elevation - lv.elevation - above.beam_depth
         wl = WALL_LOAD.get(lv.wall_type, 180) * max(0.0, hgt)
-        for _d, run in b.beam_lines():
+        for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
-                if lv.walls == "all" or b.is_perimeter(a, c):
+                if lv.walls == "all" or b.is_perimeter(a, c, lv.name):
                     add(_seg(a, c), wl)
     return loads
 
@@ -369,7 +369,7 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
     lv = b.levels[li]
     ext = level_line_loads(b, li, roof)
     results, reactions = [], {}
-    for direction, run in b.beam_lines():
+    for direction, run in b.beam_lines(lv.name):
         lengths = [abs((b.xs[c[0]] - b.xs[a[0]]) if direction == "x" else (b.ys[c[1]] - b.ys[a[1]]))
                    for a, c in zip(run, run[1:])]
         line = b.y_name(run[0][1]) if direction == "x" else b.x_name(run[0][0])
@@ -551,7 +551,7 @@ def design(b: Building) -> DesignResult:
     for li in reversed(range(len(b.levels))):
         lv = b.levels[li]
         if lv.slab in ("suspended", "on_ground"):
-            for i, j in b.panels():
+            for i, j in b.panels(lv.name):
                 res.slabs.append(design_slab(b, mat, lv, i, j))
         beams, reac = design_level_beams(b, mat, li, res.roof)
         res.beams.extend(beams)
