@@ -2267,11 +2267,12 @@ def s_notes(E):
         "(ตรวจสอบกับมาตรฐานที่ใช้ออกแบบ)",
         "4. ระยะทาบเหล็ก: เหล็กข้ออ้อยไม่น้อยกว่า 40 เท่า เหล็กกลมไม่น้อยกว่า 48 เท่า"
         "ของเส้นผ่านศูนย์กลาง พร้อมงอขอ",
-        "5. ฐานราก: " + ("ใช้ฐานรากเสาเข็ม (" + ", ".join(piles) + ") ความยาว"
-                         "เสาเข็มให้ตรวจสอบตามสภาพชั้นดิน" if piles else
-                         "ใช้ฐานรากแผ่ เมื่อดินรับน้ำหนักบรรทุกปลอดภัยไม่น้อยกว่า "
-                         "10 ตัน/ตร.ม. หากน้อยกว่าให้ใช้ฐานรากเสาเข็ม") +
-        " ชนิดฐานรากในอาคารเดียวกันให้ใช้ชนิดเดียว",
+        "5. ฐานราก มีคุณสมบัติดังนี้",
+        "   5.1 " + ("ฐานรากเสาเข็ม (" + ", ".join(piles) + ") ความยาวเสาเข็มให้ตรวจสอบตามสภาพชั้นดิน "
+                     "และทดสอบการรับน้ำหนักตามที่วิศวกรกำหนด" if piles else
+                     "ฐานรากแผ่ ใช้ในกรณีที่ดินรับน้ำหนักบรรทุกปลอดภัยได้ไม่น้อยกว่า 10 ตัน/ตร.ม."),
+        "   5.2 หากดินรับน้ำหนักได้น้อยกว่าที่กำหนด ให้เปลี่ยนเป็นฐานรากเสาเข็มตามการคำนวณของวิศวกร",
+        "   5.3 ชนิดฐานรากในอาคารเดียวกันให้ใช้ชนิดเดียว",
         "6. เหล็กรูปพรรณโครงหลังคา: fy ไม่น้อยกว่า 2,400 กก./ตร.ซม. เชื่อมไฟฟ้าตลอดแนวสัมผัส "
         "ทาสีกันสนิม 2 ชั้นก่อนทาสีจริง",
         "7. ส่วนที่สัมผัสดินหรือน้ำ (พื้นห้องน้ำ ดาดฟ้า ถังเก็บน้ำ) ให้ผสมน้ำยากันซึม",
@@ -2284,43 +2285,65 @@ def s_notes(E):
 
 
 def s_index(sh, sheets, E):
+    """S-01 as the original: the ruled S sheet list on the left (to the
+    bottom), «รายการประกอบแบบ» on the right with numbered sub-items."""
+    from core import wanic_std_sheets as STD
     x0, y0, x1, y1 = drawing_area()
-    sh.text((x0 + 95, y1 - 6), "สารบัญแบบวิศวกรรมโครงสร้าง", 4.0, "center",
-            "text", True)
-    sheet_index(sheets, "S", sh, x0, y1 - 12, 190)
-    notes_block(sh, x0 + 200, y1 - 6, "รายการประกอบแบบงานโครงสร้าง",
-                s_notes(E), 2.2, 60)
+    w1 = 118.0
+    tops, xs = STD._panel(sh, x0 + 6, y0 + 4, y1 - 4, w1, "รายการแบบโครงสร้าง (S)",
+                          [("เลขที่", 20.0), ("แบบแสดง", w1 - 20.0)])
+    for top, s_ in zip(tops, [s_ for s_ in sheets if s_.group == "S"]):
+        sh.text((xs[0] + 10, top - STD.ROW + 2.0), s_.code, 2.2, "center")
+        sh.text((xs[1] + 2, top - STD.ROW + 2.0), _wrap(s_.title, 56)[0], 2.2)
+    xr = x0 + 6 + w1 + 10
+    sh.text((xr, y1 - 10), "รายการประกอบแบบ", 3.4, "left", "text", True)
+    sh.line((xr, y1 - 11.3), (xr + 32, y1 - 11.3), "text", 0.35)
+    y = y1 - 18
+    n = int((x1 - xr - 4) / 1.6)
+    for ln in s_notes(E):
+        first = True
+        sub = 6 if ln.startswith("   ") else 0
+        ln = ln.strip()
+        for part in _wrap(ln, n - sub // 2):
+            ind = sub + (0 if first else 5)
+            sh.text((xr + ind, y), part, 2.3)
+            y -= 4.0
+            first = False
+        y -= 1.2
 
 
 def s_foundation(sh, E):
-    v, sc = plan_view(sh, E)
-    draw_grid(sh, v, E)
+    """แปลนฐานราก as the original: dash-dot axes with two chains, every
+    footing with «(F w×l),C» over it, the column crossed in its middle."""
+    from core import wanic_std_sheets as STD
+    v, sc = plan_view(sh, E, pad=5.0)
+    draw_grid(sh, v, E, ext=3.7, at=(2.2, 2.9))
     lib = E["lib"]
     for ft in E["footings"]:
         spec = lib.get(ft["mark"], {})
         w, l_ = float(spec.get("w", 1)), float(spec.get("l", spec.get("w", 1)))
         sh.rect(*v(ft["x"] - w / 2, ft["y"] - l_ / 2),
-                *v(ft["x"] + w / 2, ft["y"] + l_ / 2), "struct", 0.35)
-        st = lib.get(next((s["mark"] for s in E["stumps"]
-                           if s["x"] == ft["x"] and s["y"] == ft["y"]), "PC1"),
-                     {})
-        b = float(st.get("b", 0.2))
-        pts = [v(ft["x"] - b / 2, ft["y"] - b / 2), v(ft["x"] + b / 2, ft["y"] - b / 2),
-               v(ft["x"] + b / 2, ft["y"] + b / 2), v(ft["x"] - b / 2, ft["y"] + b / 2)]
-        sh.fill(pts, "column", 0.15)
+                *v(ft["x"] + w / 2, ft["y"] + l_ / 2), "struct", 0.4)
+        st_mark = next((s["mark"] for s in E["stumps"] if s["x"] == ft["x"] and s["y"] == ft["y"]), "PC1")
+        col = next((c["mark"] for c in E["columns"] if c["floor"] == 0 and c["x"] == ft["x"] and c["y"] == ft["y"]),
+                   "C1")
+        b = float(lib.get(st_mark, {}).get("b", 0.2))
+        a_, c_ = v(ft["x"] - b / 2, ft["y"] - b / 2), v(ft["x"] + b / 2, ft["y"] + b / 2)
+        sh.rect(*a_, *c_, "column", 0.35)                       # the column crossed (the original)
+        sh.line(a_, c_, "column", 0.2)
+        sh.line((a_[0], c_[1]), (c_[0], a_[1]), "column", 0.2)
         for px, py in B.pile_points(spec, ft["x"], ft["y"]):
             sh.circle(v(px, py), v.len(float(spec.get("pile_b", 0.18)) / 2),
                       "struct", 0.18)
-        p = v(ft["x"] + w / 2, ft["y"] + l_ / 2)
-        sh.text((p[0] + 0.8, p[1] + 0.6), f"{ft['mark']}", 2.4, "left",
-                "struct", True)
+        p = v(ft["x"], ft["y"] + l_ / 2)
+        sh.text((p[0], p[1] + 1.2), f"({ft['mark']} {w:.2f}x{l_:.2f}),{col}", 2.0, "center", "struct")
     x0, y0, x1, y1 = drawing_area()
-    caption(sh, ((x0 + x1) / 2, y0 + 6), "แปลนฐานราก", f"1:{sc}")
+    STD.caption_marks(sh, ((x0 + x1) / 2 - 50, y0 + 14), "แปลนฐานราก", f"1:{sc}", None, None, 100.0)
 
 
 def s_beams(sh, E, lvl):
-    v, sc = plan_view(sh, E)
-    draw_grid(sh, v, E)
+    v, sc = plan_view(sh, E, pad=5.0)
+    draw_grid(sh, v, E, ext=3.7, at=(2.2, 2.9))
     lib = E["lib"]
     for bm in (b for b in E["beams"] if b["level"] == lvl):
         b = float(lib.get(bm["mark"], {}).get("b", 0.2))
@@ -2358,7 +2381,8 @@ def s_beams(sh, E, lvl):
     x0_, y0_, x1_, y1_ = drawing_area()
     name = "แปลนคานคอดิน และพื้นชั้น 1" if lvl == 0 else \
         "แปลนคานหลังคา" if lvl == E["n"] else f"แปลนคาน และพื้นชั้น {lvl + 1}"
-    caption(sh, ((x0_ + x1_) / 2, y0_ + 6), name, f"1:{sc}")
+    from core import wanic_std_sheets as STD
+    STD.caption_marks(sh, ((x0_ + x1_) / 2 - 50, y0_ + 14), name, f"1:{sc}", None, None, 100.0)
 
 
 def s_roof_frame(sh, E, L):
