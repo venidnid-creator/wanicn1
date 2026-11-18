@@ -6,6 +6,7 @@
     python -m wanicndesign plan PROJECT.json --autocad            (draw in running AutoCAD)
     python -m wanicndesign labour [--set CODE RATE]               (show or update ค่าแรง)
     python -m wanicndesign prices PROJECT.json -o prices.json     (price list to fill in)
+    python -m wanicndesign design BUILDING.json -o OUTDIR          (model → structure → BOQ)
 """
 from __future__ import annotations
 
@@ -70,6 +71,37 @@ def cmd_prices(args) -> int:
     return 0
 
 
+def cmd_design(args) -> int:
+    from .estimate import Estimate
+    from .quantities import takeoff
+    from .structure.building import Building
+    from .structure.design import design
+    from .structure.drawing import write_dxf
+    from .structure.report import write_report
+    from .structure.to_project import to_project
+    building = Building.load(args.building)
+    out = args.output or os.path.splitext(args.building)[0] + "-out"
+    os.makedirs(out, exist_ok=True)
+    res = design(building)
+    write_report(res, os.path.join(out, "รายการคำนวณ.xlsx"))
+    write_dxf(res, os.path.join(out, "แบบโครงสร้าง.dxf"))
+    project = to_project(res)
+    project.save(os.path.join(out, "ปริมาณ-โครงการ.json"))
+    rates = _rates(args)
+    est = Estimate(project.name, takeoff(project, rates), rates)
+    est.to_xlsx(os.path.join(out, "BOQ-ปร4.xlsx"))
+    print(f"หลังคา {res.roof.load_plan:.0f} กก./ตร.ม. แป {res.roof.purlin.section} "
+          f"จันทัน {res.roof.rafter.section}" if res.roof else "ไม่มีหลังคา")
+    print(f"พื้น {len(res.slabs)} แผ่น  คาน {len(res.beams)} ช่วง  เสา {len(res.columns)} ท่อน  "
+          f"ฐานราก {len(res.footings)} ฐาน  เสาเข็มรวม {res.total_piles()} ต้น")
+    print("ผลรวม: " + ("ผ่านทุกรายการ" if res.ok else "มีรายการไม่ผ่าน"))
+    for w in res.warnings:
+        print("  ⚠ " + w)
+    print(f"ค่าวัสดุ {est.material_total:,.2f}  ค่าแรง {est.labour_total:,.2f}  รวม {est.total:,.2f} บาท")
+    print(f"บันทึกผลใน {out}")
+    return 0
+
+
 def cmd_labour(args) -> int:
     r = Rates(override_file=OVERRIDE)
     if args.set:
@@ -101,6 +133,12 @@ def main(argv=None) -> int:
     pr.add_argument("project")
     pr.add_argument("-o", "--output")
     pr.set_defaults(func=cmd_prices)
+    d = sub.add_parser("design", help="คำนวณโครงสร้างจากโมเดล แล้วทำ BOQ")
+    d.add_argument("building")
+    d.add_argument("-o", "--output")
+    d.add_argument("--prices")
+    d.add_argument("--labour-up", type=float)
+    d.set_defaults(func=cmd_design)
     lb = sub.add_parser("labour", help="ดูหรืออัปเดตค่าแรง ว480")
     lb.add_argument("--set", nargs=2, metavar=("CODE", "RATE"))
     lb.set_defaults(func=cmd_labour)

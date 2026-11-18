@@ -1,0 +1,69 @@
+{
+ "note": "น้ำหนักบรรทุกปลอดภัยต่อต้น (กก.) ตามตารางภาคผนวกคู่มือเดิม ปรับตามผลเจาะสำรวจดินและผู้ผลิตจริง",
+ "piles": {
+  "I18": {
+   "size_m": 0.18,
+   "capacity_kg": 10000
+  },
+  "I22": {
+   "size_m": 0.22,
+   "capacity_kg": 20000
+  },
+  "I26": {
+   "size_m": 0.26,
+   "capacity_kg": 30000
+  },
+  "I30": {
+   "size_m": 0.3,
+   "capacity_kg": 40000
+  },
+  "I35": {
+   "size_m": 0.35,
+   "capacity_kg": 50000
+  },
+  "I40": {
+   "size_m": 0.4,
+   "capacity_kg": 60000
+  },
+  "R18": {
+   "size_m": 0.18,
+   "capacity_kg": 20000
+  },
+  "R22": {
+   "size_m": 0.22,
+   "capacity_kg": 30000
+  },
+  "R26": {
+   "size_m": 0.26,
+   "capacity_kg": 40000
+  },
+  "R30": {
+   "size_m": 0.3,
+   "capacity_kg": 50000
+  },
+  "R35": {
+   "size_m": 0.35,
+   "capacity_kg": 60000
+  },
+  "R40": {
+   "size_m": 0.4,
+   "capacity_kg": 70000
+  },
+  "O35": {
+   "size_m": 0.35,
+   "capacity_kg": 30000
+  },
+  "O40": {
+   "size_m": 0.4,
+   "capacity_kg": 45000
+  },
+  "O50": {
+   "size_m": 0.5,
+   "capacity_kg": 70000
+  },
+  "O60": {
+   "size_m": 0.6,
+   "capacity_kg": 90000
+  }
+ }
+}
