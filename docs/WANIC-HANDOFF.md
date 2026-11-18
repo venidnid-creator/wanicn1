@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 2027.4.3 — แก้ตามผลทดสอบ 2027.4.2 (18 พ.ย. 2569, อนุมัติแล้ว — สร้างตัวติดตั้ง ไม่ release)
+## ReadWanicn2027 2027.4.3 — แก้ตามผลทดสอบ 2027.4.2 (18 พ.ย. 2569, อนุมัติแล้ว — ตัวติดตั้ง run 44226890249 artifact 14393427570 ผ่าน, ไม่ release)
 - ว651: ตัวเลขทุกช่องไม่ตัดบรรทัด (white-space:nowrap) · ปรับความกว้างคอลัมน์ วงเงินรวมอยู่บรรทัดเดียว ·
   รายการที่รับเศษ (*) แรเงาเทาทั้งในรายงานและบนจอ + หมายเหตุ `adjust_note()` «ปรับเพิ่ม/ลดในลำดับที่ …»
 - ว124: `auto_plan` ใหม่ — เรียงทุกรายการตามขั้นตอนก่อสร้าง (อาคาร PHASES / ทาง สะพาน ชลประทาน ROAD_PHASES ตาม work_type)
