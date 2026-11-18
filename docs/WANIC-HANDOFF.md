@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 — ปุ่ม «⬇ ดาวน์โหลดรุ่นล่าสุด» ในหน้าเข้าสู่ระบบ (18 พ.ย. 2569, อนุมัติแล้ว — รุ่น 2027.4.6 ไม่ release)
+## ReadWanicn2027 — ปุ่ม «⬇ ดาวน์โหลดรุ่นล่าสุด» ในหน้าเข้าสู่ระบบ (18 พ.ย. 2569, อนุมัติแล้ว — รุ่น 2027.4.6 run 44303727127 artifact 14426259152 ผ่าน, ไม่ release)
 - `StatsBox.download` แสดงตลอด: installer_url ของ Release ล่าสุด → ถ้าไม่มี (ข้อมูลแคชเก่า) ประกอบ URL asset จากเลขรุ่น → ถ้าไม่มีข้อมูลเลยเปิดหน้า releases/latest
 - tests 52 ผ่าน
 
