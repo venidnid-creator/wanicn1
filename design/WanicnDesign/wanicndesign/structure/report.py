@@ -100,6 +100,17 @@ def write_report(res: DesignResult, path: str) -> None:
              round(s.d_req, 1), s.bars_short, s.bars_long, s.bars_top, ok(s.ok), s.note, s.refs)
             for s in res.slabs],
            [7, 12, 6, 16, 6, 6, 6, 10, 10, 10, 7, 10, 14, 14, 12, 5, 30, 40])
+    if res.trusses:
+        rows = []
+        for t in res.trusses:
+            for g, label in (("top", "จันทันบน"), ("bottom", "จันทันล่าง"), ("web", "เหล็กค้ำ/เสาตั้ง")):
+                ratio, text = t.ratios[g]
+                rows.append((t.mark, t.line, round(t.span, 2), round(t.spacing, 2), label, t.sections[g].name,
+                             round(t.sections[g].r, 2), text, round(ratio, 3), ok(ratio <= 1.0),
+                             f"{t.note} ; ปฏิกิริยา {t.reaction:,.0f} กก. ; น้ำหนัก {t.weight:,.0f} กก.", t.refs))
+        _sheet(wb, "โครงถักหลังคา", ["Mark", "แนว", "ช่วง ม.", "ระยะห่าง ม.", "ชิ้นส่วน", "หน้าตัด", "r ซม.",
+                                      "แรง", "อัตราส่วน", "ผล", "หมายเหตุ", "อ้างอิง"], rows,
+               [6, 6, 7, 9, 14, 14, 7, 28, 9, 5, 50, 40])
     if res.stairs:
         _sheet(wb, "บันได", ["ชื่อ", "ชั้นล่าง", "ช่อง", "ชนิด", "จำนวนลูกตั้ง", "ลูกตั้ง ม.", "ลูกนอน ม.",
                              "ช่วง ม.", "กว้างต่อช่วง ม.", "หนา ม.", "W ช่วงลาด กก./ตร.ม.", "M กก.-ม./ม.",

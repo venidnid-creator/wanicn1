@@ -231,6 +231,7 @@ class DesignResult:
     warnings: list = field(default_factory=list)
     stairs: list = field(default_factory=list)
     seismic: object = None
+    trusses: list = field(default_factory=list)       # truss.TrussResult
     wind: object = None            # wind.WindResult
     fire: object = None            # fire.FireResult (กฎกระทรวง พ.ศ. 2566 ข้อ 21–24)
     frames: object = None          # columns.GravityFrameResult         # seismic.SeismicResult when the earthquake check ran
@@ -240,7 +241,8 @@ class DesignResult:
         groups = [self.slabs, self.beams, self.columns, self.footings, self.stairs]
         return all(x.ok for g in groups for x in g) and \
             (self.roof is None or (self.roof.purlin.ok and self.roof.rafter.ok)) and \
-            (self.seismic is None or self.seismic.ok) and (self.wind is None or self.wind.ok)
+            (self.seismic is None or self.seismic.ok) and (self.wind is None or self.wind.ok) and \
+            all(t.ok for t in self.trusses)
 
     def total_piles(self) -> int:
         return sum(f.piles for f in self.footings)
@@ -256,6 +258,7 @@ class DesignResult:
                 if c and c not in out:
                     out.append(c)
         extra = (self.frames.refs.split(",") if self.frames else []) + \
+            (self.trusses[0].refs.split(",") if self.trusses else []) + \
             (self.wind.refs.split(",") if self.wind else []) + \
             (["MR2566-23", "MI2567-32"] if self.fire and self.fire.applies else
              ["MR2566-23"] if self.fire and self.fire.notes else []) + \
@@ -328,6 +331,9 @@ def design_roof(b: Building) -> RoofResult:
         eave = 2 * (a + c)
     w_p = (cover + r.solar_load + r.live_load) * r.purlin_spacing
     L = r.rafter_spacing
+    if r.system == "truss":                       # purlins span from truss to truss (grid lines)
+        coords = b.xs if b.xs[-1] >= b.ys[-1] else b.ys
+        L = max(c1 - c0 for c0, c1 in zip(coords, coords[1:]))
     # purlins carry no ceiling; rafters take the limits of the ceiling hung from the roof [MI2567-8]
     purlin = _pick_c(w_p * cos * L * L / 8, w_p * sin * L * L / 8, "แป", L, w_p * cos,
                      r.live_load * r.purlin_spacing * cos, ROOF_DEFL["none"])
@@ -335,6 +341,8 @@ def design_roof(b: Building) -> RoofResult:
     w_r = (cover + r.frame_load + r.solar_load + r.live_load) * r.rafter_spacing
     rafter = _pick_c(w_r * cos * span * span / 8, 0.0, "จันทัน", span, w_r * cos,
                      r.live_load * r.rafter_spacing * cos, ROOF_DEFL.get(r.ceiling, ROOF_DEFL["board"]))
+    if r.system == "truss":
+        rafter = SteelMember("จันทัน (ใช้โครงถัก)", 0.0, 0.0, 0.0, 0.0, 0.0, "-", 0.0, 0.0, 0.0, True)
     steel = (slope_area / r.purlin_spacing) * purlin.kg_m + \
             (slope_area / r.rafter_spacing) * rafter.kg_m + \
             (ridge + hips) * 2 * rafter.kg_m
@@ -352,9 +360,47 @@ def _panel_name(b: Building, i: int, j: int) -> str:
 
 
 def _slab_load(lv) -> tuple[float, float]:
-    """(total, live) kg/m² of a suspended slab: self weight [UNIT-WT],
-    finishes, live load [MR2566-11]."""
-    return CONCRETE_KG_M3 * lv.slab_thickness + lv.finish_load + lv.live_load, lv.live_load
+    """(total, live) kg/m² of a suspended slab: self weight [UNIT-WT] (planks and topping
+    for a precast floor), finishes, live load [MR2566-11]."""
+    own = lv.precast_weight if lv.slab == "precast" else CONCRETE_KG_M3 * lv.slab_thickness
+    return own + lv.finish_load + lv.live_load, lv.live_load
+
+
+def precast_span_dir(b: Building, lv, i: int, j: int) -> str:
+    """Direction the planks run in bay (i, j): along "x" they rest on the beams along Y."""
+    if lv.precast_dir in ("x", "y"):
+        return lv.precast_dir
+    lx, ly = b.xs[i + 1] - b.xs[i], b.ys[j + 1] - b.ys[j]
+    return "x" if lx <= ly else "y"
+
+
+def design_precast_slab(b: Building, mat: Concrete, lv, i: int, j: int) -> SlabResult:
+    """Precast plank floor: one-way over the bay; the planks must carry the
+    finishes and live load within the supplier's table for the span; the
+    topping takes shrinkage steel of ประกาศ มท. 2567 ข้อ 29 (11) (ฉ) [MI2567-29D]."""
+    x0, x1, y0, y1 = b.xs[i], b.xs[i + 1], b.ys[j], b.ys[j + 1]
+    d = precast_span_dir(b, lv, i, j)
+    span = (x1 - x0) if d == "x" else (y1 - y0)
+    need = lv.finish_load + lv.live_load
+    notes, ok = [f"แผ่นพื้นวางแนว {d.upper()} ช่วง {span:.2f} ม. รับน้ำหนักเพิ่ม {need:.0f} กก./ตร.ม."], True
+    if not lv.precast_allow or not lv.precast_max_span:
+        ok = False
+        notes.append("ยังไม่ได้กรอกค่ารับน้ำหนักและช่วงจากตารางผู้ผลิต")
+    else:
+        if need > lv.precast_allow + 1e-9:
+            ok = False
+            notes.append(f"เกินค่าที่ผู้ผลิตรับรอง {lv.precast_allow:.0f} กก./ตร.ม.")
+        if span > lv.precast_max_span + 1e-9:
+            ok = False
+            notes.append(f"ช่วงเกิน {lv.precast_max_span:.2f} ม. ของแผ่นที่เลือก")
+    t = lv.slab_thickness
+    # shrinkage steel of the cast-in-place topping (the planks carry their own prestressing steel)
+    as_min = slab_min_ratio(mat.tie_grade) * 100 * lv.topping * 100
+    mesh = f"RB6@{pick_spacing(as_min, 'RB6', slab_max_spacing(t, False)):.2f}"
+    notes.append(f"เหล็กเสริมผิวบน (topping {lv.topping * 100:.0f} ซม.) {mesh} สองทาง")
+    return SlabResult(lv.name, _panel_name(b, i, j), "", "precast", x1 - x0, y1 - y0, 0.0, lv.precast_weight + need,
+                      0.0, 0.0, 0.0, t, 0.0, mesh, mesh, "-", ok, " ; ".join(notes), 0,
+                      cite("MI2567-29D", "UNIT-WT", "MR2566-11", "PRECAST"), (x0, y0, x1, y1))
 
 
 def _panel_slab(mat: Concrete, lv, name: str, lx: float, ly: float, discontinuous: int,
@@ -560,8 +606,10 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
     def add_p(a, c, pts):
         seg(a, c)["p"].extend(pts)
 
-    if lv.slab == "suspended":
+    if lv.slab in ("suspended", "precast"):
         total, live = _slab_load(lv)
+    elif lv.slab == "roof" and roof is not None and b.roof.system == "truss":
+        total = live = 0.0                         # the trusses take the roof to the columns
     elif lv.slab == "roof" and roof is not None:
         total, live = roof.load_plan, roof.live_plan
     else:
@@ -572,6 +620,14 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
         lx = b.xs[i + 1] - b.xs[i]
         ly = b.ys[j + 1] - b.ys[j]
         bl, br, bb, bt = (i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)
+        if lv.slab == "precast":                 # one way: planks rest on two beams only
+            if precast_span_dir(b, lv, i, j) == "x":
+                add_w(bl, bb, W * lx / 2)
+                add_w(br, bt, W * lx / 2)
+            else:
+                add_w(bl, br, W * ly / 2)
+                add_w(bb, bt, W * ly / 2)
+            continue
         sub = b.sub_beam(lv, i, j)
         if not sub:
             px, py = _tributary(W, lx, ly)
@@ -612,7 +668,7 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
             seg(a, c)["sub"] = True
         subs.append(SubBeam(lv.name, name, length, sum(P for _a, P in sub_pts) / length, 0.0, line))
         subs[-1].pts = sub_pts
-    if lv.slab == "roof" and roof is not None:
+    if lv.slab == "roof" and roof is not None and b.roof.system != "truss":
         per_m = (roof.live_plan if part == "live" else roof.load_plan) * b.roof.overhang
         for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
@@ -1147,6 +1203,9 @@ def design(b: Building) -> DesignResult:
         if lv.slab in ("suspended", "on_ground"):
             for i, j in b.panels(lv.name):
                 res.slabs.extend(design_slabs(b, mat, lv, i, j))
+        elif lv.slab == "precast":
+            for i, j in b.panels(lv.name):
+                res.slabs.append(design_precast_slab(b, mat, lv, i, j))
         if lv.slab == "suspended":
             bal = balconies(b, lv)
             ends = {}
@@ -1171,6 +1230,13 @@ def design(b: Building) -> DesignResult:
                     res.slabs.append(design_cantilever_slab(mat, lv, name, length, width, rect))
         beams, reac, live = design_level_beams(b, mat, li, res.roof)
         res.beams.extend(beams)
+        if lv.slab == "roof" and res.roof and b.roof.system == "truss":
+            from .truss import design_trusses
+            res.trusses, t_reac = design_trusses(b, res.roof)
+            res.roof.steel_kg += sum(t.weight for t in res.trusses)      # for the BOQ
+            for node, (tot, lv_) in t_reac.items():
+                reac[node] = reac.get(node, 0.0) + tot
+                live[node] = live.get(node, 0.0) + lv_
         node_reac[li], node_live[li] = reac, live
     design_stairs(b, mat, res, node_reac, node_live)
     reduce = b.ll_reduction and b.occupancy not in NO_REDUCTION

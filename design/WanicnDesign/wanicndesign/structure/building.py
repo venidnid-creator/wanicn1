@@ -26,7 +26,7 @@ from ..standards import LIVE_LOAD  # noqa: E402,F401
 class Level:
     name: str                      # "GB" (ground beams), "FL2", "ROOF"
     elevation: float               # m, ±0.00 = ground beam top
-    slab: str = "suspended"        # "suspended", "on_ground", "none", "roof"
+    slab: str = "suspended"        # "suspended", "precast", "on_ground", "none", "roof"
     slab_thickness: float = 0.10
     live_load: float = 200.0       # kg/m² (house: กฎกระทรวง พ.ศ. 2566 ข้อ 11)
     finish_load: float = 50.0      # topping / finishes, kg/m²
@@ -38,6 +38,12 @@ class Level:
     sub_beams: list = field(default_factory=list)    # ["1-2/A-B:x@0.5"] secondary beam in a panel
     cantilevers: list = field(default_factory=list)  # ["1A-2A@1.50"] cantilever slab off an edge beam
     cant_beams: list = field(default_factory=list)   # ["1A:-x@1.50:P=500:wall"] cantilever beam off a column
+    # precast plank floor (slab = "precast"): planks span one way between beams
+    precast_dir: str = "auto"      # "x", "y" or "auto" (the short span of each bay)
+    precast_weight: float = 240.0  # planks + cast-in-place topping, kg/m² (e.g. 5 cm + 5 cm)
+    precast_allow: float = 0.0     # supplier: safe superimposed load at the span, kg/m² (0 = not given)
+    precast_max_span: float = 0.0  # supplier: largest span of the chosen plank, m (0 = not given)
+    topping: float = 0.05          # cast-in-place topping, m
 
 
 @dataclass
@@ -51,6 +57,7 @@ class Roof:
     purlin_spacing: float = 0.32   # battens for tiles
     rafter_spacing: float = 1.00
     solar_load: float = 0.0        # rooftop solar panels, kg/m² (dead load, ประกาศ มท. 2567 ข้อ 11)
+    system: str = "rafter"         # "rafter" (rafters on the roof beams) or "truss" (steel trusses on columns)
     ceiling: str = "board"         # "plaster", "board", "none": deflection limits of ประกาศ มท. 2567 ตาราง 1
 
 

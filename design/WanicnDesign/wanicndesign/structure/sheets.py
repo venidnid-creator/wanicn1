@@ -211,7 +211,7 @@ def notes_sheet(res) -> Sheet:
     sh.text(xr, y, "5. น้ำหนักบรรทุก (กฎกระทรวง พ.ศ. 2566 ข้อ 11)", TXT)
     y -= 5
     lines = [f"- {lv.name}: น้ำหนักจร {lv.live_load:g} กก./ตร.ม., วัสดุปูผิว {lv.finish_load:g} กก./ตร.ม."
-             for lv in b.levels if lv.slab in ("suspended",)]
+             for lv in b.levels if lv.slab in ("suspended", "precast")]
     lines.append(f"- หลังคา: น้ำหนักจร {b.roof.live_load:g} กก./ตร.ม." +
                  (f", แผงโซลาร์เซลล์ {b.roof.solar_load:g} กก./ตร.ม." if b.roof.solar_load else ""))
     if res.wind:
@@ -741,6 +741,42 @@ def column_elevation_sheet(res, number: str) -> Sheet:
     return sh
 
 
+def truss_sheet(res, number: str) -> Sheet:
+    """Elevation of each truss type with its members and forces."""
+    sh = Sheet(number, "โครงถักหลังคาเหล็ก")
+    x0, y0, x1, y1 = area()
+    kinds: dict = {}
+    for t in res.trusses:
+        kinds.setdefault(t.mark, t)
+    span = max(t.span for t in kinds.values())
+    scale = pick_scale(span + 1, 3, x1 - x0 - 40, (y1 - y0) / max(1, len(kinds)) - 30, [25, 50, 75, 100])
+    s = 1000 / scale
+    sh.scale = f"1:{scale}"
+    y = y1 - 10
+    for mark, t in sorted(kinds.items()):
+        lines = ", ".join(x.line for x in res.trusses if x.mark == mark)
+        sh.text(x0, y, f"{mark} (แนว {lines}) ช่วง {t.span:.2f} ม. สูงที่ฐาน {t.depth:.2f} ม.: บน {t.sections['top'].name} "
+                f"ล่าง {t.sections['bottom'].name} ค้ำ {t.sections['web'].name}", TXT)
+        top = max(z for _x, z in t.nodes)
+        base = y - 8 - top * s
+        ox = x0 + 20
+        for m in t.members:
+            (a, za), (e, ze) = t.nodes[m.i], t.nodes[m.j]
+            sh.line(ox + a * s, base + za * s, ox + e * s, base + ze * s,
+                    {"top": "BEAM", "bottom": "BEAM", "web": "FRAME"}[m.group])
+            if m.group == "web" and abs(m.force) > 1:
+                sh.text(ox + (a + e) / 2 * s + 1, base + (za + ze) / 2 * s, f"{m.force / 1000:+.2f}", 1.6, "DIM")
+        for k in (0, t.panels):
+            sh.poly([(ox + t.nodes[k][0] * s, base), (ox + t.nodes[k][0] * s - 2, base - 3),
+                     (ox + t.nodes[k][0] * s + 2, base - 3)], "FRAME")
+        sh.text(ox + t.span * s / 2, base - 7, f"แรง (ตัน) + ดึง − อัด · ปฏิกิริยา {t.reaction:,.0f} กก. · "
+                f"{t.note}", TXT_S, "TEXT", "center")
+        y = base - 16
+    sh.text(x0, y0 + 4, "เหล็กท่อสี่เหลี่ยม มอก. 107 Fy ≤ 2,400 ksc (ประกาศ มท. 2567 ข้อ 27) · รอยเชื่อมเต็มรอบ "
+            "ไม่น้อยกว่าความหนาท่อ · ทาสีกันสนิม", TXT_S)
+    return sh
+
+
 def cutting_sheet(res, number: str) -> Sheet:
     from ..rates import Rates
     from .cutting import cutting_list, stock_plan
@@ -769,6 +805,8 @@ def build_sheets(res) -> list[Sheet]:
     sheets += schedule_sheets(res, len(sheets) + 1)
     sheets += beam_elevation_sheets(res, len(sheets) + 1)
     sheets.append(column_elevation_sheet(res, f"S-{len(sheets) + 1:02d}"))
+    if res.trusses:
+        sheets.append(truss_sheet(res, f"S-{len(sheets) + 1:02d}"))
     sheets.append(cutting_sheet(res, f"S-{len(sheets) + 1:02d}"))
     total = len(sheets)
     for sh in sheets:

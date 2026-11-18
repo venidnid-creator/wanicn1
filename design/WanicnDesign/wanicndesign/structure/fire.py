@@ -49,7 +49,7 @@ class FireResult:
 
 
 def requirements(b) -> FireResult:
-    floors = [lv for lv in b.levels if lv.slab in ("suspended", "on_ground")]
+    floors = [lv for lv in b.levels if lv.slab in ("suspended", "precast", "on_ground")]
     storeys = len(floors)
     plan = b.xs[-1] * b.ys[-1]
     area = plan * max(1, storeys)

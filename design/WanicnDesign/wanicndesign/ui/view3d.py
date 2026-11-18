@@ -86,6 +86,8 @@ def model_faces(b, res=None):
         for lv in b.levels:
             if lv.slab == "roof":
                 faces.extend(_roof_faces(b, lv.elevation))
+        for t in res.trusses:
+            faces.extend(_truss_faces(b, t, lv_z[b.levels[-1].name]))
         return faces
     for lv in b.levels:
         z = lv.elevation
@@ -96,7 +98,7 @@ def model_faces(b, res=None):
                 box = _box(x0, y0 - hw, z - lv.beam_depth, x1, y0 + hw, z) if abs(y1 - y0) < 1e-9 else \
                     _box(x0 - hw, y0, z - lv.beam_depth, x0 + hw, y1, z)
                 faces.extend((face, COLOURS["beam"]) for face in box)
-        if lv.slab in ("suspended", "on_ground"):
+        if lv.slab in ("suspended", "precast", "on_ground"):
             from ..structure.design import slab_parts
             for i, j in b.panels(lv.name):
                 for _n, x0, y0, x1, y1, _f in slab_parts(b, lv, i, j):
@@ -257,3 +259,21 @@ def _shade(pts) -> float:
     light = (0.3, -0.5, 0.8)
     dot = abs((nx * light[0] + ny * light[1] + nz * light[2]) / n)
     return 0.55 + 0.45 * dot
+
+
+def _truss_faces(b, t, z0):
+    """Truss members as thin boxes standing on the grid line of the truss."""
+    (i0, j0), (i1, j1) = t.supports
+    x0, y0, x1, y1 = b.xs[i0], b.ys[j0], b.xs[i1], b.ys[j1]
+    ux, uy = (x1 - x0) / t.span, (y1 - y0) / t.span
+    out = []
+    c = QColor("#5d6d7e")
+    for m in t.members:
+        (a, za), (e, ze) = t.nodes[m.i], t.nodes[m.j]
+        p0 = (x0 + ux * a, y0 + uy * a, z0 + za)
+        p1 = (x0 + ux * e, y0 + uy * e, z0 + ze)
+        w = 0.03
+        nx, ny = -uy * w, ux * w
+        out.append(([(p0[0] - nx, p0[1] - ny, p0[2]), (p1[0] - nx, p1[1] - ny, p1[2]),
+                     (p1[0] + nx, p1[1] + ny, p1[2]), (p0[0] + nx, p0[1] + ny, p0[2])], c))
+    return out

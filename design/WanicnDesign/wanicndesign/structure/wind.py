@@ -115,7 +115,7 @@ def is_public(b) -> bool:
         return True
     if w.public in ("yes", "no"):
         return w.public == "yes"
-    floors = sum(1 for lv in b.levels if lv.slab in ("suspended", "on_ground"))
+    floors = sum(1 for lv in b.levels if lv.slab in ("suspended", "precast", "on_ground"))
     return b.occupancy in PUBLIC_USES and b.xs[-1] * b.ys[-1] * max(1, floors) >= 1000.0
 
 

@@ -25,7 +25,7 @@ def default_building() -> Building:
     return Building(
         name="โครงการใหม่", grid_x=[4.0, 4.0, 3.5], grid_y=[4.0, 4.5],
         levels=[Level("GB", 0.0, "on_ground", 0.10, 150, 50, 0.20, 0.40, "GB", "perimeter"),
-                Level("FL2", 3.2, "suspended", 0.10, 150, 50, 0.20, 0.40, "B", "perimeter"),
+                Level("FL2", 3.2, "suspended", 0.10, 200, 50, 0.20, 0.40, "B", "perimeter"),
                 Level("ROOF", 6.2, "roof", 0.0, 0, 0, 0.15, 0.30, "RB", "none")],
         roof=Roof(), foundation=Foundation())
 

@@ -921,3 +921,67 @@ def test_elevation_and_cutting_sheets():
         assert f"{key[0]} แนว {spans[0].line}" in text                     # every beam line has an elevation
     numbers = [s.number for s in sheets]
     assert numbers == [f"S-{k:02d}" for k in range(1, len(sheets) + 1)]
+
+
+def test_precast_planks_load_two_beams_only():
+    from wanicndesign.structure.design import _slab_load, design_level_beams, design_roof
+    b = Building.load(BUILDING)
+    fl = b.level("FL2")
+    fl.slab, fl.precast_dir, fl.precast_allow, fl.precast_max_span = "precast", "x", 400, 4.5
+    li = b.levels.index(fl)
+    beams, reac, _live = design_level_beams(b, Concrete(), li, design_roof(b))
+    W, _l = _slab_load(fl)
+    assert W == pytest.approx(fl.precast_weight + fl.finish_load + fl.live_load)
+    inner_x = next(x for x in beams if x.span == "1B-2B")              # parallel to the planks: own weight only
+    assert inner_x.w == pytest.approx(2400 * inner_x.b * inner_x.h, rel=1e-6)
+    # all of the floor reaches the columns
+    total = W * b.xs[-1] * b.ys[-1] + sum(2400 * x.b * x.h * x.length for x in beams if x.kind == "beam")
+    walls = sum(x.w * x.length for x in beams if x.kind == "beam") - \
+        sum(2400 * x.b * x.h * x.length for x in beams if x.kind == "beam") - W * b.xs[-1] * b.ys[-1]
+    assert sum(reac.values()) == pytest.approx(total + walls, rel=1e-6)
+    res = design(b)
+    pre = [s for s in res.slabs if s.level == "FL2"]
+    assert pre and all(s.kind == "precast" and s.ok for s in pre)
+    fl.precast_allow = 200                                               # 250 needed
+    assert not any(s.ok for s in design(b).slabs if s.level == "FL2")
+
+
+# ---------------------------------------------------------------------------
+# Steel roof truss
+# ---------------------------------------------------------------------------
+
+def test_tube_properties_and_aisc_fa():
+    from wanicndesign.structure.truss import CC, Tube, fa_allow
+    t = Tube(100, 3.2)
+    assert t.area == pytest.approx(10 ** 2 - 9.36 ** 2)
+    assert t.inertia == pytest.approx((10 ** 4 - 9.36 ** 4) / 12)
+    assert CC == pytest.approx(math.sqrt(2 * math.pi ** 2 * 2.04e6 / 2400))
+    assert fa_allow(0) == pytest.approx(2400 / (5 / 3))                     # 0.6 Fy at zero slenderness
+    lam = 150
+    assert fa_allow(lam) == pytest.approx(12 * math.pi ** 2 * 2.04e6 / (23 * lam ** 2))
+
+
+def test_truss_statics_simple_triangle():
+    from wanicndesign.structure.truss import TrussMember, solve_truss
+    # two-bar triangle span 4 m rise 1 m, load P at the apex: rafter force = P/(2 sin θ)
+    nodes = [(0.0, 0.0), (4.0, 0.0), (2.0, 1.0)]
+    mem = [TrussMember("top", 0, 2, 0), TrussMember("top", 2, 1, 0), TrussMember("bottom", 0, 1, 0)]
+    P = 1000.0
+    _u, f = solve_truss(nodes, mem, [5.0] * 3, {2: (0.0, -P)}, {0: (True, True), 1: (False, True)})
+    sin = 1 / math.hypot(2, 1)
+    assert f[0] == pytest.approx(-P / (2 * sin), rel=1e-6)                 # compression
+    assert f[2] == pytest.approx(P / (2 * sin) * 2 / math.hypot(2, 1), rel=1e-6)   # tie in tension
+
+
+def test_truss_roof_on_the_example():
+    b = Building.load(BUILDING)
+    b.roof.system = "truss"
+    res = design(b)
+    assert res.trusses and all(t.ok for t in res.trusses)
+    for t in res.trusses:
+        load = res.roof.load_plan * t.spacing * (t.span + 2 * b.roof.overhang)
+        assert 2 * t.reaction == pytest.approx(load + t.weight, rel=0.03)       # statics incl. own weight
+        assert max(v[0] for v in t.ratios.values()) <= 1.0
+    roof_beams = [x for x in res.beams if x.level == "ROOF" and x.kind == "beam"]
+    assert all(x.w == pytest.approx(2400 * x.b * x.h, rel=1e-6) for x in roof_beams)   # tie beams only
+    assert "MI2567-27" in res.all_refs()

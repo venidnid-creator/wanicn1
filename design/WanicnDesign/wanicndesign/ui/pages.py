@@ -15,7 +15,8 @@ from ..structure.building import ROOF_COVER_LOAD, Level
 from ..structure.materials import CODES
 from ..structure.sections import load_piles
 
-SLAB_KINDS = [("suspended", "พื้นแขวน (บนคาน)"), ("on_ground", "พื้นวางบนดิน"),
+SLAB_KINDS = [("suspended", "พื้นแขวน (บนคาน)"), ("precast", "พื้นสำเร็จรูป (แผ่นพื้นอัดแรง)"),
+              ("on_ground", "พื้นวางบนดิน"),
               ("roof", "หลังคา"), ("none", "ไม่มีพื้น")]
 WALL_MODES = [("perimeter", "ผนังรอบนอก"), ("all", "ผนังทุกแนว"), ("none", "ไม่มีผนัง")]
 WALL_TYPES = [("brick", "อิฐมอญ"), ("qcon", "อิฐมวลเบา"), ("gypsum", "ยิปซัม/ไม้"),
@@ -254,7 +255,45 @@ class LevelsPage(Page):
         for w in (add, rem, self.ll, use):
             row.addWidget(w)
         self.lay.addLayout(row)
+        # precast plank settings of the selected level
+        pre = QFormLayout()
+        self.pc_dir = _combo([("auto", "ตามช่วงสั้นของแต่ละช่อง"), ("x", "แผ่นวางแนว X"), ("y", "แผ่นวางแนว Y")], "auto")
+        self.pc_weight = _spin(240, 50, 1000, 10, 0, "กก./ตร.ม.")
+        self.pc_allow = _spin(0, 0, 3000, 10, 0, "กก./ตร.ม.")
+        self.pc_span = _spin(0, 0, 12, 0.1, 2, "ม.")
+        pc_btn = QPushButton("ใช้ค่าพื้นสำเร็จรูปกับชั้นที่เลือก")
+        pc_btn.clicked.connect(self._set_precast)
+        pre.addRow(QLabel("<b>พื้นสำเร็จรูป</b> (ค่ารับน้ำหนักจากตารางของผู้ผลิต)"))
+        pre.addRow("ทิศแผ่นพื้น", self.pc_dir)
+        pre.addRow("น้ำหนักแผ่น + ทับหน้า", self.pc_weight)
+        pre.addRow("น้ำหนักบรรทุกเพิ่มที่รับได้", self.pc_allow)
+        pre.addRow("ช่วงสูงสุดของแผ่น", self.pc_span)
+        pre.addRow(pc_btn)
+        self.lay.addLayout(pre)
+        self._precast = {}
+        self.table.currentCellChanged.connect(self._show_precast)
         self.add_apply()
+
+    def _show_precast(self, row, *_):
+        if row < 0 or not self.building:
+            return
+        name = self.table.item(row, 0).text().strip() if self.table.item(row, 0) else ""
+        lv = self.building.level(name)
+        v = self._precast.get(name) or ((lv.precast_dir, lv.precast_weight, lv.precast_allow, lv.precast_max_span)
+                                        if lv else None)
+        if v:
+            self.pc_dir.setCurrentIndex(max(0, self.pc_dir.findData(v[0])))
+            self.pc_weight.setValue(v[1])
+            self.pc_allow.setValue(v[2])
+            self.pc_span.setValue(v[3])
+
+    def _set_precast(self):
+        r = self.table.currentRow()
+        if r < 0:
+            return
+        name = self.table.item(r, 0).text().strip()
+        self._precast[name] = (self.pc_dir.currentData(), self.pc_weight.value(), self.pc_allow.value(),
+                               self.pc_span.value())
 
     def _set_row(self, r, lv: Level):
         def item(v):
@@ -292,7 +331,7 @@ class LevelsPage(Page):
     def _use_ll(self):
         v = LIVE_LOAD[self.ll.currentData()]
         for r in range(self.table.rowCount()):
-            if self.table.cellWidget(r, 2).currentData() in ("suspended", "on_ground"):
+            if self.table.cellWidget(r, 2).currentData() in ("suspended", "precast", "on_ground"):
                 self.table.setItem(r, 4, QTableWidgetItem(f"{v:g}"))
 
     def levels_from_table(self) -> list[Level]:
@@ -309,6 +348,11 @@ class LevelsPage(Page):
                 out[-1].sub_beams = list(prev.sub_beams)
                 out[-1].cantilevers = list(prev.cantilevers)
                 out[-1].cant_beams = list(prev.cant_beams)
+                out[-1].precast_dir, out[-1].precast_weight = prev.precast_dir, prev.precast_weight
+                out[-1].precast_allow, out[-1].precast_max_span = prev.precast_allow, prev.precast_max_span
+            if out[-1].name in self._precast:
+                (out[-1].precast_dir, out[-1].precast_weight, out[-1].precast_allow,
+                 out[-1].precast_max_span) = self._precast[out[-1].name]
         out.sort(key=lambda lv: lv.elevation)
         return out
 
@@ -369,7 +413,9 @@ class RoofPage(Page):
         self.solar = _spin(0, 0, 100, 1, 0, "กก./ตร.ม.")
         self.ceiling = _combo([("plaster", "รับฝ้าเพดานที่มีการฉาบ"), ("board", "รับฝ้าเพดานไม่ฉาบ"),
                                ("none", "ไม่รับฝ้าเพดาน")], "board")
-        for label, w in (("แผงโซลาร์เซลล์", self.solar), ("ฝ้าเพดาน (ระยะแอ่นตัว)", self.ceiling), ("ทรงหลังคา", self.shape), ("วัสดุมุง", self.cover), ("ความลาด", self.slope),
+        self.system = _combo([("rafter", "จันทันวางบนคานหลังคา"), ("truss", "โครงถักเหล็กวางบนเสา (ทุกแนวกริด)")],
+                             "rafter")
+        for label, w in (("ระบบโครงหลังคา", self.system), ("แผงโซลาร์เซลล์", self.solar), ("ฝ้าเพดาน (ระยะแอ่นตัว)", self.ceiling), ("ทรงหลังคา", self.shape), ("วัสดุมุง", self.cover), ("ความลาด", self.slope),
                          ("ชายคายื่น", self.overhang), ("น้ำหนักจร", self.ll),
                          ("น้ำหนักโครงเหล็ก", self.frame), ("ระยะแป", self.purlin),
                          ("ระยะจันทัน", self.rafter)):
@@ -380,6 +426,7 @@ class RoofPage(Page):
     def load(self):
         r = self.building.roof
         self.shape.setCurrentIndex(self.shape.findData(r.shape))
+        self.system.setCurrentIndex(max(0, self.system.findData(r.system)))
         self.cover.setCurrentIndex(max(0, self.cover.findData(r.cover)))
         for w, v in ((self.slope, r.slope_deg), (self.overhang, r.overhang), (self.ll, r.live_load),
                      (self.frame, r.frame_load), (self.purlin, r.purlin_spacing),
@@ -390,6 +437,7 @@ class RoofPage(Page):
     def apply(self):
         r = self.building.roof
         r.shape, r.cover = self.shape.currentData(), self.cover.currentData()
+        r.system = self.system.currentData()
         r.slope_deg, r.overhang, r.live_load = self.slope.value(), self.overhang.value(), self.ll.value()
         r.frame_load, r.purlin_spacing = self.frame.value(), self.purlin.value()
         r.rafter_spacing = self.rafter.value()
@@ -567,6 +615,13 @@ class ResultsPage(Page):
                              "หมายเหตุ", "อ้างอิง"],
                     [(s.level, s.panel, s.mark, f"{s.kind} กรณี {s.case}" if s.case else s.kind, s.thickness,
                       s.bars_short, s.bars_long, s.bars_top, ok(s.ok), s.note, s.refs) for s in res.slabs])
+        if res.trusses:
+            self._table("โครงถัก", ["Mark", "แนว", "ช่วง", "ระยะ", "จันทันบน", "จันทันล่าง", "ค้ำ", "อัตราส่วนสูงสุด",
+                                    "แรงปฏิกิริยา กก.", "น้ำหนัก กก.", "ผล", "หมายเหตุ", "อ้างอิง"],
+                        [(t.mark, t.line, f"{t.span:.2f}", f"{t.spacing:.2f}", t.sections["top"].name,
+                          t.sections["bottom"].name, t.sections["web"].name,
+                          f"{max(v[0] for v in t.ratios.values()):.2f}", f"{t.reaction:,.0f}", f"{t.weight:,.0f}",
+                          ok(t.ok), t.note, t.refs) for t in res.trusses])
         if res.stairs:
             self._table("บันได", ["ชื่อ", "ชั้น", "ช่อง", "ชนิด", "ลูกตั้ง×ลูกนอน", "ช่วง", "หนา", "M กก.-ม./ม.",
                                   "เหล็กหลัก", "เหล็กบน", "เหล็กกันร้าว", "ผล", "หมายเหตุ", "อ้างอิง"],
