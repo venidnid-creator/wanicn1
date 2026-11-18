@@ -699,7 +699,7 @@ def report_651(p: P.Project) -> list:
 
 # -- ว124 -------------------------------------------------------------------------------------------
 
-def s_curve(plan: "P.Plan124", w=1800, h=760):
+def s_curve(plan: "P.Plan124", w=1800, h=760, actual: bool = True):
     """% ACC PLAN and % ACC ACTUAL (as the ว124 example) with the thresholds, as a picture."""
     from PySide6.QtCore import QPointF, QRectF, Qt
     from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
@@ -721,56 +721,63 @@ def s_curve(plan: "P.Plan124", w=1800, h=760):
     xs = [L + pw * (m + 1) / n for m in range(n)]
     g.setPen(QColor("#333333"))
     for m, x in enumerate(xs):
-        g.drawText(QRectF(x - 70, T + ph + 8, 140, 30), Qt.AlignCenter,
-                   plan.labels[m] if plan.labels else f"เดือน {m + 1}")
+        g.drawText(QRectF(x - 70, T + ph + 6, 140, 30), Qt.AlignCenter, str(m + 1))
+        if plan.labels:
+            g.drawText(QRectF(x - 70, T + ph + 36, 140, 30), Qt.AlignCenter, plan.labels[m])
     g.setPen(QPen(QColor("#333333"), 2))
     g.drawLine(L, T + ph, L + pw, T + ph)
     g.drawLine(L, T, L, T + ph)
-    # second line: % ACC ACTUAL — the months reported, then the estimate that the work ends as
-    # planned (dashed) all the way to the last month
-    fc = plan.forecast or plan.acc_plan
-    apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, fc)]
+    # line 2 (grey, as the ว124 example): % ACC ACTUAL as reported, then dashed on to 100 % by the
+    # plan; before anything is reported, the least the work may be — half the planned per cent
+    # (% PLAN/2 accumulated) — so the two lines never lie on top of each other
+    grey = QColor("#8c8c8c")
+    if actual and plan.last_actual >= 0:
+        second = plan.forecast
+        name2 = "% ACC ACTUAL (ผลงานจริงสะสม)"
+    else:
+        second = [v / 2 for v in plan.acc_plan]
+        name2 = ("% ACC ACTUAL ขั้นต่ำ (½ ของแผนสะสม) — ยังไม่มีผลงานจริง" if actual else
+                 "เกณฑ์ขั้นต่ำ (½ ของแผนสะสม)")
+    apts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, second)]
     for k_, (a_, b_) in enumerate(zip(apts, apts[1:])):
-        g.setPen(QPen(QColor("#f4a261"), 10, Qt.SolidLine, Qt.RoundCap))
-        if k_ <= plan.last_actual:
-            g.setPen(QPen(QColor("#c55a11"), 5))
+        real = actual and plan.last_actual >= 0 and k_ <= plan.last_actual
+        g.setPen(QPen(grey, 5 if real else 4, Qt.SolidLine if real else Qt.DashLine, Qt.RoundCap))
         g.drawLine(a_, b_)
-    g.setBrush(QColor("#c55a11"))
-    g.setPen(QColor("#c55a11"))
-    for k_, (p_, v) in enumerate(zip(apts[1:], fc)):
-        g.drawEllipse(p_, 7, 7)
-        if k_ <= plan.last_actual or abs(v - plan.acc_plan[k_]) > 0.5:
-            g.drawText(QRectF(p_.x() - 70, p_.y() + 8, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
-    # legend
+    g.setBrush(grey)
+    for k_, (p_, v) in enumerate(zip(apts[1:], second)):
+        g.setPen(grey)
+        g.drawRect(QRectF(p_.x() - 6, p_.y() - 6, 12, 12))
+        g.setPen(QColor("#555555"))
+        g.drawText(QRectF(p_.x() - 70, p_.y() + 10, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
+    # line 1: % ACC PLAN, values above the points
     pts = [QPointF(L, T + ph)] + [QPointF(x, T + ph - ph * min(100, v) / 100) for x, v in zip(xs, plan.acc_plan)]
-    g.setPen(QPen(QColor("#1f4e79"), 4))
+    g.setPen(QPen(QColor("#1f4e79"), 5))
     for a, b in zip(pts, pts[1:]):
         g.drawLine(a, b)
     g.setBrush(QColor("#1f4e79"))
     for p_, v in zip(pts[1:], plan.acc_plan):
-        g.drawEllipse(p_, 6, 6)
-        g.drawText(QRectF(p_.x() - 70, p_.y() - 36, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
+        g.setPen(QColor("#1f4e79"))
+        g.drawEllipse(p_, 7, 7)
+        g.drawText(QRectF(p_.x() - 70, p_.y() - 38, 140, 28), Qt.AlignCenter, f"{v:.2f}%")
     # ว124 thresholds
     g.setPen(QPen(QColor("#c00000"), 2, Qt.DashLine))
-    cum = [sum(plan.days[:i + 1]) for i in range(n)]
-    tot = cum[-1] or 1
     for words, _k, _v, need in plan.checks:
         frac = {"เกิน 1 ใน 2 ของระยะเวลา": 0.5, "เกิน 3 ใน 4 ของระยะเวลา": 0.75}.get(words, 1.0)
         x = L + pw * frac
         y = T + ph - ph * need / 100
+        g.setPen(QPen(QColor("#c00000"), 3, Qt.DashLine))
         g.drawLine(QPointF(x - 30, y), QPointF(x + 30, y))
-        g.drawText(QRectF(min(x - 140, L + pw - 200), y + 4, 200 if x - 140 > L + pw - 200 else 280, 26),
-                   Qt.AlignCenter, f"ขั้นต่ำ {need:.0f}%")
-    del tot
-    g.setPen(QColor("#1f4e79"))
-    act_name = "% ACC ACTUAL (ผลงานจริง + คาดการณ์ตามแผน)" if plan.last_actual >= 0 \
-        else "% ACC ACTUAL (คาดการณ์ว่าเสร็จตามแผน)"
-    for k_, (col, name) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)"), ("#f4a261", act_name))):
-        x0 = L + pw / 2 - 560 + k_ * 520
-        g.setPen(QPen(QColor(col), 5))
+        if x + 240 < L + pw:                        # beside the mark, clear of the points
+            g.drawText(QRectF(x + 36, y - 14, 200, 28), Qt.AlignLeft | Qt.AlignVCenter, f"ขั้นต่ำ {need:.0f}%")
+        else:
+            g.drawText(QRectF(x - 240, y + 4, 200, 26), Qt.AlignRight | Qt.AlignVCenter, f"ขั้นต่ำ {need:.0f}%")
+    for k_, (col, name, dash) in enumerate((("#1f4e79", "% ACC PLAN (แผนสะสม)", False), ("#8c8c8c", name2,
+                                                                                       not (actual and plan.last_actual >= 0)))):
+        x0 = L + pw / 2 - 640 + k_ * 480
+        g.setPen(QPen(QColor(col), 5, Qt.DashLine if dash else Qt.SolidLine))
         g.drawLine(QPointF(x0, 26), QPointF(x0 + 50, 26))
         g.setPen(QColor("#222222"))
-        g.drawText(QRectF(x0 + 60, 8, 520, 36), Qt.AlignLeft | Qt.AlignVCenter, name)
+        g.drawText(QRectF(x0 + 60, 8, 760, 36), Qt.AlignLeft | Qt.AlignVCenter, name)
     g.end()
     return img
 
@@ -817,13 +824,15 @@ def report_124(p: P.Project) -> list:
             for v in vals]
     half = [v / 2 for v in plan.pct_plan]
     half_diff = [(a_ - h) if a_ is not None else None for a_, h in zip(plan.actual, half)]
+    blank = [None] * n                        # ผลงานจริงกรอกในแผนปฏิบัติงาน; แผน ว124 เป็นเอกสารสัญญา
+    del half_diff
     body += [line("Money", plan.money, True), line("AccMoney", plan.acc_money, True),
              line("% PLAN", plan.pct_plan), line("% ACC PLAN", plan.acc_plan, bold=True),
-             line("% ACTUAL", plan.actual), line("% ACC ACTUAL", plan.acc_actual, bold=True),
-             line("% ACC DIFF", plan.diff), line("% PLAN/2", half), line("% PLAN/2 DIFF", half_diff)]
+             line("% ACTUAL", blank), line("% ACC ACTUAL", blank),
+             line("% ACC DIFF", blank), line("% PLAN/2", half), line("% PLAN/2 DIFF", blank)]
     widths = [3, 21, 4.5, 6, 7, 9.5, 5] + [max(4.5, 54.0 / n)] * n
     rep.blocks.append(Table(head, body, widths, fs))
-    rep.blocks.append(Chart(s_curve(plan), "scurve.png", 80))
+    rep.blocks.append(Chart(s_curve(plan, actual=False), "scurve.png", 80))
     rep.p("เกณฑ์การประเมินผลการทำงาน (ว124 ข้อ 2.2)", bold=True, size=12)
     chk = [[C("ช่วงเวลา", align="center"), C("ถึงเดือนที่", align="center"),
             C("แผนสะสม (%)", align="center"), C("ผลงานสะสมขั้นต่ำ (%)", align="center")]]
@@ -1046,6 +1055,26 @@ def report_work(p: P.Project) -> list:
         Q(v, 2, bold=True, align="center", colspan=2) for v in plan.acc_plan]
     body.append(acc)
     rep.blocks.append(Table(head, body, [3, 27, 6, 4.5, 6.5, 6.5, 3.5] + [max(2.2, 44.0 / (2 * n))] * (2 * n), fs))
+    # ผลงานจริงเทียบแผน (ตามตัวอย่าง ว124): ช่องละเดือน
+    def row(name, vals, digits=2, bold=False, pct=False):
+        return [C(name, align="right", bold=True, colspan=7)] + [
+            (Q(v, digits, bold=bold, align="center", colspan=2) if v is not None else C("", colspan=2)) for v in vals]
+    prog = [row("Money", plan.money, 0), row("AccMoney", plan.acc_money, 0), row("% PLAN", plan.pct_plan),
+            row("% ACC PLAN", plan.acc_plan, bold=True), row("% ACTUAL", plan.actual),
+            row("% ACC ACTUAL", plan.acc_actual, bold=True), row("% ACC DIFF", plan.diff)]
+    rep.p("ผลการปฏิบัติงานเทียบกับแผน", bold=True, size=12)
+    rep.blocks.append(Table([[C("", colspan=7)] + [C(f"เดือนที่ {m + 1}" + (f"\n{plan.labels[m]}" if plan.labels else ""),
+                                                     align="center", colspan=2) for m in range(n)]],
+                            prog, [3, 27, 6, 4.5, 6.5, 6.5, 3.5] + [max(2.2, 44.0 / (2 * n))] * (2 * n), fs))
+    rep.blocks.append(Chart(s_curve(plan, actual=True), "scurve.png", 80))
+    for words, k_, _v, need in plan.checks:
+        got = plan.acc_actual[k_] if k_ < len(plan.acc_actual) else None
+        if got is not None and got < need:
+            rep.p(f"⚠ {words} (เดือนที่ {k_ + 1}) ผลงานสะสม {got:.2f}% ไม่ถึงร้อยละ {need:.0f} — "
+                  "หากความล่าช้าเป็นความผิดของคู่สัญญา ให้ดำเนินการตาม ว124", size=11, bold=True)
+    if plan.last_actual < 0:
+        rep.p("ยังไม่ได้กรอกผลงานจริง — กรอก % ACTUAL รายเดือนในโปรแกรม (แท็บแผนการทำงาน) แล้วออกแผนปฏิบัติงานใหม่ "
+              "เส้นสีเทาจะเป็นผลงานจริงสะสม", size=10.5)
     rep.p("หมายเหตุ  แถบสีน้ำเงิน คือ ช่วงเวลาทำงานของแต่ละรายการ (ช่องละครึ่งเดือน) จัดลำดับก่อน–หลังตามขั้นตอนการก่อสร้าง "
           "และสอดคล้องกับแผนการทำงาน ว124 (มูลค่างานทุกเดือน)", size=10)
     _sign(rep, "ผู้รับจ้าง", p.signer or p.contractor)

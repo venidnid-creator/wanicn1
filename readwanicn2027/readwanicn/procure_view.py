@@ -693,7 +693,7 @@ class ProcureDialog(QDialog):
             for c in range(1, 5):
                 t.setItem(k, c, _item(""))
                 t.setItem(k + 1, c, _item(""))
-            t.setItem(k + 2, 0, _item("% ACTUAL ผลงานจริง (กรอกได้)", bold=True))
+            t.setItem(k + 2, 0, _item("% ACTUAL ผลงานจริง (กรอกได้ · แสดงในแผนปฏิบัติงาน)", bold=True))
             t.setItem(k + 3, 0, _item("% ACC ACTUAL ผลงานจริงสะสม", bold=True))
             for c in range(1, 5):
                 t.setItem(k + 2, c, _item(""))
