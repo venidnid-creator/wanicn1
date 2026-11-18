@@ -156,6 +156,10 @@ class BeamResult:
     kind: str = "beam"             # beam, secondary
     m_neg_live: float = 0.0        # live-load share of m_neg (earthquake combinations)
     z_top: float | None = None     # top of beam when not at its level (stair beam BT)
+    load_w: float = 0.0            # gravity loads on a frame beam (total; self weight included), kg/m
+    load_pts: list = field(default_factory=list)       # [(a from the lower node, P)]
+    load_w_live: float = 0.0
+    load_pts_live: list = field(default_factory=list)
 
 
 @dataclass
@@ -175,6 +179,11 @@ class ColumnResult:
     live_reduced: float = 0.0      # kg of live load taken off [MR6-16]
     refs: str = ""
     live: float = 0.0              # live-load share of ``load`` (after reduction), kg
+    m_dx: float = 0.0              # gravity end moments from the frame analysis, kg-m (dead / live,
+    m_lx: float = 0.0              # bending in the X frame / in the Y frame)
+    m_dy: float = 0.0
+    m_ly: float = 0.0
+    slender: str = ""              # slenderness and moment magnifier summary
 
 
 @dataclass
@@ -195,6 +204,15 @@ class FootingResult:
     ok: bool = True
     note: str = ""
     refs: str = ""
+    nodes: list = field(default_factory=list)   # columns on a combined footing
+    cx: float | None = None                     # centre of a combined footing, m
+    cy: float | None = None
+
+    def center(self, b) -> tuple[float, float]:
+        if self.cx is not None:
+            return self.cx, self.cy
+        i, j = b.parse_node(self.node)
+        return b.xs[i], b.ys[j]
 
 
 @dataclass
@@ -208,7 +226,8 @@ class DesignResult:
     footings: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     stairs: list = field(default_factory=list)
-    seismic: object = None         # seismic.SeismicResult when the earthquake check ran
+    seismic: object = None
+    frames: object = None          # columns.GravityFrameResult         # seismic.SeismicResult when the earthquake check ran
 
     @property
     def ok(self) -> bool:
@@ -230,8 +249,10 @@ class DesignResult:
                 c = c.strip()
                 if c and c not in out:
                     out.append(c)
-        if self.seismic:
-            for c in self.seismic.refs.split(",") + ["MR-EQ2564"]:
+        extra = (self.frames.refs.split(",") if self.frames else []) + \
+            (self.seismic.refs.split(",") + ["MR-EQ2564"] if self.seismic else [])
+        if extra:
+            for c in extra:
                 c = c.strip()
                 if c and c not in out:
                     out.append(c)
@@ -801,7 +822,10 @@ def design_level_beams(b: Building, mat: Concrete, li: int, roof):
             results.append(BeamResult(lv.name, line, f"{b.node_name(*a)}-{b.node_name(*c)}", "", bw, h,
                                       sp.length, sp.w, m_neg, sp.m_pos, max(sp.v_left, sp.v_right), d_req,
                                       at, ab, top, bot, stir, ok, " ; ".join(notes), hmin, refs, xy,
-                                      m_neg_live=max(0.0, -lspans[k].m_left, -lspans[k].m_right)))
+                                      m_neg_live=max(0.0, -lspans[k].m_left, -lspans[k].m_right),
+                                      load_w=segs[k]["w"] + CONCRETE_KG_M3 * bw * h, load_pts=pts[k],
+                                      load_w_live=lsegs[k]["w"],
+                                      load_pts_live=_local(lsegs[k], flips[k], sp.length)))
         for node, rx, lx in zip(run, reac, lreac):
             reactions[node] = reactions.get(node, 0.0) + rx
             live_reac[node] = live_reac.get(node, 0.0) + lx
@@ -1088,6 +1112,15 @@ def design(b: Building) -> DesignResult:
             col_at[(i, j, li)] = segs[-1]
         res.columns.extend(reversed(segs))
         res.footings.append(design_footing(b, mat, name, above, bw, h))
+    if n_lv > 1:
+        from .columns import check_footing_moments, design_columns
+        res.frames = design_columns(b, res, mat, col_at, elev[0] - stub)
+        for st in res.frames.stability:
+            if st.sway:
+                res.warnings.append(f"เสาช่วง {st.level} ทิศ {st.direction}: Q = {st.q:.3f} > 0.05 เป็นโครงแบบเซ"
+                                    + (f" ขยายโมเมนต์จากแรงด้านข้าง δs = {st.delta_s:.2f}"
+                                       if b.seismic.enabled else ""))
+        check_footing_moments(b, res, mat, col_at)
     if b.seismic.enabled and n_lv > 1:
         from .seismic import run as seismic_run
         node_dead = [{n: node_reac[li][n] - node_live[li].get(n, 0.0) for n in node_reac[li]}
@@ -1097,9 +1130,20 @@ def design(b: Building) -> DesignResult:
         for s in res.seismic.storeys:
             if not s.ok:
                 res.warnings.append(f"แผ่นดินไหว ชั้น {s.level}: {s.note}")
+    if n_lv > 0:
+        from .footings import combine_footings
+        base = {b.node_name(i, j): c for (i, j, li), c in col_at.items() if li == 0}
+        before = len(res.footings)
+        res.warnings += combine_footings(b, res, mat, base)
+        if res.seismic and len(res.footings) < before:
+            res.warnings.append("ฐานรากร่วมออกแบบด้วยน้ำหนักแนวดิ่ง ยังไม่ได้ตรวจแรงแผ่นดินไหว")
     _assign_marks(res.columns, lambda c: (c.b, c.h, c.bars, c.ties), "C", lambda c: c.load)
-    _assign_marks(res.footings, lambda f: (f.piles, f.pile, f.width, f.length, f.thickness,
-                                           f.bars_x, f.bars_y), "F", lambda f: f.load)
+    _assign_marks([f for f in res.footings if f.kind != "combined"],
+                  lambda f: (f.piles, f.pile, f.width, f.length, f.thickness, f.bars_x, f.bars_y), "F",
+                  lambda f: f.load)
+    _assign_marks([f for f in res.footings if f.kind == "combined"],
+                  lambda f: (f.piles, f.pile, f.width, f.length, f.thickness, f.bars_x, f.bars_y), "CF",
+                  lambda f: f.load)
     _assign_marks([x for x in res.beams if x.kind == "stair"],
                   lambda x: (x.b, x.h, x.top, x.bottom, x.stirrup), "BT", lambda x: x.m_pos)
     for st in res.stairs:

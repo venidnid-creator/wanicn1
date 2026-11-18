@@ -37,15 +37,23 @@ def model_faces(b, res=None):
     if res:
         for c in res.columns:
             col.setdefault(c.node, []).append(c)
-    foot = {f.node: f for f in res.footings} if res else {}
+    foot = {}
+    for f in (res.footings if res else []):
+        for n in (f.nodes or [f.node]):
+            foot[n] = f
+        if f.cx is not None:
+            faces.extend((face, COLOURS["footing"]) for face in _box(
+                f.cx - f.width / 2, f.cy - f.length / 2, -b.foundation.depth,
+                f.cx + f.width / 2, f.cy + f.length / 2, -b.foundation.depth + f.thickness))
     top = b.levels[-1].elevation if b.levels else 3.0
     for i, j in b.nodes():
         name = b.node_name(i, j)
         x, y = xs[i], ys[j]
         f = foot.get(name)
         fw, fl, ft = (f.width, f.length, f.thickness) if f else (0.6, 0.6, 0.4)
-        for face in _box(x - fw / 2, y - fl / 2, -df, x + fw / 2, y + fl / 2, -df + ft):
-            faces.append((face, COLOURS["footing"]))
+        if f is None or f.cx is None:
+            for face in _box(x - fw / 2, y - fl / 2, -df, x + fw / 2, y + fl / 2, -df + ft):
+                faces.append((face, COLOURS["footing"]))
         segs = col.get(name)
         if segs:
             for c in segs:

@@ -293,6 +293,9 @@ class _Frame:
                 loads[n] = (F / len(ids), 0.0, 0.0)
         return solve_frame(self.nodes, self.members, self.fixed, loads)
 
+    def solve_with(self, loads: dict, member_loads: dict):
+        return solve_frame(self.nodes, self.members, self.fixed, loads, member_loads)
+
     def level_disp(self, disp, li):
         ids = self.level_nodes.get(li, [])
         return max((abs(disp[n][0]) for n in ids), default=0.0)
@@ -480,7 +483,12 @@ def check_columns(b, res, out, col_forces, col_at, mat):
         worst = None
         for d in ("x", "y"):
             M, N, Vsh, _mb = col_forces.get((name, li, d), (0.0, 0.0, 0.0, 0.0))
-            combos = [((1.2 + 0.2 * sds) * D + L + N, M), ((0.9 - 0.2 * sds) * D - N, M)]
+            ds = next((st.delta_s for st in getattr(res.frames, "stability", [])
+                       if st.li == li and st.direction == d), 1.0)
+            M *= ds                                                    # sway magnifier [EIT1008-SLENDER]
+            md, ml = (c.m_dx, c.m_lx) if d == "x" else (c.m_dy, c.m_ly)       # gravity moments
+            combos = [((1.2 + 0.2 * sds) * D + L + N, M + (1.2 + 0.2 * sds) * md + ml),
+                      ((0.9 - 0.2 * sds) * D - N, M + (0.9 - 0.2 * sds) * md)]
             while True:
                 n, size = parse_bars(c.bars)
                 depth, width = (c.b * 100, c.h * 100) if d == "x" else (c.h * 100, c.b * 100)

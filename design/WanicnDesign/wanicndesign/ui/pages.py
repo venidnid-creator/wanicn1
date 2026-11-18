@@ -506,10 +506,11 @@ class ResultsPage(Page):
                             "หมายเหตุ", "อ้างอิง"],
                     [(x.level, x.span, x.mark, f"{x.b:.2f}×{x.h:.2f}", f"{x.m_neg:,.0f}", f"{x.m_pos:,.0f}",
                       x.top, x.bottom, x.stirrup, ok(x.ok), x.note, x.refs) for x in res.beams])
-        self._table("เสา", ["ตำแหน่ง", "ช่วง", "Mark", "P กก.", "ขนาด", "เหล็ก", "ปลอก", "ผล",
-                            "หมายเหตุ", "อ้างอิง"],
+        self._table("เสา", ["ตำแหน่ง", "ช่วง", "Mark", "P กก.", "ขนาด", "เหล็ก", "ปลอก", "Mx (D+L)", "My (D+L)",
+                            "ผล", "แรงอัดร่วมโมเมนต์", "หมายเหตุ", "อ้างอิง"],
                     [(c.node, c.segment, c.mark, f"{c.load:,.0f}", f"{c.b:.2f}×{c.h:.2f}", c.bars, c.ties,
-                      ok(c.ok), c.note, c.refs) for c in res.columns])
+                      f"{c.m_dx + c.m_lx:,.0f}", f"{c.m_dy + c.m_ly:,.0f}", ok(c.ok), c.slender, c.note, c.refs)
+                     for c in res.columns])
         self._table("ฐานราก", ["ตำแหน่ง", "Mark", "P กก.", "เข็ม", "จำนวน", "ขนาดฐาน", "เหล็ก X", "เหล็ก Y",
                                "ผล", "หมายเหตุ", "อ้างอิง"],
                     [(f.node, f.mark, f"{f.load:,.0f}", f.pile, f.piles,

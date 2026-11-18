@@ -111,11 +111,18 @@ def write_report(res: DesignResult, path: str) -> None:
              round(x.m_pos), round(x.v), round(x.d_req, 1), round(x.as_top, 2), round(x.as_bot, 2),
              x.top, x.bottom, x.stirrup, round(x.h_min, 2), ok(x.ok), x.note, x.refs) for x in res.beams],
            [7, 5, 10, 6, 6, 6, 7, 9, 9, 9, 9, 9, 9, 9, 10, 10, 12, 10, 5, 34, 40])
-    _sheet(wb, "เสา", ["ตำแหน่ง", "ช่วงเสา", "Mark", "สูง ม.", "P กก.", "b ม.", "h ม.", "pg",
-                       "เหล็กยืน", "ปลอก", "ลดน้ำหนักจร กก.", "ผล", "หมายเหตุ", "อ้างอิง"],
-           [(c.node, c.segment, c.mark, round(c.height, 2), round(c.load), c.b, c.h, round(c.pg, 4),
-             c.bars, c.ties, round(c.live_reduced), ok(c.ok), c.note, c.refs) for c in res.columns],
-           [9, 16, 6, 7, 10, 6, 6, 8, 10, 12, 12, 5, 30, 40])
+    _sheet(wb, "เสา", ["ตำแหน่ง", "ช่วงเสา", "Mark", "สูง ม.", "P กก.", "P จร กก.", "b ม.", "h ม.", "pg",
+                       "เหล็กยืน", "ปลอก", "ลดน้ำหนักจร กก.", "MD x", "ML x", "MD y", "ML y",
+                       "แรงอัดร่วมโมเมนต์ (อัตราส่วน · Pu · λ δ Mu/φMn)", "ผล", "หมายเหตุ", "อ้างอิง"],
+           [(c.node, c.segment, c.mark, round(c.height, 2), round(c.load), round(c.live), c.b, c.h,
+             round(c.pg, 4), c.bars, c.ties, round(c.live_reduced), round(c.m_dx), round(c.m_lx), round(c.m_dy),
+             round(c.m_ly), c.slender, ok(c.ok), c.note, c.refs) for c in res.columns],
+           [9, 16, 6, 7, 10, 9, 6, 6, 8, 10, 12, 12, 8, 8, 8, 8, 60, 5, 30, 40])
+    if res.frames:
+        _sheet(wb, "เสถียรภาพชั้น", ["ช่วงเสา", "ทิศ", "Q = ΣPu·Δo/(Vus·lc)", "ผล", "หมายเหตุ"],
+               [(st.level, st.direction, round(st.q, 4), "เซ" if st.sway else "ไม่เซ",
+                 "Q > 0.05 ต้องขยายโมเมนต์จากแรงด้านข้างด้วย δs = 1/(1−Q)" if st.sway else "")
+                for st in res.frames.stability], [16, 6, 20, 8, 60])
     _sheet(wb, "ฐานราก", ["ตำแหน่ง", "Mark", "ชนิด", "P กก.", "เสาเข็ม", "จำนวน", "รับ/ต้น กก.",
                           "กว้าง ม.", "ยาว ม.", "หนา ม.", "เหล็ก X", "เหล็ก Y", "ผล", "หมายเหตุ", "อ้างอิง"],
            [(f.node, f.mark, f.kind, round(f.load), f.pile, f.piles, f.pile_capacity, f.width,

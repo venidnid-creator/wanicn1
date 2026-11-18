@@ -537,3 +537,91 @@ def test_balcony_on_cantilever_beams():
     res = design(b)
     bal = next(s for s in res.slabs if "ยื่น" in s.panel)
     assert bal.kind == "one-way" and bal.ok
+
+
+# ---------------------------------------------------------------------------
+# Gravity frames, slender columns, combined footings — hand checks
+# ---------------------------------------------------------------------------
+
+def test_frame_member_loads_against_closed_form():
+    from wanicndesign.structure.frame2d import Member, solve_frame
+    E, Ib, Ic, L, h, w, P = 2.0e9, 1e-3, 1e-4, 4.0, 3.0, 1000.0, 2000.0
+    # fixed-fixed beam: wL²/12 and PL/8
+    _d, f = solve_frame([(0, 0), (L, 0)], [Member(0, 1, E, 1.0, Ib)], {0, 1}, {}, {0: (-w, [(L / 2, -P)])})
+    assert f[0][2] == pytest.approx(w * L * L / 12 + P * L / 8)
+    assert f[0][1] == pytest.approx(w * L / 2 + P / 2)
+    # symmetric portal: joint moment = FEM · kc / (kc + kb/2) (moment distribution, symmetry)
+    nodes = [(0, 0), (0, h), (L, h), (L, 0)]
+    mem = [Member(0, 1, E, 10.0, Ic), Member(1, 2, E, 10.0, Ib), Member(3, 2, E, 10.0, Ic)]
+    _d, f = solve_frame(nodes, mem, {0, 3}, {}, {1: (-w, [])})
+    kc, kb = 4 * Ic / h, 2 * Ib / L
+    assert f[1][2] == pytest.approx(w * L * L / 12 * kc / (kc + kb), rel=1e-3)
+    assert abs(f[0][2]) == pytest.approx(f[1][2] / 2, rel=1e-3)          # carry-over ½ to the fixed base
+
+
+def test_moment_magnifier_hand_value():
+    from wanicndesign.structure.columns import magnifier
+    fc, pu, pd = 210.0, 30000.0, 15000.0
+    lam, delta, slender = magnifier(pu, pd, 25.0, 25.0, 300.0, fc)
+    assert lam == pytest.approx(300 / (0.3 * 25)) and slender
+    ec = 15100 * math.sqrt(fc)
+    ei = 0.4 * ec * 25 * 25 ** 3 / 12 / (1 + 1.2 * pd / pu)
+    pc = math.pi ** 2 * ei / 300 ** 2
+    assert delta == pytest.approx(1 / (1 - pu / (0.75 * pc)))
+    assert magnifier(pu, pd, 40.0, 40.0, 250.0, fc)[2] is False        # λ = 20.8 ≤ 22
+
+
+def test_gravity_frame_moments_in_columns_and_beams():
+    res = design(Building.load(BUILDING))
+    assert res.frames is not None and res.frames.stability
+    corner = next(c for c in res.columns if c.node == "1A" and c.segment == "GB–FL2")
+    assert corner.m_dx > 0 and corner.m_dy > 0 and corner.slender
+    assert "EIT1008-SLENDER" in res.all_refs() and "EIT1008-BIAX" in res.all_refs()
+    # every column passes the strength check after any added bars
+    assert all(float(c.slender.split(" ")[0]) <= 1.0 for c in res.columns)
+
+
+def test_cantilever_beam_bends_the_column():
+    b = Building.load(BUILDING)
+    before = next(c for c in design(b).columns if c.node == "4A" and c.segment == "GB–FL2").m_dy
+    b.toggle_cant_beam(b.level("FL2"), (3, 0), "x", 2.0, 1000.0, False)   # out along +X from 4A
+    after = next(c for c in design(b).columns if c.node == "4A" and c.segment == "GB–FL2")
+    assert after.m_dx > 0 and after.m_dy == pytest.approx(before, rel=0.05)
+
+
+def _narrow(kind, pile="I22"):
+    b = Building.load(BUILDING)
+    b.grid_x = [4.0, 0.8, 3.5]
+    b.foundation.kind, b.foundation.pile = kind, pile
+    return b
+
+
+def test_combined_spread_footing_has_uniform_pressure():
+    from wanicndesign.structure.footings import _beam_moments, _shear_at
+    b = _narrow("spread")
+    res = design(b)
+    cf = [f for f in res.footings if f.kind == "combined"]
+    assert cf, "the two middle columns of the narrow bay must share a footing"
+    f = cf[0]
+    (n1, n2) = f.nodes
+    x1 = b.xs[b.parse_node(n1)[0]]
+    p1 = next(c for c in res.columns if c.node == n1 and c.segment.startswith("ฐานราก")).load
+    p2 = f.load - p1
+    xr = x1 + p2 * 0.8 / f.load                                           # resultant
+    assert f.cx == pytest.approx(xr, abs=0.03)                             # centred on it (to rounding)
+    assert f.width * f.length * b.foundation.soil_qa >= f.load + f.weight - 1
+    assert f.mark.startswith("CF") and f.ok
+    up = [(0.5, 3.0), (1.5, 1.0)]
+    downs = [(1.0, 4.0)]
+    assert _shear_at(2.0, up, downs) == pytest.approx(0.0)                 # statics of the helper
+    assert _beam_moments(2.0, up, downs)[0] == pytest.approx(1.5)
+
+
+def test_combined_pile_cap_carries_the_load():
+    b = _narrow("pile", "I18")
+    res = design(b)
+    cf = [f for f in res.footings if f.kind == "combined"]
+    assert cf
+    for f in cf:
+        assert f.piles * f.pile_capacity >= f.load + f.weight - 1
+        assert "เข็ม" in f.note and f.ok

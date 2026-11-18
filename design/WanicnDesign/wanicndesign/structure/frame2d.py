@@ -41,9 +41,23 @@ def _rot(c: float, s: float) -> np.ndarray:
     return t
 
 
-def solve_frame(nodes, members, fixed, loads):
+def fixed_end(L: float, q: float, pts) -> np.ndarray:
+    """Fixed-end forces on a member (local axes, forces from the supports on
+    the member) for a uniform load ``q`` and point loads ``(a, P)``, both in
+    the local +y direction: wL²/12, Pab²/L² … [STATICS]."""
+    f = np.array([0.0, -q * L / 2, -q * L * L / 12, 0.0, -q * L / 2, q * L * L / 12])
+    for a, P in pts:
+        b = L - a
+        f += [0.0, -P * b * b * (3 * a + b) / L ** 3, -P * a * b * b / L ** 2,
+              0.0, -P * a * a * (a + 3 * b) / L ** 3, P * a * a * b / L ** 2]
+    return f
+
+
+def solve_frame(nodes, members, fixed, loads, member_loads=None):
     """``nodes`` [(x, z)], ``members`` [Member], ``fixed`` node indices
-    (fully fixed), ``loads`` {node: (Fx, Fz, M)}.
+    (fully fixed), ``loads`` {node: (Fx, Fz, M)}, ``member_loads``
+    {member index: (q, [(a, P)])} transverse to the member in its local +y
+    (for a member drawn left to right, +y is up: gravity is negative).
 
     Returns ``(disp, forces)``: ``disp[n] = (u, w, θ)``; ``forces[m]`` are
     the member end forces in local axes (N1, V1, M1, N2, V2, M2), from
@@ -64,11 +78,19 @@ def solve_frame(nodes, members, fixed, loads):
         geo.append((L, T, dofs))
     for node, f in loads.items():
         F[3 * node:3 * node + 3] += f
+    fef = {}
+    for k, (q, pts) in (member_loads or {}).items():
+        L, T, dofs = geo[k]
+        fef[k] = fixed_end(L, q, pts)
+        F[dofs] -= T.T @ fef[k]
     free = [d for d in range(3 * n) if d // 3 not in fixed]
     U = np.zeros(3 * n)
     U[free] = np.linalg.solve(K[np.ix_(free, free)], F[free])
     forces = []
-    for m, (L, T, dofs) in zip(members, geo):
-        forces.append(_local_k(L, m.E, m.A, m.I) @ (T @ U[dofs]))
+    for k, (m, (L, T, dofs)) in enumerate(zip(members, geo)):
+        f = _local_k(L, m.E, m.A, m.I) @ (T @ U[dofs])
+        if k in fef:
+            f = f + fef[k]
+        forces.append(f)
     disp = [tuple(U[3 * k:3 * k + 3]) for k in range(n)]
     return disp, forces

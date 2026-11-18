@@ -85,8 +85,8 @@ def write_dxf(res: DesignResult, path: str) -> None:
     elev = [lv.elevation for lv in b.levels]
     df = b.foundation.depth
     for f in res.footings:
-        i, j = _node_ij(b, f.node)
-        x, y = xs[i], ys[j] + oy
+        x, y = f.center(b)
+        y += oy
         _box(msp, x - f.width / 2, y - f.length / 2, -df, x + f.width / 2, y + f.length / 2,
              -df + f.thickness, "S-FOOTING")
     for c in res.columns:
