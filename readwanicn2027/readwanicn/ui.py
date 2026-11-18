@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
-from . import APP_NAME, DEVELOPER, VERSION, auth, cadimport, license, measure, pdfedit, pdfops, themes, update, usage
+from . import APP_NAME, DEVELOPER, REPO, TAG_PREFIX, VERSION, auth, cadimport, license, measure, pdfedit, pdfops, themes, update, usage
 from .canvas import TOOLS, PdfCanvas
 from .model3d import ModelView, load_model
 from .dialogs import TextDialog, UsageDialog
@@ -188,6 +188,13 @@ class StatsBox(QFrame):
         self.body.setWordWrap(True)
         self.body.setTextFormat(Qt.RichText)
         lay.addWidget(self.body)
+        self.download = QPushButton("⬇ ดาวน์โหลดรุ่นล่าสุด")
+        self.download.setToolTip("ดาวน์โหลดตัวติดตั้งรุ่นล่าสุด แล้วติดตั้งทับได้เลย — อายุการใช้งานนับต่อจากวันที่ติดตั้งครั้งแรก")
+        self.download.setStyleSheet("QPushButton { background:#1D4ED8; color:white; border:none; border-radius:6px;"
+                                    " padding:6px 10px; font-weight:bold; } QPushButton:hover { background:#2563EB; }")
+        self.download.clicked.connect(self.open_download)
+        lay.addWidget(self.download)
+        self._info = None
         self.link = QLabel("<a href='#' style='color:#5AA9FF'>↻ อัปเดตตัวเลข</a>")
         self.link.setAlignment(Qt.AlignRight)
         self.link.linkActivated.connect(lambda _h: self.refresh())
@@ -226,7 +233,24 @@ class StatsBox(QFrame):
                 self.body.setText("ยังไม่มีข้อมูล (ออฟไลน์)")
         QTimer.singleShot(300, poll)
 
+    def download_url(self) -> str:
+        """The latest installer itself; without release data, the releases page."""
+        info = self._info
+        if info and getattr(info, "installer_url", ""):
+            return info.installer_url
+        if info and info.latest:
+            return update.ASSET.format(repo=REPO, tag=f"{TAG_PREFIX}{info.latest}",
+                                       name=f"readwanicn2027-setup-{info.latest}.exe")
+        return f"https://github.com/{REPO}/releases/latest"
+
+    def open_download(self):
+        QDesktopServices.openUrl(QUrl(self.download_url()))
+
     def show_info(self, info, cached=False):
+        self._info = info
+        if info.latest:
+            self.download.setText(f"⬇ ดาวน์โหลดรุ่นล่าสุด v{info.latest}"
+                                  + (" (ใหม่กว่ารุ่นที่ใช้อยู่)" if info.newer else ""))
         lines = []
         if info.latest:
             day = f" ({info.published_th})" if getattr(info, "published_th", "") else ""

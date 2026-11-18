@@ -296,3 +296,18 @@ def test_new_version_found_and_offered():
     d = UpdateDialog(info, lic)
     texts = " ".join(w.text() for w in d.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
     assert "v2099.1.0" in texts and "18 พฤศจิกายน 2570" in texts and "ไม่เริ่มนับใหม่" in texts
+
+
+def test_login_box_download_latest_button():
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from readwanicn import update
+    from readwanicn.ui import StatsBox
+    box = StatsBox(QSettings("WANICNSURVEY-test", "stats-test"))
+    assert box.download_url().endswith("/releases/latest")
+    box.show_info(update.ReleaseInfo(latest="2027.4.5"))
+    assert box.download_url().endswith("/readwanicn-v2027.4.5/readwanicn2027-setup-2027.4.5.exe")
+    assert "v2027.4.5" in box.download.text()
+    box.show_info(update.ReleaseInfo(latest="2099.1.0", newer=True, installer_url="https://example.invalid/s.exe"))
+    assert box.download_url() == "https://example.invalid/s.exe" and "ใหม่กว่า" in box.download.text()
