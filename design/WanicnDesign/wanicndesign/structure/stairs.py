@@ -15,7 +15,7 @@ Two layouts, as in the QuickDesign stair menus [QD-STAIR]:
 Each flight is a one-way slab strip, simply supported over the bay length
 [STATICS], with the inclined part loaded by the waist t/cosθ plus half a
 riser of concrete and the landing by t [UNIT-WT]; finishes and the stair
-live load of กฎกระทรวง ฉบับที่ 6 ข้อ 15 [MR6-15]. Geometry is checked against
+live load of กฎกระทรวง พ.ศ. 2566 ข้อ 11 [MR2566-11]. Geometry is checked against
 กฎกระทรวง ฉบับที่ 55 ข้อ 23–24 [MR55-STAIR]; thickness against the
 one-way slab minimum [EIT1007-SLABMIN].
 """
@@ -29,13 +29,9 @@ from .analysis import continuous_beam, partial_udl
 from .materials import CONCRETE_KG_M3, FY
 from .sections import bar_area, pick_spacing
 
-#: Stair live load, kg/m², by building use — กฎกระทรวง ฉบับที่ 6 ข้อ 15:
-#: halls, stairs and corridors 300 (apartments, hotels, offices, banks),
-#: 400 (commercial buildings, schools, hospitals), 500 (markets,
-#: department stores, assembly halls). Houses are not listed separately;
-#: 300 is used (the lowest stair value in the table, on the safe side).
-STAIR_LIVE = {"house": 300, "apartment": 300, "office": 300, "commercial": 400,
-              "assembly": 500, "industrial": 500, "archive": 500}
+#: Stair live load, kg/m², by building use — กฎกระทรวง พ.ศ. 2566 ข้อ 11
+#: (halls, stairs and corridors of each use; houses: "ระเบียง บันได" 200).
+from ..standards import STAIR_LIVE  # noqa: E402
 
 #: Geometry limits — กฎกระทรวง ฉบับที่ 55 ข้อ 23 (residential buildings)
 #: and ข้อ 24 (other buildings): riser max, tread min, clear width min,
@@ -108,7 +104,7 @@ def rules_for(b) -> dict:
 
 
 def live_load(b, st) -> float:
-    return st.live_load or STAIR_LIVE.get(b.occupancy, 300)
+    return st.live_load or STAIR_LIVE.get(b.occupancy, 400)
 
 
 def geometry(b, st) -> StairGeom | None:
@@ -170,7 +166,7 @@ def min_thickness(span: float, fy: float) -> float:
 
 def design_stair(b, mat, st) -> StairResult:
     g = geometry(b, st)
-    refs = cite(mat.ref, "STATICS", "UNIT-WT", "MR6-15", "MR55-STAIR", "EIT1007-SLABMIN", "EIT1007-TEMP",
+    refs = cite(mat.ref, "STATICS", "UNIT-WT", "MR2566-11", "MR55-STAIR", "EIT1007-SLABMIN", "EIT1007-TEMP",
                 "EIT1007-SHEAR", "QD-STAIR")
     if g is None:
         return StairResult(st.name, st.level, st.panel, st.kind, 0, 0, st.tread, 0, 0, st.thickness, 0, 0, 0,

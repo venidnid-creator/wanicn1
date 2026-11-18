@@ -9,12 +9,12 @@
   {"name": "GB", "elevation": 0.0, "slab": "on_ground", "slab_thickness": 0.10,
    "beam_width": 0.20, "beam_depth": 0.40, "beam_mark": "GB", "walls": "perimeter"},
   {"name": "FL2", "elevation": 3.2, "slab": "suspended", "slab_thickness": 0.10,
-   "live_load": 150, "finish_load": 50, "beam_width": 0.20, "beam_depth": 0.40,
+   "live_load": 200, "finish_load": 50, "beam_width": 0.20, "beam_depth": 0.40,
    "beam_mark": "B", "walls": "perimeter"},
   {"name": "ROOF", "elevation": 6.2, "slab": "roof", "beam_width": 0.15, "beam_depth": 0.30,
    "beam_mark": "RB", "walls": "none"}
  ],
  "roof": {"shape": "hip", "cover": "concrete_tile", "slope_deg": 30, "overhang": 1.0,
-          "live_load": 30, "frame_load": 15, "purlin_spacing": 0.32, "rafter_spacing": 1.0},
+          "live_load": 50, "frame_load": 15, "purlin_spacing": 0.32, "rafter_spacing": 1.0},
  "foundation": {"depth": 1.5, "kind": "pile", "pile": "I22", "pile_length": 16.0}
 }

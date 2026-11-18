@@ -46,9 +46,14 @@ def write_report(res: DesignResult, path: str) -> None:
     ws.append([])
     use = next((t for k, t, _v in LIVE_LOADS if k == b.occupancy), b.occupancy)
     rows = [
+        ("กฎหมาย", "กฎกระทรวง กำหนดการออกแบบโครงสร้างอาคาร ... พ.ศ. 2566" if b.design_code != "MR6"
+         else "กฎกระทรวง ฉบับที่ 6 (พ.ศ. 2527) ตามบทเฉพาะกาล ข้อ 25"),
+        ("ตัวคูณลดกำลัง (ข้อ 8)", "มีการระบุมาตรฐานงานก่อสร้างและการควบคุมคุณภาพ" if b.quality_control
+         else "ไม่มีการระบุมาตรฐานงานก่อสร้างและการควบคุมคุณภาพ"),
         ("เกณฑ์การออกแบบ", CODES.get(b.design_code, b.design_code)),
         ("ประเภทการใช้อาคาร", use),
-        ("ลดน้ำหนักจรสำหรับเสาและฐานราก", "ใช้ (กฎกระทรวง ฉบับที่ 6 ข้อ 16)" if b.ll_reduction else "ไม่ใช้"),
+        ("ลดน้ำหนักจรสำหรับเสาและฐานราก", ("ใช้ (กฎกระทรวง ฉบับที่ 6 ข้อ 16 ตามบทเฉพาะกาล)" if b.design_code == "MR6"
+                                            else "ใช้ (กฎกระทรวง พ.ศ. 2566 ข้อ 13–14)") if b.ll_reduction else "ไม่ใช้"),
         ("กำลังอัดคอนกรีต fc' (ทรงกระบอก)", f"{mat.fc_prime:g} ksc"),
         ("หน่วยแรงอัดที่ยอมให้ fc", f"{mat.fc:.1f} ksc"),
         ("n = Es/Ec", mat.n),
@@ -128,10 +133,50 @@ def write_report(res: DesignResult, path: str) -> None:
            [(f.node, f.mark, f.kind, round(f.load), f.pile, f.piles, f.pile_capacity, f.width,
              f.length, f.thickness, f.bars_x, f.bars_y, ok(f.ok), f.note, f.refs) for f in res.footings],
            [9, 6, 7, 10, 8, 7, 10, 7, 7, 7, 10, 10, 5, 36, 40])
+    if res.fire:
+        f = res.fire
+        rows = [("พื้นที่อาคารรวม (ประมาณจากแปลนกริด)", round(f.area, 1), "ตร.ม.", ""),
+                ("จำนวนชั้น", f.storeys, "", ""), ("ความสูง", round(f.height, 2), "ม.", ""),
+                ("ต้องมีอัตราการทนไฟ (ข้อ 22)", "ต้อง" if f.applies else "ไม่ต้อง", "", "MR2566-23")]
+        rows += [("เหตุ", r, "", "MR2566-23") for r in f.reasons]
+        rows += [(f"ชั้น {n}", f"เสา คาน ผนังรับน้ำหนัก {h:g} ชม. พื้น {s:g} ชม.", "", "MR2566-23")
+                 for n, h, s in f.floors]
+        if f.applies:
+            rows.append(("โครงหลังคา", f"{f.roof_hours:g} ชม." if f.roof_hours else "ไม่บังคับ", "", "MR2566-23"))
+        rows += [("หมายเหตุ", x, "", "MR2566-23") for x in f.notes]
+        _sheet(wb, "การทนไฟ", ["รายการ", "ค่า", "หน่วย", "อ้างอิง"], rows, [36, 70, 8, 14])
+    if res.wind:
+        _wind_sheet(wb, res)
     if res.seismic:
         _seismic_sheet(wb, res)
     references_sheet(wb, res.all_refs())
     wb.save(path)
+
+
+def _wind_sheet(wb, res):
+    w = res.wind
+    rows = [("กฎหมาย", "กฎกระทรวง พ.ศ. 2566 ข้อ 17 (หน่วยแรงลมตามตาราง)", "", "MR2566-17"),
+            ("สภาพภูมิประเทศ", "เมืองหรือชานเมือง (ตารางที่ 1)" if w.terrain == "urban"
+             else "โล่งหรือชายฝั่งทะเล (ตารางที่ 2)", "", "MR2566-17"),
+            ("อาคารสาธารณะ ≥ 1,000 ตร.ม. (+15%)", "ใช่" if w.public else "ไม่ใช่", "", "MR2566-17"),
+            ("ความสูงอาคาร (ถึงสันหลังคา)", round(w.height, 2), "ม.", ""),
+            ("ความกว้างน้อยที่สุด", round(w.least_width, 2), "ม.", ""),
+            ("ใช้ตารางได้ (สูง ≤ 40 ม. และ ≤ 3 เท่าความกว้าง)", "ได้" if w.applicable else "ไม่ได้", "", "MR2566-17")]
+    rows += [(f"หน่วยแรงลม {t}", q, "กก./ตร.ม.", "MR2566-17") for t, q in w.pressures]
+    rows += [("การรวมน้ำหนัก (กำลัง)", "0.75(1.4D + 1.7L) + 1.6W ; 0.9D + 1.6W", "", "MR2566-7"),
+             ("การรวมน้ำหนัก (หน่วยแรงใช้งาน) เสาเข็ม/ดิน", "D + 0.75(L + W) ; 0.6D + W", "", "MR2566-6"),
+             ("ตัวคูณลดกำลัง", "ตามข้อ 8 (มี/ไม่มีการควบคุมคุณภาพ)", "", "MR2566-8")]
+    rows += [("⚠", x, "", "") for x in w.warnings]
+    _sheet(wb, "แรงลม", ["รายการ", "ค่า", "หน่วย", "อ้างอิง"], rows, [44, 60, 10, 14])
+    _sheet(wb, "แรงลม-ชั้น", ["ชั้น", "ช่วงความสูง ม.", "Fx กก.", "Fy กก.", "Vx กก.", "Vy กก.", "Δx/h", "Δy/h",
+                             "หมายเหตุ"],
+           [(lv.level, f"{lv.z0:.2f}–{lv.z1:.2f}", round(lv.fx), round(lv.fy), round(lv.vx), round(lv.vy),
+             round(lv.drift_x, 5), round(lv.drift_y, 5), lv.note) for lv in w.levels],
+           [8, 14, 10, 10, 10, 10, 9, 9, 40])
+    kinds = {"column": "เสา", "beam": "คาน", "footing": "ฐานราก"}
+    _sheet(wb, "แรงลม-ชิ้นส่วน", ["ชิ้นส่วน", "ตำแหน่ง", "ทิศ", "แรง", "กำลัง", "อัตราส่วน", "ปลอก", "ผล", "หมายเหตุ"],
+           [(kinds[c.kind], c.where, c.direction, c.demand, c.capacity, c.ratio, c.detail, ok(c.ok), c.note)
+            for c in w.checks], [8, 18, 5, 34, 26, 9, 14, 5, 40])
 
 
 def _seismic_sheet(wb, res):
@@ -154,9 +199,9 @@ def _seismic_sheet(wb, res):
         ("k (การกระจายแรงตามความสูง)", round(q.k, 3), "", "DPT1301"),
         ("การวิเคราะห์", "โครงข้อแข็งระนาบทุกแนวกริด พื้นแข็งเกร็ง แรงบิดโดยบังเอิญ 5% "
          "เสา 0.70Ig คาน 0.35Ig", "", "STATICS, ACI318-STIFF"),
-        ("การรวมน้ำหนัก (กำลัง)", "(1.2+0.2SDS)D + 1.0L + E ; (0.9−0.2SDS)D + E", "", "DPT1301, ASCE7, EIT1008"),
+        ("การรวมน้ำหนัก (กำลัง)", "0.75(1.4D + 1.7L) + 1.0E ; 0.9D + 1.0E", "", "MR2566-7"),
         ("การรวมน้ำหนัก (หน่วยแรงใช้งาน) เสาเข็ม/ดิน",
-         "(1+0.14SDS)D + 0.7E ; (1+0.105SDS)D + 0.75L + 0.525E ; (0.6−0.14SDS)D + 0.7E", "", "ASCE7"),
+         "D + 0.7E ; D + 0.525E + 0.75L ; 0.6D + 0.7E", "", "MR2566-6"),
     ]
     rows += [("⚠", w, "", "") for w in q.warnings]
     _sheet(wb, "แผ่นดินไหว", ["รายการ", "ค่า", "หน่วย", "อ้างอิง"], rows, [42, 70, 10, 26])

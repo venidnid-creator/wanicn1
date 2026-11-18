@@ -8,8 +8,8 @@
    end moments that a continuous beam on pins cannot, and the hogging
    moments at exterior supports; beam top steel is designed for the larger
    of the two analyses (an envelope).
-2. Columns are checked by strength design [EIT1008] for 1.4D and
-   1.2D + 1.6L: slenderness k·lu/r with k = 1 (non-sway), ignored up to 22;
+2. Columns are checked by strength design [EIT1008] for 1.4D + 1.7L
+   (กฎกระทรวง พ.ศ. 2566 ข้อ 7) with the φ of ข้อ 8: slenderness k·lu/r with k = 1 (non-sway), ignored up to 22;
    beyond, the moments are magnified by δ = Cm/(1 − Pu/0.75Pc) with Cm = 1,
    EI = 0.4·Ec·Ig/(1 + βdns), not less than M2,min = Pu(1.5 + 0.03h) cm
    [EIT1008-SLENDER]. Bending about both axes is combined linearly,
@@ -56,7 +56,8 @@ class StoreyStability:
 class GravityFrameResult:
     stability: list = field(default_factory=list)
     beams_raised: int = 0
-    refs: str = cite("STATICS", "ACI318-STIFF", "EIT1008", "EIT1008-SLENDER", "EIT1008-BIAX", "EIT1008-LOADS")
+    refs: str = cite("STATICS", "ACI318-STIFF", "MR2566-7", "MR2566-8", "EIT1008", "EIT1008-SLENDER",
+                     "EIT1008-BIAX")
 
 
 def _beam_member_loads(x, part):
@@ -164,7 +165,7 @@ def magnifier(pu, pd, depth_cm, width_cm, lu_cm, fc):
     if lam <= LAMBDA_FREE or pu <= 0:
         return lam, 1.0, False
     ig = width_cm * depth_cm ** 3 / 12
-    beta = min(1.0, 1.2 * pd / pu) if pu else 0.0          # βdns, sustained share
+    beta = min(1.0, 1.4 * pd / pu) if pu else 0.0          # βdns: factored dead / total
     ei = 0.4 * (_ec(fc) / 1e4) * ig / (1 + beta)
     pc = math.pi ** 2 * ei / lu_cm ** 2
     if pu >= 0.75 * pc:
@@ -178,8 +179,8 @@ def check_column(b, c, mat, lu: float):
     fc, fy = b.fc_prime, FY[mat.main_grade]
     PD, PL = c.load - c.live, c.live
     worst = (0.0, "")
-    for pu, mx, my in ((1.4 * PD, 1.4 * c.m_dx, 1.4 * c.m_dy),
-                       (1.2 * PD + 1.6 * PL, 1.2 * c.m_dx + 1.6 * c.m_lx, 1.2 * c.m_dy + 1.6 * c.m_ly)):
+    # กฎกระทรวง พ.ศ. 2566 ข้อ 7 (1): นป. = 1.4นค. + 1.7นจ.
+    for pu, mx, my in ((1.4 * PD + 1.7 * PL, 1.4 * c.m_dx + 1.7 * c.m_lx, 1.4 * c.m_dy + 1.7 * c.m_ly),):
         n, size = parse_bars(c.bars)
         parts, text = [], []
         for d, m in (("x", mx), ("y", my)):
@@ -230,7 +231,8 @@ def design_columns(b, res, mat, col_at, z_base) -> GravityFrameResult:
             if ratio > 1.0:
                 c.ok = False
                 c.note = _add(c.note, "ไม่ผ่านแรงอัดร่วมกับโมเมนต์")
-            c.refs = _add_ref(c.refs, "EIT1008", "EIT1008-LOADS", "EIT1008-SLENDER", "EIT1008-BIAX", "ACI318-STIFF")
+            c.refs = _add_ref(c.refs, "MR2566-7", "MR2566-8", "EIT1008", "EIT1008-SLENDER", "EIT1008-BIAX",
+                              "ACI318-STIFF")
         if not grew:
             break
     out.beams_raised = raise_beam_end_moments(res, mat, beam_hog)
@@ -239,7 +241,7 @@ def design_columns(b, res, mat, col_at, z_base) -> GravityFrameResult:
             k = stiff.get((li, d))
             if not k:
                 continue
-            pu = sum(1.2 * (c.load - c.live) + 1.6 * c.live for (i, j, l2), c in col_at.items() if l2 == li)
+            pu = sum(1.4 * (c.load - c.live) + 1.7 * c.live for (i, j, l2), c in col_at.items() if l2 == li)
             lc = next(c.height for (i, j, l2), c in col_at.items() if l2 == li)
             q = pu / (k * lc)
             seg = next(c.segment for (i, j, l2), c in col_at.items() if l2 == li)

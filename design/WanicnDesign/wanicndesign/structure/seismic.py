@@ -16,11 +16,11 @@ follow ASCE 7-05 [ASCE7]):
 6. Each frame line is analysed as a plane frame with cracked stiffness
    (0.70 Ig columns, 0.35 Ig beams) [ACI318-STIFF]: storey drift
    Δ = Cd·δe/Ie ≤ Δa, stability coefficient θ.
-7. Strength checks with the load combinations of the standard:
-   (1.2 + 0.2 SDS) D + 1.0 L + E and (0.9 − 0.2 SDS) D + E for beams and
-   columns (strength design, วสท. 1008 / ACI 318 [EIT1008]); allowable
-   stress combinations D + 0.7E, D + 0.75L + 0.525E, 0.6D + 0.7E for
-   piles and soil.
+7. Strength checks with the load combinations of กฎกระทรวง พ.ศ. 2566
+   ข้อ 7 (3): 0.75(1.4D + 1.7L) + 1.0E and 0.9D + 1.0E for beams and
+   columns, with the strength reduction factors of ข้อ 8 [MR2566-7],
+   [MR2566-8]; ข้อ 6 (3) allowable stress combinations D + 0.7E,
+   D + 0.525E + 0.75L, 0.6D + 0.7E for piles and soil [MR2566-6].
 
 Gravity design stays by working stress (วสท. 1007); the earthquake check is
 a separate strength check that may add bars, enlarge columns and add piles.
@@ -60,12 +60,12 @@ DRIFT_LIMIT = {"I": 0.020, "II": 0.020, "III": 0.015, "IV": 0.010}
 ACCIDENTAL = 0.05
 CRACKED_COLUMN, CRACKED_BEAM = 0.70, 0.35          # [ACI318-STIFF]
 STORAGE_USES = {"industrial", "archive"}            # 25% of live load in W
-PHI_SHEAR = 0.75
 COVER = 4.0                                          # cm to the ties
 TIE = "RB6"
 FY_TIE = 2400.0
 
-REFS = cite("DPT1301", "ASCE7", "EIT1008", "ACI318-STIFF", "STATICS")
+REFS = cite("MR2566-18", "DPT1301", "ASCE7", "MR2566-6", "MR2566-7", "MR2566-8", "EIT1008", "ACI318-STIFF",
+            "STATICS")
 
 
 def _step(v: float, steps: list[float], vals: list[float]) -> float:
@@ -158,13 +158,28 @@ def _beta1(fc: float) -> float:
     return max(0.65, min(0.85, 0.85 - 0.05 * (fc - 280.0) / 70.0))
 
 
-def _phi(eps_t: float, fy: float) -> float:
-    ey = fy / ES
-    if eps_t <= ey:
-        return 0.65
-    if eps_t >= 0.005:
-        return 0.90
-    return 0.65 + 0.25 * (eps_t - ey) / (0.005 - ey)
+#: Strength reduction factors — กฎกระทรวง พ.ศ. 2566 ข้อ 8 [MR2566-8], with and without a specified
+#: construction standard and quality control: bending (and tension), tied columns, shear.
+PHI_TABLE = {True: {"b": 0.90, "c": 0.70, "v": 0.85}, False: {"b": 0.75, "c": 0.60, "v": 0.70}}
+PHI = dict(PHI_TABLE[True])
+
+
+def use_quality_control(qc: bool) -> None:
+    """Set the factors of ข้อ 8 for the design run (``Building.quality_control``)."""
+    PHI.update(PHI_TABLE[bool(qc)])
+
+
+def _nominal(c, depth, width, bars, fc, fy, b1):
+    a = min(b1 * c, depth)
+    cc = 0.85 * fc * a * width
+    P, M = cc, cc * (depth / 2 - a / 2)
+    for y, area in bars:
+        fs = max(-fy, min(fy, ES * 0.003 * (c - y) / c))
+        if y < a:
+            fs -= 0.85 * fc
+        P += area * fs
+        M += area * fs * (depth / 2 - y)
+    return P, M
 
 
 def parse_bars(text: str) -> tuple[int, str]:
@@ -191,25 +206,29 @@ def column_bars(n: int, size: str, depth: float, width: float):
 
 
 def pm_curve(depth: float, width: float, bars, fc: float, fy: float):
-    """φPn, φMn points (kg, kg-cm) from pure tension to the compression cap."""
+    """φPn, φMn points (kg, kg-cm) from pure tension to the compression cap.
+
+    φ is that of tied columns (ข้อ 8) and rises linearly to that of bending
+    as φPn falls from min(0.1fc'Ag, φPb) to zero (ACI 318-99 9.3.2.2, the
+    edition that goes with the 1.4/1.7 load factors of ข้อ 7)."""
+    phc, phb = PHI["c"], PHI["b"]
     b1 = _beta1(fc)
     ast = sum(a for _y, a in bars)
     ag = depth * width
-    p_max = 0.80 * 0.65 * (0.85 * fc * (ag - ast) + fy * ast)
+    p_max = 0.80 * phc * (0.85 * fc * (ag - ast) + fy * ast)
     dt = max(y for y, _a in bars)
-    pts = [(-0.9 * ast * fy, 0.0)]
+    pb, _mb = _nominal(0.003 / (0.003 + fy / ES) * dt, depth, width, bars, fc, fy, b1)
+    p_lim = max(1.0, min(0.1 * fc * ag, phc * pb))
+    pts = [(-phb * ast * fy, 0.0)]
     for t in range(1, 121):
         c = depth * 3.0 * t / 120
-        a = min(b1 * c, depth)
-        cc = 0.85 * fc * a * width
-        P, M = cc, cc * (depth / 2 - a / 2)
-        for y, area in bars:
-            fs = max(-fy, min(fy, ES * 0.003 * (c - y) / c))
-            if y < a:
-                fs -= 0.85 * fc
-            P += area * fs
-            M += area * fs * (depth / 2 - y)
-        phi = _phi(0.003 * (dt - c) / c, fy)
+        P, M = _nominal(c, depth, width, bars, fc, fy, b1)
+        if P <= 0:
+            phi = phb
+        elif phc * P >= p_lim:
+            phi = phc
+        else:
+            phi = phb - (phb - phc) * phc * P / p_lim
         pts.append((min(phi * P, p_max), phi * M))
     pts.sort()
     return pts, p_max
@@ -229,12 +248,12 @@ def phi_mn_at(curve, pu: float) -> float:
 
 def phi_mn_beam(as_: float, b: float, d: float, fc: float, fy: float) -> float:
     a = as_ * fy / (0.85 * fc * b)
-    return 0.9 * as_ * fy * (d - a / 2)
+    return PHI["b"] * as_ * fy * (d - a / 2)
 
 
 def as_for(mu: float, b: float, d: float, fc: float, fy: float) -> float | None:
     """Tension steel for φMn ≥ Mu (kg-cm); None when the section is too small."""
-    rn = mu / (0.9 * b * d * d)
+    rn = mu / (PHI["b"] * b * d * d)
     x = 1 - 2 * rn / (0.85 * fc)
     if x < 0:
         return None
@@ -250,7 +269,7 @@ def rho_max(fc: float, fy: float) -> float:
 def tie_spacing(vu: float, b: float, d: float, fc: float, nu: float = 0.0, ag: float = 0.0):
     """Two-leg RB6 tie spacing (cm) for φ(Vc + Vs) ≥ Vu, or None."""
     vc = 0.53 * math.sqrt(fc) * b * d * (1 + (nu / (140 * ag) if ag and nu > 0 else 0.0))
-    vs = vu / PHI_SHEAR - vc
+    vs = vu / PHI["v"] - vc
     if vs <= 0:
         return 999.0
     if vs > 2.1 * math.sqrt(fc) * b * d:
@@ -346,6 +365,57 @@ def build_frames(b, res, col_at, z_base):
     return frames
 
 
+def lateral_forces(b, res, col_at, z_base, F_dir, centres, accidental, first=1):
+    """Floor forces ``F_dir[d][li]`` (kg, at levels ``first``…top) into the
+    frame lines: rigid floors, each frame by its lateral stiffness, with
+    the eccentricity of ``centres[li]`` (plan point where the floor force
+    acts) from the centre of rigidity plus ``accidental`` × the plan size.
+    Returns ``(col_forces, beam_forces, drift)``: column (M max, N, V,
+    M bottom) and beam (M max, V) per direction, and the largest elastic
+    storey drift per level and direction [STATICS]."""
+    n_lv = len(b.levels)
+    frames = build_frames(b, res, col_at, z_base)
+    for fr in frames:
+        pattern = {li: F_dir[fr.direction][li] for li in range(first, n_lv)}
+        total = sum(pattern.values())
+        disp, _f = fr.solve(pattern)
+        top = fr.level_disp(disp, n_lv - 1)
+        fr.k = float(total / top) if top > 0 and total > 0 else 0.0
+    kx = [f for f in frames if f.direction == "x"]
+    ky = [f for f in frames if f.direction == "y"]
+    sum_k = {"x": sum(f.k for f in kx) or 1.0, "y": sum(f.k for f in ky) or 1.0}
+    cr = {"x": sum(f.k * f.coord for f in kx) / sum_k["x"],      # y of the centre (x loading)
+          "y": sum(f.k * f.coord for f in ky) / sum_k["y"]}
+    J = sum(f.k * (f.coord - cr[f.direction]) ** 2 for f in frames) or 1.0
+    dims = {"x": b.ys[-1], "y": b.xs[-1]}
+    col_forces, beam_forces = {}, {}
+    drift = {"x": [0.0] * n_lv, "y": [0.0] * n_lv}
+    for fr in frames:
+        d = fr.direction
+        forces = {}
+        for li in range(first, n_lv):
+            e0 = (centres[li][1] if d == "x" else centres[li][0]) - cr[d]
+            arm = fr.coord - cr[d]
+            share = max(fr.k / sum_k[d] + fr.k * arm * (e0 + sg * accidental * dims[d]) / J
+                        for sg in (1, -1))
+            forces[li] = F_dir[d][li] * max(share, fr.k / sum_k[d])
+        disp, mf = fr.solve(forces)
+        for m, _node, li in fr.columns:
+            if li >= 1:
+                mem = fr.members[m]
+                rel = abs(float(disp[mem.j][0] - disp[mem.i][0]))
+                drift[d][li] = max(drift[d][li], rel)
+        for m, node, li in fr.columns:
+            N1, V1, M1, _N2, _V2, M2 = mf[m]
+            col_forces[(node, li, d)] = (float(max(abs(M1), abs(M2))), float(abs(N1)), float(abs(V1)),
+                                         float(abs(M1)))
+        for m, x in fr.beams:
+            _N1, V1, M1, _N2, _V2, M2 = mf[m]
+            prev = beam_forces.get(id(x), (0.0, 0.0))
+            beam_forces[id(x)] = (max(prev[0], float(max(abs(M1), abs(M2)))), max(prev[1], float(abs(V1))))
+    return col_forces, beam_forces, drift
+
+
 def analyse(b, res, node_dead, node_live, col_at, z_base):
     """Seismic forces, drifts and member forces. Returns
     ``(SeismicResult, column_forces, beam_forces)``."""
@@ -396,44 +466,11 @@ def analyse(b, res, node_dead, node_live, col_at, z_base):
                             + ("ต้องใช้โครงต้านแรงดัดแบบพิเศษ ซึ่งโปรแกรมยังไม่รองรับ" if sdc == "D"
                                else "ให้เลือกระบบที่มีความเหนียวมากขึ้น"))
 
-    frames = build_frames(b, res, col_at, z_base)
-    pattern = {li: F[li] for li in range(1, n_lv)}
-    for fr in frames:
-        disp, _f = fr.solve(pattern)
-        top = fr.level_disp(disp, n_lv - 1)
-        fr.k = float(V / top) if top > 0 else 0.0
-    kx = [f for f in frames if f.direction == "x"]
-    ky = [f for f in frames if f.direction == "y"]
-    sum_k = {"x": sum(f.k for f in kx) or 1.0, "y": sum(f.k for f in ky) or 1.0}
-    cr = {"x": sum(f.k * f.coord for f in kx) / sum_k["x"],      # y of the centre (x loading)
-          "y": sum(f.k * f.coord for f in ky) / sum_k["y"]}
-    J = sum(f.k * (f.coord - cr[f.direction]) ** 2 for f in frames) or 1.0
-    dims = {"x": b.ys[-1], "y": b.xs[-1]}
-
-    col_forces, beam_forces = {}, {}
-    drift = {"x": [0.0] * n_lv, "y": [0.0] * n_lv}
-    for fr in frames:
-        d = fr.direction
-        forces = {}
-        for li in range(1, n_lv):
-            e0 = (cm[li][1] if d == "x" else cm[li][0]) - cr[d]
-            arm = fr.coord - cr[d]
-            share = max(fr.k / sum_k[d] + fr.k * arm * (e0 + sg * ACCIDENTAL * dims[d]) / J
-                        for sg in (1, -1))
-            forces[li] = F[li] * max(share, fr.k / sum_k[d])
-        disp, mf = fr.solve(forces)
-        for m, _node, li in fr.columns:
-            if li >= 1:
-                mem = fr.members[m]
-                rel = abs(float(disp[mem.j][0] - disp[mem.i][0]))
-                drift[d][li] = max(drift[d][li], cd * rel / ie)
-        for m, node, li in fr.columns:
-            N1, V1, M1, _N2, _V2, M2 = mf[m]
-            key = (node, li, d)
-            col_forces[key] = (float(max(abs(M1), abs(M2))), float(abs(N1)), float(abs(V1)), float(abs(M1)))
-        for m, x in fr.beams:
-            _N1, V1, M1, _N2, _V2, M2 = mf[m]
-            beam_forces[id(x)] = (float(max(abs(M1), abs(M2))), float(abs(V1)))
+    F_dir = {"x": F, "y": F}
+    centres = [(c[0], c[1]) for c in cm]
+    col_forces, beam_forces, raw = lateral_forces(b, res, col_at, z_base, F_dir, centres, ACCIDENTAL,
+                                                  first=1)
+    drift = {d: [cd * v / ie for v in raw[d]] for d in raw}
 
     # storeys
     lim = DRIFT_LIMIT[s.category]
@@ -487,8 +524,9 @@ def check_columns(b, res, out, col_forces, col_at, mat):
                        if st.li == li and st.direction == d), 1.0)
             M *= ds                                                    # sway magnifier [EIT1008-SLENDER]
             md, ml = (c.m_dx, c.m_lx) if d == "x" else (c.m_dy, c.m_ly)       # gravity moments
-            combos = [((1.2 + 0.2 * sds) * D + L + N, M + (1.2 + 0.2 * sds) * md + ml),
-                      ((0.9 - 0.2 * sds) * D - N, M + (0.9 - 0.2 * sds) * md)]
+            # กฎกระทรวง พ.ศ. 2566 ข้อ 7 (3): 0.75(1.4D + 1.7L) + 1.0E and 0.9D + 1.0E
+            combos = [(0.75 * (1.4 * D + 1.7 * L) + N, M + 0.75 * (1.4 * md + 1.7 * ml)),
+                      (0.9 * D - N, M + 0.9 * md)]
             while True:
                 n, size = parse_bars(c.bars)
                 depth, width = (c.b * 100, c.h * 100) if d == "x" else (c.h * 100, c.b * 100)
@@ -522,7 +560,7 @@ def check_columns(b, res, out, col_forces, col_at, mat):
         bmin = min(c.b, c.h) * 100
         detail = ""
         dd = max(c.b, c.h) * 100 - COVER - 1.0
-        s_v = tie_spacing((2.0 if imf else 1.0) * Vsh, bmin, dd, fc, (0.9 - 0.2 * sds) * D, c.b * c.h * 1e4)
+        s_v = tie_spacing((2.0 if imf else 1.0) * Vsh, bmin, dd, fc, 0.9 * D, c.b * c.h * 1e4)
         if imf:
             so = min(8 * BAR_DIA[size], 24 * BAR_DIA[TIE], bmin / 2, 30.0)
             lo = max((c.height - 0.5) / 6, max(c.b, c.h), 0.45)
@@ -582,8 +620,8 @@ def check_beams(b, res, out, beam_forces, mat):
         ME, VE = beam_forces[id(x)]
         bw, d = x.b * 100, x.h * 100 - 5.0
         MD = max(0.0, x.m_neg - x.m_neg_live)
-        mu_neg = (1.2 + 0.2 * sds) * MD + 1.0 * x.m_neg_live + ME
-        mu_pos = max(0.0, ME - (0.9 - 0.2 * sds) * MD)
+        mu_neg = 0.75 * (1.4 * MD + 1.7 * x.m_neg_live) + ME                # ข้อ 7 (3)
+        mu_pos = max(0.0, ME - 0.9 * MD)
         notes, ok = [], True
         nt, st = parse_bars(x.top)
         nb, sb = parse_bars(x.bottom)
@@ -609,7 +647,7 @@ def check_beams(b, res, out, beam_forces, mat):
             if max(as_t, as_b) / (bw * d) > rho_max(fc, fy):
                 ok = False
                 notes.append("เหล็กเกิน 0.75ρb ต้องเพิ่มขนาดคาน")
-        vu = (1.2 + 0.2 * sds) * x.v + (2.0 if imf else 1.0) * VE
+        vu = 0.75 * 1.7 * x.v + (2.0 if imf else 1.0) * VE          # live factor on all: safe side
         s_v = tie_spacing(vu, bw, d, fc)
         if s_v is None:
             ok = False
@@ -661,9 +699,10 @@ def check_footings(b, res, out, col_forces, col_at, mat):
             low = math.inf
             for d in ("x", "y"):
                 _M, N, _V, Mb = col_forces.get((f.node, 0, d), (0.0, 0.0, 0.0, 0.0))
-                combos = [((1 + 0.14 * sds) * D + 0.7 * N, 0.7 * Mb),
-                          ((1 + 0.105 * sds) * D + 0.75 * L + 0.525 * N, 0.525 * Mb),
-                          ((0.6 - 0.14 * sds) * D - 0.7 * N, 0.7 * Mb)]
+                # กฎกระทรวง พ.ศ. 2566 ข้อ 6 (3)
+                combos = [(D + 0.7 * N, 0.7 * Mb),
+                          (D + 0.75 * L + 0.525 * N, 0.525 * Mb),
+                          (0.6 * D - 0.7 * N, 0.7 * Mb)]
                 for P, M in combos:
                     if new.kind == "pile":
                         pts = _pile_points(new.piles, piles[new.pile]["size_m"])

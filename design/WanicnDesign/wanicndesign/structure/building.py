@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 WALL_LOAD = {"brick": 180, "qcon": 90, "gypsum": 40, "concrete": 240, "metal": 0}
 #: Roof covering dead load, kg/m² of roof slope (QuickDesign appendix).
 ROOF_COVER_LOAD = {"concrete_tile": 50, "ceramic_tile": 50, "asbestos": 30, "metal_sheet": 20}
-#: Live load by use, kg/m² — กฎกระทรวง ฉบับที่ 6 ข้อ 15 (see standards.py).
+#: Live load by use, kg/m² — กฎกระทรวง พ.ศ. 2566 ข้อ 11 (see standards.py).
 from ..standards import LIVE_LOAD  # noqa: E402,F401
 
 
@@ -28,7 +28,7 @@ class Level:
     elevation: float               # m, ±0.00 = ground beam top
     slab: str = "suspended"        # "suspended", "on_ground", "none", "roof"
     slab_thickness: float = 0.10
-    live_load: float = 150.0       # kg/m²
+    live_load: float = 200.0       # kg/m² (house: กฎกระทรวง พ.ศ. 2566 ข้อ 11)
     finish_load: float = 50.0      # topping / finishes, kg/m²
     beam_width: float = 0.20
     beam_depth: float = 0.40
@@ -46,7 +46,7 @@ class Roof:
     cover: str = "concrete_tile"
     slope_deg: float = 30.0
     overhang: float = 1.0          # eave beyond the outer grid, m
-    live_load: float = 30.0        # kg/m² plan
+    live_load: float = 50.0        # kg/m² plan (กฎกระทรวง พ.ศ. 2566 ข้อ 11)
     frame_load: float = 15.0       # purlins + rafters, kg/m² slope
     purlin_spacing: float = 0.32   # battens for tiles
     rafter_spacing: float = 1.00
@@ -72,7 +72,7 @@ class Stair:
     kind: str = "landing"          # "straight" (one flight) or "landing" (two flights, landing on beam BT)
     tread: float = 0.25            # m
     thickness: float = 0.12        # waist slab, m (thickened when below the minimum)
-    live_load: float = 0.0         # kg/m²; 0 = by occupancy (กฎกระทรวง ฉบับที่ 6 ข้อ 15)
+    live_load: float = 0.0         # kg/m²; 0 = by occupancy (กฎกระทรวง พ.ศ. 2566 ข้อ 11)
     finish_load: float = 50.0      # kg/m²
 
 
@@ -92,6 +92,14 @@ class Seismic:
 
 
 @dataclass
+class Wind:
+    """Wind load by กฎกระทรวง พ.ศ. 2566 ข้อ 17 (see wind.py)."""
+    enabled: bool = True
+    terrain: str = "urban"         # "urban" (table 1) or "open" (table 2, open country / coast)
+    public: str = "auto"           # "auto", "yes", "no": public building of 1,000 m² or more (+15%)
+
+
+@dataclass
 class Building:
     name: str
     grid_x: list = field(default_factory=list)     # spacings 1-2, 2-3, … (m)
@@ -105,10 +113,12 @@ class Building:
     roof: Roof = field(default_factory=Roof)
     foundation: Foundation = field(default_factory=Foundation)
     fc_prime: float = 210.0
-    design_code: str = "EIT1007"   # "EIT1007" (วสท. 1007-34) or "MR6" (กฎกระทรวง ฉบับที่ 6)
+    design_code: str = "EIT1007"   # "EIT1007" (วสท. 1007-34) or "MR6" (repealed; transitional clause only)
     occupancy: str = "house"       # standards.LIVE_LOADS key
-    ll_reduction: bool = True      # กฎกระทรวง ฉบับที่ 6 ข้อ 16, columns and footings
+    ll_reduction: bool = True      # กฎกระทรวง พ.ศ. 2566 ข้อ 13–14, columns and footings
+    quality_control: bool = True   # construction standard and quality control specified (ข้อ 8 φ)
     seismic: Seismic = field(default_factory=Seismic)
+    wind: Wind = field(default_factory=Wind)
     stairs: list = field(default_factory=list)      # [Stair]
 
     # -- grid ---------------------------------------------------------------
@@ -370,7 +380,9 @@ class Building:
             design_code=d.get("design_code", "EIT1007"),
             occupancy=d.get("occupancy", "house"),
             ll_reduction=d.get("ll_reduction", True),
+            quality_control=d.get("quality_control", True),
             seismic=Seismic(**d.get("seismic", {})),
+            wind=Wind(**d.get("wind", {})),
             stairs=[Stair(**x) for x in d.get("stairs", [])],
         )
 

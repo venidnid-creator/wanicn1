@@ -48,7 +48,7 @@ def test_wsd_constants():
 def test_two_way_slab_case5():
     b = Building("t", grid_x=[4.0], grid_y=[4.0], levels=[Level("FL2", 3.0)])
     s = design_slab(b, Concrete(), b.levels[0], 0, 0)
-    W = 2400 * 0.10 + 50 + 150
+    W = 2400 * 0.10 + 50 + 200                    # house live load 200 [MR2566-11]
     assert s.kind == "two-way"
     assert s.m_pos == pytest.approx(0.050 * W * 16)
     assert s.ok
@@ -113,7 +113,7 @@ def test_slab_case_follows_continuity():
     # 1 (case 2), the middle panel none (case 1).
     b = Building("t", grid_x=[4.0] * 3, grid_y=[4.0] * 3, levels=[Level("FL2", 3.0)])
     c = Concrete()
-    W = 2400 * 0.10 + 50 + 150
+    W = 2400 * 0.10 + 50 + 200                    # house live load 200 [MR2566-11]
     corner = design_slab(b, c, b.levels[0], 0, 0)
     edge = design_slab(b, c, b.levels[0], 1, 0)
     middle = design_slab(b, c, b.levels[0], 1, 1)
@@ -132,8 +132,8 @@ def test_mr6_criteria_are_more_conservative():
 
 
 def test_live_load_reduction_lowers_column_loads():
-    # 4 floors: FL4 is the 1st floor below the roof (0 %), FL3 the 2nd (10 %),
-    # FL2 the 3rd (20 %) [MR6-16]. A two-storey house gets no reduction.
+    # กฎกระทรวง พ.ศ. 2566 ข้อ 13: FL4 is the 1st floor below the roof (0 %),
+    # FL3 the 2nd (0 %), FL2 the 3rd (10 %). A two-storey house gets no reduction.
     b = Building.load(BUILDING)
     fl = b.levels[1]
     b.levels = [b.levels[0]] + [Level(f"FL{k}", 3.2 * (k - 1), "suspended", fl.slab_thickness,
@@ -147,9 +147,17 @@ def test_live_load_reduction_lowers_column_loads():
     below_fl2 = [c for c in reduced if c.segment == "GB–FL2"]
     assert below_fl2 and all(c.live_reduced > 0 for c in below_fl2)
     assert all(c.load < plain[(c.node, c.segment)] for c in below_fl2)
-    assert all("MR6-16" in c.refs for c in below_fl2)
-    top = [c for c in reduced if c.segment == "FL4–ROOF"]
-    assert all(c.live_reduced == 0 for c in top)
+    assert all("MR2566-13" in c.refs for c in below_fl2)
+    for seg in ("FL4–ROOF", "FL3–FL4", "FL2–FL3"):            # nothing reduced above FL2
+        assert all(c.live_reduced == 0 for c in reduced if c.segment == seg)
+    # the reduction taken below FL2 is 10 % of FL2's live load reactions
+    from wanicndesign.structure.design import design_level_beams, design_roof
+    _bm, _r, live = design_level_beams(b, Concrete(), 1, design_roof(b))
+    for c in below_fl2:
+        assert c.live_reduced == pytest.approx(0.10 * live[b.parse_node(c.node)], rel=1e-6)
+    b.design_code = "MR6"                         # transitional clause: the repealed table, FL3 gets 10 %
+    old = design(b).columns
+    assert all(c.live_reduced > 0 for c in old if c.segment == "FL2–FL3")
     b.occupancy = "industrial"                    # no reduction for warehouses/factories
     assert all(c.live_reduced == 0 for c in design(b).columns)
 
@@ -175,7 +183,7 @@ def test_report_lists_standards(tmp_path):
     wb = openpyxl.load_workbook(out)
     refs = wb["มาตรฐานและที่มา"]
     codes = [r[0] for r in refs.iter_rows(min_row=2, values_only=True)]
-    assert "EIT1007-COL" in codes and "MR6-15" in codes
+    assert "EIT1007-COL" in codes and "MR2566-11" in codes and "MR6-15" not in codes
     assert [c.value for c in wb["คาน"][1]][-1] == "อ้างอิง"
 
 
@@ -200,7 +208,7 @@ def test_partial_udl_equals_its_total():
 
 
 def _one_bay(sub=None, cant=None):
-    fl = Level("FL2", 3.0, "suspended", 0.10, 150, 50, 0.20, 0.40, "B", "none")
+    fl = Level("FL2", 3.0, "suspended", 0.10, 200, 50, 0.20, 0.40, "B", "none")
     roof = Level("ROOF", 6.0, "none", 0.0, 0, 0, 0.20, 0.40, "RB", "none")
     b = Building("t", grid_x=[4.0], grid_y=[4.0], levels=[fl, roof])
     if sub:
@@ -213,7 +221,7 @@ def _one_bay(sub=None, cant=None):
 def test_secondary_beam_hand_check():
     from wanicndesign.structure.design import design_level_beams
     b = _one_bay(sub="x")
-    W = 2400 * 0.10 + 50 + 150                      # 440 kg/m²
+    W = 2400 * 0.10 + 50 + 200                      # 490 kg/m²
     res = design(b)
     sb = next(x for x in res.beams if x.kind == "secondary")
     # two 4 × 2 m pieces; each sends a trapezoid (q = W·S/2, ramps a = S/2) to
@@ -236,7 +244,7 @@ def test_secondary_beam_hand_check():
 def test_cantilever_slab_hand_check():
     from wanicndesign.structure.design import design_level_beams
     b = _one_bay(cant=1.5)
-    W = 2400 * 0.10 + 50 + 150
+    W = 2400 * 0.10 + 50 + 200                    # house live load 200 [MR2566-11]
     res = design(b)
     cs = next(s for s in res.slabs if s.kind == "cantilever")
     assert cs.m_neg == pytest.approx(W * 1.5 ** 2 / 2)
@@ -316,7 +324,7 @@ def test_column_interaction_points():
     bars = column_bars(4, "DB16", 30.0, 30.0)
     ast = sum(a for _y, a in bars)
     curve = pm_curve(30.0, 30.0, bars, fc, fy)
-    p0 = 0.80 * 0.65 * (0.85 * fc * (900 - ast) + fy * ast)
+    p0 = 0.80 * 0.70 * (0.85 * fc * (900 - ast) + fy * ast)             # φ tied 0.70 [MR2566-8]
     assert curve[1] == pytest.approx(p0)
     assert phi_mn_at(curve, p0 * 1.01) == 0.0
     # pure bending: about the beam value of the tension bars (compression bars add a little)
@@ -565,7 +573,7 @@ def test_moment_magnifier_hand_value():
     lam, delta, slender = magnifier(pu, pd, 25.0, 25.0, 300.0, fc)
     assert lam == pytest.approx(300 / (0.3 * 25)) and slender
     ec = 15100 * math.sqrt(fc)
-    ei = 0.4 * ec * 25 * 25 ** 3 / 12 / (1 + 1.2 * pd / pu)
+    ei = 0.4 * ec * 25 * 25 ** 3 / 12 / (1 + 1.4 * pd / pu)
     pc = math.pi ** 2 * ei / 300 ** 2
     assert delta == pytest.approx(1 / (1 - pu / (0.75 * pc)))
     assert magnifier(pu, pd, 40.0, 40.0, 250.0, fc)[2] is False        # λ = 20.8 ≤ 22
@@ -625,3 +633,82 @@ def test_combined_pile_cap_carries_the_load():
     for f in cf:
         assert f.piles * f.pile_capacity >= f.load + f.weight - 1
         assert "เข็ม" in f.note and f.ok
+
+
+# ---------------------------------------------------------------------------
+# กฎกระทรวง กำหนดการออกแบบโครงสร้างอาคาร พ.ศ. 2566 (supplied by the owner)
+# ---------------------------------------------------------------------------
+
+def test_law_2566_live_loads_and_stairs():
+    from wanicndesign.standards import LIVE_LOAD, NO_REDUCTION, STAIR_LIVE, ll_reduction
+    assert (LIVE_LOAD["house"], LIVE_LOAD["roof"], LIVE_LOAD["canopy"], LIVE_LOAD["office"]) == (200, 50, 100, 250)
+    assert (STAIR_LIVE["house"], STAIR_LIVE["apartment"], STAIR_LIVE["office"], STAIR_LIVE["assembly"]) == \
+        (200, 400, 300, 500)
+    assert [ll_reduction(k) for k in range(9)] == [0, 0, 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.5]   # ข้อ 13
+    assert {"school", "hospital", "parking"} <= NO_REDUCTION                                  # ข้อ 14
+
+
+def test_law_2566_strength_reduction_factors():
+    from wanicndesign.structure.seismic import (PHI, column_bars, phi_mn_at, phi_mn_beam, pm_curve,
+                                                use_quality_control)
+    bars = column_bars(4, "DB16", 30.0, 30.0)
+    try:
+        use_quality_control(True)
+        assert PHI == {"b": 0.90, "c": 0.70, "v": 0.85}
+        good = pm_curve(30.0, 30.0, bars, 210.0, 4000.0)
+        m_good = phi_mn_beam(4.0, 20.0, 35.0, 210.0, 4000.0)
+        use_quality_control(False)                                   # no quality control specified
+        assert PHI == {"b": 0.75, "c": 0.60, "v": 0.70}
+        poor = pm_curve(30.0, 30.0, bars, 210.0, 4000.0)
+        assert poor[1] / good[1] == pytest.approx(0.60 / 0.70)       # compression cap
+        assert phi_mn_at(poor, 0.0) / phi_mn_at(good, 0.0) == pytest.approx(0.75 / 0.90, rel=3e-3)
+        assert phi_mn_beam(4.0, 20.0, 35.0, 210.0, 4000.0) / m_good == pytest.approx(0.75 / 0.90)
+    finally:
+        use_quality_control(True)
+
+
+def test_wind_pressure_tables():
+    from wanicndesign.structure.wind import force_on, pressure
+    assert [pressure(z, "urban", False) for z in (5, 15, 30)] == [60, 80, 120]
+    assert [pressure(z, "open", False) for z in (5, 15, 30)] == [100, 120, 160]
+    assert pressure(5, "urban", True) == pytest.approx(69.0)                 # public building +15 %
+    assert force_on(8.0, 12.0, 10.0, "urban", False) == pytest.approx(60 * 2 * 10 + 80 * 2 * 10)
+
+
+def test_wind_on_the_example_house():
+    from wanicndesign.structure.wind import force_on, roof_rise
+    b = Building.load(BUILDING)
+    res = design(b)
+    w = res.wind
+    assert w is not None and w.applicable and not w.public
+    H = 6.2 + roof_rise(b)
+    assert w.height == pytest.approx(H)
+    e = b.roof.overhang
+    total_x = force_on(0, 6.2, b.ys[-1], "urban", False) + force_on(6.2, H, b.ys[-1] + 2 * e, "urban", False)
+    assert w.base_shear[0] == pytest.approx(total_x)
+    assert sum(lv.fx for lv in w.levels) == pytest.approx(total_x)
+    assert any(c.kind == "column" for c in w.checks) and all(c.ok for c in w.checks)
+    assert "MR2566-17" in res.all_refs() and res.ok
+
+
+def test_wind_table_not_for_slender_buildings():
+    b = Building("tower", grid_x=[3.0], grid_y=[3.0],
+                 levels=[Level("GB", 0.0, "on_ground")] + [Level(f"FL{k}", 3.0 * (k - 1)) for k in range(2, 6)])
+    b.levels[-1].slab = "none"
+    res = design(b)
+    assert not res.wind.applicable and not res.ok                          # 12 m > 3 × 3 m
+
+
+def test_fire_rating_rules():
+    from wanicndesign.structure.fire import requirements
+    b = Building.load(BUILDING)
+    f = requirements(b)
+    assert not f.applies                                   # a two-storey house
+    b.occupancy = "hospital"
+    f = requirements(b)
+    assert f.applies and all(h == 2.0 for _n, h, _s in f.floors) and f.roof_hours == 1.0
+    b.occupancy = "apartment"
+    f = requirements(b)
+    assert f.applies and all(h == 1.0 for _n, h, _s in f.floors) and f.roof_hours == 0.0   # ≤ 1,000 m²
+    res = design(b)
+    assert res.fire.applies and "MR2566-23" in res.all_refs()

@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from ..standards import NO_REDUCTION, cite, ll_reduction
+from ..standards import LL_REDUCTION_MR6, NO_REDUCTION, NO_REDUCTION_ABOVE, cite, ll_reduction
 from .analysis import continuous_beam, partial_udl
 from .building import ROOF_COVER_LOAD, WALL_LOAD, Building
 from .materials import CONCRETE_KG_M3, ES, FY, Concrete
@@ -176,7 +176,7 @@ class ColumnResult:
     mark: str = ""
     ok: bool = True
     note: str = ""
-    live_reduced: float = 0.0      # kg of live load taken off [MR6-16]
+    live_reduced: float = 0.0      # kg of live load taken off [MR2566-13]
     refs: str = ""
     live: float = 0.0              # live-load share of ``load`` (after reduction), kg
     m_dx: float = 0.0              # gravity end moments from the frame analysis, kg-m (dead / live,
@@ -227,6 +227,8 @@ class DesignResult:
     warnings: list = field(default_factory=list)
     stairs: list = field(default_factory=list)
     seismic: object = None
+    wind: object = None            # wind.WindResult
+    fire: object = None            # fire.FireResult (กฎกระทรวง พ.ศ. 2566 ข้อ 21–24)
     frames: object = None          # columns.GravityFrameResult         # seismic.SeismicResult when the earthquake check ran
 
     @property
@@ -234,7 +236,7 @@ class DesignResult:
         groups = [self.slabs, self.beams, self.columns, self.footings, self.stairs]
         return all(x.ok for g in groups for x in g) and \
             (self.roof is None or (self.roof.purlin.ok and self.roof.rafter.ok)) and \
-            (self.seismic is None or self.seismic.ok)
+            (self.seismic is None or self.seismic.ok) and (self.wind is None or self.wind.ok)
 
     def total_piles(self) -> int:
         return sum(f.piles for f in self.footings)
@@ -250,6 +252,8 @@ class DesignResult:
                 if c and c not in out:
                     out.append(c)
         extra = (self.frames.refs.split(",") if self.frames else []) + \
+            (self.wind.refs.split(",") if self.wind else []) + \
+            (["MR2566-23"] if self.fire and (self.fire.applies or self.fire.notes) else []) + \
             (self.seismic.refs.split(",") + ["MR-EQ2564"] if self.seismic else [])
         if extra:
             for c in extra:
@@ -293,7 +297,7 @@ def design_roof(b: Building) -> RoofResult:
     th = math.radians(r.slope_deg)
     cos, sin = math.cos(th), math.sin(th)
     cover = ROOF_COVER_LOAD.get(r.cover, 50)                     # [QD-ROOF]
-    load_plan = (cover + r.frame_load) / cos + r.live_load       # live per plan [MR6-15]
+    load_plan = (cover + r.frame_load) / cos + r.live_load       # live per plan [MR2566-11]
     X, Y = b.plan_size()
     a, c = X + 2 * r.overhang, Y + 2 * r.overhang
     long_, short = max(a, c), min(a, c)
@@ -317,7 +321,7 @@ def design_roof(b: Building) -> RoofResult:
             (slope_area / r.rafter_spacing) * rafter.kg_m + \
             (ridge + hips) * 2 * rafter.kg_m
     return RoofResult(load_plan, r.live_load, plan_area, slope_area, ridge, hips, eave, purlin, rafter,
-                      steel, cite("QD-ROOF", "MR6-15", "QD-PURLIN"))
+                      steel, cite("QD-ROOF", "MR2566-11", "QD-PURLIN"))
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +334,7 @@ def _panel_name(b: Building, i: int, j: int) -> str:
 
 def _slab_load(lv) -> tuple[float, float]:
     """(total, live) kg/m² of a suspended slab: self weight [UNIT-WT],
-    finishes, live load [MR6-15]."""
+    finishes, live load [MR2566-11]."""
     return CONCRETE_KG_M3 * lv.slab_thickness + lv.finish_load + lv.live_load, lv.live_load
 
 
@@ -351,7 +355,7 @@ def _panel_slab(mat: Concrete, lv, name: str, lx: float, ly: float, discontinuou
                           bars, bars, "-", True, "พื้นวางบนดิน ใช้เหล็กกันร้าว",
                           refs=cite("EIT1007-TEMP"), rect=rect)
     W, _live = _slab_load(lv)
-    refs = [mat.ref, "UNIT-WT", "MR6-15", "EIT1007-TEMP"]
+    refs = [mat.ref, "UNIT-WT", "MR2566-11", "EIT1007-TEMP"]
     if m < 0.5:
         kind, case = "one-way", 0
         m_pos = W * S * S / 8
@@ -442,7 +446,7 @@ def design_cantilever_slab(mat: Concrete, lv, name: str, length: float, width: f
     temp = f"RB9@{pick_spacing(as_min, 'RB9', smax):.2f}"
     return SlabResult(lv.name, name, "", "cantilever", length, width, 0.0, W, 0.0, mom, 0.0, t, d_req,
                       temp, temp, f"RB9@{pick_spacing(as_, 'RB9', smax):.2f}", ok, note, 0,
-                      cite(mat.ref, "STATICS", "EIT1007-SLABMIN", "UNIT-WT", "MR6-15", "EIT1007-TEMP"),
+                      cite(mat.ref, "STATICS", "EIT1007-SLABMIN", "UNIT-WT", "MR2566-11", "EIT1007-TEMP"),
                       rect)
 
 
@@ -1044,8 +1048,12 @@ def _assign_marks(items, key, prefix, load):
 # ---------------------------------------------------------------------------
 
 def design(b: Building) -> DesignResult:
+    from .seismic import use_quality_control
+    use_quality_control(b.quality_control)            # φ of กฎกระทรวง พ.ศ. 2566 ข้อ 8
     mat = Concrete(fc_prime=b.fc_prime, code=b.design_code)
     res = DesignResult(b, mat)
+    from .fire import requirements as fire_requirements
+    res.fire = fire_requirements(b)
     if any(lv.slab == "roof" for lv in b.levels):
         res.roof = design_roof(b)
     n_lv = len(b.levels)
@@ -1085,7 +1093,9 @@ def design(b: Building) -> DesignResult:
     reduce = b.ll_reduction and b.occupancy not in NO_REDUCTION
     elev = [lv.elevation for lv in b.levels]
     stub = b.foundation.depth - 0.40 + elev[0]
-    col_refs = cite(mat.ref, "EIT1007-COL", "EIT1007-TIE", "UNIT-WT", "MR6-16" if reduce else "")
+    old_law = b.design_code == "MR6"                     # transitional clause, ข้อ 25
+    col_refs = cite(mat.ref, "EIT1007-COL", "EIT1007-TIE", "UNIT-WT",
+                    ("MR6-16" if old_law else "MR2566-13") if reduce else "", "MR2566-25" if old_law else "")
     col_at = {}
     for i, j in b.nodes():
         name = b.node_name(i, j)
@@ -1093,7 +1103,9 @@ def design(b: Building) -> DesignResult:
         bw, h = b.column_width, b.column_depth
         segs = []
         for li in reversed(range(n_lv)):
-            r = ll_reduction(n_lv - 1 - li) if reduce else 0.0           # [MR6-16]
+            r = ll_reduction(n_lv - 1 - li, LL_REDUCTION_MR6 if old_law else None) if reduce else 0.0
+            if b.levels[li].live_load > NO_REDUCTION_ABOVE:          # ข้อ 14 (2)
+                r = 0.0
             cut = node_live[li].get((i, j), 0.0) * r
             above += node_reac[li].get((i, j), 0.0) - cut
             live += node_live[li].get((i, j), 0.0) - cut
@@ -1121,6 +1133,10 @@ def design(b: Building) -> DesignResult:
                                     + (f" ขยายโมเมนต์จากแรงด้านข้าง δs = {st.delta_s:.2f}"
                                        if b.seismic.enabled else ""))
         check_footing_moments(b, res, mat, col_at)
+    if b.wind.enabled and n_lv > 1:
+        from .wind import run as wind_run
+        res.wind = wind_run(b, res, mat, col_at, elev[0] - stub)
+        res.warnings += [w[3:] if w.startswith("NG ") else w for w in res.wind.warnings]
     if b.seismic.enabled and n_lv > 1:
         from .seismic import run as seismic_run
         node_dead = [{n: node_reac[li][n] - node_live[li].get(n, 0.0) for n in node_reac[li]}

@@ -117,7 +117,7 @@ class ProjectPage(Page):
         self.code = _combo(list(CODES.items()), "EIT1007")
         self.use = _combo([(k, f"{t} ({v})") for k, t, v in LIVE_LOADS if k not in ("roof", "canopy")],
                           "house")
-        self.reduce = QCheckBox("ลดน้ำหนักจรสำหรับเสาและฐานราก (กฎกระทรวง ฉบับที่ 6 ข้อ 16)")
+        self.reduce = QCheckBox("ลดน้ำหนักจรสำหรับเสาและฐานราก (กฎกระทรวง พ.ศ. 2566 ข้อ 13–14)")
         f.addRow("ชื่อโครงการ", self.name)
         f.addRow("เกณฑ์การออกแบบ", self.code)
         f.addRow("ประเภทการใช้อาคาร", self.use)
@@ -234,7 +234,7 @@ class LevelsPage(Page):
         rem.clicked.connect(self._remove)
         self.ll = _combo([(k, f"{t[:28]} ({v})") for k, t, v in LIVE_LOADS
                           if k not in ("roof", "canopy")], "house")
-        use = QPushButton("ใช้น้ำหนักจรตามกฎกระทรวง ฉบับที่ 6 ข้อ 15")
+        use = QPushButton("ใช้น้ำหนักจรตามกฎกระทรวง พ.ศ. 2566 ข้อ 11")
         use.clicked.connect(self._use_ll)
         for w in (add, rem, self.ll, use):
             row.addWidget(w)
@@ -281,6 +281,7 @@ class LevelsPage(Page):
                 self.table.setItem(r, 4, QTableWidgetItem(f"{v:g}"))
 
     def levels_from_table(self) -> list[Level]:
+        old = {lv.name: lv for lv in (self.building.levels if self.building else [])}
         out = []
         for r in range(self.table.rowCount()):
             txt = lambda c: self.table.item(r, c).text().strip()
@@ -288,6 +289,11 @@ class LevelsPage(Page):
                              float(txt(3)), float(txt(4)), float(txt(5)), float(txt(6)),
                              float(txt(7)), txt(8) or "B", self.table.cellWidget(r, 9).currentData(),
                              self.table.cellWidget(r, 10).currentData()))
+            prev = old.get(out[-1].name)
+            if prev is not None:                 # keep what was placed on the plan
+                out[-1].sub_beams = list(prev.sub_beams)
+                out[-1].cantilevers = list(prev.cantilevers)
+                out[-1].cant_beams = list(prev.cant_beams)
         out.sort(key=lambda lv: lv.elevation)
         return out
 
@@ -370,8 +376,38 @@ class RoofPage(Page):
         r.rafter_spacing = self.rafter.value()
 
 
+class WindPage(Page):
+    title = "6. แรงลม"
+    hint = ("กฎกระทรวง พ.ศ. 2566 ข้อ 17: อาคารสี่เหลี่ยมสูงไม่เกิน 40 ม. และไม่เกิน 3 เท่าความกว้างน้อยที่สุด "
+            "ใช้หน่วยแรงลมตามตาราง · อาคารสาธารณะพื้นที่ตั้งแต่ 1,000 ตร.ม. เพิ่ม 15% · อาคารอื่นต้องใช้วิธีละเอียด")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from ..structure.wind import TERRAINS
+        f = QFormLayout()
+        self.enabled = QCheckBox("คิดแรงลม (บังคับสำหรับงานที่ต้องมีวิศวกรโยธาออกแบบ)")
+        self.terrain = _combo(TERRAINS, "urban")
+        self.public = _combo([("auto", "ตามประเภทอาคารและพื้นที่"), ("yes", "เป็นอาคารสาธารณะ ≥ 1,000 ตร.ม. (+15%)"),
+                              ("no", "ไม่ใช่")], "auto")
+        f.addRow(self.enabled)
+        f.addRow("สภาพภูมิประเทศ", self.terrain)
+        f.addRow("อาคารสาธารณะ", self.public)
+        self.lay.addLayout(f)
+        self.add_apply()
+
+    def load(self):
+        w = self.building.wind
+        self.enabled.setChecked(w.enabled)
+        self.terrain.setCurrentIndex(max(0, self.terrain.findData(w.terrain)))
+        self.public.setCurrentIndex(max(0, self.public.findData(w.public)))
+
+    def apply(self):
+        w = self.building.wind
+        w.enabled, w.terrain, w.public = self.enabled.isChecked(), self.terrain.currentData(), self.public.currentData()
+
+
 class SeismicPage(Page):
-    title = "6. แผ่นดินไหว"
+    title = "7. แผ่นดินไหว"
     hint = ("วิธีแรงสถิตเทียบเท่าตาม มยผ. 1301/1302-61 · ค่า Ss, S1 อ่านจากตารางท้ายมาตรฐานตามอำเภอที่ตั้ง "
             "· ในแอ่งกรุงเทพฯ ให้เลือก 'กรอก SDS, SD1 เอง' และใส่ Sa จากสเปกตรัมของโซน "
             "· ตรวจกับกฎกระทรวงแผ่นดินไหว พ.ศ. 2564 ว่าอาคารนี้อยู่ในบังคับหรือไม่")
@@ -447,7 +483,7 @@ class SeismicPage(Page):
 
 
 class ResultsPage(Page):
-    title = "7. ผลคำนวณและส่งออก"
+    title = "8. ผลคำนวณและส่งออก"
     run_requested = Signal()
     export_requested = Signal(str)
 
@@ -482,10 +518,20 @@ class ResultsPage(Page):
         lines.append(f"เกณฑ์ {CODES.get(res.building.design_code, '')} · fc = {res.concrete.fc:.1f} ksc")
         lines.append(f"พื้น {len(res.slabs)} แผ่น · คาน {len(res.beams)} ช่วง · เสา {len(res.columns)} ท่อน · "
                      f"ฐานราก {len(res.footings)} ฐาน · เสาเข็มรวม {res.total_piles()} ต้น")
+        wr = res.wind
+        if wr:
+            vx, vy = wr.base_shear
+            lines.append(f"แรงลม ({'เมือง' if wr.terrain == 'urban' else 'โล่ง/ชายฝั่ง'}"
+                         f"{', อาคารสาธารณะ +15%' if wr.public else ''}): สูง {wr.height:.1f} ม. · "
+                         f"แรงเฉือนที่ฐาน X {vx:,.0f} กก. Y {vy:,.0f} กก.")
         q = res.seismic
         if q:
             lines.append(f"แผ่นดินไหว: SDS {q.sds:.3f} SD1 {q.sd1:.3f} · ประเภท {q.category} · T {q.period:.2f} วินาที · "
                          f"Cs {q.cs:.4f} · W {q.weight:,.0f} กก. · V {q.base_shear:,.0f} กก.")
+        f = res.fire
+        if f and f.applies:
+            lines.append("การทนไฟ: " + " · ".join(f"{n} {h:g} ชม." for n, h, _s in f.floors)
+                         + (f" · หลังคา {f.roof_hours:g} ชม." if f.roof_hours else ""))
         lines.append("ผล: ผ่านทุกรายการ" if res.ok else "ผล: มีรายการไม่ผ่าน (สีแดง)")
         lines += ["⚠ " + w for w in res.warnings]
         lines.append("ผลคำนวณเบื้องต้น ต้องให้วิศวกรผู้มีใบอนุญาตตรวจสอบและลงนาม")
@@ -516,6 +562,16 @@ class ResultsPage(Page):
                     [(f.node, f.mark, f"{f.load:,.0f}", f.pile, f.piles,
                       f"{f.width:.2f}×{f.length:.2f}×{f.thickness:.2f}", f.bars_x, f.bars_y, ok(f.ok),
                       f.note, f.refs) for f in res.footings])
+        if wr:
+            kinds = {"column": "เสา", "beam": "คาน", "footing": "ฐานราก"}
+            rows = [(f"ชั้น {lv.level}", f"{lv.z0:.2f}–{lv.z1:.2f} ม.", "", f"Fx {lv.fx:,.0f} Fy {lv.fy:,.0f}",
+                     f"Vx {lv.vx:,.0f} Vy {lv.vy:,.0f}", f"Δ/h {max(lv.drift_x, lv.drift_y):.4f}", "", "", lv.note)
+                    for lv in wr.levels]
+            rows += [(kinds[c.kind], c.where, c.direction, c.demand, c.capacity, f"{c.ratio:.2f}", c.detail,
+                      ok(c.ok), c.note) for c in wr.checks]
+            rows += [("หมายเหตุ", w, "", "", "", "", "", "", "") for w in wr.warnings]
+            self._table("แรงลม", ["ชิ้นส่วน", "ตำแหน่ง", "ทิศ", "แรง", "กำลัง", "อัตราส่วน", "ปลอก", "ผล",
+                                  "หมายเหตุ"], rows)
         if q:
             rows = [(f"ชั้น {st.level}", f"hx {st.hx:.2f} ม.", f"W {st.wx:,.0f}", f"F {st.fx:,.0f}",
                      f"V {st.vx:,.0f}", f"Δx {st.drift_x * 1000:.1f} Δy {st.drift_y * 1000:.1f} มม.",

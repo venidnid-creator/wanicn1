@@ -133,3 +133,12 @@ def test_plan_adds_stair_and_cantilever_beam(win, app):
     assert not win.building.cant_beams(win.building.level("FL2"))
     win.plan.toggle("stair", "ST1")
     assert not win.building.stairs
+
+
+def test_wind_page_applies(win, app):
+    page = next(p for p in win.page_list if p.title.endswith("แรงลม"))
+    page.terrain.setCurrentIndex(page.terrain.findData("open"))
+    page._apply()
+    assert win.building.wind.terrain == "open"
+    win.calculate()
+    assert win.result.wind is not None and win.result.wind.pressures[0][1] == 100
