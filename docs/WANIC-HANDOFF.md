@@ -10,6 +10,8 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
+## ReadWanicn2027 2027.4.9 (19 พ.ย. 2569, อนุมัติแล้ว — ไม่ release) — StatsBox บอก «รุ่นทดสอบ ใหม่กว่ารุ่นที่เผยแพร่» เมื่อ VERSION > Release ล่าสุด
+
 ## ReadWanicn2027 — Factor F ตาม BOQ · ปร.1–ปร.4 พร้อมพิมพ์ · ผลการอ่านทีละหน้า (19 พ.ย. 2569, อนุมัติแล้ว — รุ่น 2027.4.8 run 44463231761 artifact 14501526744 ผ่าน, ไม่ release; ลายเซ็น ปร. เป็นตาราง 4 คอลัมน์จัดตรง)
 - Factor F: `Item.factor` อ่านคอลัมน์ F/FN ของแต่ละบรรทัด, `p.factor` = ค่าที่บรรทัดส่วนใหญ่ใช้ (ไม่มีค่อยหา «Factor F …»);
   `effective_factor()` คืน p.factor เสมอถ้ามี (ไม่คำนวณกลับจากราคากลาง — เคสผู้ใช้ 1.3432 กลายเป็น 1.3400)
