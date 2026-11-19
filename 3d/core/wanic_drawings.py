@@ -3027,9 +3027,10 @@ def build_set(data, info=None,
         add("SN", "สารบัญแบบและสัญลักษณ์ระบบสุขาภิบาล", lambda sh, all_: SNS.sn_index_std(sh, all_, E), "-")
         add("SN", "รายการประกอบแบบ (แผ่นที่ 1)", lambda sh, _a: SNS.sn_spec(sh, E, 1), "-")
         add("SN", "รายการประกอบแบบ (แผ่นที่ 2)", lambda sh, _a: SNS.sn_spec(sh, E, 2), "-")
+        add("SN", "ไดอะแกรมระบบสุขาภิบาลแนวดิ่ง", lambda sh, _a: SNS.sn_riser(sh, E), "ไม่ตามมาตราส่วน")
         for k in floors:
             add("SN", f"แปลนระบบสุขาภิบาลชั้น {k + 1}",
-                lambda sh, _a, k=k: sn_plan(sh, E, k))
+                lambda sh, _a, k=k: SNS.sn_plan_std(sh, E, k))
         add("SN", "แบบขยายถังบำบัด บ่อพัก ฟลอร์เดรน", lambda sh, _a: sn_details(sh, E), "1:20")
         add("SN", "แบบขยายบ่อดักไขมัน บ่อพักตะแกรง", lambda sh, _a: sn_traps(sh, E), "1:10")
         add("SN", "ภาพ 3 มิติ การต่อท่อน้ำดี ท่อน้ำเสีย ถังบำบัด",

@@ -75,3 +75,16 @@ def test_sn_index_symbols_and_specification():
     for w in ("ชนิดท่อที่ใช้ในการก่อสร้าง", "สัญลักษณ์ประกอบแบบระบบสุขาภิบาล", "ประตูน้ำ (GATE VALVE)", "SN-03"):
         assert w in t, w
     assert "ข้อมูลการออกแบบ" in " ".join(sheets[2].texts())
+
+
+def test_sn_riser_and_floor_plans():
+    """SN-04 the riser diagram and the floor plans as the standard: the drain
+    round the building, the tanks, the meter, the stacks upstairs."""
+    sheets = {s.title: s for s in D.build_set(house(), INFO) if s.group == "SN"}
+    t = " ".join(sheets["ไดอะแกรมระบบสุขาภิบาลแนวดิ่ง"].texts())
+    assert 'Ø4"SW' in t and "VTR" in t and "BP" in t and "ระดับพื้นชั้น 1" in t
+    g = " ".join(sheets["แปลนระบบสุขาภิบาลชั้น 1"].texts())
+    assert "ลาด 1 : 200" in g and "ถังบำบัดน้ำเสีย" in g and "มาตรวัดน้ำ" in g
+    up = [k for k in sheets if k.startswith("แปลนระบบสุขาภิบาลชั้น") and not k.endswith("1")]
+    for k in up:
+        assert "ท่อโสโครกแนวดิ่ง" in " ".join(sheets[k].texts()) or "ห้องน้ำ" not in " ".join(sheets[k].texts())
