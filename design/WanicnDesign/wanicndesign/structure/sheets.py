@@ -297,6 +297,23 @@ def plan_sheets(res, start: int) -> list[Sheet]:
                 sh.line(P0[0] - hw, P0[1], P1[0] - hw, P1[1], "BEAM", x.kind == "secondary")
                 sh.line(P0[0] + hw, P0[1], P1[0] + hw, P1[1], "BEAM", x.kind == "secondary")
                 sh.text(P0[0] + hw + 1, (P0[1] + P1[1]) / 2, f"{x.mark}", TXT_S, "BEAM")
+        from .architecture import openings_on
+        segs = [((i, j), (i + 1, j)) for j in range(len(b.ys)) for i in range(len(b.xs) - 1)] + \
+               [((i, j), (i, j + 1)) for i in range(len(b.xs)) for j in range(len(b.ys) - 1)]
+        for a, c in segs:
+            if not (b.has_node(*a) and b.has_node(*c)):
+                continue
+            ops = openings_on(b, lv, a, c)
+            if ops:
+                X = ox + (b.xs[a[0]] + b.xs[c[0]]) / 2 * s
+                Y = oy + (b.ys[a[1]] + b.ys[c[1]]) / 2 * s
+                sh.text(X + (0 if a[1] == c[1] else 3), Y + (-5 if a[1] == c[1] else 0), " ".join(ops), TXT_S,
+                        "DIM", "center")
+        for bay in lv.wet_bays:
+            xpart, ypart = bay.split("/")
+            i, j = int(xpart.split("-")[0]) - 1, ord(ypart.split("-")[0]) - ord("A")
+            sh.text(ox + (b.xs[i] + b.xs[i + 1]) / 2 * s, oy + (b.ys[j] + b.ys[j + 1]) / 2 * s - 5, "ห้องน้ำ",
+                    TXT_S, "SLAB", "center")
         for sl in res.slabs:
             if sl.level != lv.name or not sl.rect:
                 continue
@@ -534,6 +551,17 @@ def schedule_sheets(res, start: int) -> list[Sheet]:
 
     # --- slabs and stairs ---------------------------------------------------
     sh = Sheet(f"S-{n:02d}", "ตารางพื้นและบันได")
+    b_ = res.building
+    used: dict = {}
+    for lv in b_.levels:
+        for e in lv.openings:
+            used[e.split(":", 1)[1]] = used.get(e.split(":", 1)[1], 0) + 1
+    if used:
+        rows = [[o.name, "ประตู" if o.kind == "door" else "หน้าต่าง", f"{o.width:.2f}×{o.height:.2f}",
+                 "ไม้" if o.material == "wood" else "อลูมิเนียม", str(used[o.name])]
+                for o in b_.opening_types if o.name in used]
+        sh.text(x0 + 230, y1 - 90, "ตารางประตู หน้าต่าง", TXT)
+        table(sh, x0 + 230, y1 - 94, ["ชื่อ", "ชนิด", "กว้าง×สูง (ม.)", "วัสดุ", "จำนวน"], rows, [14, 20, 28, 26, 16])
     slabs = {}
     for sl in res.slabs:
         slabs.setdefault(sl.mark, sl)

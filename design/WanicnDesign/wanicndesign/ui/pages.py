@@ -444,8 +444,78 @@ class RoofPage(Page):
         r.solar_load, r.ceiling = self.solar.value(), self.ceiling.currentData()
 
 
+class ArchitecturePage(Page):
+    title = "6. งานสถาปัตย์"
+    hint = ("ชนิดประตูหน้าต่าง และวัสดุพื้น/ฝ้าแต่ละชั้น · วางประตูหน้าต่าง เพิ่มผนัง และกำหนดห้องน้ำ "
+            "ด้วยการคลิกขวาที่แปลน · ค่าแรงตามบัญชี ว480")
+    COLS = ["ชื่อ", "ชนิด", "กว้าง (ม.)", "สูง (ม.)", "วัสดุ"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lay.addWidget(QLabel("<b>ชนิดประตู หน้าต่าง</b>"))
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.setMaximumHeight(220)
+        self.lay.addWidget(self.table)
+        row = QHBoxLayout()
+        add = QPushButton("เพิ่มชนิด")
+        add.clicked.connect(lambda: self._add_row(None))
+        rem = QPushButton("ลบชนิดที่เลือก")
+        rem.clicked.connect(lambda: self.table.removeRow(self.table.currentRow()))
+        row.addWidget(add)
+        row.addWidget(rem)
+        self.lay.addLayout(row)
+        self.lay.addWidget(QLabel("<b>วัสดุพื้นและฝ้าของแต่ละชั้น</b> (ห้องน้ำใช้กระเบื้องเซรามิคอัตโนมัติ)"))
+        self.levels = QTableWidget(0, 3)
+        self.levels.setHorizontalHeaderLabels(["ชั้น", "วัสดุพื้น", "ฝ้าเพดาน"])
+        self.levels.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.lay.addWidget(self.levels)
+        self.add_apply()
+
+    def _add_row(self, o):
+        from ..structure.building import OpeningType
+        o = o or OpeningType(f"X{self.table.rowCount() + 1}")
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, 0, QTableWidgetItem(o.name))
+        self.table.setCellWidget(r, 1, _combo([("door", "ประตู"), ("window", "หน้าต่าง")], o.kind))
+        self.table.setItem(r, 2, QTableWidgetItem(f"{o.width:g}"))
+        self.table.setItem(r, 3, QTableWidgetItem(f"{o.height:g}"))
+        self.table.setCellWidget(r, 4, _combo([("wood", "ไม้"), ("aluminium", "อลูมิเนียม (ชุดสำเร็จ)")], o.material))
+
+    def load(self):
+        from ..structure.architecture import CEILING_LABELS, FLOOR_LABELS
+        self.table.setRowCount(0)
+        for o in self.building.opening_types:
+            self._add_row(o)
+        lv = [x for x in self.building.levels if x.slab not in ("roof", "none")]
+        self.levels.setRowCount(len(lv))
+        for r, x in enumerate(lv):
+            self.levels.setItem(r, 0, QTableWidgetItem(x.name))
+            self.levels.setCellWidget(r, 1, _combo(FLOOR_LABELS, x.floor_finish))
+            self.levels.setCellWidget(r, 2, _combo(CEILING_LABELS, x.ceiling))
+
+    def apply(self):
+        from ..structure.building import OpeningType
+        types = []
+        for r in range(self.table.rowCount()):
+            try:
+                types.append(OpeningType(self.table.item(r, 0).text().strip(), self.table.cellWidget(r, 1).currentData(),
+                                         float(self.table.item(r, 2).text()), float(self.table.item(r, 3).text()),
+                                         self.table.cellWidget(r, 4).currentData()))
+            except (ValueError, AttributeError):
+                continue
+        self.building.opening_types = types
+        for r in range(self.levels.rowCount()):
+            lv = self.building.level(self.levels.item(r, 0).text())
+            if lv:
+                lv.floor_finish = self.levels.cellWidget(r, 1).currentData()
+                lv.ceiling = self.levels.cellWidget(r, 2).currentData()
+
+
 class WindPage(Page):
-    title = "6. แรงลม"
+    title = "7. แรงลม"
     hint = ("กฎกระทรวง พ.ศ. 2566 ข้อ 17: อาคารสี่เหลี่ยมสูงไม่เกิน 40 ม. และไม่เกิน 3 เท่าความกว้างน้อยที่สุด "
             "ใช้หน่วยแรงลมตามตาราง · อาคารสาธารณะพื้นที่ตั้งแต่ 1,000 ตร.ม. เพิ่ม 15% · อาคารอื่นต้องใช้วิธีละเอียด")
 
@@ -480,7 +550,7 @@ class WindPage(Page):
 
 
 class SeismicPage(Page):
-    title = "7. แผ่นดินไหว"
+    title = "8. แผ่นดินไหว"
     hint = ("วิธีแรงสถิตเทียบเท่าตาม มยผ. 1301/1302-61 · ค่า Ss, S1 อ่านจากตารางท้ายมาตรฐานตามอำเภอที่ตั้ง "
             "· ในแอ่งกรุงเทพฯ ให้เลือก 'กรอก SDS, SD1 เอง' และใส่ Sa จากสเปกตรัมของโซน "
             "· ตรวจกับกฎกระทรวงแผ่นดินไหว พ.ศ. 2564 ว่าอาคารนี้อยู่ในบังคับหรือไม่")
@@ -556,7 +626,7 @@ class SeismicPage(Page):
 
 
 class ResultsPage(Page):
-    title = "8. ผลคำนวณและส่งออก"
+    title = "9. ผลคำนวณและส่งออก"
     run_requested = Signal()
     export_requested = Signal(str)
 

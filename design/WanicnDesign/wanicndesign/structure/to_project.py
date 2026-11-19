@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from ..model import Beam, Column, Floor, Footing, Project, Roof, Slab, Wall
+from ..model import Beam, Column, Finish, Fixture, Floor, Footing, Opening, Project, Roof, Slab, Wall
 from .design import DesignResult
 
 _SHAPE = {"hip": "hip", "gable": "gable"}
@@ -41,18 +41,36 @@ def to_project(res: DesignResult) -> Project:
         if vol > 0:
             p.slabs.append(Slab(f"บันได {st.name}", st.level, round(vol / st.thickness, 3), st.thickness,
                                 st.bars_main, False, st.width))
+    from .architecture import FIXTURES, level_rooms, openings_on, wet_wall_tiles
+    used: dict = {}
     for li, lv in enumerate(b.levels):
-        if li + 1 >= len(b.levels) or lv.walls == "none":
+        if li + 1 >= len(b.levels):
             continue
         above = b.levels[li + 1]
         for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
-                if lv.walls == "all" or b.is_perimeter(a, c, lv.name):
+                if b.has_wall(lv, a, c):
                     length = abs(b.xs[c[0]] - b.xs[a[0]]) + abs(b.ys[c[1]] - b.ys[a[1]])
+                    ops = [n for n in openings_on(b, lv, a, c) if b.opening_type(n)]
+                    for n in ops:
+                        used[n] = used.get(n, 0) + 1
                     p.walls.append(Wall(f"ผนัง {lv.name} {b.node_name(*a)}-{b.node_name(*c)}", lv.name,
                                         length, above.elevation - lv.elevation, b.column_width,
                                         above.beam_depth, lv.wall_type, "M2",
-                                        "P1" if b.is_perimeter(a, c, lv.name) else "P0"))
+                                        "P1" if b.is_perimeter(a, c, lv.name) else "P0", ops))
+        for bay, area, wet in level_rooms(b, lv):
+            kind = "ceramic_16" if wet else lv.floor_finish
+            if kind != "none":
+                p.finishes.append(Finish(f"พื้น {lv.name} {bay}", lv.name, f"floor:{kind}", round(area, 3)))
+            if lv.ceiling != "none":
+                p.finishes.append(Finish(f"ฝ้า {lv.name} {bay}", lv.name, f"ceiling:{lv.ceiling}", round(area, 3)))
+            if wet:
+                p.finishes.append(Finish(f"บุผนัง {lv.name} {bay}", lv.name, "wall_tile",
+                                         round(wet_wall_tiles(b, lv, bay), 3)))
+                p.fixtures += [Fixture(k, 1, f"{lv.name} {bay}") for k in FIXTURES]
+    for name, n in used.items():
+        o = b.opening_type(name)
+        p.openings.append(Opening(o.kind, o.name, o.width, o.height, n, o.material))
     if res.roof:
         r = res.roof
         cover = b.roof.cover if b.roof.cover in ("concrete_tile", "metal_sheet", "ceramic_tile") \

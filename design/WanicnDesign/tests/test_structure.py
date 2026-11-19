@@ -1026,3 +1026,60 @@ def test_hip_roof_step_down_trusses():
     full = max(res.trusses, key=lambda t: t.rise)
     assert end.rise < full.rise
     assert end.rise == pytest.approx(end.hip_cut * math.tan(math.radians(b.roof.slope_deg)), rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Stage 7: architectural BOQ
+# ---------------------------------------------------------------------------
+
+def _house_with_rooms():
+    b = Building.load(BUILDING)
+    gb = b.level("GB")
+    b.toggle_wet(gb, 2, 0)                                   # bathroom in bay 3-4/A-B
+    b.add_opening(gb, (2, 1), (3, 1), "D2")                  # its door, on an interior beam line
+    b.add_opening(gb, (0, 0), (1, 0), "D1")
+    b.add_opening(gb, (1, 0), (2, 0), "W1")
+    return b
+
+
+def test_openings_partitions_and_wet_rooms_in_the_model(tmp_path):
+    b = _house_with_rooms()
+    gb = b.level("GB")
+    assert b.has_wall(gb, (2, 1), (3, 1))                    # wet-room edge wall
+    assert "3-4/A-B" in gb.wet_bays
+    p = tmp_path / "b.json"
+    b.save(str(p))
+    b2 = Building.load(str(p))
+    assert b2.level("GB").openings == gb.openings and b2.opening_type("W1").material == "aluminium"
+
+
+def test_partition_wall_loads_the_beam():
+    from wanicndesign.structure.design import level_line_loads
+    b = Building.load(BUILDING)
+    gb = b.level("GB")
+    before = level_line_loads(b, 0, None)[0].get(((1, 0), (1, 1)), {"w": 0.0})["w"]
+    b.toggle_wall(gb, (1, 0), (1, 1))
+    after = level_line_loads(b, 0, None)[0].get(((1, 0), (1, 1)), {"w": 0.0})["w"]
+    fl2 = b.level("FL2")
+    wall = 180 * (fl2.elevation - gb.elevation - fl2.beam_depth)
+    assert after - before == pytest.approx(wall)
+
+
+def test_architectural_quantities():
+    from wanicndesign.quantities import takeoff
+    from wanicndesign.rates import Rates
+    from wanicndesign.structure.architecture import FIXTURES, WET_TILE_HEIGHT
+    from wanicndesign.structure.to_project import to_project
+    b = _house_with_rooms()
+    res = design(b)
+    lines = {ln.item: ln for ln in takeoff(to_project(res), Rates())}
+    area = sum((b.xs[i + 1] - b.xs[i]) * (b.ys[j + 1] - b.ys[j]) for lv in b.levels
+               for i, j in b.panels(lv.name) if lv.slab in ("on_ground", "suspended"))
+    floor = sum(ln.qty for ln in lines.values() if ln.section == "งานพื้น ผนัง ฝ้า" and ln.item.startswith("ปู"))
+    assert floor == pytest.approx(area, abs=0.05)                                   # every room floored
+    tiles = lines['ผนังบุกระเบื้องเซรามิค 8"×8"–12"×12"']
+    perim = 2 * (3.5 + 4.0) - 4 * b.column_width
+    assert tiles.qty == pytest.approx(perim * WET_TILE_HEIGHT - 0.70 * 2.00, abs=0.05)   # less the door
+    assert all(lines[name].qty == 1 for name, _code in FIXTURES.values())
+    assert lines["อุปกรณ์ประตู (ลูกบิด กุญแจ)"].qty == 2
+    assert tiles.labour_code == "2.3.3a" and lines["ฝ้าแผ่นยิปซัมฉาบรอยต่อเรียบ"].labour_code == "2.2.2"

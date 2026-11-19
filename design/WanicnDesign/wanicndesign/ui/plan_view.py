@@ -179,6 +179,35 @@ class PlanView(QGraphicsView):
                 it.setToolTip(f"พื้นยื่น {length:.2f} ม. (คลิกเพื่อลบ)")
                 t = sc.addSimpleText(f"{mark}  ยื่น {length:.2f}".strip(), font)
                 t.setPos(QRectF(r0, r1).center() - QPointF(18, 6))
+        # walls, doors and windows, bathrooms (stage 7)
+        lv_w = b.level(lvl)
+        if lv_w is not None:
+            from ..structure.architecture import openings_on
+            wall_pen = QPen(QColor(205, 180, 140), 13, Qt.SolidLine, Qt.FlatCap)
+            segs = [((i, j), (i + 1, j)) for j in range(len(ys)) for i in range(len(xs) - 1)] + \
+                   [((i, j), (i, j + 1)) for i in range(len(xs)) for j in range(len(ys) - 1)]
+            for a, c in segs:
+                if not (b.has_node(*a) and b.has_node(*c)) or not b.has_wall(lv_w, a, c):
+                    continue
+                p1, p2 = self._p(xs[a[0]], ys[a[1]]), self._p(xs[c[0]], ys[c[1]])
+                it = sc.addLine(p1.x(), p1.y(), p2.x(), p2.y(), wall_pen)
+                it.setZValue(1.5)
+                ops = openings_on(b, lv_w, a, c)
+                if ops:
+                    t = sc.addSimpleText(" ".join(ops), font)
+                    t.setBrush(QColor("#6a1b9a"))
+                    mid = (p1 + p2) / 2
+                    t.setPos(mid + (QPointF(-10, 6) if p1.y() == p2.y() else QPointF(-24, -6)))
+                    t.setZValue(4)
+            for bay in lv_w.wet_bays:
+                xpart, ypart = bay.split("/")
+                i, j = int(xpart.split("-")[0]) - 1, ord(ypart.split("-")[0]) - ord("A")
+                if i + 1 < len(xs) and j + 1 < len(ys):
+                    r_ = QRectF(self._p(xs[i], ys[j + 1]), self._p(xs[i + 1], ys[j])).adjusted(10, 10, -10, -10)
+                    it = sc.addRect(r_, QPen(QColor("#0277bd"), 1, Qt.DotLine), QBrush(QColor(2, 119, 189, 30)))
+                    t = sc.addSimpleText("ห้องน้ำ", font)
+                    t.setPos(r_.center() + QPointF(-12, 8))
+                    t.setZValue(4)
         # stairs (on their bottom and top levels)
         from ..structure.stairs import geometry, tread_lines
         for st in b.stairs:
@@ -305,6 +334,10 @@ class PlanView(QGraphicsView):
         self.building.toggle_cantilever(self.building.level(self.level), a, c, length)
         self._done()
 
+    def _edit(self, fn):
+        fn()
+        self._done()
+
     def add_stair(self, i: int, j: int, kind: str = "landing", direction: str = "y", tread: float = 0.25):
         from ..structure.building import Stair
         b = self.building
@@ -358,10 +391,26 @@ class PlanView(QGraphicsView):
                 menu.addAction("ลบคานซอย", lambda: self.add_sub_beam(i, j, ""))
             if self.level != b.levels[-1].name:
                 menu.addAction("เพิ่มบันไดขึ้นชั้นถัดไป…", lambda: self._ask_stair(i, j))
+            wet = b.panel_name(i, j) in lv.wet_bays
+            menu.addAction("ยกเลิกห้องน้ำ" if wet else "กำหนดเป็นห้องน้ำ (กระเบื้อง สุขภัณฑ์ ผนังรอบ)",
+                           lambda: self._edit(lambda: b.toggle_wet(lv, i, j)))
             menu.addAction("ลบแผ่นพื้น (ช่องเปิด)", lambda: self.toggle("panel", key))
-        elif kind == "beam" and lv is not None and lv.slab == "suspended":
+        elif kind == "beam" and lv is not None:
             na, nc = key.split(":")[1].split("-")
             a, c = b.parse_node(na), b.parse_node(nc)
+            if b.has_beam(lv.name, a, c) and lv.slab not in ("roof",):
+                sub = menu.addMenu("เพิ่มประตู/หน้าต่าง")
+                for o in b.opening_types:
+                    label = f"{o.name} {'ประตู' if o.kind == 'door' else 'หน้าต่าง'} {o.width:.2f}×{o.height:.2f}"
+                    sub.addAction(label, lambda n=o.name: self._edit(lambda: b.add_opening(lv, a, c, n)))
+                from ..structure.architecture import openings_on
+                if openings_on(b, lv, a, c):
+                    menu.addAction("ลบประตู/หน้าต่างในช่วงนี้", lambda: self._edit(lambda: b.add_opening(lv, a, c, None)))
+                has = b.has_wall(lv, a, c)
+                if b.segment_name(a, c) in lv.extra_walls or not has:
+                    menu.addAction("ลบผนังที่เพิ่ม" if has else "เพิ่มผนังในช่วงนี้",
+                                   lambda: self._edit(lambda: b.toggle_wall(lv, a, c)))
+        if kind == "beam" and lv is not None and lv.slab == "suspended":
             if b.has_beam(lv.name, a, c) and b.is_perimeter(a, c, lv.name):
                 def ask():
                     length, ok = QInputDialog.getDouble(self, "พื้นยื่น", "ยื่นออกจากคาน (ม.)", 1.5, 0.3, 3.0, 2)
@@ -369,6 +418,7 @@ class PlanView(QGraphicsView):
                         self.add_cantilever(a, c, length)
                 menu.addAction("เพิ่มพื้นยื่น (ระเบียง)…", ask)
                 menu.addAction("ลบพื้นยื่น", lambda: self.add_cantilever(a, c, None))
+        if kind == "beam":
             menu.addAction("ลบคาน", lambda: self.toggle("beam", key))
         elif kind == "stair":
             menu.addAction("ลบบันได", lambda: self.toggle("stair", key))

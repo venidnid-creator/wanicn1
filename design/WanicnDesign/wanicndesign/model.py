@@ -107,6 +107,22 @@ class Roof:
 
 
 @dataclass
+class Finish:
+    """Floor finish, ceiling or wall tiles of an area (stage 7)."""
+    name: str
+    floor: str
+    kind: str                    # "floor:<key>", "ceiling:<key>", "wall_tile"
+    area: float
+
+
+@dataclass
+class Fixture:
+    name: str                    # architecture.FIXTURES key
+    count: int
+    room: str = ""
+
+
+@dataclass
 class Project:
     name: str
     floors: list = field(default_factory=list)
@@ -119,6 +135,8 @@ class Project:
     walls: list = field(default_factory=list)
     openings: list = field(default_factory=list)
     roof: Roof | None = None
+    finishes: list = field(default_factory=list)
+    fixtures: list = field(default_factory=list)
 
     @property
     def storeys(self) -> int:
@@ -148,6 +166,8 @@ class Project:
             walls=[Wall(**x) for x in d.get("walls", [])],
             openings=[Opening(**x) for x in d.get("openings", [])],
             roof=Roof(**d["roof"]) if d.get("roof") else None,
+            finishes=[Finish(**x) for x in d.get("finishes", [])],
+            fixtures=[Fixture(**x) for x in d.get("fixtures", [])],
         )
 
     def save(self, path: str) -> None:

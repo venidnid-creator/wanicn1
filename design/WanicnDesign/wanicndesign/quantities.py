@@ -32,7 +32,7 @@ BEAM_UNDERSIDE = 0.50  # default beam depth for column plaster, m
 
 SECTIONS = [
     "งานดิน", "งานคอนกรีต", "งานไม้แบบ", "งานเหล็กเสริม", "งานก่อ ฉาบ",
-    "งานทาสี", "งานประตู หน้าต่าง", "งานหลังคา",
+    "งานทาสี", "งานประตู หน้าต่าง", "งานพื้น ผนัง ฝ้า", "งานสุขภัณฑ์", "งานหลังคา",
 ]
 
 
@@ -225,6 +225,8 @@ class Takeoff:
             plaster_in += area * (plastered - out_pl)
             paint_out += area * sides_out
             paint_in += area * sides_in
+        tiles = sum(f.area for f in self.p.finishes if f.kind == "wall_tile")
+        paint_in = max(0.0, paint_in - tiles)              # no paint behind wall tiles
         for kind, area in laid.items():
             name, code = masonry[kind]
             self.add("งานก่อ ฉาบ", name, area, "ตร.ม.", code)
@@ -251,6 +253,8 @@ class Takeoff:
             else:
                 self.add("งานประตู หน้าต่าง", f"{label} — วงกบ", area, "ตร.ม.", "2.5.2b")
                 self.add("งานประตู หน้าต่าง", f"{label} — บาน", area, "ตร.ม.", "2.5.3c")
+                self.add("งานประตู หน้าต่าง", f"{label} — กระจก 5 มม.", area * 10.7639, "ตร.ฟ.", "2.5.7",
+                         "พื้นที่บานหน้าต่าง")
         self.add("งานประตู หน้าต่าง", "อุปกรณ์ประตู (ลูกบิด กุญแจ)", door_sets, "ชุด", "2.5.4")
 
     def roof(self) -> None:
@@ -274,11 +278,32 @@ class Takeoff:
             self.add("งานหลังคา", "โครงหลังคาเหล็กรูปพรรณ", r.steel_kg * (1 + sw / 100), "กก.",
                      "1.11.1", f"เผื่อ {sw:g}%")
 
+    def finishes(self) -> None:
+        from .structure.architecture import CEILINGS, FIXTURES, FLOOR_FINISHES, WALL_TILE
+        sums: "OrderedDict[tuple, float]" = OrderedDict()
+        for f in self.p.finishes:
+            sums[(f.kind,)] = sums.get((f.kind,), 0.0) + f.area
+        for (kind,), area in sums.items():
+            if kind == "wall_tile":
+                name, code = WALL_TILE
+            else:
+                group, key = kind.split(":", 1)
+                name, code = (FLOOR_FINISHES if group == "floor" else CEILINGS).get(key, ("", ""))
+            if name:
+                self.add("งานพื้น ผนัง ฝ้า", name, area, "ตร.ม.", code, "ปริมาณสุทธิ ไม่รวมเผื่อเศษ")
+        counts: "OrderedDict[str, int]" = OrderedDict()
+        for fx in self.p.fixtures:
+            counts[fx.name] = counts.get(fx.name, 0) + fx.count
+        for key, n in counts.items():
+            name, code = FIXTURES.get(key, (key, ""))
+            self.add("งานสุขภัณฑ์", name, n, "ชุด", code)
+
     def run(self) -> list[Line]:
         self.earthwork()
         self.concrete_and_forms()
         self.rebar()
         self.walls()
+        self.finishes()
         self.roof()
         order = {s: i for i, s in enumerate(SECTIONS)}
         self.lines.sort(key=lambda ln: order.get(ln.section, 99))

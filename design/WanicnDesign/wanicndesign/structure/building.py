@@ -44,6 +44,12 @@ class Level:
     precast_allow: float = 0.0     # supplier: safe superimposed load at the span, kg/m² (0 = not given)
     precast_max_span: float = 0.0  # supplier: largest span of the chosen plank, m (0 = not given)
     topping: float = 0.05          # cast-in-place topping, m
+    # architecture (stage 7)
+    floor_finish: str = "ceramic_16"   # see architecture.FLOOR_FINISHES
+    ceiling: str = "gypsum"            # ceiling of the rooms on this level: "gypsum" or "none"
+    openings: list = field(default_factory=list)     # ["1A-2A:W1"] doors and windows on wall segments
+    extra_walls: list = field(default_factory=list)  # ["2A-2B"] partition walls besides the level's wall rule
+    wet_bays: list = field(default_factory=list)     # ["3-4/A-B"] bathrooms: tiles, fixtures, walls round
 
 
 @dataclass
@@ -103,6 +109,21 @@ class Seismic:
 
 
 @dataclass
+class OpeningType:
+    name: str                      # "D1", "W1" …
+    kind: str = "door"             # "door" or "window"
+    width: float = 0.90
+    height: float = 2.00
+    material: str = "wood"         # "wood" or "aluminium"
+
+
+DEFAULT_OPENINGS = [OpeningType("D1", "door", 0.90, 2.00, "wood"), OpeningType("D2", "door", 0.70, 2.00, "wood"),
+                    OpeningType("D3", "door", 1.80, 2.10, "aluminium"),
+                    OpeningType("W1", "window", 1.20, 1.10, "aluminium"),
+                    OpeningType("W2", "window", 0.60, 0.60, "aluminium")]
+
+
+@dataclass
 class Wind:
     """Wind load by กฎกระทรวง พ.ศ. 2566 ข้อ 17 (see wind.py)."""
     enabled: bool = True
@@ -133,6 +154,7 @@ class Building:
     seismic: Seismic = field(default_factory=Seismic)
     wind: Wind = field(default_factory=Wind)
     stairs: list = field(default_factory=list)      # [Stair]
+    opening_types: list = field(default_factory=lambda: [OpeningType(**vars(o)) for o in DEFAULT_OPENINGS])
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -292,6 +314,57 @@ class Building:
         if length:
             level.cantilevers.append(f"{key}@{length:.2f}")
 
+    # -- walls, openings, wet rooms ----------------------------------------------
+    def opening_type(self, name: str) -> OpeningType | None:
+        return next((o for o in self.opening_types if o.name == name), None)
+
+    def segment_name(self, a, c) -> str:
+        return self.beam_key("", a, c).split(":", 1)[1]
+
+    def wet_edges(self, level: Level) -> set:
+        """Wall segments round the wet bays of a level."""
+        out = set()
+        for bay in level.wet_bays:
+            xpart, ypart = bay.split("/")
+            i, j = int(xpart.split("-")[0]) - 1, ord(ypart.split("-")[0]) - ord("A")
+            c = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)]
+            for k in range(4):
+                out.add(self.segment_name(c[k], c[(k + 1) % 4]))
+        return out
+
+    def has_wall(self, level: Level, a, c) -> bool:
+        """A wall stands on beam segment a–c of this level: the level's rule,
+        a partition added by hand, or the edge of a wet bay."""
+        if level.walls == "none" and not level.extra_walls and not level.wet_bays:
+            return False
+        name = self.segment_name(a, c)
+        return (level.walls == "all" or (level.walls == "perimeter" and self.is_perimeter(a, c, level.name))
+                or name in level.extra_walls or name in self.wet_edges(level))
+
+    def toggle_wall(self, level: Level, a, c):
+        name = self.segment_name(a, c)
+        if name in level.extra_walls:
+            level.extra_walls.remove(name)
+        else:
+            level.extra_walls.append(name)
+
+    def add_opening(self, level: Level, a, c, type_name: str | None):
+        """Put an opening on a wall segment; ``None`` clears the segment."""
+        name = self.segment_name(a, c)
+        if type_name is None:
+            level.openings[:] = [e for e in level.openings if not e.startswith(name + ":")]
+        else:
+            level.openings.append(f"{name}:{type_name}")
+            if not self.has_wall(level, a, c):
+                level.extra_walls.append(name)
+
+    def toggle_wet(self, level: Level, i: int, j: int):
+        bay = self.panel_name(i, j)
+        if bay in level.wet_bays:
+            level.wet_bays.remove(bay)
+        else:
+            level.wet_bays.append(bay)
+
     # -- cantilever beams ---------------------------------------------------------
     DIRS = {"x": (1, 0), "-x": (-1, 0), "y": (0, 1), "-y": (0, -1)}
 
@@ -398,6 +471,8 @@ class Building:
             seismic=Seismic(**d.get("seismic", {})),
             wind=Wind(**d.get("wind", {})),
             stairs=[Stair(**x) for x in d.get("stairs", [])],
+            opening_types=[OpeningType(**x) for x in d["opening_types"]] if "opening_types" in d else
+            [OpeningType(**vars(o)) for o in DEFAULT_OPENINGS],
         )
 
     @classmethod

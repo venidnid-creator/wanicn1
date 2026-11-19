@@ -702,13 +702,13 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
                                              max(x0, x1) + dx * length, max(y0, y1) + dy * length)}
             for n in (a, c):
                 loads.setdefault(("cb", n, (dx, dy)), []).extend(side)
-    if part != "live" and li + 1 < len(b.levels) and lv.walls != "none":
+    if part != "live" and li + 1 < len(b.levels):
         above = b.levels[li + 1]
         hgt = above.elevation - lv.elevation - above.beam_depth
         wl = WALL_LOAD.get(lv.wall_type, 180) * max(0.0, hgt)           # [QD-WALL]
         for _d, run in b.beam_lines(lv.name):
             for a, c in zip(run, run[1:]):
-                if lv.walls == "all" or b.is_perimeter(a, c, lv.name):
+                if b.has_wall(lv, a, c):                                  # rule, partitions, wet rooms
                     add_w(a, c, wl)
     return loads, subs
 
