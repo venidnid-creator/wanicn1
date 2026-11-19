@@ -201,6 +201,9 @@ class MainWindow(QMainWindow):
         if self.result is None and self.calculate() is None:
             return
         res = self.result
+        if kind == "contract":
+            self.export_contract(res)
+            return
         ext = {"report": "xlsx", "dxf": "dxf", "boq": "xlsx", "sheets": "pdf", "cutting": "xlsx"}[kind]
         flt = "แบบก่อสร้าง PDF (*.pdf);;แบบก่อสร้าง DXF (*.dxf)" if kind == "sheets" else f"*.{ext}"
         path, _ = QFileDialog.getSaveFileName(self, "ส่งออก", "", flt)
@@ -208,6 +211,27 @@ class MainWindow(QMainWindow):
             return
         self.export_to(kind, path, res)
         self.statusBar().showMessage(f"บันทึก {path}")
+
+    def export_contract(self, res):
+        """Price this building with others in one contract (Factor F from the whole contract, ข้อ 9.3 ข้อ 3)."""
+        from ..estimate import contract_for_designs
+        from ..structure.building import Building
+        from ..structure.design import design
+        files, _ = QFileDialog.getOpenFileNames(self, "เลือกโมเดลอาคารอื่นในสัญญาเดียวกัน", "", "*.json")
+        if not files:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "ราคากลางหลายอาคาร", "", "*.xlsx")
+        if not path:
+            return
+        try:
+            results = [res] + [design(Building.load(f)) for f in files]
+            con = contract_for_designs(self.building.name, results)
+            con.to_xlsx(path if path.endswith(".xlsx") else path + ".xlsx")
+        except Exception as e:                   # one bad model must not lose the session
+            QMessageBox.critical(self, APP, f"ทำราคากลางหลายอาคารไม่สำเร็จ\n{e}")
+            return
+        self.statusBar().showMessage(f"{len(results)} อาคาร Factor F {con.factor:.4f} ราคากลาง {con.grand:,.2f} บาท "
+                                     f"→ {path}")
 
     @staticmethod
     def export_to(kind: str, path: str, res):

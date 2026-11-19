@@ -232,3 +232,31 @@ def test_loan_interest_rounding_cgd_26_6_2569():
     from wanicndesign.estimate import loan_interest, needs_new_table
     assert loan_interest(6.38) == 6 and loan_interest(6.50) == 7 and loan_interest(6.49) == 6
     assert not needs_new_table(6.38) and needs_new_table(7.0) and needs_new_table(5.0)
+
+
+def test_contract_uses_factor_f_of_the_whole_contract(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path))
+    import os
+    from conftest import ROOT
+    from wanicndesign.estimate import contract_for_designs, official_factor
+    from wanicndesign.structure.building import Building
+    from wanicndesign.structure.design import design
+    a = Building.load(os.path.join(ROOT, "examples", "building_2storey.json"))
+    b = Building.load(os.path.join(ROOT, "examples", "building_2storey.json"))
+    a.name, b.name = "อาคาร ก", "อาคาร ข"
+    rates = Rates(prices={"คอนกรีตผสมเสร็จ 240 กก./ตร.ซม. (ลูกบาศก์)": 2500.0})
+    con = contract_for_designs("โรงเรียน", [design(a), design(b)], rates)
+    assert con.total == pytest.approx(sum(e.total for _l, e in con.items))
+    f = round(official_factor(con.total, 0, 0), 4)
+    assert con.factor == f and all(e.factor == f for _l, e in con.items)        # one F for the whole contract
+    alone = con.items[0][1].total
+    assert official_factor(alone, 0, 0) >= official_factor(con.total, 0, 0)    # a bigger cost never raises F
+    assert con.grand == pytest.approx(sum(round(e.total * f, 2) for _l, e in con.items), abs=0.05)
+    out = tmp_path / "c.xlsx"
+    con.to_xlsx(str(out))
+    wb = openpyxl.load_workbook(out)
+    assert wb.sheetnames[:4] == ["ปร.4", "ปร.1 (ก)", "ปร.1 (1)", "ปร.1 (2)"]
+    labels = [c.value for row in wb["ปร.1 (ก)"].iter_rows() for c in row]
+    assert "อาคาร ก" in labels and "อาคาร ข" in labels
+    assert any(str(v).startswith("='ปร.1 (2)'!I") for v in labels)
+    assert any("งานหรือกลุ่มงาน  อาคาร ข" == c.value for row in wb["ปร.1 (2)"].iter_rows() for c in row)

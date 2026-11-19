@@ -941,7 +941,8 @@ class ResultsPage(Page):
         run.clicked.connect(self.run_requested.emit)
         row.addWidget(run)
         for key, label in (("report", "รายการคำนวณ Excel"), ("sheets", "แบบก่อสร้าง PDF/DXF"), ("dxf", "โมเดล DXF"),
-                           ("cutting", "ตารางตัดเหล็ก"), ("boq", "ราคากลาง ปร.4")):
+                           ("cutting", "ตารางตัดเหล็ก"), ("boq", "ราคากลาง ปร.4"),
+                           ("contract", "ราคากลางหลายอาคาร")):
             b = QPushButton(label)
             b.clicked.connect(lambda _c=False, k=key: self.export_requested.emit(k))
             row.addWidget(b)

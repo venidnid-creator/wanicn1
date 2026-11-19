@@ -120,6 +120,7 @@ class Estimate:
         self.costing = costing or Costing()
         self.province = province
         self.area = area
+        self.factor_cost: float | None = None     # cost that picks Factor F (a contract: all its buildings)
         self.rows = []
         for ln in lines:
             own = rates.prices.get(ln.price_key)       # a price typed for the BOQ line itself wins
@@ -158,23 +159,24 @@ class Estimate:
         """Factor F and where it came from: the user's rows, the official CGD table, or the typed value.
         Funded partly by a loan with no VAT (``loan_share`` %), the two columns are averaged by share (ข้อ 8)."""
         c = self.costing
+        a = self.factor_cost if self.factor_cost is not None else self.total
         if c.factor_table:
-            return round(factor_f(self.total, c.factor_table, c.factor_f), 4), \
+            return round(factor_f(a, c.factor_table, c.factor_f), 4), \
                 "ตามตาราง Factor F ที่กรอก (เทียบอัตราส่วนระหว่างช่วง)"
         ok = (c.use_official and abs(c.interest - OFFICIAL_FF["interest"]) < 1e-9
               and abs(c.vat - OFFICIAL_FF["vat"]) < 1e-9)
-        f_vat = official_factor(self.total, c.adv_pay, c.retention) if ok else None
+        f_vat = official_factor(a, c.adv_pay, c.retention) if ok else None
         if f_vat is None:
             why = "" if not c.use_official else \
                 (" (ไม่มีตารางทางการสำหรับเงื่อนไขนี้ — ตารางมีเงินล่วงหน้า 0/5/10/15 %, ประกันผลงาน 0/5/10 %, "
                  "ดอกเบี้ย 6 %, VAT 7 %)")
             return round(float(c.factor_f or 1.0), 4), "ตามค่าที่กรอก" + why
         share = min(max(c.loan_share, 0.0), 100.0) / 100
-        f_loan = official_factor(self.total, c.adv_pay, c.retention, no_vat=True)
+        f_loan = official_factor(a, c.adv_pay, c.retention, no_vat=True)
         f = f_loan * share + f_vat * (1 - share)
         note = (f"ตามตาราง Factor F งานก่อสร้างอาคาร กรมบัญชีกลาง ว 481 (26 มิ.ย. 2569) เงินล่วงหน้า {c.adv_pay:g} % "
-                f"ประกันผลงาน {c.retention:g} % ดอกเบี้ย 6 % VAT 7 % — ค่างานต้นทุน {self.total / 1e6:,.4f} ล้านบาท "
-                "เทียบอัตราส่วนระหว่างช่วง (ข้อ 9.3)")
+                f"ประกันผลงาน {c.retention:g} % ดอกเบี้ย 6 % VAT 7 % — ค่างานต้นทุน{'ทั้งสัญญา' if self.factor_cost is not None else ''} "
+                f"{a / 1e6:,.4f} ล้านบาท เทียบอัตราส่วนระหว่างช่วง (ข้อ 9.3)")
         if share:
             note += (f"; เงินกู้ไม่เสียภาษี {share * 100:g} % ใช้ช่อง รวมในรูป Factor {f_loan:.4f} "
                      f"และงบประมาณ {100 - share * 100:g} % ใช้ Factor F {f_vat:.4f} ตามสัดส่วน (ข้อ 8)")
@@ -254,19 +256,18 @@ class Estimate:
                 w.writerow(["", f"ภาษีมูลค่าเพิ่ม {self.costing.vat:g}%", "", "", "", "", "", "", self.vat_added])
             w.writerow(["", "ราคากลาง", "", "", "", "", "", "", self.grand])
 
-    def to_xlsx(self, path: str) -> None:
-        from openpyxl import Workbook
+    def _tools(self, name: str | None = None):
+        """(bold, header, head_row, sign) for the forms of this estimate (``name`` overrides the project name)."""
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.utils import get_column_letter
-
-        wb = Workbook()
         bold = Font(bold=True)
         head_fill = PatternFill("solid", fgColor="DDEBF7")
         thin = Side(style="thin", color="999999")
         box = Border(left=thin, right=thin, top=thin, bottom=thin)
         c = self.costing
+        project = name or self.project_name
 
-        def header(ws, form, title, ncols):
+        def header(ws, form, title, ncols, group=""):
             last = get_column_letter(ncols)
             ws.append([""] * (ncols - 1) + [f"แบบ {form}"])
             ws.cell(ws.max_row, ncols).font = bold
@@ -275,9 +276,11 @@ class Estimate:
             ws.merge_cells(f"A{ws.max_row}:{last}{ws.max_row}")
             ws.cell(ws.max_row, 1).alignment = Alignment(horizontal="center")
             dots = "........................................"
-            for text in (f"ชื่อโครงการ  {self.project_name}", f"สถานที่ก่อสร้าง  {c.location or dots}",
-                         f"แบบเลขที่  {c.drawing_no or dots}", f"หน่วยงานเจ้าของโครงการ  {c.owner or dots}",
-                         self.price_ref, f"ค่าแรงงาน: {self.rates.source}"):
+            texts = ([f"งานหรือกลุ่มงาน  {group}"] if group else []) + [
+                f"ชื่อโครงการ  {project}", f"สถานที่ก่อสร้าง  {c.location or dots}",
+                f"แบบเลขที่  {c.drawing_no or dots}", f"หน่วยงานเจ้าของโครงการ  {c.owner or dots}",
+                self.price_ref, f"ค่าแรงงาน: {self.rates.source}"]
+            for text in texts:
                 ws.append([text])
                 ws.merge_cells(f"A{ws.max_row}:{last}{ws.max_row}")
 
@@ -296,12 +299,64 @@ class Estimate:
                       ("กรรมการกำหนดราคากลาง", c.member2),
                       ("ผู้ถอดแบบและคำนวณราคา", c.preparer + (f"  ตำแหน่ง {c.preparer_role}" if c.preparer_role
                                                              else ""))]
-            for role, name in people:
+            for role, person in people:
                 for text in (f"(ลงชื่อ) ......................................  {role}",
-                             f"( {name or '..........................................'} )", ""):
+                             f"( {person or '..........................................'} )", ""):
                     ws.append([text])
                     ws.merge_cells(f"A{ws.max_row}:{last}{ws.max_row}")
                     ws.cell(ws.max_row, 1).alignment = Alignment(horizontal="center")
+        return bold, header, head_row, sign
+
+    def write_pr1(self, ws, tools, group: str = "") -> tuple[list, int]:
+        """แบบ ปร.1 of this estimate on ``ws``; returns [(section, subtotal row)] and the total row."""
+        from openpyxl.utils import get_column_letter
+        bold, header, head_row, sign = tools
+        header(ws, "ปร.1", "แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน", 11, group)
+        head_row(ws, self.HEADERS)
+        n = 0
+        subtotal = []
+        for name, rows in self.sections():
+            ws.append(["", name])
+            ws.cell(ws.max_row, 2).font = bold
+            first = ws.max_row + 1
+            for r in rows:
+                n += 1
+                note = r.line.note
+                if r.missing:
+                    note = (note + " · " if note else "") + "ยังไม่มีราคา: " + ", ".join(r.missing[:3]) + \
+                        (" …" if len(r.missing) > 3 else "")
+                ws.append([n, r.line.item, r.line.qty, r.line.unit, r.material_rate, None,
+                           r.labour_rate, None, None, r.line.labour_code, note])
+                i = ws.max_row
+                ws.cell(i, 6, f"=ROUND(C{i}*E{i},2)")
+                ws.cell(i, 8, f"=ROUND(C{i}*G{i},2)")
+                ws.cell(i, 9, f"=F{i}+H{i}")
+            last = ws.max_row
+            ws.append(["", f"รวม{name}", None, None, None, f"=SUM(F{first}:F{last})", None,
+                       f"=SUM(H{first}:H{last})", f"=SUM(I{first}:I{last})"])
+            ws.cell(ws.max_row, 2).font = bold
+            subtotal.append((name, ws.max_row))
+        refs = lambda col: "+".join(f"{col}{i}" for _n, i in subtotal) or "0"
+        ws.append(["", "รวมค่างานต้นทุน", None, None, None, "=" + refs("F"), None, "=" + refs("H"), "=" + refs("I")])
+        total_row = ws.max_row
+        for cell in ws[total_row]:
+            cell.font = bold
+        for i, wdt in enumerate([7, 48, 11, 8, 13, 14, 13, 14, 16, 12, 44], 1):
+            ws.column_dimensions[get_column_letter(i)].width = wdt
+        for row in ws.iter_rows(min_row=9):
+            for cell in row[2:9]:
+                cell.number_format = "#,##0.00"
+        sign(ws, 11)
+        return subtotal, total_row
+
+    def to_xlsx(self, path: str) -> None:
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+
+        wb = Workbook()
+        c = self.costing
+        tools = self._tools()
+        bold, header, head_row, sign = tools
 
         # ---- ปร.4: summary ---------------------------------------------------
         s4 = wb.active
@@ -309,43 +364,7 @@ class Estimate:
         s1k = wb.create_sheet("ปร.1 (ก)")
         s1 = wb.create_sheet("ปร.1")
 
-        # ---- ปร.1: quantities and prices ------------------------------------
-        header(s1, "ปร.1", "แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน", 11)
-        head_row(s1, self.HEADERS)
-        n = 0
-        subtotal = []                      # (section, row)
-        for name, rows in self.sections():
-            s1.append(["", name])
-            s1.cell(s1.max_row, 2).font = bold
-            first = s1.max_row + 1
-            for r in rows:
-                n += 1
-                note = r.line.note
-                if r.missing:
-                    note = (note + " · " if note else "") + "ยังไม่มีราคา: " + ", ".join(r.missing[:3]) + \
-                        (" …" if len(r.missing) > 3 else "")
-                s1.append([n, r.line.item, r.line.qty, r.line.unit, r.material_rate, None,
-                           r.labour_rate, None, None, r.line.labour_code, note])
-                i = s1.max_row
-                s1.cell(i, 6, f"=ROUND(C{i}*E{i},2)")
-                s1.cell(i, 8, f"=ROUND(C{i}*G{i},2)")
-                s1.cell(i, 9, f"=F{i}+H{i}")
-            last = s1.max_row
-            s1.append(["", f"รวม{name}", None, None, None, f"=SUM(F{first}:F{last})", None,
-                       f"=SUM(H{first}:H{last})", f"=SUM(I{first}:I{last})"])
-            s1.cell(s1.max_row, 2).font = bold
-            subtotal.append((name, s1.max_row))
-        refs = lambda col: "+".join(f"{col}{i}" for _n, i in subtotal) or "0"
-        s1.append(["", "รวมค่างานต้นทุน", None, None, None, "=" + refs("F"), None, "=" + refs("H"), "=" + refs("I")])
-        total_row = s1.max_row
-        for cell in s1[total_row]:
-            cell.font = bold
-        for i, wdt in enumerate([7, 48, 11, 8, 13, 14, 13, 14, 16, 12, 44], 1):
-            s1.column_dimensions[get_column_letter(i)].width = wdt
-        for row in s1.iter_rows(min_row=9):
-            for cell in row[2:9]:
-                cell.number_format = "#,##0.00"
-        sign(s1, 11)
+        subtotal, _total_row = self.write_pr1(s1, tools)
 
         # ---- ปร.1 (ก): sections × Factor F ----------------------------------
         header(s1k, "ปร.1 (ก)", "แบบสรุปค่าก่อสร้าง ค่างานต้นทุน", 6)
@@ -627,3 +646,135 @@ def for_design(res, rates: Rates | None = None) -> Estimate:
         costing.price_month = month
     return Estimate(project.name, takeoff(project, rates), rates, costing, b.province if book else "",
                     floor_area(b))
+
+
+class Contract:
+    """Several buildings priced in one contract (หลักเกณฑ์งานอาคาร 2569 ข้อ 9.3 ข้อ 3): Factor F from the
+    cost of the whole contract; one แบบ ปร.1 per building (งานหรือกลุ่มงาน, หน้า 5), ปร.1 (ก) listing every
+    building × that Factor F, one ปร.2/ปร.3 and the ปร.4 of the project. The first building's costing gives
+    the project details, committee and Factor F conditions."""
+
+    def __init__(self, name: str, estimates: list[tuple[str, Estimate]]):
+        if not estimates:
+            raise ValueError("ไม่มีอาคารในสัญญา")
+        self.name = name
+        self.items = estimates
+        self.lead = estimates[0][1]
+        total = self.total
+        for _label, est in estimates:
+            est.factor_cost = total
+            est.costing.factor_table = self.lead.costing.factor_table
+            for k in ("use_official", "loan_share", "factor_f", "adv_pay", "retention", "interest", "vat", "method"):
+                setattr(est.costing, k, getattr(self.lead.costing, k))
+
+    @property
+    def total(self) -> float:
+        return round(sum(e.total for _l, e in self.items), 2)
+
+    @property
+    def factor(self) -> float:
+        return self.lead.factor
+
+    @property
+    def construction(self) -> float:
+        return round(sum(e.construction for _l, e in self.items), 2)
+
+    def extras(self, section: str) -> list[dict]:
+        return [dict(x, item=f"{x.get('item', '')} ({label})") for label, e in self.items for x in e.extras(section)]
+
+    def extras_total(self, section: str) -> float:
+        return round(sum(e.extras_total(section) for _l, e in self.items), 2)
+
+    @property
+    def grand(self) -> float:
+        c = self.lead.costing
+        vat = self.construction * c.vat / 100 if c.method == "private" else 0.0
+        return round(self.construction + vat + self.lead.with_vat(self.extras_total("equip"))
+                     + self.lead.with_vat(self.extras_total("special")), 2)
+
+    @property
+    def area(self) -> float:
+        return round(sum(e.area for _l, e in self.items), 2)
+
+    def to_xlsx(self, path: str) -> None:
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+        wb = Workbook()
+        lead, c = self.lead, self.lead.costing
+        tools = lead._tools(self.name)
+        bold, header, head_row, sign = tools
+        s4 = wb.active
+        s4.title = "ปร.4"
+        s1k = wb.create_sheet("ปร.1 (ก)")
+        totals = []
+        for k, (label, est) in enumerate(self.items, 1):
+            ws = wb.create_sheet(f"ปร.1 ({k})")
+            _sub, row = est.write_pr1(ws, est._tools(self.name), group=label)
+            totals.append((label, ws.title, row))
+        header(s1k, "ปร.1 (ก)", "แบบสรุปค่าก่อสร้าง ค่างานต้นทุน", 6)
+        head_row(s1k, ["ลำดับที่", "รายการ (งานหรือกลุ่มงาน)", "ค่างานต้นทุน (บาท)", "Factor F", "ค่าก่อสร้าง (บาท)",
+                       "หมายเหตุ"])
+        first = s1k.max_row + 1
+        for k, (label, title, row) in enumerate(totals, 1):
+            s1k.append([k, label, f"='{title}'!I{row}", self.factor if k == 1 else f"=$D${first}", None,
+                        f"แบบ {title}"])
+            i = s1k.max_row
+            s1k.cell(i, 5, f"=ROUND(C{i}*D{i},2)")
+        last = s1k.max_row
+        s1k.append(["", "รวมค่าก่อสร้าง", f"=SUM(C{first}:C{last})", None, f"=SUM(E{first}:E{last})", ""])
+        sum_row = s1k.max_row
+        for cell in s1k[sum_row]:
+            cell.font = bold
+        s1k.append([])
+        for text in (f"Factor F {self.factor:.4f} — {lead.factor_note}",
+                     "สัญญาเดียว: ใช้ค่างานต้นทุนรวมทุกอาคารหาค่า Factor F (หลักเกณฑ์งานอาคาร 2569 ข้อ 9.3 ข้อ 3)",
+                     "เงื่อนไขการใช้ตาราง Factor F", f"   เงินล่วงหน้าจ่าย {c.adv_pay:g} %",
+                     f"   เงินประกันผลงานหัก {c.retention:g} %", f"   ดอกเบี้ยเงินกู้ {c.interest:g} % ต่อปี",
+                     f"   ภาษีมูลค่าเพิ่ม {c.vat:g} %",
+                     ("ขนาดหรือเนื้อที่อาคารรวม " + (f"{self.area:,.2f} ตร.ม. เฉลี่ย {self.grand / self.area:,.2f} บาท/ตร.ม."
+                                                    if self.area > 0 else "........ ตร.ม."))):
+            s1k.append(["", text])
+            s1k.merge_cells(f"B{s1k.max_row}:F{s1k.max_row}")
+        for i, wdt in enumerate([8, 44, 18, 11, 18, 16], 1):
+            s1k.column_dimensions[get_column_letter(i)].width = wdt
+        for row in s1k.iter_rows(min_row=first, max_row=sum_row):
+            for cell in (row[2], row[4]):
+                cell.number_format = "#,##0.00"
+            row[3].number_format = "0.0000"
+        sign(s1k, 6)
+        header(s4, "ปร.4", "แบบสรุปราคากลางงานก่อสร้างอาคาร", 4)
+        head_row(s4, ["ลำดับที่", "รายการ", "ค่าก่อสร้าง (บาท)", "หมายเหตุ"])
+        s4.append(["1", f"ค่างานต้นทุน × Factor F (ตามแบบ ปร.1 (ก)) {len(self.items)} อาคาร",
+                   f"='ปร.1 (ก)'!E{sum_row}", f"Factor F {self.factor:.4f}"])
+        rows4 = [s4.max_row]
+        if c.method == "private":
+            s4.append(["", f"ภาษีมูลค่าเพิ่ม {c.vat:g}% (งานเอกชน)", f"=ROUND(C{rows4[0]}*{c.vat / 100},2)", ""])
+            rows4.append(s4.max_row)
+        for no, sec, label in (("2", "equip", "ค่าครุภัณฑ์จัดซื้อ (ตามแบบ ปร.2 (ก)) รวมภาษีมูลค่าเพิ่ม"),
+                               ("3", "special", "ค่าใช้จ่ายพิเศษตามข้อกำหนด (ตามแบบ ปร.3) รวมภาษีมูลค่าเพิ่ม")):
+            s4.append([no, label, lead.with_vat(self.extras_total(sec)), "" if self.extras(sec) else "ไม่มี"])
+            rows4.append(s4.max_row)
+        s4.append(["", "ราคากลาง", "=" + "+".join(f"C{i}" for i in rows4), ""])
+        for i in rows4 + [s4.max_row]:
+            s4.cell(i, 3).number_format = "#,##0.00"
+        s4.cell(s4.max_row, 2).font = bold
+        s4.append(["", f"ราคากลาง (ตัวอักษร)  ({baht_text(self.grand)})"])
+        s4.merge_cells(f"B{s4.max_row}:D{s4.max_row}")
+        for i, wdt in enumerate([8, 60, 20, 22], 1):
+            s4.column_dimensions[get_column_letter(i)].width = wdt
+        sign(s4, 4)
+        # ปร.2/ปร.3 of all buildings, through the lead estimate with the combined lines
+        saved = lead.costing.extras
+        lead.costing.extras = [dict(x, section=sec) for sec in ("equip", "special") for x in self.extras(sec)]
+        try:
+            lead._extras_sheets(wb, header, head_row, sign, bold)
+        finally:
+            lead.costing.extras = saved
+        from .structure.report import references_sheet
+        references_sheet(wb, ["CGD2569", "CGD2569-MAT", "W480", "W480-MEP", "CGD-FACTORF"])
+        wb.save(path)
+
+
+def contract_for_designs(name: str, results, rates: Rates | None = None) -> Contract:
+    """A contract from designed buildings (each priced with its own province book and quantities)."""
+    return Contract(name, [(r.building.name, for_design(r, rates)) for r in results])

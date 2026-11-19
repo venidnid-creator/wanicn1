@@ -8,6 +8,7 @@
     python -m wanicndesign prices PROJECT.json -o prices.json     (price list to fill in)
     python -m wanicndesign design BUILDING.json -o OUTDIR          (model → structure → ราคากลาง)
     python -m wanicndesign province BUILDING.json จังหวัด ตาราง.xlsx  (ราคาวัสดุพาณิชย์จังหวัด)
+    python -m wanicndesign contract A.json B.json --name "โครงการ" -o OUT.xlsx  (หลายอาคาร สัญญาเดียว)
 """
 from __future__ import annotations
 
@@ -140,6 +141,22 @@ def cmd_design(args) -> int:
     return 0
 
 
+def cmd_contract(args) -> int:
+    """Several buildings in one contract: Factor F from the cost of the whole contract (ข้อ 9.3 ข้อ 3)."""
+    from .estimate import contract_for_designs
+    from .structure.building import Building
+    from .structure.design import design
+    results = [design(Building.load(p)) for p in args.buildings]
+    con = contract_for_designs(args.name, results, _rates(args) if args.prices else None)
+    out = args.output or "ราคากลาง-สัญญา.xlsx"
+    con.to_xlsx(out)
+    for label, est in con.items:
+        print(f"  {label}: ค่างานต้นทุน {est.total:,.2f} × F {est.factor:.4f} = {est.construction:,.2f}")
+    print(f"รวม {len(con.items)} อาคาร ค่างานต้นทุน {con.total:,.2f}  Factor F {con.factor:.4f}  "
+          f"ราคากลาง {con.grand:,.2f} บาท → {out}")
+    return 0
+
+
 def cmd_labour(args) -> int:
     r = Rates(override_file=OVERRIDE)
     if args.set:
@@ -183,6 +200,13 @@ def main(argv=None) -> int:
     pv.add_argument("file")
     pv.add_argument("--month", help="เดือนของราคา เช่น \"ต.ค. 2569\"")
     pv.set_defaults(func=cmd_province)
+    ct = sub.add_parser("contract", help="ราคากลางหลายอาคารในสัญญาเดียว (Factor F จากค่างานรวม)")
+    ct.add_argument("buildings", nargs="+")
+    ct.add_argument("--name", default="โครงการก่อสร้าง")
+    ct.add_argument("-o", "--output")
+    ct.add_argument("--prices")
+    ct.add_argument("--labour-up", type=float)
+    ct.set_defaults(func=cmd_contract)
     lb = sub.add_parser("labour", help="ดูหรืออัปเดตค่าแรง ว480")
     lb.add_argument("--set", nargs=2, metavar=("CODE", "RATE"))
     lb.set_defaults(func=cmd_labour)
