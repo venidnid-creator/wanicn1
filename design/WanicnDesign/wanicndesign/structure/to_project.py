@@ -8,7 +8,7 @@ from collections import Counter
 from ..model import Beam, Column, Finish, Fixture, Floor, Footing, Opening, Project, Roof, Slab, Wall
 from .design import DesignResult
 
-_SHAPE = {"hip": "hip", "gable": "gable"}
+_SHAPE = {"hip": "hip", "gable": "gable", "shed": "shed", "manila": "hip"}
 
 
 def to_project(res: DesignResult) -> Project:
@@ -73,8 +73,9 @@ def to_project(res: DesignResult) -> Project:
         p.openings.append(Opening(o.kind, o.name, o.width, o.height, n, o.material))
     if res.roof:
         r = res.roof
-        cover = b.roof.cover if b.roof.cover in ("concrete_tile", "metal_sheet", "ceramic_tile") \
+        cover = b.roof.cover if b.roof.cover in ("concrete_tile", "metal_sheet", "ceramic_tile", "asbestos") \
             else "concrete_tile"
         p.roof = Roof(round(r.plan_area, 2), b.roof.slope_deg, _SHAPE.get(b.roof.shape, "hip"), cover,
-                      round(r.ridge, 2), round(r.hips, 2), 0.0, round(r.eave, 2), round(r.steel_kg, 1))
+                      round(r.ridge, 2), round(r.hips, 2), 0.0, round(r.eave, 2), round(r.steel_kg, 1),
+                      round(r.verge, 2))
     return p

@@ -1083,3 +1083,92 @@ def test_architectural_quantities():
     assert all(lines[name].qty == 1 for name, _code in FIXTURES.values())
     assert lines["อุปกรณ์ประตู (ลูกบิด กุญแจ)"].qty == 2
     assert tiles.labour_code == "2.3.3a" and lines["ฝ้าแผ่นยิปซัมฉาบรอยต่อเรียบ"].labour_code == "2.2.2"
+
+
+# ---------------------------------------------------------------------------
+# Roof shapes, regional presets and the concrete roof deck
+def _roof(shape, slope=30.0):
+    b = Building.load(BUILDING)
+    b.roof.shape, b.roof.slope_deg = shape, slope
+    return b
+
+
+def test_roof_geometry_by_shape():
+    from wanicndesign.structure.roofs import faces, geometry
+    t, cos = math.tan(math.radians(30)), math.cos(math.radians(30))
+    hip = geometry(_roof("hip"))
+    run = hip.short / 2
+    assert hip.rise == pytest.approx(run * t)
+    assert hip.ridge == pytest.approx(hip.long - hip.short)
+    assert hip.hips == pytest.approx(4 * math.sqrt(2 * run ** 2 + hip.rise ** 2))
+    gable = geometry(_roof("gable"))
+    assert gable.ridge == pytest.approx(gable.long) and gable.hips == 0
+    assert gable.verge == pytest.approx(4 * run / cos) and gable.eave == pytest.approx(2 * gable.long)
+    shed = geometry(_roof("shed", 10))
+    assert shed.rise == pytest.approx(shed.short * math.tan(math.radians(10)))      # one slope over the short side
+    assert shed.ridge == 0 and shed.eave == pytest.approx(shed.long)
+    assert shed.verge == pytest.approx(2 * shed.short / math.cos(math.radians(10)) + shed.long)
+    b = _roof("manila")
+    b.roof.manila_ratio = 0.5
+    m = geometry(b)
+    h = 0.5 * run
+    assert m.ridge == pytest.approx(m.long - 2 * h)
+    assert m.hips == pytest.approx(4 * math.sqrt(2 * h * h + (0.5 * m.rise) ** 2))
+    assert m.verge == pytest.approx(4 * 0.5 * run / cos)
+    # 3D planes: every roof point lies between the eave and the top
+    for shape in ("hip", "gable", "shed", "manila"):
+        bb = _roof(shape)
+        g = geometry(bb)
+        zs = [p[2] for f in faces(bb, 3.0) for p in f]
+        assert min(zs) == pytest.approx(3.0) and max(zs) == pytest.approx(3.0 + g.rise)
+
+
+def test_every_roof_shape_designs():
+    for shape in ("hip", "gable", "shed", "manila"):
+        for system in ("rafter", "truss"):
+            b = _roof(shape, 15 if shape == "shed" else 30)
+            b.roof.cover = "metal_sheet" if shape == "shed" else "concrete_tile"
+            b.roof.system = system
+            res = design(b)
+            assert res.roof.verge >= 0 and "ROOF-STYLE" in res.roof.refs
+            if system == "truss":
+                assert res.trusses and all(t.ok for t in res.trusses), (shape, [t.line for t in res.trusses if not t.ok])
+
+
+def test_mono_truss_statics():
+    from wanicndesign.structure.truss import geometry, solve_truss
+    nodes, mem = geometry(6.0, 10.0, 0.3, 4, mono=True)
+    assert nodes[5][1] == pytest.approx(0.3) and nodes[9][1] == pytest.approx(0.3 + 6 * math.tan(math.radians(10)))
+    P = 1000.0
+    loads = {k: (0.0, -P) for k in range(5, 10)}
+    _u, f = solve_truss(nodes, mem, [5.0] * len(mem), loads, {0: (True, True), 4: (False, True)})
+    assert all(math.isfinite(x) for x in f)                               # triangulated and stable
+
+
+def test_slope_warning_and_regional_presets():
+    from wanicndesign.structure.roofs import MIN_SLOPE, REGIONS, slope_warning
+    b = _roof("gable", 12)
+    b.roof.cover = "concrete_tile"
+    assert slope_warning(b) and any("ความลาดหลังคา" in w for w in design(b).warnings)
+    b.roof.cover = "metal_sheet"
+    assert not slope_warning(b)
+    for _lbl, shape, slope, overhang, cover, _why in REGIONS.values():
+        assert slope >= MIN_SLOPE[cover] and 0 < overhang <= 2.0
+        bb = _roof(shape, slope)
+        bb.roof.overhang, bb.roof.cover = overhang, cover
+        rr = design(bb).roof
+        assert rr.purlin.ok and rr.rafter.ok
+
+
+def test_concrete_roof_deck_is_designed_as_a_slab():
+    from wanicndesign.standards import DECK_LIVE
+    from wanicndesign.structure.architecture import level_rooms
+    b = Building.load(BUILDING)
+    top = b.levels[-1]
+    top.slab, top.live_load = "deck", DECK_LIVE
+    res = design(b)
+    deck = [s for s in res.slabs if s.level == top.name]
+    assert deck and all(s.ok for s in deck)
+    assert DECK_LIVE == 200 and not level_rooms(b, top)
+    beams = [x for x in res.beams if x.level == top.name and x.kind == "beam"]
+    assert beams and max(x.w for x in beams) > 2400 * 0.2 * 0.4        # the deck load reaches its beams

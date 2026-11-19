@@ -263,14 +263,20 @@ class Takeoff:
             return
         slope_area = r.plan_area / math.cos(math.radians(r.slope_deg))
         waste = float(self.r.roofing_waste_pct.get(r.shape, 3.0))
-        cover = {"concrete_tile": ("มุงกระเบื้องคอนกรีต", "2.1.3", "2.1.3r"),
-                 "metal_sheet": ("มุงหลังคาเหล็กรีดลอน", "2.1.8", "2.1.8f"),
-                 "ceramic_tile": ("มุงกระเบื้องดินเผาเคลือบเซรามิค", "2.1.7", "2.1.7r")}
-        name, code, ridge_code = cover.get(r.material, cover["concrete_tile"])
+        hip = r.shape == "hip"
+        # (roof item, ว480 code, ridge code, verge code)
+        cover = {"concrete_tile": ("มุงกระเบื้องคอนกรีต", "2.1.3", "2.1.3r", "2.1.3v"),
+                 "metal_sheet": ("มุงหลังคาเหล็กรีดลอน", "2.1.8", "2.1.8f", "2.1.8f"),
+                 "ceramic_tile": ("มุงกระเบื้องดินเผาเคลือบเซรามิค", "2.1.7", "2.1.7r", "2.1.7v"),
+                 "asbestos": ("มุงกระเบื้องลอนคู่ ลอนเล็ก" + (" (ทรงปั้นหยา)" if hip else ""),
+                              "2.1.1h" if hip else "2.1.1", "2.1.1r", "2.1.1r")}
+        name, code, ridge_code, verge_code = cover.get(r.material, cover["concrete_tile"])
         self.add("งานหลังคา", name, slope_area * (1 + waste / 100), "ตร.ม.", code,
                  f"พื้นที่ราบ {q2(r.plan_area)} ตร.ม. ลาด {r.slope_deg:g}° เผื่อ {waste:g}%")
         self.add("งานหลังคา", "ครอบสัน ครอบตะเข้สัน", r.ridge_length + r.hip_length, "เมตร",
                  ridge_code)
+        self.add("งานหลังคา", "ครอบข้าง ครอบปั้นลม" + (" ครอบชนผนังด้านสูง" if r.shape == "shed" else ""),
+                 r.verge_length, "เมตร", verge_code)
         self.add("งานหลังคา", "รางน้ำตะเข้", r.valley_length, "เมตร", "2.1.10c")
         self.add("งานหลังคา", "เชิงชาย ทับเชิงชาย", r.eave_length, "เมตร", "2.1.10a")
         if r.steel_kg:

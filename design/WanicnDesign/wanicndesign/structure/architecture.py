@@ -43,7 +43,7 @@ SQFT_PER_M2 = 10.7639
 
 def level_rooms(b, lv):
     """Floor bays of a level with rooms: [(bay name, area, wet)]."""
-    if lv.slab in ("roof", "none"):
+    if lv.slab in ("roof", "none", "deck"):     # a roof deck has no rooms (waterproofing is its finish)
         return []
     out = []
     for i, j in b.panels(lv.name):

@@ -97,13 +97,14 @@ class Wall:
 class Roof:
     plan_area: float             # horizontal area, m²
     slope_deg: float = 30.0
-    shape: str = "hip"           # gable, shed, hip
-    material: str = "concrete_tile"   # concrete_tile, metal_sheet, ceramic_tile
+    shape: str = "hip"           # gable, shed, hip (a Manila roof counts as hip)
+    material: str = "concrete_tile"   # concrete_tile, metal_sheet, ceramic_tile, asbestos (ลอนคู่)
     ridge_length: float = 0.0
     hip_length: float = 0.0
     valley_length: float = 0.0
     eave_length: float = 0.0     # roof circumference
     steel_kg: float = 0.0        # roof steel frame, kg
+    verge_length: float = 0.0    # verges (ครอบปั้นลม / ครอบข้าง) and the high edge of a shed roof
 
 
 @dataclass

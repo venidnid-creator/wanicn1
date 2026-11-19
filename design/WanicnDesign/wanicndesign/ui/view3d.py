@@ -98,7 +98,7 @@ def model_faces(b, res=None):
                 box = _box(x0, y0 - hw, z - lv.beam_depth, x1, y0 + hw, z) if abs(y1 - y0) < 1e-9 else \
                     _box(x0 - hw, y0, z - lv.beam_depth, x0 + hw, y1, z)
                 faces.extend((face, COLOURS["beam"]) for face in box)
-        if lv.slab in ("suspended", "precast", "on_ground"):
+        if lv.slab in ("suspended", "precast", "on_ground", "deck"):
             from ..structure.design import slab_parts
             for i, j in b.panels(lv.name):
                 for _n, x0, y0, x1, y1, _f in slab_parts(b, lv, i, j):
@@ -114,7 +114,7 @@ def model_faces(b, res=None):
                         xx = xs[i] + f * (xs[i + 1] - xs[i])
                         box = _box(xx - hw, ys[j], z - lv.beam_depth, xx + hw, ys[j + 1], z)
                     faces.extend((face, COLOURS["beam"]) for face in box)
-        if lv.slab == "suspended":
+        if lv.slab in ("suspended", "deck"):
             for a, c, length, (dx, dy) in b.cantilevers(lv):
                 (x0, y0), (x1, y1) = (xs[a[0]], ys[a[1]]), (xs[c[0]], ys[c[1]])
                 faces.extend((face, COLOURS["slab"]) for face in _box(
@@ -146,30 +146,9 @@ def _stair_faces(b, g, kind, t, colour):
 
 
 def _roof_faces(b, z):
-    r = b.roof
-    e = r.overhang
-    x0, y0, x1, y1 = -e, -e, b.xs[-1] + e, b.ys[-1] + e
-    w, d = x1 - x0, y1 - y0
-    t = math.tan(math.radians(r.slope_deg))
+    from ..structure.roofs import faces
     c = QColor(COLOURS["roof"])
-    if r.shape == "gable":
-        if w >= d:
-            rise, ym = d / 2 * t, (y0 + y1) / 2
-            return [([(x0, y0, z), (x1, y0, z), (x1, ym, z + rise), (x0, ym, z + rise)], c),
-                    ([(x0, y1, z), (x0, ym, z + rise), (x1, ym, z + rise), (x1, y1, z)], c)]
-        rise, xm = w / 2 * t, (x0 + x1) / 2
-        return [([(x0, y0, z), (xm, y0, z + rise), (xm, y1, z + rise), (x0, y1, z)], c),
-                ([(x1, y0, z), (x1, y1, z), (xm, y1, z + rise), (xm, y0, z + rise)], c)]
-    half = min(w, d) / 2
-    rise = half * t
-    if w >= d:
-        ra, rb = (x0 + half, (y0 + y1) / 2, z + rise), (x1 - half, (y0 + y1) / 2, z + rise)
-    else:
-        ra, rb = ((x0 + x1) / 2, y0 + half, z + rise), ((x0 + x1) / 2, y1 - half, z + rise)
-    p00, p10, p11, p01 = (x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)
-    if w >= d:
-        return [([p00, p10, rb, ra], c), ([p11, p01, ra, rb], c), ([p01, p00, ra], c), ([p10, p11, rb], c)]
-    return [([p10, p11, rb, ra], c), ([p01, p00, ra, rb], c), ([p00, p10, ra], c), ([p11, p01, rb], c)]
+    return [(f, c) for f in faces(b, z)]
 
 
 class View3D(QWidget):
@@ -205,13 +184,18 @@ class View3D(QWidget):
             p.drawText(self.rect(), Qt.AlignCenter, "ยังไม่มีโมเดล")
             return
         cx, cy = b.xs[-1] / 2, b.ys[-1] / 2
-        top = b.levels[-1].elevation if b.levels else 3.0
+        top = max(q[2] for pts, _c in self._faces for q in pts)          # includes the roof
         cz = (top - b.foundation.depth) / 2
-        span = max(b.xs[-1], b.ys[-1], top + b.foundation.depth) or 1.0
-        scale = 0.75 * min(self.width(), self.height()) / span * self.zoom
+        # fit the projected model (roof included) into the widget
+        unit = [self._project(q, cx, cy, cz, 1.0)[0] for pts, _c in self._faces for q in pts]
+        xs = [q.x() - self.width() / 2 for q in unit]
+        ys = [q.y() - self.height() / 2 for q in unit]
+        bw, bh = (max(xs) - min(xs)) or 1.0, (max(ys) - min(ys)) or 1.0
+        scale = 0.88 * min(self.width() / bw, (self.height() - 24) / bh) * self.zoom
+        off = QPointF(-(max(xs) + min(xs)) / 2 * scale, -(max(ys) + min(ys)) / 2 * scale - 8)
         drawn = []
         for pts, colour in self._faces:
-            proj = [self._project(q, cx, cy, cz, scale) for q in pts]
+            proj = [(q + off, d) for q, d in (self._project(v, cx, cy, cz, scale) for v in pts)]
             depth = sum(d for _q, d in proj) / len(proj)
             drawn.append((depth, [q for q, _d in proj], colour, pts))
         drawn.sort(key=lambda t: -t[0])

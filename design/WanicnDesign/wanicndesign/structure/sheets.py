@@ -211,8 +211,10 @@ def notes_sheet(res) -> Sheet:
     sh.text(xr, y, "5. น้ำหนักบรรทุก (กฎกระทรวง พ.ศ. 2566 ข้อ 11)", TXT)
     y -= 5
     lines = [f"- {lv.name}: น้ำหนักจร {lv.live_load:g} กก./ตร.ม., วัสดุปูผิว {lv.finish_load:g} กก./ตร.ม."
-             for lv in b.levels if lv.slab in ("suspended", "precast")]
-    lines.append(f"- หลังคา: น้ำหนักจร {b.roof.live_load:g} กก./ตร.ม." +
+             for lv in b.levels if lv.slab in ("suspended", "precast", "deck")]
+    from .roofs import SHAPES
+    lines.append(f"- หลังคา{dict(SHAPES).get(b.roof.shape, '')} ลาด {b.roof.slope_deg:g}°: "
+                 f"น้ำหนักจร {b.roof.live_load:g} กก./ตร.ม." +
                  (f", แผงโซลาร์เซลล์ {b.roof.solar_load:g} กก./ตร.ม." if b.roof.solar_load else ""))
     if res.wind:
         w = res.wind

@@ -87,3 +87,16 @@ def test_example_project_runs(rates):
     lines = takeoff(Project.load(EXAMPLE), rates)
     assert len(lines) > 20
     assert all(ln.qty > 0 for ln in lines)
+
+
+def test_corrugated_roof_codes_and_verges(rates):
+    for shape, code in (("gable", "2.1.1"), ("shed", "2.1.1"), ("hip", "2.1.1h")):
+        p = Project("t", roof=Roof(100.0, 30.0, shape, "asbestos", ridge_length=10, verge_length=12))
+        lines = takeoff(p, rates)
+        roof = [ln for ln in lines if ln.item.startswith("มุงกระเบื้องลอนคู่")]
+        assert roof and roof[0].labour_code == code
+        assert by_item(lines)["ครอบสัน ครอบตะเข้สัน"].labour_code == "2.1.1r"
+        verge = [ln for ln in lines if "ครอบปั้นลม" in ln.item]
+        assert verge and verge[0].qty == pytest.approx(12.0)
+    p = Project("t", roof=Roof(100.0, 30.0, "gable", "concrete_tile", ridge_length=10, verge_length=8))
+    assert [ln for ln in takeoff(p, rates) if "ครอบปั้นลม" in ln.item][0].labour_code == "2.1.3v"

@@ -164,7 +164,7 @@ class PlanView(QGraphicsView):
             if mark:
                 t = sc.addSimpleText(mark, font)
                 t.setPos((p1 + p2) / 2 + QPointF(4, 4))
-        if lv is not None and lv.slab == "suspended":
+        if lv is not None and lv.slab in ("suspended", "deck"):
             for a, c, length, (dx, dy) in b.cantilevers(lv):
                 (x0, y0), (x1, y1) = (xs[a[0]], ys[a[1]]), (xs[c[0]], ys[c[1]])
                 r0 = self._p(min(x0, x1, x0 + dx * length), max(y0, y1, y0 + dy * length))
@@ -410,7 +410,7 @@ class PlanView(QGraphicsView):
                 if b.segment_name(a, c) in lv.extra_walls or not has:
                     menu.addAction("ลบผนังที่เพิ่ม" if has else "เพิ่มผนังในช่วงนี้",
                                    lambda: self._edit(lambda: b.toggle_wall(lv, a, c)))
-        if kind == "beam" and lv is not None and lv.slab == "suspended":
+        if kind == "beam" and lv is not None and lv.slab in ("suspended", "deck"):
             if b.has_beam(lv.name, a, c) and b.is_perimeter(a, c, lv.name):
                 def ask():
                     length, ok = QInputDialog.getDouble(self, "พื้นยื่น", "ยื่นออกจากคาน (ม.)", 1.5, 0.3, 3.0, 2)

@@ -104,6 +104,7 @@ class RoofResult:
     rafter: SteelMember
     steel_kg: float
     refs: str = ""
+    verge: float = 0.0             # verges and the high edge of a shed roof, m
 
 
 @dataclass
@@ -316,19 +317,12 @@ def design_roof(b: Building) -> RoofResult:
     cos, sin = math.cos(th), math.sin(th)
     cover = ROOF_COVER_LOAD.get(r.cover, 50)                     # [QD-ROOF]
     load_plan = (cover + r.frame_load + r.solar_load) / cos + r.live_load   # live per plan [MR2566-11]
-    X, Y = b.plan_size()
-    a, c = X + 2 * r.overhang, Y + 2 * r.overhang
-    long_, short = max(a, c), min(a, c)
-    plan_area = a * c
+    from .roofs import geometry as roof_geometry
+    g = roof_geometry(b)
+    long_, short = g.long, g.short
+    plan_area = g.plan_area
     slope_area = plan_area / cos
-    rise = short / 2 * math.tan(th)
-    if r.shape == "gable":
-        ridge, hips = long_, 0.0
-        eave = 2 * long_ + 4 * (short / 2) / cos
-    else:
-        ridge = long_ - short
-        hips = 4 * math.sqrt(2 * (short / 2) ** 2 + rise ** 2)
-        eave = 2 * (a + c)
+    ridge, hips, eave = g.ridge, g.hips, g.eave
     w_p = (cover + r.solar_load + r.live_load) * r.purlin_spacing
     L = r.rafter_spacing
     if r.system == "truss":                       # purlins span from truss to truss (grid lines)
@@ -341,7 +335,11 @@ def design_roof(b: Building) -> RoofResult:
     # purlins carry no ceiling; rafters take the limits of the ceiling hung from the roof [MI2567-8]
     purlin = _pick_c(max(w_p * cos, up_p) * L * L / 8, w_p * sin * L * L / 8, "แป", L, w_p * cos,
                      r.live_load * r.purlin_spacing * cos, ROOF_DEFL["none"])
-    span = (short / 2 - r.overhang) / cos if short / 2 > r.overhang else short / 2 / cos
+    if r.shape == "shed":                          # rafters rest on the roof beams of every grid line
+        across = b.ys if g.along_x else b.xs
+        span = max(c1 - c0 for c0, c1 in zip(across, across[1:])) / cos
+    else:
+        span = (short / 2 - r.overhang) / cos if short / 2 > r.overhang else short / 2 / cos
     w_r = (cover + r.frame_load + r.solar_load + r.live_load) * r.rafter_spacing
     up_r = max(0.0, p_up - 0.6 * (cover + r.frame_load + r.solar_load) * cos) * r.rafter_spacing
     rafter = _pick_c(max(w_r * cos, up_r) * span * span / 8, 0.0, "จันทัน", span, w_r * cos,
@@ -352,7 +350,7 @@ def design_roof(b: Building) -> RoofResult:
             (slope_area / r.rafter_spacing) * rafter.kg_m + \
             (ridge + hips) * 2 * rafter.kg_m
     return RoofResult(load_plan, r.live_load, plan_area, slope_area, ridge, hips, eave, purlin, rafter,
-                      steel, cite("QD-ROOF", "MR2566-11", "QD-PURLIN", "MI2567-11" if r.solar_load else "",
+                      steel, verge=g.verge, refs=cite("ROOF-STYLE", "ROOF-MAKER", "QD-ROOF", "MR2566-11", "QD-PURLIN", "MI2567-11" if r.solar_load else "",
                                   "MR72" if r.solar_load else "", "WIND-ROOF", "MR2566-6"))
 
 
@@ -611,7 +609,7 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
     def add_p(a, c, pts):
         seg(a, c)["p"].extend(pts)
 
-    if lv.slab in ("suspended", "precast"):
+    if lv.slab in ("suspended", "precast", "deck"):
         total, live = _slab_load(lv)
     elif lv.slab == "roof" and roof is not None and b.roof.system == "truss":
         total = live = 0.0                         # the trusses take the roof to the columns
@@ -684,7 +682,7 @@ def level_line_loads(b: Building, li: int, roof: RoofResult | None, part: str = 
         if b.has_beam(lv.name, a, c):
             add_p(a, c, pts)
             seg(a, c)["stair"] = True
-    if lv.slab == "suspended":
+    if lv.slab in ("suspended", "deck"):
         for a, c, length, (dx, dy), supported in balconies(b, lv):
             if not supported:
                 add_w(a, c, W * length)                # [STATICS], torsion not included
@@ -1205,13 +1203,13 @@ def design(b: Building) -> DesignResult:
     node_live: list[dict] = [dict() for _ in b.levels]
     for li in reversed(range(n_lv)):
         lv = b.levels[li]
-        if lv.slab in ("suspended", "on_ground"):
+        if lv.slab in ("suspended", "on_ground", "deck"):
             for i, j in b.panels(lv.name):
                 res.slabs.extend(design_slabs(b, mat, lv, i, j))
         elif lv.slab == "precast":
             for i, j in b.panels(lv.name):
                 res.slabs.append(design_precast_slab(b, mat, lv, i, j))
-        if lv.slab == "suspended":
+        if lv.slab in ("suspended", "deck"):
             bal = balconies(b, lv)
             ends = {}
             for a, c, _l, out, sup in bal:
@@ -1312,6 +1310,11 @@ def design(b: Building) -> DesignResult:
         if "MI2567-29D" not in c.refs:
             c.refs += ", MI2567-29D"
     res.warnings += site_notes(b)
+    if res.roof:
+        from .roofs import slope_warning
+        w = slope_warning(b)
+        if w:
+            res.warnings.append(w)
     from .fire import check_members as fire_check
     fire_check(res)
     _assign_marks(res.columns, lambda c: (c.b, c.h, c.bars, c.ties), "C", lambda c: c.load)

@@ -149,7 +149,8 @@ class TrussResult:
     seat: dict = field(default_factory=dict)    # base plate and anchor bolts
 
 
-def geometry(span: float, slope_deg: float, depth: float, panels: int, hip_cut: float | None = None):
+def geometry(span: float, slope_deg: float, depth: float, panels: int, hip_cut: float | None = None,
+             mono: bool = False):
     """Nodes (x, z) and members of a pitched Pratt truss: bottom nodes 0…n,
     top nodes n+1…2n+1 above them; diagonals fall towards midspan. A
     step-down hip truss (``hip_cut`` = its distance from the hip end, m)
@@ -158,7 +159,10 @@ def geometry(span: float, slope_deg: float, depth: float, panels: int, hip_cut: 
     t = math.tan(math.radians(slope_deg))
     xs = [span * k / n for k in range(n + 1)]
     cap = span if hip_cut is None else hip_cut
-    nodes = [(x, 0.0) for x in xs] + [(x, depth + min(x, span - x, cap) * t) for x in xs]
+    if mono:                                            # shed roof: one slope from the low side (x = 0)
+        nodes = [(x, 0.0) for x in xs] + [(x, depth + x * t) for x in xs]
+    else:
+        nodes = [(x, 0.0) for x in xs] + [(x, depth + min(x, span - x, cap) * t) for x in xs]
     top = lambda k: n + 1 + k
     mem = []
     for k in range(n):
@@ -225,7 +229,8 @@ def roof_uplift(b) -> tuple[float, str]:
     v = g["v50"] * (g["tf"] if b.wind.importance == "very_high" else 1.0)
     q = 0.5 * RHO_AIR * v * v / 9.81
     lv = b.levels
-    rise = (min(b.xs[-1], b.ys[-1]) / 2 + b.roof.overhang) * math.tan(math.radians(b.roof.slope_deg))
+    from .roofs import geometry as roof_geometry
+    rise = roof_geometry(b).rise if any(x.slab == "roof" for x in lv) else 0.0
     h = max(1.0, lv[-1].elevation - lv[0].elevation + rise / 2)
     ce = max(0.9, (h / 10) ** 0.2) if b.wind.terrain == "open" else max(0.7, 0.7 * (h / 12) ** 0.3)
     iw = IW.get(b.wind.importance, 1.0)
@@ -318,7 +323,7 @@ def design_truss(b, roof_res, line: str, span: float, spacing: float, supports=(
     r = b.roof
     depth = max(0.30, span / 20)                         # QuickDesign default D = L/20
     panels = max(4, 2 * math.ceil(span / 2 / 1.5))       # panels about 1.5 m, even
-    nodes, mem = geometry(span, r.slope_deg, depth, panels, hip_cut)
+    nodes, mem = geometry(span, r.slope_deg, depth, panels, hip_cut, r.shape == "shed")
     n = panels
     top = lambda k: n + 1 + k
     cos = math.cos(math.radians(r.slope_deg))
@@ -418,9 +423,10 @@ def design_trusses(b, roof_res):
             continue
         name = b.x_name(k) if along_x else b.y_name(k)
         hip = None
-        if b.roof.shape == "hip":                       # step-down trusses near the hip ends
+        if b.roof.shape in ("hip", "manila"):           # step-down trusses near the hip ends
             dist = min(coords[k], coords[-1] - coords[k]) + b.roof.overhang
-            if dist < span / 2 + b.roof.overhang - 1e-6:
+            f = 1.0 if b.roof.shape == "hip" else min(max(b.roof.manila_ratio, 0.1), 0.9)
+            if dist < f * (span / 2 + b.roof.overhang) - 1e-6:
                 hip = dist
         col = (b.column_width, b.column_depth)
         t = design_truss(b, roof_res, name, span, spacing, (a, c), hip, col)

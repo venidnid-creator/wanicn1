@@ -10,20 +10,21 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
                                QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
                                QTabWidget, QTextEdit, QVBoxLayout, QWidget)
 
-from ..standards import LIVE_LOAD, LIVE_LOADS
+from ..standards import DECK_LIVE, LIVE_LOAD, LIVE_LOADS
 from ..structure.building import ROOF_COVER_LOAD, Level
 from ..structure.materials import CODES
 from ..structure.sections import load_piles
 
 SLAB_KINDS = [("suspended", "พื้นแขวน (บนคาน)"), ("precast", "พื้นสำเร็จรูป (แผ่นพื้นอัดแรง)"),
-              ("on_ground", "พื้นวางบนดิน"),
+              ("on_ground", "พื้นวางบนดิน"), ("deck", "ดาดฟ้า / หลังคาคอนกรีต"),
               ("roof", "หลังคา"), ("none", "ไม่มีพื้น")]
 WALL_MODES = [("perimeter", "ผนังรอบนอก"), ("all", "ผนังทุกแนว"), ("none", "ไม่มีผนัง")]
 WALL_TYPES = [("brick", "อิฐมอญ"), ("qcon", "อิฐมวลเบา"), ("gypsum", "ยิปซัม/ไม้"),
               ("concrete", "คอนกรีต"), ("metal", "แผ่นเหล็ก")]
-ROOF_SHAPES = [("hip", "ปั้นหยา"), ("gable", "จั่ว")]
+from ..structure.roofs import REGIONS, SHAPES as ROOF_SHAPES
+SHED_LOW = [("front", "ด้านหน้า (แกน Y ต่ำ / X ต่ำ)"), ("back", "ด้านหลัง")]
 ROOF_COVERS = [("concrete_tile", "กระเบื้องคอนกรีต"), ("ceramic_tile", "กระเบื้องเซรามิค"),
-               ("metal_sheet", "เมทัลชีท"), ("asbestos", "กระเบื้องลอน")]
+               ("metal_sheet", "เมทัลชีท"), ("asbestos", "กระเบื้องลอนคู่")]
 
 
 NG_FILL = QColor("#f8cbad")
@@ -331,8 +332,11 @@ class LevelsPage(Page):
     def _use_ll(self):
         v = LIVE_LOAD[self.ll.currentData()]
         for r in range(self.table.rowCount()):
-            if self.table.cellWidget(r, 2).currentData() in ("suspended", "precast", "on_ground"):
+            kind = self.table.cellWidget(r, 2).currentData()
+            if kind in ("suspended", "precast", "on_ground"):
                 self.table.setItem(r, 4, QTableWidgetItem(f"{v:g}"))
+            elif kind == "deck":                 # usable roof deck: not less than the house floor [DECK]
+                self.table.setItem(r, 4, QTableWidgetItem(f"{max(v, DECK_LIVE):g}"))
 
     def levels_from_table(self) -> list[Level]:
         old = {lv.name: lv for lv in (self.building.levels if self.building else [])}
@@ -400,8 +404,21 @@ class RoofPage(Page):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        reg = QHBoxLayout()
+        self.region = _combo([(k, v[0]) for k, v in REGIONS.items()], "central")
+        use = QPushButton("ใช้แบบตามภาค")
+        use.clicked.connect(self._use_region)
+        reg.addWidget(QLabel("แบบหลังคาที่นิยมตามภาค"))
+        reg.addWidget(self.region, 1)
+        reg.addWidget(use)
+        self.lay.addLayout(reg)
+        self.why = QLabel("")
+        self.why.setWordWrap(True)
+        self.lay.addWidget(self.why)
         f = QFormLayout()
         self.shape = _combo(ROOF_SHAPES, "hip")
+        self.shed_low = _combo(SHED_LOW, "front")
+        self.manila = _spin(0.5, 0.1, 0.9, 0.05, 2, "ของความสูง")
         self.cover = _combo([(k, f"{lbl} ({ROOF_COVER_LOAD[k]} กก./ตร.ม.)") for k, lbl in ROOF_COVERS],
                             "concrete_tile")
         self.slope = _spin(30, 5, 60, 1, 0, "องศา")
@@ -415,7 +432,9 @@ class RoofPage(Page):
                                ("none", "ไม่รับฝ้าเพดาน")], "board")
         self.system = _combo([("rafter", "จันทันวางบนคานหลังคา"), ("truss", "โครงถักเหล็กวางบนเสา (ทุกแนวกริด)")],
                              "rafter")
-        for label, w in (("ระบบโครงหลังคา", self.system), ("แผงโซลาร์เซลล์", self.solar), ("ฝ้าเพดาน (ระยะแอ่นตัว)", self.ceiling), ("ทรงหลังคา", self.shape), ("วัสดุมุง", self.cover), ("ความลาด", self.slope),
+        for label, w in (("ระบบโครงหลังคา", self.system), ("แผงโซลาร์เซลล์", self.solar), ("ฝ้าเพดาน (ระยะแอ่นตัว)", self.ceiling), ("ทรงหลังคา", self.shape),
+                         ("เพิงหมาแหงน: ชายคาด้านต่ำ", self.shed_low), ("มนิลา: สัดส่วนส่วนปั้นหยา", self.manila),
+                         ("วัสดุมุง", self.cover), ("ความลาด", self.slope),
                          ("ชายคายื่น", self.overhang), ("น้ำหนักจร", self.ll),
                          ("น้ำหนักโครงเหล็ก", self.frame), ("ระยะแป", self.purlin),
                          ("ระยะจันทัน", self.rafter)):
@@ -423,8 +442,19 @@ class RoofPage(Page):
         self.lay.addLayout(f)
         self.add_apply()
 
+    def _use_region(self):
+        """Fill the customary roof of the chosen region [ROOF-STYLE]; the design checks it as usual."""
+        _lbl, shape, slope, overhang, cover, why = REGIONS[self.region.currentData()]
+        self.shape.setCurrentIndex(self.shape.findData(shape))
+        self.slope.setValue(slope)
+        self.overhang.setValue(overhang)
+        self.cover.setCurrentIndex(self.cover.findData(cover))
+        self.why.setText(f"{why} — ค่าเริ่มต้นตามความนิยม ไม่ใช่ข้อบังคับ; กด \"นำไปใช้\" แล้วโปรแกรมตรวจตามกฎกระทรวง")
+
     def load(self):
         r = self.building.roof
+        self.shed_low.setCurrentIndex(max(0, self.shed_low.findData(r.shed_low)))
+        self.manila.setValue(r.manila_ratio)
         self.shape.setCurrentIndex(self.shape.findData(r.shape))
         self.system.setCurrentIndex(max(0, self.system.findData(r.system)))
         self.cover.setCurrentIndex(max(0, self.cover.findData(r.cover)))
@@ -442,6 +472,7 @@ class RoofPage(Page):
         r.frame_load, r.purlin_spacing = self.frame.value(), self.purlin.value()
         r.rafter_spacing = self.rafter.value()
         r.solar_load, r.ceiling = self.solar.value(), self.ceiling.currentData()
+        r.shed_low, r.manila_ratio = self.shed_low.currentData(), self.manila.value()
 
 
 class ArchitecturePage(Page):

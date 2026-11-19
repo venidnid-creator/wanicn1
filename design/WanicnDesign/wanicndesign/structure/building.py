@@ -26,7 +26,7 @@ from ..standards import LIVE_LOAD  # noqa: E402,F401
 class Level:
     name: str                      # "GB" (ground beams), "FL2", "ROOF"
     elevation: float               # m, ±0.00 = ground beam top
-    slab: str = "suspended"        # "suspended", "precast", "on_ground", "none", "roof"
+    slab: str = "suspended"        # "suspended", "precast", "on_ground", "deck" (ดาดฟ้า), "none", "roof"
     slab_thickness: float = 0.10
     live_load: float = 200.0       # kg/m² (house: กฎกระทรวง พ.ศ. 2566 ข้อ 11)
     finish_load: float = 50.0      # topping / finishes, kg/m²
@@ -64,6 +64,8 @@ class Roof:
     rafter_spacing: float = 1.00
     solar_load: float = 0.0        # rooftop solar panels, kg/m² (dead load, ประกาศ มท. 2567 ข้อ 11)
     system: str = "rafter"         # "rafter" (rafters on the roof beams) or "truss" (steel trusses on columns)
+    manila_ratio: float = 0.5      # Manila roof: share of the rise in the hip part
+    shed_low: str = "front"        # shed roof: low side "front" (smaller Y, or X) or "back"
     uplift_coef: float = 1.6       # net wind uplift coefficient on the roof (−1.3 outside − 0.3 inside)
     chord_brace: float = 0.0       # bottom chord bracing spacing, m (0 = every second panel point)
     ceiling: str = "board"         # "plaster", "board", "none": deflection limits of ประกาศ มท. 2567 ตาราง 1

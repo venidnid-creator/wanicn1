@@ -97,9 +97,8 @@ def force_on(z0: float, z1: float, width: float, terrain: str, public: bool) -> 
 def roof_rise(b) -> float:
     if not any(lv.slab == "roof" for lv in b.levels):
         return 0.0
-    r = b.roof
-    short = min(b.xs[-1], b.ys[-1]) + 2 * r.overhang
-    return short / 2 * math.tan(math.radians(r.slope_deg))
+    from .roofs import geometry
+    return geometry(b).rise
 
 
 IMPORTANCE = [("low", "น้อย (อาคารเกษตร อาคารชั่วคราว)"), ("normal", "ปกติ"),
