@@ -293,7 +293,9 @@ class ProcureDialog(QDialog):
         b.clicked.connect(self.import_bill)
         h.addWidget(b)
         for text, fn, tip in (("📂 เปิดงานที่บันทึกไว้…", self.open_project, "เปิดงานที่นำเข้าและบันทึกไว้"),
-                              ("💾 บันทึกงาน", self.save_project, "บันทึกข้อมูลทั้งหมด (ราคา แผนงาน แผนพัสดุ)")):
+                              ("💾 บันทึกงาน", self.save_project, "บันทึกข้อมูลทั้งหมด (ราคา แผนงาน แผนพัสดุ)"),
+                              ("🗑 ล้างข้อมูล (เริ่มงานใหม่)", lambda: self.clear_project(ask=True),
+                               "บันทึกงานปัจจุบันไว้ แล้วล้างข้อมูลทั้งหมดบนหน้าจอ เพื่อรับใบแจ้งปริมาณงานชุดใหม่")):
             bb = QPushButton(text)
             bb.setToolTip(tip)
             bb.clicked.connect(fn)
@@ -792,6 +794,24 @@ class ProcureDialog(QDialog):
         self.fill_78()
 
     # -- saving
+    def clear_project(self, ask: bool = False) -> bool:
+        """A new job: the one on screen is saved (it stays under «เปิดงานที่บันทึกไว้»), then every
+        field, price, plan and table is emptied, and the window no longer reopens it."""
+        if ask and self.p.items and QMessageBox.question(
+                self, self.windowTitle(), "ล้างข้อมูลทั้งหมดบนหน้าจอเพื่อเริ่มงานใหม่?\n\n"
+                "งานปัจจุบันจะถูกบันทึกไว้ก่อน เปิดกลับมาได้ที่ «📂 เปิดงานที่บันทึกไว้…»") != QMessageBox.Yes:
+            return False
+        if self.p.items:
+            self.save_project(quiet=True)
+        self.p = P.Project()
+        self.path = None
+        self.settings.setValue("procure/last", "")
+        self.fill()
+        self.contract_date.set_iso("")
+        self.src.setText("ยังไม่ได้รับข้อมูล — กด «📥 รับข้อมูล…» เพื่อนำเข้าใบแจ้งปริมาณงานชุดใหม่")
+        self.tabs.setCurrentIndex(0)
+        return True
+
     def _open_last(self):
         last = self.settings.value("procure/last", "")
         if last and Path(last).exists():

@@ -128,6 +128,14 @@ class BoqDialog(QDialog):
         self.stop_btn = QPushButton("หยุดอ่าน")
         self.stop_btn.clicked.connect(self._stop)
         row.addWidget(self.stop_btn)
+        self.other_btn = QPushButton("📂 ถอดแบบไฟล์อื่น…")
+        self.other_btn.setToolTip("ล้างผลที่อ่านไว้ แล้วเลือกไฟล์แบบ PDF ชุดใหม่มาอ่าน")
+        self.other_btn.clicked.connect(self.choose_other)
+        row.addWidget(self.other_btn)
+        self.clear_btn = QPushButton("🗑 ล้างข้อมูล")
+        self.clear_btn.setToolTip("ล้างผลการอ่านและช่องข้อมูลโครงการทั้งหมด เพื่อเริ่มถอดแบบชุดใหม่")
+        self.clear_btn.clicked.connect(lambda: self.clear(ask=True))
+        row.addWidget(self.clear_btn)
         row.addStretch(1)
         self.csv_btn = QPushButton("🧾 ส่งออก CSV แบบ ปร.1 (แยกตามประเภทงาน)")
         self.csv_btn.setObjectName("Primary")
@@ -141,6 +149,51 @@ class BoqDialog(QDialog):
         self._start()
 
     # -- reading in the background
+    # -- a new set of drawings
+    def clear(self, ask: bool = False) -> bool:
+        """Forget everything read so far (tables, the result, the project fields)."""
+        if self.thread and self.thread.isRunning():
+            self._stop()
+            self.thread.quit()
+            self.thread.wait(5000)
+        if ask and self.res and QMessageBox.question(
+                self, self.windowTitle(), "ล้างผลการอ่านแบบและข้อมูลโครงการทั้งหมด เพื่อเริ่มถอดแบบชุดใหม่?\n"
+                "(ไฟล์ CSV ที่ส่งออกไปแล้วไม่ถูกลบ)") != QMessageBox.Yes:
+            return False
+        self.res = None
+        for t in (self.pages, self.items, self.tags):
+            t.clearContents()
+            t.setRowCount(0)
+        for f in (self.f_project, self.f_place, self.f_no, self.f_owner):
+            f.clear()
+        self.f_project.setPlaceholderText("ชื่อโครงการงานก่อสร้าง (เว้นว่าง = ใช้ชื่อในตาราง BOQ)")
+        self.csv_btn.setEnabled(False)
+        self.bar.hide()
+        self.stop_btn.hide()
+        self.setWindowTitle("ถอดแบบตาม BOQ")
+        self.head.setText("ล้างข้อมูลแล้ว — กด <b>«📂 ถอดแบบไฟล์อื่น…»</b> เพื่อเลือกไฟล์แบบ PDF ชุดใหม่")
+        self.tabs.setCurrentIndex(0)
+        return True
+
+    def choose_other(self):
+        base = str(Path(self.path).parent) if self.path else str(Path.home())
+        path, _ = QFileDialog.getOpenFileName(self, "เลือกไฟล์แบบ PDF ที่จะถอดแบบ", base, "PDF (*.pdf)")
+        if not path:
+            return
+        self.clear()
+        self.read(path)
+
+    def read(self, path):
+        """Read a set of drawings (from the start, nothing of the last one kept)."""
+        self.path = str(path)
+        self.setWindowTitle(f"ถอดแบบตาม BOQ — {Path(path).name}")
+        self.head.setText(f"กำลังอ่านแบบ <b>{Path(path).name}</b> …")
+        self.bar.setValue(0)
+        self.bar.show()
+        self.stop_btn.setEnabled(True)
+        self.stop_btn.show()
+        self._start()
+
     def _start(self):
         ocr = bool(B.tesseract_path())
         self.thread = QThread(self)
@@ -236,6 +289,9 @@ class BoqDialog(QDialog):
         box.exec()
         if box.clickedButton() is go:
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        if QMessageBox.question(self, self.windowTitle(),
+                                "ส่งออกเรียบร้อยแล้ว — ล้างข้อมูลที่อ่านไว้ เพื่อถอดแบบชุดใหม่เลยหรือไม่?") == QMessageBox.Yes:
+            self.clear()
 
     def reject(self):
         if self.thread and self.thread.isRunning():

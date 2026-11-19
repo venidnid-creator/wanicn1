@@ -445,3 +445,22 @@ def test_sheets_with_excel_control_characters(app, tmp_path):
     R.WRITE_ERRORS.clear()
     files = R.write("651", p, tmp_path / "r651.pdf", "Laksaman")
     assert not R.WRITE_ERRORS and any(str(f).endswith(".xlsx") for f in files)
+
+
+def test_procure_window_clear_for_a_new_job(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QMessageBox
+
+    from readwanicn import procure_view as V
+    monkeypatch.setattr(V, "store_dir", lambda: tmp_path)
+    p = _road()
+    d = V.ProcureDialog("Laksaman", lambda *_: None, None, project=p)
+    d.settings = QSettings(str(tmp_path / "s.ini"), QSettings.IniFormat)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    assert d.t651.rowCount() > 0
+    assert d.clear_project(ask=True)
+    assert not d.p.items and d.path is None and d.t651.rowCount() == 0
+    assert d.settings.value("procure/last") == "" and "ยังไม่ได้รับข้อมูล" in d.src.text()
+    assert list(tmp_path.glob("*.rwprice.json"))                 # the old job was saved first
+    d.close()

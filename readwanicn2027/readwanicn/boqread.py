@@ -37,6 +37,19 @@ LEGACY = {"đ": "เ", "Ē": "แ", "ē": "โ", "Ĕ": "ใ", "ĕ": "ไ", "ė":
           "Ũ": "็", "ŉ": "่", "Ø": "Ø", "\u05ce": "Ø"}
 
 
+THAI = "\u0e00-\u0e7f"
+_MARK_AA = re.compile(f"(?<=[{THAI}])\\?(?=า)")
+_MARK = re.compile(f"(?<=[{THAI}])\\?(?=[{THAI}])")
+
+
+def fix_marks(s: str) -> str:
+    """A Thai tone mark drawn as one glyph with the vowel (ไม้โท on top of a vowel, ้ํ of น้ำ) has no
+    text in some PDFs and comes out as «?»: แปลนพื?นชั?น → แปลนพื้นชั้น, ห้องน?า → ห้องน้ำ."""
+    if "?" not in s:
+        return s
+    return _MARK.sub("\u0e49", _MARK_AA.sub("\u0e49\u0e4d", s)).replace("\u0e4d\u0e32", "\u0e33")
+
+
 def looks_legacy(text: str) -> bool:
     letters = [c for c in text if not c.isspace() and not c.isdigit()]
     if len(letters) < 20:
@@ -170,7 +183,7 @@ def _lines(page, legacy: bool):
             t = "".join(s["text"] for s in ln["spans"])
             if legacy:
                 t = decode_legacy(t)
-            t = " ".join(t.split())
+            t = " ".join(fix_marks(t).split())
             if not t:
                 continue
             x0, y0, x1, y1 = ln["bbox"]
@@ -432,7 +445,7 @@ def analyse(path, ocr: bool = True, progress=None) -> Result:
         if progress and progress(i, n, f"หน้า {i + 1}/{n}") is False:
             break
         pg = Page(no=i + 1)
-        text = page.get_text()
+        text = fix_marks(page.get_text())
         legacy = looks_legacy(text)
         if legacy:
             text = decode_legacy(text)

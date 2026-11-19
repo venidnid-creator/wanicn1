@@ -10,6 +10,12 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
+## ReadWanicn2027 — ปุ่มล้างข้อมูล (19 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
+- ถอดแบบตาม BOQ (`BoqDialog`): «📂 ถอดแบบไฟล์อื่น…» (`choose_other` → `clear()` → `read(path)`), «🗑 ล้างข้อมูล» (`clear(ask=True)`),
+  หลังส่งออก CSV ถามว่าจะล้างเพื่อถอดชุดใหม่ไหม · `fix_marks()` แก้ «?» ที่แทนวรรณยุกต์ในชื่อแผ่น (พื?น → พื้น, น?า → น้ำ)
+- ปรับลดราคา (`ProcureDialog.clear_project`): «🗑 ล้างข้อมูล (เริ่มงานใหม่)» บันทึกงานเดิมก่อน แล้วล้างทุกช่อง/ตาราง และ `procure/last` = "" (ไม่เปิดงานเก่าเองอีก)
+- tests 55 ผ่าน
+
 ## ReadWanicn2027 — ปุ่ม «⬇ ดาวน์โหลดรุ่นล่าสุด» ในหน้าเข้าสู่ระบบ (18 พ.ย. 2569, อนุมัติแล้ว — รุ่น 2027.4.6 run 44303727127 artifact 14426259152 ผ่าน, ไม่ release)
 - `StatsBox.download` แสดงตลอด: installer_url ของ Release ล่าสุด → ถ้าไม่มี (ข้อมูลแคชเก่า) ประกอบ URL asset จากเลขรุ่น → ถ้าไม่มีข้อมูลเลยเปิดหน้า releases/latest
 - tests 52 ผ่าน

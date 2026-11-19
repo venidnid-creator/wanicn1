@@ -143,3 +143,38 @@ def test_dialog_shows_result(tmp_path):
     assert d.res and d.items.rowCount() == 4 and d.pages.rowCount() == 3
     assert d.csv_btn.isEnabled()
     d.reject()
+
+
+def test_dialog_clear_and_read_another(tmp_path, monkeypatch):
+    import time
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    app = QApplication.instance() or QApplication([])
+    from readwanicn.boqread_view import BoqDialog
+    src = tmp_path / "ชุดแบบ.pdf"
+    make_set(src)
+
+    def wait(d):
+        end = time.time() + 60
+        while not d.res and time.time() < end:
+            app.processEvents()
+            time.sleep(0.02)
+    d = BoqDialog(src)
+    wait(d)
+    d.f_place.setText("ทดสอบ")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    assert d.clear(ask=True)
+    assert d.res is None and d.items.rowCount() == 0 and d.pages.rowCount() == 0
+    assert d.f_place.text() == "" and not d.csv_btn.isEnabled()
+    other = tmp_path / "ชุดที่สอง.pdf"
+    make_set(other)
+    d.read(other)
+    wait(d)
+    assert d.res and d.res.path == str(other) and d.items.rowCount() == 4
+    d.reject()
+
+
+def test_marks_lost_as_question_marks():
+    assert B.fix_marks("แปลนพื?นชั?น 1") == "แปลนพื้นชั้น 1"
+    assert B.fix_marks("แบบขยายห้องน?า") == "แบบขยายห้องน้ำ"
+    assert B.fix_marks("What? A-01") == "What? A-01"
