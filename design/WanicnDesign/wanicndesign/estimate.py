@@ -76,6 +76,19 @@ def _load_official():
 OFFICIAL_FF = _load_official()
 
 
+def loan_interest(mlr_average: float) -> int:
+    """Loan interest for the price rules from the average MLR of the large banks (ประกาศกรมบัญชีกลาง
+    26 มิ.ย. 2569, ข้อ 13): a whole number, a fraction of 0.50 or more rounds up, less rounds down
+    (24 มิ.ย. 2569: 6.38 → 6)."""
+    import math
+    return int(math.floor(mlr_average + 0.5 + 1e-9))
+
+
+def needs_new_table(mlr_average: float, current: float = 6.0) -> bool:
+    """A new Factor F table is due when the average MLR has moved by 1 % or more from the announced rate."""
+    return abs(mlr_average - current) >= 1.0 - 1e-9
+
+
 def official_factor(cost: float, advance: float, retention: float, no_vat: bool = False) -> float | None:
     """Factor F of a construction cost (บาท) from the official building table for this advance payment and
     retention (หลักเกณฑ์งานอาคาร 2569 ข้อ 9.3 ข้อ 2: F = D − (D − E)(A − B)/(C − B)); ``no_vat`` gives the

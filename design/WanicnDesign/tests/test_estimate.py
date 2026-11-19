@@ -226,3 +226,9 @@ def test_mep_and_costing_round_trip(tmp_path):
     b.save(str(p))
     c = Building.load(str(p))
     assert c.mep.ac_points == 3 and c.mep.panel == "2B" and c.costing.extras[0]["item"] == "x"
+
+
+def test_loan_interest_rounding_cgd_26_6_2569():
+    from wanicndesign.estimate import loan_interest, needs_new_table
+    assert loan_interest(6.38) == 6 and loan_interest(6.50) == 7 and loan_interest(6.49) == 6
+    assert not needs_new_table(6.38) and needs_new_table(7.0) and needs_new_table(5.0)
