@@ -88,3 +88,18 @@ def test_sn_riser_and_floor_plans():
     up = [k for k in sheets if k.startswith("แปลนระบบสุขาภิบาลชั้น") and not k.endswith("1")]
     for k in up:
         assert "ท่อโสโครกแนวดิ่ง" in " ".join(sheets[k].texts()) or "ห้องน้ำ" not in " ".join(sheets[k].texts())
+
+
+def test_sn_bathrooms_details_and_hangers():
+    """SN-07..SN-10 as the standard: the bathrooms at 1:50 with the branch
+    sizes, the fixture and drain details, the hanger tables."""
+    sheets = {s.title: s for s in D.build_set(house(), INFO) if s.group == "SN"}
+    bath = next(v for k, v in sheets.items() if k.startswith("แบบขยายระบบสุขาภิบาลห้องน้ำ"))
+    t = " ".join(bath.texts())
+    assert "ขนาดท่อย่อยที่ต่อเข้าสุขภัณฑ์" in t and "STOP VALVE" in t and "FCO" in t
+    t = " ".join(sheets["แบบขยายการติดตั้งท่อ (แผ่นที่ 1)"].texts())
+    assert "( LAV )" in t and "( FLUSH TANK )" in t and "( SH )" in t and "( RFD )" in t
+    t = " ".join(sheets["แบบขยายการติดตั้งท่อ (แผ่นที่ 2)"].texts())
+    assert "( FD )" in t and "( FCO )" in t and "( CO )" in t and "( AVC )" in t
+    t = " ".join(sheets["แบบขยายและตารางระยะการแขวนท่อ"].texts())
+    assert "100 (4)" in t and "เส้นผ่านศูนย์กลางเหล็ก (มม.)" in t

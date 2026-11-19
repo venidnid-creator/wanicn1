@@ -3084,6 +3084,13 @@ def build_set(data, info=None,
         for k in floors:
             add("SN", f"แปลนระบบสุขาภิบาลชั้น {k + 1}",
                 lambda sh, _a, k=k: SNS.sn_plan_std(sh, E, k))
+        bl = D_bathrooms = bathrooms(E)
+        for i_ in range(0, len(bl), 2):                     # SN-07: the bathrooms at 1:50, two a sheet
+            add("SN", "แบบขยายระบบสุขาภิบาลห้องน้ำ" + (f" ({i_ // 2 + 1})" if len(bl) > 2 else ""),
+                lambda sh, _a, its=bl[i_:i_ + 2], n0=i_ + 1: _set_scale(sh, SNS.sn_bath_std(sh, E, its, n0) or 50), "1:50")
+        add("SN", "แบบขยายการติดตั้งท่อ (แผ่นที่ 1)", lambda sh, _a: SNS.sn_fixture_details(sh, E), "ไม่ตามมาตราส่วน")
+        add("SN", "แบบขยายการติดตั้งท่อ (แผ่นที่ 2)", lambda sh, _a: SNS.sn_drain_details(sh, E), "ไม่ตามมาตราส่วน")
+        add("SN", "แบบขยายและตารางระยะการแขวนท่อ", lambda sh, _a: SNS.sn_hangers(sh, E), "ไม่ตามมาตราส่วน")
         add("SN", "แบบขยายถังบำบัด บ่อพัก ฟลอร์เดรน", lambda sh, _a: sn_details(sh, E), "1:20")
         add("SN", "แบบขยายบ่อดักไขมัน บ่อพักตะแกรง", lambda sh, _a: sn_traps(sh, E), "1:10")
         add("SN", "ภาพ 3 มิติ การต่อท่อน้ำดี ท่อน้ำเสีย ถังบำบัด",
