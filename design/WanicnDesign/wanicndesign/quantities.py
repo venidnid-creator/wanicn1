@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from .model import Project
+from .materials import LABOUR_ONLY, READY_MIX
 from .rates import Rates, q2
 
 COVER = 0.025          # concrete cover to stirrups, m
@@ -45,6 +46,7 @@ class Line:
     labour_code: str = ""
     note: str = ""
     labour_factor: float = 1.0   # converts qty to the labour unit (kg → ตัน = 0.001)
+    materials: tuple = ()        # ((ref, qty per unit), …): "R:<recipe>", "FORM" or a price key
 
     @property
     def price_key(self) -> str:
@@ -111,9 +113,9 @@ class Takeoff:
         run = bar_count(a, sp) * max(0.0, b - trim) + bar_count(b, sp) * max(0.0, a - trim)
         self._bars(size, run * times)
 
-    def add(self, section, item, qty, unit, code="", note="", factor=1.0) -> None:
+    def add(self, section, item, qty, unit, code="", note="", factor=1.0, mats=()) -> None:
         if qty and qty > 0:
-            self.lines.append(Line(section, item, q2(qty), unit, code, note, factor))
+            self.lines.append(Line(section, item, q2(qty), unit, code, note, factor, tuple(mats)))
 
     # -- groups ---------------------------------------------------------------
     def earthwork(self) -> None:
@@ -142,13 +144,14 @@ class Takeoff:
         else:
             code = "1.3.1a"
         self.add("งานดิน", "ขุดดินฐานราก", total, "ลบ.ม.", code,
-                 f"สุทธิ {q2(net)} ลบ.ม. รวมเผื่อตามเกณฑ์ 2569")
+                 f"สุทธิ {q2(net)} ลบ.ม. รวมเผื่อตามเกณฑ์ 2569", mats=LABOUR_ONLY)
         sand_w = sand * (1 + self.r.bedding_waste_pct.get("ทราย", 25.0) / 100)
         self.add("งานดิน", "ทรายรองก้นหลุม หนา 5 ซม.", sand_w, "ลบ.ม.", "1.5",
-                 "เผื่อตามเกณฑ์ 2569")
-        self.add("งานดิน", "คอนกรีตหยาบรองก้นหลุม หนา 5 ซม.", lean, "ลบ.ม.", "1.6.1")
+                 "เผื่อตามเกณฑ์ 2569", mats=[("ทรายหยาบ", 1.0)])
+        self.add("งานดิน", "คอนกรีตหยาบรองก้นหลุม หนา 5 ซม.", lean, "ลบ.ม.", "1.6.1",
+                 "สูตรวัสดุ 1.1", mats=[("R:1.1", 1.0)])
         backfill = net - conc - sand - lean
-        self.add("งานดิน", "ถมดินกลับ", backfill, "ลบ.ม.", "1.4")
+        self.add("งานดิน", "ถมดินกลับ", backfill, "ลบ.ม.", "1.4", "ดินเดิมจากการขุด", mats=LABOUR_ONLY)
 
     def concrete_and_forms(self) -> None:
         vol = OrderedDict()
@@ -181,9 +184,9 @@ class Takeoff:
             self._mesh(s.bars, short, long_)
         code = "1.7a" if self.p.storeys <= 1 else "1.7b"
         for part, v in vol.items():
-            self.add("งานคอนกรีต", f"คอนกรีตผสมเสร็จ ({part})", v, "ลบ.ม.", code)
+            self.add("งานคอนกรีต", f"คอนกรีตผสมเสร็จ ({part})", v, "ลบ.ม.", code, mats=[(READY_MIX, 1.0)])
         fcode = "1.8.1a" if form >= 5000 else "1.8.1b"
-        self.add("งานไม้แบบ", "ไม้แบบ", form, "ตร.ม.", fcode)
+        self.add("งานไม้แบบ", "ไม้แบบ", form, "ตร.ม.", fcode, "วัสดุ A(0.133)+B(0.774)+C(0.25)", mats=[("FORM", 1.0)])
 
     def rebar(self) -> None:
         total_kg = 0.0
@@ -193,13 +196,14 @@ class Takeoff:
             kg = self.bar_m[size] * kg_m * (1 + waste / 100)
             total_kg += kg
             self.add("งานเหล็กเสริม", f"เหล็กเสริม {size}", kg, "กก.", rebar_labour_code(size),
-                     f"ยาว {q2(self.bar_m[size])} ม. เผื่อ {waste:g}% ค่าแรงคิดต่อตัน", 0.001)
+                     f"ยาว {q2(self.bar_m[size])} ม. เผื่อ {waste:g}% ค่าแรงคิดต่อตัน", 0.001,
+                     mats=[(size, 1.0)])
         self.add("งานเหล็กเสริม", "ลวดผูกเหล็ก", total_kg / 1000 * self.r.tie_wire_kg_per_tonne,
-                 "กก.", "", "30 กก. ต่อเหล็ก 1 ตัน")
+                 "กก.", "", "30 กก. ต่อเหล็ก 1 ตัน", mats=[("ลวดผูกเหล็ก", 1.0)])
 
     def walls(self) -> None:
-        masonry = {"brick": ("ก่ออิฐมอญครึ่งแผ่น", "2.3.1a"),
-                   "qcon": ("ก่ออิฐมวลเบา", "2.3.1b")}
+        masonry = {"brick": ("ก่ออิฐมอญครึ่งแผ่น", "2.3.1a", "6.1"),
+                   "qcon": ("ก่ออิฐมวลเบา", "2.3.1b", "6.10")}
         lintel = plaster_in = plaster_out = paint_in = paint_out = 0.0
         laid = OrderedDict()
         door_sets = 0
@@ -228,17 +232,22 @@ class Takeoff:
         tiles = sum(f.area for f in self.p.finishes if f.kind == "wall_tile")
         paint_in = max(0.0, paint_in - tiles)              # no paint behind wall tiles
         for kind, area in laid.items():
-            name, code = masonry[kind]
-            self.add("งานก่อ ฉาบ", name, area, "ตร.ม.", code)
+            name, code, rc = masonry[kind]
+            self.add("งานก่อ ฉาบ", name, area, "ตร.ม.", code, f"สูตรวัสดุ {rc}", mats=[(f"R:{rc}", 1.0)])
         self.add("งานก่อ ฉาบ", "เสาเอ็น คานทับหลัง", lintel, "เมตร", "2.3.1e",
-                 "ตามภาคผนวกคู่มือ (ประตู 1 แถว+4 ม., หน้าต่าง 2 แถว+2.2 ม.)")
-        self.add("งานก่อ ฉาบ", "ฉาบปูนผนังภายใน", plaster_in, "ตร.ม.", "2.3.2a")
-        self.add("งานก่อ ฉาบ", "ฉาบปูนผนังภายนอก", plaster_out, "ตร.ม.", "2.3.2b")
+                 "ตามภาคผนวกคู่มือ (ประตู 1 แถว+4 ม., หน้าต่าง 2 แถว+2.2 ม.)", mats=[("R:4.1", 1.0)])
+        self.add("งานก่อ ฉาบ", "ฉาบปูนผนังภายใน", plaster_in, "ตร.ม.", "2.3.2a", "สูตรวัสดุ 7.2",
+                 mats=[("R:7.2", 1.0)])
+        self.add("งานก่อ ฉาบ", "ฉาบปูนผนังภายนอก", plaster_out, "ตร.ม.", "2.3.2b", "สูตรวัสดุ 7.2",
+                 mats=[("R:7.2", 1.0)])
         col_plaster = sum(2 * (c.width + c.depth) * max(0.0, c.height - BEAM_UNDERSIDE) * c.count
                           for c in self.p.columns)
-        self.add("งานก่อ ฉาบ", "ฉาบปูนโครงสร้าง (เสา 4 ด้าน)", col_plaster, "ตร.ม.", "2.3.2c")
-        self.add("งานทาสี", "ทาสีน้ำอะครีลิค ภายใน", paint_in, "ตร.ม.", "2.8.1a")
-        self.add("งานทาสี", "ทาสีน้ำอะครีลิค ภายนอก", paint_out, "ตร.ม.", "2.8.1b")
+        self.add("งานก่อ ฉาบ", "ฉาบปูนโครงสร้าง (เสา 4 ด้าน)", col_plaster, "ตร.ม.", "2.3.2c", "สูตรวัสดุ 7.2",
+                 mats=[("R:7.2", 1.0)])
+        self.add("งานทาสี", "ทาสีน้ำอะครีลิค ภายใน", paint_in, "ตร.ม.", "2.8.1a",
+                 mats=[("สีน้ำอะครีลิค ภายใน (ต่อ ตร.ม.)", 1.0)])
+        self.add("งานทาสี", "ทาสีน้ำอะครีลิค ภายนอก", paint_out, "ตร.ม.", "2.8.1b",
+                 mats=[("สีน้ำอะครีลิค ภายนอก (ต่อ ตร.ม.)", 1.0)])
         for o in self.p.openings:
             area = o.width * o.height * o.count
             label = f"{'ประตู' if o.kind == 'door' else 'หน้าต่าง'} {o.name} {o.width:.2f}x{o.height:.2f} ม."
@@ -254,7 +263,7 @@ class Takeoff:
                 self.add("งานประตู หน้าต่าง", f"{label} — วงกบ", area, "ตร.ม.", "2.5.2b")
                 self.add("งานประตู หน้าต่าง", f"{label} — บาน", area, "ตร.ม.", "2.5.3c")
                 self.add("งานประตู หน้าต่าง", f"{label} — กระจก 5 มม.", area * 10.7639, "ตร.ฟ.", "2.5.7",
-                         "พื้นที่บานหน้าต่าง")
+                         "พื้นที่บานหน้าต่าง", mats=[("กระจกใส 5 มม.", 1.0)])
         self.add("งานประตู หน้าต่าง", "อุปกรณ์ประตู (ลูกบิด กุญแจ)", door_sets, "ชุด", "2.5.4")
 
     def roof(self) -> None:
@@ -272,20 +281,23 @@ class Takeoff:
                               "2.1.1h" if hip else "2.1.1", "2.1.1r", "2.1.1r")}
         name, code, ridge_code, verge_code = cover.get(r.material, cover["concrete_tile"])
         self.add("งานหลังคา", name, slope_area * (1 + waste / 100), "ตร.ม.", code,
-                 f"พื้นที่ราบ {q2(r.plan_area)} ตร.ม. ลาด {r.slope_deg:g}° เผื่อ {waste:g}%")
+                 f"พื้นที่ราบ {q2(r.plan_area)} ตร.ม. ลาด {r.slope_deg:g}° เผื่อ {waste:g}%",
+                 mats=[("กระเบื้องคอนกรีต (รวมอุปกรณ์)", 1.0)] if r.material == "concrete_tile" else ())
         self.add("งานหลังคา", "ครอบสัน ครอบตะเข้สัน", r.ridge_length + r.hip_length, "เมตร",
                  ridge_code)
         self.add("งานหลังคา", "ครอบข้าง ครอบปั้นลม" + (" ครอบชนผนังด้านสูง" if r.shape == "shed" else ""),
                  r.verge_length, "เมตร", verge_code)
         self.add("งานหลังคา", "รางน้ำตะเข้", r.valley_length, "เมตร", "2.1.10c")
-        self.add("งานหลังคา", "เชิงชาย ทับเชิงชาย", r.eave_length, "เมตร", "2.1.10a")
+        self.add("งานหลังคา", "เชิงชาย ทับเชิงชาย", r.eave_length, "เมตร", "2.1.10a",
+                 mats=[("เชิงชายไม้สำเร็จรูป 1\"×8\" + ทับเชิงชาย 1\"×6\"", 1.0)])
         if r.steel_kg:
             sw = {"gable": 3.0, "shed": 3.0, "hip": 5.0}.get(r.shape, 3.0)
             self.add("งานหลังคา", "โครงหลังคาเหล็กรูปพรรณ", r.steel_kg * (1 + sw / 100), "กก.",
-                     "1.11.1", f"เผื่อ {sw:g}%")
+                     "1.11.1", f"เผื่อ {sw:g}%", mats=[("เหล็กรูปพรรณ (ทั่วไป)", 1.0)])
 
     def finishes(self) -> None:
-        from .structure.architecture import CEILINGS, FIXTURES, FLOOR_FINISHES, WALL_TILE
+        from .structure.architecture import (CEILINGS, FINISH_RECIPES, FIXTURES, FLOOR_FINISHES,
+                                             WALL_TILE)
         sums: "OrderedDict[tuple, float]" = OrderedDict()
         for f in self.p.finishes:
             sums[(f.kind,)] = sums.get((f.kind,), 0.0) + f.area
@@ -295,8 +307,11 @@ class Takeoff:
             else:
                 group, key = kind.split(":", 1)
                 name, code = (FLOOR_FINISHES if group == "floor" else CEILINGS).get(key, ("", ""))
+            mats = FINISH_RECIPES.get(kind, ())
+            note = "ปริมาณสุทธิ (สูตรวัสดุรวมเผื่อแล้ว)" if any(m[0].startswith("R:") for m in mats) else \
+                "ปริมาณสุทธิ ไม่รวมเผื่อเศษ"
             if name:
-                self.add("งานพื้น ผนัง ฝ้า", name, area, "ตร.ม.", code, "ปริมาณสุทธิ ไม่รวมเผื่อเศษ")
+                self.add("งานพื้น ผนัง ฝ้า", name, area, "ตร.ม.", code, note, mats=mats)
         counts: "OrderedDict[str, int]" = OrderedDict()
         for fx in self.p.fixtures:
             counts[fx.name] = counts.get(fx.name, 0) + fx.count

@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLis
                                QWidget)
 
 from ..structure.building import Building, Foundation, Level, Roof
-from .pages import FoundationPage, GridPage, LevelsPage, ProjectPage, ArchitecturePage, ResultsPage, RoofPage, SeismicPage, WindPage
+from .pages import (ArchitecturePage, CostPage, FoundationPage, GridPage, LevelsPage, ProjectPage, ResultsPage,
+                    RoofPage, SeismicPage, WindPage)
 from .plan_view import PlanView
 from .view3d import View3D
 
@@ -45,7 +46,7 @@ class MainWindow(QMainWindow):
         self.steps.setMaximumWidth(240)
         self.pages = QStackedWidget()
         self.page_list = [ProjectPage(), GridPage(), LevelsPage(), FoundationPage(), RoofPage(),
-                          ArchitecturePage(), WindPage(), SeismicPage(), ResultsPage()]
+                          ArchitecturePage(), WindPage(), SeismicPage(), CostPage(), ResultsPage()]
         for p in self.page_list:
             self.steps.addItem(p.title)
             self.pages.addWidget(p)
@@ -226,10 +227,5 @@ class MainWindow(QMainWindow):
             else:
                 write_sheets_pdf(res, path if path.lower().endswith(".pdf") else path + ".pdf")
         else:
-            from ..estimate import Estimate
-            from ..quantities import takeoff
-            from ..rates import DATA_DIR, Rates
-            from ..structure.to_project import to_project
-            project = to_project(res)
-            rates = Rates(override_file=os.path.join(DATA_DIR, "labour_override.json"))
-            Estimate(project.name, takeoff(project, rates), rates).to_xlsx(path)
+            from ..estimate import for_design
+            for_design(res).to_xlsx(path)

@@ -126,6 +126,27 @@ DEFAULT_OPENINGS = [OpeningType("D1", "door", 0.90, 2.00, "wood"), OpeningType("
 
 
 @dataclass
+class Costing:
+    """Price estimate settings (หลักเกณฑ์การคำนวณราคากลางงานก่อสร้าง 2569, แบบ ปร.)."""
+    owner: str = ""                # หน่วยงานเจ้าของโครงการ
+    location: str = ""             # สถานที่ก่อสร้าง
+    drawing_no: str = ""           # แบบเลขที่
+    price_month: str = ""          # month of the province prices, e.g. "ต.ค. 2569"
+    method: str = "gov"            # "gov": Factor F holds VAT; "private": VAT on top
+    factor_f: float = 1.0          # used when factor_table is empty
+    factor_table: list = field(default_factory=list)   # [[ค่างานต้นทุน (บาท), Factor F], …] from the CGD table
+    adv_pay: float = 0.0           # เงินล่วงหน้าจ่าย %
+    retention: float = 0.0         # เงินประกันผลงานหัก %
+    interest: float = 6.0          # ดอกเบี้ยเงินกู้ %
+    vat: float = 7.0               # ภาษีมูลค่าเพิ่ม %
+    chair: str = ""                # ประธานกรรมการกำหนดราคากลาง
+    member1: str = ""
+    member2: str = ""
+    preparer: str = ""             # ผู้ถอดแบบและคำนวณราคา
+    preparer_role: str = ""
+
+
+@dataclass
 class Wind:
     """Wind load by กฎกระทรวง พ.ศ. 2566 ข้อ 17 (see wind.py)."""
     enabled: bool = True
@@ -157,6 +178,7 @@ class Building:
     wind: Wind = field(default_factory=Wind)
     stairs: list = field(default_factory=list)      # [Stair]
     opening_types: list = field(default_factory=lambda: [OpeningType(**vars(o)) for o in DEFAULT_OPENINGS])
+    costing: Costing = field(default_factory=Costing)
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -475,6 +497,7 @@ class Building:
             stairs=[Stair(**x) for x in d.get("stairs", [])],
             opening_types=[OpeningType(**x) for x in d["opening_types"]] if "opening_types" in d else
             [OpeningType(**vars(o)) for o in DEFAULT_OPENINGS],
+            costing=Costing(**d.get("costing", {})),
         )
 
     @classmethod

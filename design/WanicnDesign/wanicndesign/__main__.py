@@ -6,7 +6,8 @@
     python -m wanicndesign plan PROJECT.json --autocad            (draw in running AutoCAD)
     python -m wanicndesign labour [--set CODE RATE]               (show or update ค่าแรง)
     python -m wanicndesign prices PROJECT.json -o prices.json     (price list to fill in)
-    python -m wanicndesign design BUILDING.json -o OUTDIR          (model → structure → BOQ)
+    python -m wanicndesign design BUILDING.json -o OUTDIR          (model → structure → ราคากลาง)
+    python -m wanicndesign province BUILDING.json จังหวัด ตาราง.xlsx  (ราคาวัสดุพาณิชย์จังหวัด)
 """
 from __future__ import annotations
 
@@ -61,19 +62,48 @@ def cmd_prices(args) -> int:
     from .quantities import takeoff
     out = args.output or "prices.json"
     current = Rates.load_prices(out) if os.path.exists(out) else {}
-    lines = takeoff(Project.load(args.project), Rates())
-    keys = [ln.price_key for ln in lines]
+    from .estimate import Estimate
+    rates = Rates()
+    keys = Estimate("", takeoff(Project.load(args.project), rates), rates).needed_materials()
     data = {k: current.get(k, 0) for k in keys}
     data.update({k: v for k, v in current.items() if k not in data})
     with open(out, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
-    print(f"บันทึกรายการราคา {len(data)} รายการ → {out} (กรอกราคาต่อหน่วยแล้วใช้ --prices)")
+    print(f"บันทึกรายการราคาวัสดุ {len(data)} รายการ → {out} (กรอกราคาต่อหน่วยแล้วใช้ --prices)")
+    return 0
+
+
+def cmd_province(args) -> int:
+    """Read the commerce office's price table into the province's price book."""
+    from . import province as P
+    from .estimate import Estimate
+    from .quantities import takeoff
+    from .structure.building import Building
+    from .structure.design import design
+    from .structure.to_project import to_project
+    if args.province not in P.PROVINCES:
+        print(f"ไม่รู้จักจังหวัด {args.province}")
+        return 2
+    b = Building.load(args.building)
+    rates = Rates()
+    need = Estimate("", takeoff(to_project(design(b)), rates), rates).needed_materials()
+    rows, month = P.read_table(args.file)
+    found = P.match(rows, list(need), need)
+    old = P.load_book(args.province) or {"prices": {}, "src": {}, "item": {}}
+    prices = {**old["prices"], **{k: v for k, (v, _n) in found.items()}}
+    src = {**old.get("src", {}), **{k: "พาณิชย์" for k in found}}
+    item = {**old.get("item", {}), **{k: n for k, (_v, n) in found.items()}}
+    P.save_book(args.province, prices, args.month or month, src=src, item=item)
+    have, missing = P.coverage(prices, need)
+    print(f"อ่านตาราง {len(rows)} รายการ ({month or 'ไม่ระบุเดือน'}) จับคู่ได้ {len(found)} รายการ; "
+          f"มีราคา {have}/{len(need)} วัสดุ → {P.book_dir()}")
+    for k in missing:
+        print(f"  ยังไม่มีราคา: {k} ({need[k]})")
     return 0
 
 
 def cmd_design(args) -> int:
-    from .estimate import Estimate
-    from .quantities import takeoff
+    from .estimate import for_design
     from .structure.building import Building
     from .structure.design import design
     from .structure.drawing import write_dxf
@@ -93,9 +123,8 @@ def cmd_design(args) -> int:
     print("เหล็กเส้น 10 ม.: " + ", ".join(f"{p.size} {p.bars} เส้น (เศษ {p.waste_pct:.1f}%)" for p in plans))
     project = to_project(res)
     project.save(os.path.join(out, "ปริมาณ-โครงการ.json"))
-    rates = _rates(args)
-    est = Estimate(project.name, takeoff(project, rates), rates)
-    est.to_xlsx(os.path.join(out, "BOQ-ปร4.xlsx"))
+    est = for_design(res, _rates(args))
+    est.to_xlsx(os.path.join(out, "ราคากลาง-ปร.xlsx"))
     print(f"หลังคา {res.roof.load_plan:.0f} กก./ตร.ม. แป {res.roof.purlin.section} "
           f"จันทัน {res.roof.rafter.section}" if res.roof else "ไม่มีหลังคา")
     print(f"พื้น {len(res.slabs)} แผ่น  คาน {len(res.beams)} ช่วง  เสา {len(res.columns)} ท่อน  "
@@ -103,7 +132,10 @@ def cmd_design(args) -> int:
     print("ผลรวม: " + ("ผ่านทุกรายการ" if res.ok else "มีรายการไม่ผ่าน"))
     for w in res.warnings:
         print("  ⚠ " + w)
-    print(f"ค่าวัสดุ {est.material_total:,.2f}  ค่าแรง {est.labour_total:,.2f}  รวม {est.total:,.2f} บาท")
+    print(f"ค่าวัสดุ {est.material_total:,.2f}  ค่าแรง {est.labour_total:,.2f}  ค่างานต้นทุน {est.total:,.2f}  "
+          f"Factor F {est.factor:.4f}  ราคากลาง {est.grand:,.2f} บาท")
+    if est.missing_prices():
+        print(f"  วัสดุที่ยังไม่มีราคา {len(est.missing_prices())} รายการ (ดูแผ่น ราคาวัสดุ)")
     print(f"บันทึกผลใน {out}")
     return 0
 
@@ -145,6 +177,12 @@ def main(argv=None) -> int:
     d.add_argument("--prices")
     d.add_argument("--labour-up", type=float)
     d.set_defaults(func=cmd_design)
+    pv = sub.add_parser("province", help="นำเข้าตารางราคาวัสดุของสำนักงานพาณิชย์จังหวัด (.xlsx/.csv)")
+    pv.add_argument("building")
+    pv.add_argument("province")
+    pv.add_argument("file")
+    pv.add_argument("--month", help="เดือนของราคา เช่น \"ต.ค. 2569\"")
+    pv.set_defaults(func=cmd_province)
     lb = sub.add_parser("labour", help="ดูหรืออัปเดตค่าแรง ว480")
     lb.add_argument("--set", nargs=2, metavar=("CODE", "RATE"))
     lb.set_defaults(func=cmd_labour)

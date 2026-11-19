@@ -40,6 +40,18 @@ FIXTURES = {
 }
 SQFT_PER_M2 = 10.7639
 
+#: Unit-material recipes (กรมบัญชีกลาง 2569 วัสดุมวลรวม) of each finish — by the Finish kind.
+#: The smooth-jointed gypsum ceiling has no recipe: its material is priced by the user's key.
+FINISH_RECIPES = {
+    "floor:screed": (("R:9.3", 1.0),),            # ปูนทรายพื้นขัดมัน หนา 3 ซม.
+    "floor:ceramic_16": (("R:9.30", 1.0),),       # เซรามิค 12"×12" (สีธรรมดา) รวมปรับระดับ
+    "floor:ceramic_24": (("R:9.36", 1.0),),       # เซรามิค 24"×24"
+    "floor:granito": (("R:9.38", 1.0),),          # แกรนิตโต้ผิวด้าน 12"×12"
+    "floor:granito_20": (("R:9.40", 1.0),),       # แกรนิตโต้ผิวด้าน 20"×20"
+    "wall_tile": (("R:7.33", 1.0), ("R:7.1", 1.0)),   # บุเซรามิค 12"×12" + ปูนทรายรองพื้น
+    "ceiling:gypsum": (("ฝ้ายิปซัมฉาบเรียบ โครงเหล็กชุบสังกะสี (วัสดุ)", 1.0),),
+}
+
 
 def level_rooms(b, lv):
     """Floor bays of a level with rooms: [(bay name, area, wet)]."""

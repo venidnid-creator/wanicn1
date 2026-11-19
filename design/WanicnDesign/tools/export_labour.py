@@ -17,9 +17,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "3d"))
 
+from core import wanic_recipes2569 as RC  # noqa: E402
 from core import wanic_std2569 as S  # noqa: E402
 
 OUT = os.path.join(HERE, "..", "data", "labour_2569.json")
+MATERIALS = os.path.join(HERE, "..", "data", "materials_2569.json")
+PROVINCE_SRC = os.path.join(ROOT, "3d", "core", "wanic_province.py")
+PROVINCE_DST = os.path.join(HERE, "..", "wanicndesign", "province.py")
 
 
 def main():
@@ -40,6 +44,22 @@ def main():
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     print(f"wrote {len(data['labour'])} labour items to {os.path.normpath(OUT)}")
+    mats = {
+        "source": RC.SOURCE,
+        "note": "สูตรวัสดุมวลรวมต่อหน่วยงาน (รวมเผื่อแล้ว) — ตรวจกับหน้าที่ระบุ (page) ก่อนใช้ในงานราชการ",
+        "price_keys": [[k, u] for k, u in S.PRICE_KEYS],
+        "formwork_recipe": [[n, q, u] for n, q, u in S.FORMWORK_RECIPE],
+        "recipes": RC.RECIPES,
+    }
+    with open(MATERIALS, "w", encoding="utf-8") as f:
+        json.dump(mats, f, ensure_ascii=False, indent=0)
+    print(f"wrote {len(RC.RECIPES)} material recipes to {os.path.normpath(MATERIALS)}")
+    # the province price books are shared with the 3D program: same module, same folder
+    with open(PROVINCE_SRC, encoding="utf-8") as f:
+        src = f.read()
+    with open(PROVINCE_DST, "w", encoding="utf-8") as f:
+        f.write("# Copied from 3d/core/wanic_province.py by tools/export_labour.py — edit it there.\n" + src)
+    print(f"copied the province price-book module to {os.path.normpath(PROVINCE_DST)}")
 
 
 if __name__ == "__main__":

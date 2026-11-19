@@ -149,3 +149,27 @@ def test_sheets_pdf_export(win, app, tmp_path):
     p = tmp_path / "sheets.pdf"
     win.export_to("sheets", str(p), win.result)
     assert p.exists() and p.read_bytes()[:4] == b"%PDF" and p.stat().st_size > 10000
+
+
+def test_cost_page_prices_and_factor_table(win, app, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path))
+    from wanicndesign import province as P
+    page = next(p for p in win.page_list if p.title.endswith("ราคากลาง"))
+    win.building.province = "ขอนแก่น"
+    page.set_model(win.building)
+    assert page.prices.rowCount() > 10                     # the materials the design needs
+    names = [page.prices.item(r, 0).text() for r in range(page.prices.rowCount())]
+    r = names.index("ทรายหยาบ")
+    page.prices.item(r, 2).setText("480")
+    page._frow(5_000_000, 1.30)
+    page.factor.setValue(1.25)
+    page.apply()
+    book = P.load_book("ขอนแก่น")
+    assert book["prices"]["ทรายหยาบ"] == 480 and book["src"]["ทรายหยาบ"] == "กรอกเอง"
+    c = win.building.costing
+    assert c.factor_table == [[5_000_000.0, 1.30]] and c.factor_f == 1.25
+    res = win.calculate()
+    from wanicndesign.estimate import for_design
+    est = for_design(res)
+    assert est.factor == 1.30 and est.province == "ขอนแก่น"
+    assert "ราคากลาง" in win.page_list[-1].summary.toPlainText()

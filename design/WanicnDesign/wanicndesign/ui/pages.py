@@ -4,7 +4,7 @@ of the :class:`~wanicndesign.structure.building.Building` and emits
 ``changed`` when the user applies it."""
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
@@ -656,8 +656,197 @@ class SeismicPage(Page):
                                           self.sd1.value(), self.sa.value())
 
 
+class CostPage(Page):
+    title = "9. ราคากลาง"
+    hint = ("ราคาวัสดุของจังหวัดที่ตั้งโครงการ (หน้า 1) จากตารางสำนักงานพาณิชย์จังหวัด หรือกรอกเอง · "
+            "ค่าวัสดุต่อหน่วยคิดจากสูตรวัสดุมวลรวม กรมบัญชีกลาง 2569 · ค่าแรง ว480 · "
+            "Factor F กรอกค่าเดียว หรือกรอกแถวจากตาราง Factor F ฉบับที่ใช้ (โปรแกรมเทียบอัตราส่วนระหว่างช่วง)")
+    PRICE_COLS = ["วัสดุ", "หน่วย", "ราคาต่อหน่วย (บาท)", "ที่มา"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._need: dict = {}
+        top = QHBoxLayout()
+        self.book = QLabel("")
+        self.book.setWordWrap(True)
+        top.addWidget(self.book, 1)
+        imp = QPushButton("นำเข้าตารางพาณิชย์จังหวัด (.xlsx/.csv)")
+        imp.clicked.connect(self._import)
+        web = QPushButton("เปิดเว็บราคาวัสดุ")
+        web.clicked.connect(self._open_site)
+        top.addWidget(imp)
+        top.addWidget(web)
+        self.lay.addLayout(top)
+        self.prices = QTableWidget(0, len(self.PRICE_COLS))
+        self.prices.setHorizontalHeaderLabels(self.PRICE_COLS)
+        self.prices.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.prices.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.prices.setMinimumHeight(180)
+        self.lay.addWidget(self.prices)
+        f = QFormLayout()
+        self.month = QLineEdit()
+        self.method = _combo([("gov", "ราคากลางราชการ (Factor F รวม VAT แล้ว)"),
+                              ("private", "งานเอกชน (บวก VAT)")], "gov")
+        self.factor = _spin(1.0, 0.5, 3.0, 0.0001, 4)
+        self.adv = _spin(0, 0, 50, 1, 1, "%")
+        self.ret = _spin(0, 0, 50, 1, 1, "%")
+        self.interest = _spin(6, 0, 20, 0.25, 2, "%")
+        self.vat = _spin(7, 0, 20, 1, 1, "%")
+        self.text = {k: QLineEdit() for k in ("owner", "location", "drawing_no", "chair", "member1", "member2",
+                                              "preparer", "preparer_role")}
+        for label, w in (("เดือนของราคาวัสดุ", self.month), ("วิธีคิด", self.method),
+                         ("Factor F (เมื่อไม่กรอกตาราง)", self.factor), ("เงินล่วงหน้าจ่าย", self.adv),
+                         ("เงินประกันผลงานหัก", self.ret), ("ดอกเบี้ยเงินกู้", self.interest),
+                         ("ภาษีมูลค่าเพิ่ม", self.vat), ("หน่วยงานเจ้าของโครงการ", self.text["owner"]),
+                         ("สถานที่ก่อสร้าง", self.text["location"]), ("แบบเลขที่", self.text["drawing_no"]),
+                         ("ประธานกรรมการกำหนดราคากลาง", self.text["chair"]), ("กรรมการ", self.text["member1"]),
+                         ("กรรมการ", self.text["member2"]), ("ผู้ถอดแบบและคำนวณราคา", self.text["preparer"]),
+                         ("ตำแหน่ง", self.text["preparer_role"])):
+            f.addRow(label, w)
+        self.lay.addLayout(f)
+        self.lay.addWidget(QLabel("<b>ตาราง Factor F</b> (ค่างานต้นทุน บาท → Factor F) ตามเงื่อนไขด้านบน"))
+        self.ftable = QTableWidget(0, 2)
+        self.ftable.setHorizontalHeaderLabels(["ค่างานต้นทุน (บาท)", "Factor F"])
+        self.ftable.setMaximumHeight(150)
+        self.ftable.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.lay.addWidget(self.ftable)
+        row = QHBoxLayout()
+        add = QPushButton("เพิ่มแถว")
+        add.clicked.connect(lambda: self._frow(0, 1.0))
+        rem = QPushButton("ลบแถวที่เลือก")
+        rem.clicked.connect(lambda: self.ftable.removeRow(self.ftable.currentRow()))
+        row.addWidget(add)
+        row.addWidget(rem)
+        self.lay.addLayout(row)
+        self.add_apply()
+
+    def _frow(self, cost, f):
+        r = self.ftable.rowCount()
+        self.ftable.insertRow(r)
+        self.ftable.setItem(r, 0, QTableWidgetItem(f"{float(cost):,.0f}"))
+        self.ftable.setItem(r, 1, QTableWidgetItem(f"{float(f):.4f}"))
+
+    def _needed(self) -> dict:
+        from ..estimate import Estimate
+        from ..quantities import takeoff
+        from ..rates import Rates
+        from ..structure.design import design
+        from ..structure.to_project import to_project
+        rates = Rates()
+        try:
+            self._need = Estimate("", takeoff(to_project(design(self.building)), rates), rates).needed_materials()
+        except Exception:                       # an unfinished model: list nothing yet
+            self._need = {}
+        return self._need
+
+    def _fill_prices(self):
+        from .. import province as P
+        book = P.load_book(self.building.province) if self.building.province else None
+        prices, src = (book or {}).get("prices", {}), (book or {}).get("src", {})
+        self.prices.setRowCount(0)
+        for name, unit in sorted(self._need.items()):
+            r = self.prices.rowCount()
+            self.prices.insertRow(r)
+            for c, v in enumerate((name, unit, f"{prices[name]:g}" if name in prices else "", src.get(name, ""))):
+                it = QTableWidgetItem(v)
+                if c != 2:
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                if c == 2 and not v:
+                    it.setBackground(QColor("#fff2cc"))
+                self.prices.setItem(r, c, it)
+        have = sum(1 for k in self._need if prices.get(k))
+        prov = self.building.province or "(ยังไม่เลือกจังหวัดในหน้า 1)"
+        self.book.setText(f"จังหวัด {prov} · สมุดราคา {(book or {}).get('month') or '-'} · "
+                          f"มีราคา {have}/{len(self._need)} วัสดุ · เก็บที่ {P.book_dir()}")
+
+    def load(self):
+        c = self.building.costing
+        self.month.setText(c.price_month)
+        self.method.setCurrentIndex(max(0, self.method.findData(c.method)))
+        for w, v in ((self.factor, c.factor_f), (self.adv, c.adv_pay), (self.ret, c.retention),
+                     (self.interest, c.interest), (self.vat, c.vat)):
+            w.setValue(v)
+        for k, w in self.text.items():
+            w.setText(getattr(c, k))
+        self.ftable.setRowCount(0)
+        for cost, f in c.factor_table:
+            self._frow(cost, f)
+        self._needed()
+        self._fill_prices()
+        if not c.price_month and self.building.province:
+            from .. import province as P
+            self.month.setText((P.load_book(self.building.province) or {}).get("month", ""))
+
+    def apply(self):
+        from .. import province as P
+        c = self.building.costing
+        c.price_month, c.method = self.month.text().strip(), self.method.currentData()
+        c.factor_f, c.adv_pay, c.retention = self.factor.value(), self.adv.value(), self.ret.value()
+        c.interest, c.vat = self.interest.value(), self.vat.value()
+        for k, w in self.text.items():
+            setattr(c, k, w.text().strip())
+        rows = []
+        for r in range(self.ftable.rowCount()):
+            try:
+                rows.append([float(self.ftable.item(r, 0).text().replace(",", "")),
+                             float(self.ftable.item(r, 1).text())])
+            except (AttributeError, ValueError):
+                continue
+        c.factor_table = sorted(rows)
+        if self.building.province:                 # typed prices go to the province book
+            book = P.load_book(self.building.province) or {"prices": {}, "src": {}, "item": {}}
+            prices, src = dict(book["prices"]), dict(book.get("src", {}))
+            for r in range(self.prices.rowCount()):
+                name, txt = self.prices.item(r, 0).text(), self.prices.item(r, 2).text().replace(",", "").strip()
+                try:
+                    v = float(txt) if txt else 0.0
+                except ValueError:
+                    continue
+                if v > 0 and abs(v - float(prices.get(name, 0))) > 1e-9:
+                    prices[name], src[name] = v, "กรอกเอง"
+            P.save_book(self.building.province, prices, c.price_month or book.get("month", ""), src=src,
+                        item=book.get("item", {}))
+            self._fill_prices()
+
+    def _import(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from .. import province as P
+        if not self.building.province:
+            QMessageBox.information(self, "ราคาวัสดุ", "เลือกจังหวัดที่ตั้งโครงการในหน้า 1 ก่อน")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "ตารางราคาวัสดุ สำนักงานพาณิชย์จังหวัด", "",
+                                              "ตาราง (*.xlsx *.csv *.txt)")
+        if not path:
+            return
+        try:
+            rows, month = P.read_table(path)
+        except ValueError as e:
+            QMessageBox.warning(self, "ราคาวัสดุ", str(e))
+            return
+        need = self._need or self._needed()
+        found = P.match(rows, list(need), need)
+        book = P.load_book(self.building.province) or {"prices": {}, "src": {}, "item": {}}
+        prices = {**book["prices"], **{k: v for k, (v, _n) in found.items()}}
+        src = {**book.get("src", {}), **{k: "พาณิชย์" for k in found}}
+        item = {**book.get("item", {}), **{k: n for k, (_v, n) in found.items()}}
+        P.save_book(self.building.province, prices, month or book.get("month", ""), src=src, item=item)
+        if month:
+            self.month.setText(month)
+        self._fill_prices()
+        QMessageBox.information(self, "ราคาวัสดุ", f"อ่าน {len(rows)} รายการ จับคู่ได้ {len(found)} วัสดุ "
+                                                 "— ตรวจรายการที่ยังว่าง (สีเหลือง) แล้วกรอกเอง")
+
+    def _open_site(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from .. import province as P
+        QDesktopServices.openUrl(QUrl(P.PRICE_SITE))
+
+
 class ResultsPage(Page):
-    title = "9. ผลคำนวณและส่งออก"
+    title = "10. ผลคำนวณและส่งออก"
     run_requested = Signal()
     export_requested = Signal(str)
 
@@ -669,7 +858,7 @@ class ResultsPage(Page):
         run.clicked.connect(self.run_requested.emit)
         row.addWidget(run)
         for key, label in (("report", "รายการคำนวณ Excel"), ("sheets", "แบบก่อสร้าง PDF/DXF"), ("dxf", "โมเดล DXF"),
-                           ("cutting", "ตารางตัดเหล็ก"), ("boq", "BOQ ปร.4")):
+                           ("cutting", "ตารางตัดเหล็ก"), ("boq", "ราคากลาง ปร.4")):
             b = QPushButton(label)
             b.clicked.connect(lambda _c=False, k=key: self.export_requested.emit(k))
             row.addWidget(b)
@@ -707,6 +896,15 @@ class ResultsPage(Page):
         if f and f.applies:
             lines.append("การทนไฟ: " + " · ".join(f"{n} {h:g} ชม." for n, h, _s in f.floors)
                          + (f" · หลังคา {f.roof_hours:g} ชม." if f.roof_hours else ""))
+        try:
+            from ..estimate import for_design
+            est = for_design(res)
+            miss = est.missing_prices()
+            lines.append(f"ราคากลาง: ค่างานต้นทุน {est.total:,.2f} × Factor F {est.factor:.4f} = {est.grand:,.2f} บาท"
+                         + (f" · {est.grand / est.area:,.0f} บาท/ตร.ม." if est.area else "")
+                         + (f" · วัสดุยังไม่มีราคา {len(miss)} รายการ (หน้า 9)" if miss else ""))
+        except Exception as e:                     # the structure result still shows
+            lines.append(f"ราคากลาง: คำนวณไม่ได้ ({e})")
         lines.append("ผล: ผ่านทุกรายการ" if res.ok else "ผล: มีรายการไม่ผ่าน (สีแดง)")
         lines += ["⚠ " + w for w in res.warnings]
         lines.append("ผลคำนวณเบื้องต้น ต้องให้วิศวกรผู้มีใบอนุญาตตรวจสอบและลงนาม")
