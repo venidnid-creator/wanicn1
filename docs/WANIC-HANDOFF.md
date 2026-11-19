@@ -10,6 +10,14 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
+## ReadWanicn2027 — Factor F ตาม BOQ · ปร.1–ปร.4 พร้อมพิมพ์ · ผลการอ่านทีละหน้า (19 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
+- Factor F: `Item.factor` อ่านคอลัมน์ F/FN ของแต่ละบรรทัด, `p.factor` = ค่าที่บรรทัดส่วนใหญ่ใช้ (ไม่มีค่อยหา «Factor F …»);
+  `effective_factor()` คืน p.factor เสมอถ้ามี (ไม่คำนวณกลับจากราคากลาง — เคสผู้ใช้ 1.3432 กลายเป็น 1.3400)
+- `boqforms.py`: ปร.4 · ปร.1 (ก) · ปร.1 · ปร.2 · ปร.3 (หลักเกณฑ์ 2569 ตามชื่อแบบใน 3d/core/wanic_takeoff) → .xlsx A4 (`to_xlsx`) + PDF ต่อ 1 ชุด BOQ;
+  ชุดแบบที่ไม่มี BOQ: ปร.1 มีรายการจากป้ายที่นับได้ + หมวดงานว่างให้กรอก (ระบุชัดว่าต้องวัดเอง)
+- BoqDialog: ช่อง Factor F, ปุ่มหลัก «📄 ส่งออก ปร.1–ปร.4 (พร้อมพิมพ์ A4)», CSV เป็นปุ่มรอง · แสดงผลทีละหน้าระหว่างอ่าน (`analyse(on_page=)`, `_Pages`)
+- ยังทำไม่ได้: วัดความยาว/พื้นที่/ปริมาตรจากเส้นในแบบเองอัตโนมัติ · tests 57 ผ่าน
+
 ## ReadWanicn2027 2027.4.7 — ปุ่มล้างข้อมูล (19 พ.ย. 2569, อนุมัติแล้ว — ตัวติดตั้ง run 44427000629 artifact 14484054265 ผ่าน, ไม่ release)
 - ถอดแบบตาม BOQ (`BoqDialog`): «📂 ถอดแบบไฟล์อื่น…» (`choose_other` → `clear()` → `read(path)`), «🗑 ล้างข้อมูล» (`clear(ask=True)`),
   หลังส่งออก CSV ถามว่าจะล้างเพื่อถอดชุดใหม่ไหม · `fix_marks()` แก้ «?» ที่แทนวรรณยุกต์ในชื่อแผ่น (พื?น → พื้น, น?า → น้ำ)

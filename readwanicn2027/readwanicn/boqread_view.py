@@ -33,6 +33,7 @@ STATUS_COLOR = {"อ่านได้": "#2E7D32", "อ่านได้บา
 
 class _Worker(QObject):
     progress = Signal(int, int, str)
+    page = Signal(object)
     done = Signal(object)
     failed = Signal(str)
 
@@ -45,7 +46,7 @@ class _Worker(QObject):
             def tick(i, n, text):
                 self.progress.emit(i, n, text)
                 return not self.stop
-            self.done.emit(B.analyse(self.path, ocr=self.ocr, progress=tick))
+            self.done.emit(B.analyse(self.path, ocr=self.ocr, progress=tick, on_page=self.page.emit))
         except Exception as e:                       # shown in the window, never swallowed
             self.failed.emit(f"{type(e).__name__}: {e}")
 
@@ -122,6 +123,9 @@ class BoqDialog(QDialog):
         form.addRow("สถานที่ก่อสร้าง", self.f_place)
         form.addRow("แบบเลขที่", self.f_no)
         form.addRow("หน่วยงานเจ้าของโครงการ", self.f_owner)
+        self.f_factor = QLineEdit()
+        self.f_factor.setPlaceholderText("Factor F ตามตารางของกรมบัญชีกลาง เช่น 1.3432 (เว้นว่างได้ — ใส่ในตารางคำนวณภายหลัง)")
+        form.addRow("Factor F", self.f_factor)
         lay.addWidget(info)
 
         row = QHBoxLayout()
@@ -137,8 +141,15 @@ class BoqDialog(QDialog):
         self.clear_btn.clicked.connect(lambda: self.clear(ask=True))
         row.addWidget(self.clear_btn)
         row.addStretch(1)
-        self.csv_btn = QPushButton("🧾 ส่งออก CSV แบบ ปร.1 (แยกตามประเภทงาน)")
-        self.csv_btn.setObjectName("Primary")
+        self.forms_btn = QPushButton("📄 ส่งออก ปร.1–ปร.4 (พร้อมพิมพ์ A4)")
+        self.forms_btn.setObjectName("Primary")
+        self.forms_btn.setToolTip("ปร.4 สรุปราคากลาง · ปร.1 (ก) สรุปค่าก่อสร้าง · ปร.1 รายการปริมาณงาน · ปร.2 ครุภัณฑ์ · "
+                                  "ปร.3 ค่าใช้จ่ายพิเศษ — ตารางคำนวณ .xlsx จัดหน้า A4 และ PDF")
+        self.forms_btn.setEnabled(False)
+        self.forms_btn.clicked.connect(self.export_forms)
+        row.addWidget(self.forms_btn)
+        self.csv_btn = QPushButton("🧾 CSV")
+        self.csv_btn.setToolTip("ไฟล์ข้อมูล CSV แบบ ปร.1 แยกตามประเภทงาน + รายงานการอ่านแบบ (ไม่จัดหน้า)")
         self.csv_btn.setEnabled(False)
         self.csv_btn.clicked.connect(self.export)
         row.addWidget(self.csv_btn)
@@ -164,7 +175,8 @@ class BoqDialog(QDialog):
         for t in (self.pages, self.items, self.tags):
             t.clearContents()
             t.setRowCount(0)
-        for f in (self.f_project, self.f_place, self.f_no, self.f_owner):
+        self.forms_btn.setEnabled(False)
+        for f in (self.f_project, self.f_place, self.f_no, self.f_owner, self.f_factor):
             f.clear()
         self.f_project.setPlaceholderText("ชื่อโครงการงานก่อสร้าง (เว้นว่าง = ใช้ชื่อในตาราง BOQ)")
         self.csv_btn.setEnabled(False)
@@ -201,6 +213,7 @@ class BoqDialog(QDialog):
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self._progress)
+        self.worker.page.connect(self._page_read)
         self.worker.done.connect(self._done)
         self.worker.failed.connect(self._failed)
         self.worker.done.connect(self.thread.quit)
@@ -211,6 +224,17 @@ class BoqDialog(QDialog):
         if self.worker:
             self.worker.stop = True
             self.stop_btn.setEnabled(False)
+
+    def _page_read(self, p):
+        """Each page shows as soon as it is read (a long set is never a blank window)."""
+        r = self.pages.rowCount()
+        self.pages.insertRow(r)
+        col = STATUS_COLOR.get(p.status)
+        kind = p.kind.replace(" (ฟอนต์ไทยรุ่นเก่า แปลงให้แล้ว)", " ✓ฟอนต์เก่า")
+        for c, v in enumerate((p.no, p.status, kind, p.sheet, p.title, p.work, p.note)):
+            self.pages.setItem(r, c, _item(v, col if c in (1, 6) else None))
+        self.pages.resizeRowToContents(r)
+        self.pages.scrollToBottom()
 
     def _progress(self, i, n, text):
         self.bar.setMaximum(n)
@@ -261,10 +285,53 @@ class BoqDialog(QDialog):
                 self.tags.setItem(r, c, _item(v))
         self.tabs.setCurrentIndex(1 if res.lines else 0)
         self.csv_btn.setEnabled(True)
+        self.forms_btn.setEnabled(True)
         if res.project and not self.f_project.text():
             self.f_project.setPlaceholderText(f"ชื่อโครงการงานก่อสร้าง (เว้นว่าง = {res.project})")
 
     # -- CSV
+    def _info(self) -> dict:
+        try:
+            f = float(self.f_factor.text().strip().replace(",", "") or 0)
+        except ValueError:
+            f = 0.0
+        return {"project": self.f_project.text().strip(), "place": self.f_place.text().strip(),
+                "drawing_no": self.f_no.text().strip(), "owner": self.f_owner.text().strip(),
+                "factor": f if 1.0 <= f < 3.0 else 0.0}
+
+    def export_forms(self):
+        """ปร.4 · ปร.1 (ก) · ปร.1 · ปร.2 · ปร.3 as an A4-ready workbook and PDF, per bill in the set."""
+        if not self.res:
+            return
+        from . import boqforms
+        base = self.settings.value("dir", str(Path.home() / "Documents"))
+        folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ที่จะบันทึก ปร.1–ปร.4", base)
+        if not folder:
+            return
+        try:
+            files = boqforms.write(self.res, folder, self._info())
+        except Exception as e:
+            QMessageBox.critical(self, self.windowTitle(), f"บันทึกไม่สำเร็จ\n{type(e).__name__}: {e}"
+                                 + ("\n\nไฟล์อาจเปิดค้างอยู่ในโปรแกรมอื่น" if isinstance(e, PermissionError) else ""))
+            return
+        if self.record:
+            self.record("ถอดแบบตาม BOQ: ปร.1–ปร.4")
+        names = "\n".join(f"• {Path(f).name}" for f in files)
+        extra = ("" if self.res.lines else
+                 "\n\nชุดแบบนี้ไม่มีตาราง BOQ — ปร.1 มีรายการที่นับจากป้ายในแบบ (ถ้ามี) และหมวดงานให้กรอก"
+                 " ปริมาณที่วัดด้วยเครื่องมือวัด/รูปทรง")
+        box = QMessageBox(self)
+        box.setWindowTitle("ส่งออก ปร.1–ปร.4 แล้ว")
+        box.setText(f"บันทึก {len(files)} ไฟล์ที่ {folder}\n\n{names}{extra}")
+        go = box.addButton("เปิดโฟลเดอร์", QMessageBox.AcceptRole)
+        box.addButton("ปิด", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is go:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        if QMessageBox.question(self, self.windowTitle(),
+                                "ส่งออกเรียบร้อยแล้ว — ล้างข้อมูลที่อ่านไว้ เพื่อถอดแบบชุดใหม่เลยหรือไม่?") == QMessageBox.Yes:
+            self.clear()
+
     def export(self):
         if not self.res:
             return
@@ -272,9 +339,7 @@ class BoqDialog(QDialog):
         folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ที่จะบันทึก CSV", base)
         if not folder:
             return
-        info = {"project": self.f_project.text().strip(), "place": self.f_place.text().strip(),
-                "drawing_no": self.f_no.text().strip(), "owner": self.f_owner.text().strip()}
-        files = B.write_csv(self.res, folder, info)
+        files = B.write_csv(self.res, folder, self._info())
         if self.record:
             self.record("ถอดแบบตาม BOQ: ส่งออก CSV")
         names = "\n".join(f"• {Path(f).name}" for f in files)

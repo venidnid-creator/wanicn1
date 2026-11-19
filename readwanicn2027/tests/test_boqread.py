@@ -178,3 +178,27 @@ def test_marks_lost_as_question_marks():
     assert B.fix_marks("แปลนพื?นชั?น 1") == "แปลนพื้นชั้น 1"
     assert B.fix_marks("แบบขยายห้องน?า") == "แบบขยายห้องน้ำ"
     assert B.fix_marks("What? A-01") == "What? A-01"
+
+
+def test_forms_pr1_to_pr4(tmp_path):
+    from openpyxl import load_workbook
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from readwanicn import boqforms
+    src = tmp_path / "ชุดแบบ.pdf"
+    make_set(src)
+    res = B.analyse(src, ocr=False)
+    files = boqforms.write(res, tmp_path / "out", {"factor": 1.3432, "place": "ทดสอบ"})
+    x = next(f for f in files if f.suffix == ".xlsx")
+    wb = load_workbook(x)
+    assert wb.sheetnames == ["ปร.4", "ปร.1 (ก)", "ปร.1", "ปร.2", "ปร.3"]
+    assert all(int(ws.page_setup.paperSize) == 9 for ws in wb.worksheets)
+    text = " ".join(str(c.value) for row in wb["ปร.1"].iter_rows() for c in row if c.value is not None)
+    assert "ขุดดิน" in text and "แบบแสดงรายการ ปริมาณงาน และราคา ค่างานต้นทุน" in text
+    assert any(f.suffix == ".pdf" and f.exists() for f in files)
+    # a set of drawings only: the tags counted become lines, the groups are there to fill
+    res.lines = []
+    reps = boqforms.forms(res, {})
+    pr1 = next(r for r in reps if r.title == "ปร.1")
+    names = [row[1].text for b in pr1.blocks if hasattr(b, "body") for row in b.body if len(row) > 1]
+    assert any("ป1" in n for n in names) and "หมวดงานโครงสร้าง" in names

@@ -433,13 +433,26 @@ def _sheet_from_text(text: str, ocr: bool = False):
 
 # -- the whole set ---------------------------------------------------------------------------------
 
-def analyse(path, ocr: bool = True, progress=None) -> Result:
+class _Pages(list):
+    """The pages read so far; each one is handed to `on_page` as soon as it is read."""
+
+    def __init__(self, on_page=None):
+        super().__init__()
+        self.on_page = on_page
+
+    def append(self, pg):
+        super().append(pg)
+        if self.on_page:
+            self.on_page(pg)
+
+
+def analyse(path, ocr: bool = True, progress=None, on_page=None) -> Result:
     """Read every page; `progress(i, n, text)` returns False to stop."""
     import pymupdf
     doc = pymupdf.open(str(path))
     n = doc.page_count
     use_ocr = ocr and bool(tesseract_path())
-    pages, raw, tags = [], [], defaultdict(dict)
+    pages, raw, tags = _Pages(on_page), [], defaultdict(dict)
     project = ""
     for i, page in enumerate(doc):
         if progress and progress(i, n, f"หน้า {i + 1}/{n}") is False:
