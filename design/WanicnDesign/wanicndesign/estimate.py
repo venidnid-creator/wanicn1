@@ -121,6 +121,7 @@ class Estimate:
         self.province = province
         self.area = area
         self.factor_cost: float | None = None     # cost that picks Factor F (a contract: all its buildings)
+        self.project = None                        # the measured model (schedule: frame by floor)
         self.rows = []
         for ln in lines:
             own = rates.prices.get(ln.price_key)       # a price typed for the BOQ line itself wins
@@ -428,7 +429,8 @@ class Estimate:
         self._extras_sheets(wb, header, head_row, sign, bold)
         from .schedule import plan, write_plan
         write_plan(plan(self, c.wage, c.workweek, c.crews), wb.create_sheet("แผนงานก่อสร้าง"),
-                   f"แผนงานก่อสร้าง (CPM) — {self.project_name}")
+                   f"แผนงานก่อสร้าง (CPM) — {self.project_name}", self.construction + self.vat_added,
+                   c.adv_pay, c.retention)
 
         # ---- material analysis ---------------------------------------------
         self._material_sheets(wb, bold, head_row)
@@ -607,7 +609,9 @@ def baht_text(amount: float) -> str:
 
 def estimate(project, rates: Rates, costing=None, province: str = "", area: float = 0.0):
     from .quantities import takeoff
-    return Estimate(project.name, takeoff(project, rates), rates, costing, province, area)
+    est = Estimate(project.name, takeoff(project, rates), rates, costing, province, area)
+    est.project = project
+    return est
 
 
 def floor_area(b) -> float:
@@ -647,8 +651,10 @@ def for_design(res, rates: Rates | None = None) -> Estimate:
     costing = copy.deepcopy(b.costing)
     if not costing.price_month:
         costing.price_month = month
-    return Estimate(project.name, takeoff(project, rates), rates, costing, b.province if book else "",
-                    floor_area(b))
+    est = Estimate(project.name, takeoff(project, rates), rates, costing, b.province if book else "",
+                   floor_area(b))
+    est.project = project                        # for the plan: the frame by floor
+    return est
 
 
 class Contract:
@@ -777,7 +783,7 @@ class Contract:
         from .schedule import plan, write_plan
         for k, (label, est) in enumerate(self.items, 1):
             write_plan(plan(est, c.wage, c.workweek, c.crews), wb.create_sheet(f"แผนงาน ({k})"),
-                       f"แผนงานก่อสร้าง (CPM) — {label}")
+                       f"แผนงานก่อสร้าง (CPM) — {label}", est.construction + est.vat_added, c.adv_pay, c.retention)
         references_sheet(wb, ["CGD2569", "CGD2569-MAT", "W480", "W480-MEP", "CGD-FACTORF"])
         wb.save(path)
 

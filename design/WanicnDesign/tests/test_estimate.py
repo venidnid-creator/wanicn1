@@ -269,7 +269,7 @@ def test_cpm_plan_from_the_estimate(tmp_path, monkeypatch):
     from wanicndesign.schedule import plan
     from wanicndesign.structure.design import design
     est = for_design(design(_house_with_bath()))
-    p = plan(est, wage=400, week=6)
+    p = plan(est, wage=400, week=6, stages=[])                          # the frame as one task
     t = {x.key: x for x in p.tasks}
     frame = t["frame"]
     assert frame.days == math.ceil(frame.labour / (10 * 400))           # labour ÷ (crew × wage)
@@ -284,3 +284,30 @@ def test_cpm_plan_from_the_estimate(tmp_path, monkeypatch):
     out = tmp_path / "p.xlsx"
     est.to_xlsx(str(out))
     assert "แผนงานก่อสร้าง" in openpyxl.load_workbook(out).sheetnames
+
+
+def test_frame_by_floor_and_monthly_installments(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path))
+    from wanicndesign.estimate import for_design
+    from wanicndesign.schedule import frame_stages, plan
+    from wanicndesign.structure.design import design
+    est = for_design(design(_house_with_bath()))
+    st = frame_stages(est.project)
+    p0 = est.project
+    concrete = (sum(f.width * f.length * f.thickness * f.count for f in p0.footings)
+                + sum(c.width * c.depth * c.height * c.count for c in p0.columns)
+                + sum(b.width * b.depth * b.length * b.count for b in p0.beams)
+                + sum(s.area * s.thickness for s in p0.slabs))
+    assert sum(v for _l, v in st) == pytest.approx(concrete)            # every m³ in one stage
+    assert [l.split()[-1] for l, _v in st] == ["(GB)", "FL2", "ROOF"]
+    p = plan(est)
+    t = {x.key: x for x in p.tasks}
+    assert t["frame1"].es == t["frame0"].ef and t["frame2"].es == t["frame1"].ef
+    assert t["wall"].es == t["frame1"].ef and t["roof"].es == t["frame2"].ef
+    assert sum(x.labour for k, x in t.items() if k.startswith("frame")) == pytest.approx(
+        sum(r.labour_amount for r in est.rows if r.line.section in ("งานคอนกรีต", "งานไม้แบบ", "งานเหล็กเสริม")))
+    inst = p.installments(1_000_000, advance=15, retention=5)
+    assert inst[-1]["cumulative"] == pytest.approx(100.0) and inst[-1]["day"] == p.days
+    assert sum(i["amount"] for i in inst) == pytest.approx(1_000_000, abs=0.05)
+    assert sum(i["advance_back"] for i in inst) == pytest.approx(150_000, abs=0.05)
+    assert all(i["pay"] == pytest.approx(i["amount"] * 0.80, abs=0.02) for i in inst)

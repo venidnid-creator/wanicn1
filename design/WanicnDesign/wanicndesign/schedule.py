@@ -64,6 +64,29 @@ LOGIC = [
 ]
 
 
+def frame_stages(project) -> list[tuple[str, float]]:
+    """Concrete volume of the frame by stage, in building order: the footings with the columns up to the
+    first level and that level's beams and slabs, then each higher level with the columns below it."""
+    floors = [f.name for f in project.floors if f.name != "FL0"]
+    if not floors:
+        return []
+    vol = {f: 0.0 for f in floors}
+    vol[floors[0]] += sum(f.width * f.length * f.thickness * f.count for f in project.footings)
+    for c in project.columns:
+        top = c.name.rsplit("–", 1)[-1].rstrip(")").strip() if "–" in c.name else floors[0]
+        vol[top if top in vol else floors[0]] += c.width * c.depth * c.height * c.count
+    for b in project.beams:
+        vol[b.floor if b.floor in vol else floors[-1]] += b.width * b.depth * b.length * b.count
+    for sl in project.slabs:
+        vol[sl.floor if sl.floor in vol else floors[0]] += sl.area * sl.thickness
+    out = []
+    for i, f in enumerate(floors):
+        if vol[f] > 0:
+            label = f"ฐานราก เสาตอม่อ คานคอดิน ({f})" if i == 0 else f"โครงสร้าง ค.ส.ล. ชั้น {f}"
+            out.append((label, vol[f]))
+    return out
+
+
 @dataclass
 class Plan:
     tasks: list
@@ -83,10 +106,43 @@ class Plan:
     def critical_path(self) -> list:
         return [t for t in self.tasks if t.days and t.critical]
 
+    def installments(self, value: float, advance: float = 0.0, retention: float = 0.0) -> list[dict]:
+        """Monthly installments (the payment period D of the Factor F interest, หลักเกณฑ์งานอาคาร 2569 ข้อ 9.2):
+        the work done in each month by the S-curve × the contract value; the advance (``advance`` % of the
+        contract, paid at the start) is repaid by the same share of every installment, and ``retention`` %
+        is held and returned under the contract."""
+        if not self.days:
+            return []
+        per_month = self.week * 52 / 12
+        months = max(1, math.ceil(self.days / per_month))
+        out, done = [], 0.0
+        for m in range(1, months + 1):
+            end = min(self.days, round(m * per_month))
+            cum = self.progress(end)
+            part = cum - done
+            done = cum
+            amount = value * part / 100
+            adv = amount * advance / 100
+            ret = amount * retention / 100
+            out.append({"no": m, "day": end, "percent": round(part, 2), "cumulative": round(cum, 2),
+                        "amount": round(amount, 2), "advance_back": round(adv, 2), "retention": round(ret, 2),
+                        "pay": round(amount - adv - ret, 2)})
+        return out
 
-def plan(est, wage: float = 400.0, week: int = 6, crews: dict | None = None) -> Plan:
-    """CPM plan of an :class:`~wanicndesign.estimate.Estimate` (or a Contract's estimate)."""
+    def progress(self, day: float) -> float:
+        """Cumulative % of the work value done by the end of working day ``day``."""
+        total = sum(t.value for t in self.tasks) or 1.0
+        done = sum(t.value * max(0.0, min(t.ef, day) - t.es) / t.days for t in self.tasks if t.days and day > t.es)
+        return min(100.0, 100 * done / total)
+
+
+def plan(est, wage: float = 400.0, week: int = 6, crews: dict | None = None, stages=None) -> Plan:
+    """CPM plan of an :class:`~wanicndesign.estimate.Estimate` (or a Contract's estimate). ``stages``
+    (:func:`frame_stages`, taken from ``est.project`` when it has one) splits the frame by floor, its
+    labour and value shared by concrete volume; each stage follows the one below it."""
     crews = crews or {}
+    if stages is None and getattr(est, "project", None) is not None:
+        stages = frame_stages(est.project)
     by_section: dict = {}
     for r in est.rows:
         lab, val = by_section.get(r.line.section, (0.0, 0.0))
@@ -99,15 +155,19 @@ def plan(est, wage: float = 400.0, week: int = 6, crews: dict | None = None) -> 
         t.value = sum(by_section.get(s, (0, 0))[1] for s in secs) * factor
         t.days = math.ceil(t.labour / (max(t.crew, 1) * wage)) if t.labour > 0 else (1 if t.value > 0 else 0)
         tasks.append(t)
+    if stages and len(stages) > 1:
+        tasks = _split_frame(tasks, stages, wage)
     known = {s for _k, _n, secs, *_ in LOGIC for s in secs}
     other = [s for s in by_section if s not in known]
     if other:                                   # sections not in the logic: last, after the structure
-        t = Task("other", "งานอื่น ๆ", tuple(other), ("frame",), (), 4)
+        last_frame = [t.key for t in tasks if t.key.startswith("frame")][-1]
+        t = Task("other", "งานอื่น ๆ", tuple(other), (last_frame,), (), 4)
         t.labour = sum(by_section[s][0] for s in other)
         t.value = sum(by_section[s][1] for s in other) * factor
         t.days = math.ceil(t.labour / (t.crew * wage)) if t.labour > 0 else 0
         tasks.append(t)
     idx = {t.key: t for t in tasks}
+    tasks = [t for t in tasks if t.key in idx]
     # forward pass (tasks are in a topological order)
     for t in tasks:
         start = 0
@@ -139,7 +199,7 @@ def plan(est, wage: float = 400.0, week: int = 6, crews: dict | None = None) -> 
     return p
 
 
-def write_plan(p: Plan, ws, title: str) -> None:
+def write_plan(p: Plan, ws, title: str, value: float = 0.0, advance: float = 0.0, retention: float = 0.0) -> None:
     """The bar chart (one column per week) and the S-curve table on an openpyxl sheet."""
     from openpyxl.chart import LineChart, Reference
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -185,3 +245,48 @@ def write_plan(p: Plan, ws, title: str) -> None:
         ch.add_data(data, from_rows=True, titles_from_data=False)
         ch.height, ch.width = 8, 22
         ws.add_chart(ch, f"A{cum_row + 2}")
+    if value > 0 and p.days:
+        r0 = cum_row + 20                     # below the chart
+        ws.cell(r0, 1, f"งวดงานรายเดือน (ตามผลงานจาก S-Curve) มูลค่าสัญญา {value:,.2f} บาท · "
+                       f"หักเงินล่วงหน้า {advance:g}% · เงินประกันผลงาน {retention:g}% (คืนตามสัญญา)").font = bold
+        heads = ["งวดที่", "ถึงวันทำงานที่", "ผลงานงวดนี้ (%)", "ผลงานสะสม (%)", "ค่างานงวดนี้", "หักคืนเงินล่วงหน้า",
+                 "หักเงินประกันผลงาน", "จ่ายสุทธิ"]
+        for k, h in enumerate(heads, 1):
+            ws.cell(r0 + 1, k, h).font = bold
+        rows = p.installments(value, advance, retention)
+        for i, it in enumerate(rows):
+            r = r0 + 2 + i
+            for k, key in enumerate(("no", "day", "percent", "cumulative", "amount", "advance_back", "retention",
+                                     "pay"), 1):
+                ws.cell(r, k, it[key])
+        r = r0 + 2 + len(rows)
+        ws.cell(r, 1, "รวม").font = bold
+        for k, key in ((5, "amount"), (6, "advance_back"), (7, "retention"), (8, "pay")):
+            ws.cell(r, k, round(sum(it[key] for it in rows), 2)).font = bold
+        ws.cell(r + 1, 1, "งวดงานแบ่งตามเดือน (ช่วงเวลาการรับเงิน D ในสูตรค่าดอกเบี้ยของ Factor F หลักเกณฑ์งานอาคาร "
+                          "ข้อ 9.2) — ปรับงวดและเงื่อนไขการจ่ายตามสัญญาจริง")
+
+
+def _split_frame(tasks: list, stages, wage: float) -> list:
+    """Replace the single frame task by one task per stage, chained; the roof follows the top stage and
+    the masonry the stage below the top (the walls of the lower floors go up while the top is cast)."""
+    frame = next(t for t in tasks if t.key == "frame")
+    total = sum(v for _l, v in stages) or 1.0
+    parts, prev = [], frame.after
+    for k, (label, v) in enumerate(stages):
+        t = Task(f"frame{k}", label, frame.sections, prev, (), frame.crew)
+        t.labour, t.value = frame.labour * v / total, frame.value * v / total
+        t.days = math.ceil(t.labour / (max(t.crew, 1) * wage)) if t.labour > 0 else 0
+        parts.append(t)
+        prev = (t.key,)
+    top, below = parts[-1].key, parts[-2].key
+    out = []
+    for t in tasks:
+        if t.key == "frame":
+            out += parts
+            continue
+        if "frame" in t.after:
+            t.after = tuple((below if t.key == "wall" else top) if a == "frame" else a for a in t.after)
+        out.append(t)
+    return out
+
