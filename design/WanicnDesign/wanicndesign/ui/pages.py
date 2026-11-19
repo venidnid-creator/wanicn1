@@ -501,7 +501,29 @@ class ArchitecturePage(Page):
         self.levels = QTableWidget(0, 3)
         self.levels.setHorizontalHeaderLabels(["ชั้น", "วัสดุพื้น", "ฝ้าเพดาน"])
         self.levels.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.levels.setMaximumHeight(140)
         self.lay.addWidget(self.levels)
+        mep_head = QLabel("<b>งานระบบไฟฟ้า ประปา</b> — วัดระยะจากตู้ไฟ/มาตรวัดน้ำถึงแต่ละห้องตามแนวกริด "
+                          "จำนวนจุดต่อห้องเป็นค่าเริ่มต้นของโครงการ (ไม่มีกฎหมายกำหนด) · ค่าแรง ว480 หมวด 3–4")
+        mep_head.setWordWrap(True)
+        self.lay.addWidget(mep_head)
+        f = QFormLayout()
+        self.mep_on = QCheckBox("ถอดปริมาณงานระบบไฟฟ้าและประปา")
+        self.panel, self.meter = QLineEdit(), QLineEdit()
+        self.light_area = _spin(9, 2, 50, 1, 1, "ตร.ม./จุด")
+        self.sockets = _spin(2, 0, 10, 1, 0, "ชุด/ห้อง")
+        self.ac = _spin(0, 0, 50, 1, 0, "จุด")
+        self.cable = _combo([("VAF", "VAF 300 V (เดินลอยตีกิ๊บ)"), ("VVF", "VVF 750 V")], "VAF")
+        self.conduit = QCheckBox("ร้อยท่อ PVC สีเหลือง")
+        self.allow = _spin(10, 0, 50, 1, 0, "%")
+        self.service = _spin(10, 0, 200, 1, 1, "ม.")
+        self.septic = _spin(1, 0, 10, 1, 0, "ชุด")
+        for label, w in (("", self.mep_on), ("ตู้ไฟ (จุดกริด)", self.panel), ("มาตรวัดน้ำ/บ่อ (จุดกริด)", self.meter),
+                         ("โคมไฟ", self.light_area), ("เต้ารับ", self.sockets), ("จุดเครื่องปรับอากาศ", self.ac),
+                         ("สายไฟ", self.cable), ("", self.conduit), ("เผื่อแนวเดินสาย/ท่อ", self.allow),
+                         ("ท่อประปา 3/4\" จากท่อเมน", self.service), ("ถังบำบัดน้ำเสีย", self.septic)):
+            f.addRow(label, w)
+        self.lay.addLayout(f)
         self.add_apply()
 
     def _add_row(self, o):
@@ -526,6 +548,15 @@ class ArchitecturePage(Page):
             self.levels.setItem(r, 0, QTableWidgetItem(x.name))
             self.levels.setCellWidget(r, 1, _combo(FLOOR_LABELS, x.floor_finish))
             self.levels.setCellWidget(r, 2, _combo(CEILING_LABELS, x.ceiling))
+        m = self.building.mep
+        self.mep_on.setChecked(m.enabled)
+        self.panel.setText(m.panel)
+        self.meter.setText(m.meter)
+        for w, v in ((self.light_area, m.light_area), (self.sockets, m.sockets), (self.ac, m.ac_points),
+                     (self.allow, m.allowance), (self.service, m.service_water), (self.septic, m.septic)):
+            w.setValue(v)
+        self.cable.setCurrentIndex(max(0, self.cable.findData(m.cable)))
+        self.conduit.setChecked(m.conduit)
 
     def apply(self):
         from ..structure.building import OpeningType
@@ -543,6 +574,11 @@ class ArchitecturePage(Page):
             if lv:
                 lv.floor_finish = self.levels.cellWidget(r, 1).currentData()
                 lv.ceiling = self.levels.cellWidget(r, 2).currentData()
+        m = self.building.mep
+        m.enabled, m.cable, m.conduit = self.mep_on.isChecked(), self.cable.currentData(), self.conduit.isChecked()
+        m.panel, m.meter = self.panel.text().strip().upper() or "1A", self.meter.text().strip().upper() or "1A"
+        m.light_area, m.sockets, m.ac_points = self.light_area.value(), int(self.sockets.value()), int(self.ac.value())
+        m.allowance, m.service_water, m.septic = self.allow.value(), self.service.value(), int(self.septic.value())
 
 
 class WindPage(Page):
@@ -714,6 +750,12 @@ class CostPage(Page):
         self.ftable.setHorizontalHeaderLabels(["ค่างานต้นทุน (บาท)", "Factor F"])
         self.ftable.setMaximumHeight(150)
         self.ftable.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.xtable = QTableWidget(0, 7)
+        self.xtable.setHorizontalHeaderLabels(["แบบ", "รายการ", "จำนวน", "หน่วย", "ราคา/หน่วย (ไม่รวม VAT)",
+                                               "ค่าติดตั้ง/หน่วย", "หมายเหตุ"])
+        self.xtable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.xtable.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.xtable.setMaximumHeight(150)
         self.lay.addWidget(self.ftable)
         row = QHBoxLayout()
         add = QPushButton("เพิ่มแถว")
@@ -723,7 +765,28 @@ class CostPage(Page):
         row.addWidget(add)
         row.addWidget(rem)
         self.lay.addLayout(row)
+        self.lay.addWidget(QLabel("<b>ครุภัณฑ์จัดซื้อ (ปร.2) และค่าใช้จ่ายพิเศษตามข้อกำหนด (ปร.3)</b> — "
+                                  "ราคาผู้ผลิต/ผู้จำหน่ายยังไม่รวม VAT โปรแกรมบวก VAT ในแบบ"))
+        self.lay.addWidget(self.xtable)
+        row = QHBoxLayout()
+        for label, sec in (("เพิ่มครุภัณฑ์ (ปร.2)", "equip"), ("เพิ่มค่าใช้จ่ายพิเศษ (ปร.3)", "special")):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _c=False, s=sec: self._xrow({"section": s, "qty": 1, "unit": "ชุด"}))
+            row.addWidget(btn)
+        rem = QPushButton("ลบรายการที่เลือก")
+        rem.clicked.connect(lambda: self.xtable.removeRow(self.xtable.currentRow()))
+        row.addWidget(rem)
+        self.lay.addLayout(row)
         self.add_apply()
+
+    def _xrow(self, e):
+        r = self.xtable.rowCount()
+        self.xtable.insertRow(r)
+        self.xtable.setCellWidget(r, 0, _combo([("equip", "ปร.2 ครุภัณฑ์"), ("special", "ปร.3 ค่าใช้จ่ายพิเศษ")],
+                                               e.get("section", "equip")))
+        for c, k in ((1, "item"), (2, "qty"), (3, "unit"), (4, "mat"), (5, "lab"), (6, "note")):
+            v = e.get(k, "")
+            self.xtable.setItem(r, c, QTableWidgetItem(f"{v:g}" if isinstance(v, (int, float)) else str(v)))
 
     def _frow(self, cost, f):
         r = self.ftable.rowCount()
@@ -777,6 +840,9 @@ class CostPage(Page):
         self.ftable.setRowCount(0)
         for cost, f in c.factor_table:
             self._frow(cost, f)
+        self.xtable.setRowCount(0)
+        for e in c.extras:
+            self._xrow(e)
         self._needed()
         self._fill_prices()
         if not c.price_month and self.building.province:
@@ -800,6 +866,16 @@ class CostPage(Page):
             except (AttributeError, ValueError):
                 continue
         c.factor_table = sorted(rows)
+        extras = []
+        for r in range(self.xtable.rowCount()):
+            txt = lambda col: (self.xtable.item(r, col).text().strip() if self.xtable.item(r, col) else "")
+            try:
+                extras.append({"section": self.xtable.cellWidget(r, 0).currentData(), "item": txt(1),
+                               "qty": float(txt(2) or 0), "unit": txt(3), "mat": float(txt(4) or 0),
+                               "lab": float(txt(5) or 0), "note": txt(6)})
+            except ValueError:
+                continue
+        c.extras = [e for e in extras if e["item"]]
         if self.building.province:                 # typed prices go to the province book
             book = P.load_book(self.building.province) or {"prices": {}, "src": {}, "item": {}}
             prices, src = dict(book["prices"]), dict(book.get("src", {}))
@@ -907,7 +983,10 @@ class ResultsPage(Page):
             from ..estimate import for_design
             est = for_design(res)
             miss = est.missing_prices()
-            lines.append(f"ราคากลาง: ค่างานต้นทุน {est.total:,.2f} × Factor F {est.factor:.4f} = {est.grand:,.2f} บาท"
+            add = est.grand - est.construction
+            lines.append(f"ราคากลาง: ค่างานต้นทุน {est.total:,.2f} × Factor F {est.factor:.4f} = {est.construction:,.2f}"
+                         + (f" + VAT/ครุภัณฑ์/ค่าใช้จ่ายพิเศษ {add:,.2f}" if add > 0.005 else "")
+                         + f" → {est.grand:,.2f} บาท"
                          + (f" · {est.grand / est.area:,.0f} บาท/ตร.ม." if est.area else "")
                          + (f" · วัสดุยังไม่มีราคา {len(miss)} รายการ (หน้า 9)" if miss else ""))
         except Exception as e:                     # the structure result still shows

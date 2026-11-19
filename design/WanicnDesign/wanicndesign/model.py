@@ -138,6 +138,7 @@ class Project:
     roof: Roof | None = None
     finishes: list = field(default_factory=list)
     fixtures: list = field(default_factory=list)
+    mep: list = field(default_factory=list)       # electrical/plumbing BOQ lines (structure.mep.mep_lines)
 
     @property
     def storeys(self) -> int:
@@ -169,6 +170,7 @@ class Project:
             roof=Roof(**d["roof"]) if d.get("roof") else None,
             finishes=[Finish(**x) for x in d.get("finishes", [])],
             fixtures=[Fixture(**x) for x in d.get("fixtures", [])],
+            mep=list(d.get("mep", [])),
         )
 
     def save(self, path: str) -> None:

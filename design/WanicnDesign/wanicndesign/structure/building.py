@@ -125,6 +125,11 @@ DEFAULT_OPENINGS = [OpeningType("D1", "door", 0.90, 2.00, "wood"), OpeningType("
                     OpeningType("W2", "window", 0.60, 0.60, "aluminium")]
 
 
+def _mep(**kw):
+    from .mep import Mep
+    return Mep(**kw)
+
+
 @dataclass
 class Costing:
     """Price estimate settings (หลักเกณฑ์การคำนวณราคากลางงานก่อสร้าง 2569, แบบ ปร.)."""
@@ -146,6 +151,9 @@ class Costing:
     member2: str = ""
     preparer: str = ""             # ผู้ถอดแบบและคำนวณราคา
     preparer_role: str = ""
+    #: แบบ ปร.2 ค่าครุภัณฑ์จัดซื้อ (section "equip") and ปร.3 ค่าใช้จ่ายพิเศษตามข้อกำหนด ("special"):
+    #: [{"section", "item", "qty", "unit", "mat", "lab", "note"}] — prices without VAT; VAT is added on the form
+    extras: list = field(default_factory=list)
 
 
 @dataclass
@@ -181,6 +189,7 @@ class Building:
     stairs: list = field(default_factory=list)      # [Stair]
     opening_types: list = field(default_factory=lambda: [OpeningType(**vars(o)) for o in DEFAULT_OPENINGS])
     costing: Costing = field(default_factory=Costing)
+    mep: "Mep" = field(default_factory=lambda: _mep())
 
     # -- grid ---------------------------------------------------------------
     @property
@@ -500,6 +509,7 @@ class Building:
             opening_types=[OpeningType(**x) for x in d["opening_types"]] if "opening_types" in d else
             [OpeningType(**vars(o)) for o in DEFAULT_OPENINGS],
             costing=Costing(**d.get("costing", {})),
+            mep=_mep(**d.get("mep", {})),
         )
 
     @classmethod

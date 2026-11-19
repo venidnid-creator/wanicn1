@@ -34,6 +34,7 @@ BEAM_UNDERSIDE = 0.50  # default beam depth for column plaster, m
 SECTIONS = [
     "งานดิน", "งานคอนกรีต", "งานไม้แบบ", "งานเหล็กเสริม", "งานก่อ ฉาบ",
     "งานทาสี", "งานประตู หน้าต่าง", "งานพื้น ผนัง ฝ้า", "งานสุขภัณฑ์", "งานหลังคา",
+    "งานระบบไฟฟ้า", "งานระบบประปา สุขาภิบาล",
 ]
 
 
@@ -47,6 +48,7 @@ class Line:
     note: str = ""
     labour_factor: float = 1.0   # converts qty to the labour unit (kg → ตัน = 0.001)
     materials: tuple = ()        # ((ref, qty per unit), …): "R:<recipe>", "FORM" or a price key
+    labour_pct: float = 0.0      # labour as a share of the material (ว480 pipe fittings, hangers, tests)
 
     @property
     def price_key(self) -> str:
@@ -326,6 +328,10 @@ class Takeoff:
         self.walls()
         self.finishes()
         self.roof()
+        for d in self.p.mep:                     # measured in structure.mep from the building
+            if d["qty"] > 0:
+                self.lines.append(Line(d["section"], d["item"], q2(d["qty"]), d["unit"], d["code"], d["note"], 1.0,
+                                       tuple((r, q) for r, q in d["mats"]), d.get("labour_pct", 0.0)))
         order = {s: i for i, s in enumerate(SECTIONS)}
         self.lines.sort(key=lambda ln: order.get(ln.section, 99))
         return self.lines

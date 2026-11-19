@@ -41,6 +41,11 @@ class Rates:
         self.excavation_side_m = data["excavation_side_m"]
         self.bedding_waste_pct = data["bedding_waste_pct"]
         self.roofing_waste_pct = data["roofing_waste_pct"]
+        mep = os.path.join(os.path.dirname(labour_file), "labour_mep_2569.json")
+        if os.path.exists(mep):                    # ว480 หมวด 3–4 (tools/parse_w480_mep.py)
+            with open(mep, encoding="utf-8") as f:
+                for code, item in json.load(f)["labour"].items():
+                    self.labour.setdefault(code, dict(item))
         self.override_file = override_file
         if override_file and os.path.exists(override_file):
             with open(override_file, encoding="utf-8") as f:

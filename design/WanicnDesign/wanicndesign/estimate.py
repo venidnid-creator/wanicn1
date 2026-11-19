@@ -111,8 +111,8 @@ class Estimate:
         for ln in lines:
             own = rates.prices.get(ln.price_key)       # a price typed for the BOQ line itself wins
             mat, miss = (float(own), []) if own else material_rate(ln.materials, rates.prices, ln.price_key)
-            self.rows.append(Row(ln, round(mat, 2), round(rates.labour_rate(ln.labour_code) * ln.labour_factor, 4),
-                                 miss))
+            lab = mat * ln.labour_pct if ln.labour_pct else rates.labour_rate(ln.labour_code) * ln.labour_factor
+            self.rows.append(Row(ln, round(mat, 2), round(lab, 4), miss))
 
     def sections(self):
         names = [s for s in SECTIONS if any(r.line.section == s for r in self.rows)]
@@ -176,10 +176,22 @@ class Estimate:
     def vat_added(self) -> float:
         return round(self.construction * self.costing.vat / 100, 2) if self.costing.method == "private" else 0.0
 
+    def extras(self, section: str) -> list[dict]:
+        return [e for e in self.costing.extras if e.get("section") == section and float(e.get("qty") or 0) > 0]
+
+    def extras_total(self, section: str) -> float:
+        """Material + installation of ปร.2 ("equip") or ปร.3 ("special") lines, without VAT."""
+        return round(sum(float(e["qty"]) * (float(e.get("mat") or 0) + float(e.get("lab") or 0))
+                         for e in self.extras(section)), 2)
+
+    def with_vat(self, amount: float) -> float:
+        return round(amount * (1 + self.costing.vat / 100), 2)
+
     @property
     def grand(self) -> float:
-        """ราคากลาง."""
-        return round(self.construction + self.vat_added, 2)
+        """ราคากลาง = ค่าก่อสร้าง (+ VAT งานเอกชน) + ครุภัณฑ์จัดซื้อ (รวม VAT) + ค่าใช้จ่ายพิเศษ (รวม VAT)."""
+        return round(self.construction + self.vat_added + self.with_vat(self.extras_total("equip"))
+                     + self.with_vat(self.extras_total("special")), 2)
 
     def missing_prices(self) -> list[str]:
         out = []
@@ -362,6 +374,11 @@ class Estimate:
         if c.method == "private":
             s4.append(["2", f"ภาษีมูลค่าเพิ่ม {c.vat:g}% (งานเอกชน)", f"=ROUND(C{rows4[0]}*{c.vat / 100},2)", ""])
             rows4.append(s4.max_row)
+        for no, sec, label in (("2", "equip", "ค่าครุภัณฑ์จัดซื้อ (ตามแบบ ปร.2 (ก)) รวมภาษีมูลค่าเพิ่ม"),
+                               ("3", "special", "ค่าใช้จ่ายพิเศษตามข้อกำหนด (ตามแบบ ปร.3) รวมภาษีมูลค่าเพิ่ม")):
+            s4.append([no if c.method == "gov" else str(int(no) + 1), label, self.with_vat(self.extras_total(sec)),
+                       "" if self.extras(sec) else "ไม่มี"])
+            rows4.append(s4.max_row)
         s4.append(["", "ราคากลาง", "=" + "+".join(f"C{i}" for i in rows4), ""])
         s4.cell(s4.max_row, 2).font = bold
         s4.cell(s4.max_row, 3).font = bold
@@ -375,6 +392,8 @@ class Estimate:
         for i, wdt in enumerate([8, 60, 20, 22], 1):
             s4.column_dimensions[get_column_letter(i)].width = wdt
         sign(s4, 4)
+
+        self._extras_sheets(wb, header, head_row, sign, bold)
 
         # ---- material analysis ---------------------------------------------
         self._material_sheets(wb, bold, head_row)
@@ -390,6 +409,62 @@ class Estimate:
         from .structure.report import references_sheet
         references_sheet(wb, ["CGD2569", "CGD2569-MAT", "W480", "CGD-FACTORF"])
         wb.save(path)
+
+    def _extras_sheets(self, wb, header, head_row, sign, bold) -> None:
+        """แบบ ปร.2, ปร.2 (ก) and ปร.3 (หลักเกณฑ์งานอาคาร 2569: ครุภัณฑ์ราคาผู้ผลิต/ผู้จำหน่ายยังไม่รวม VAT แล้วบวก VAT)."""
+        v = self.costing.vat / 100
+        p2 = wb.create_sheet("ปร.2")
+        header(p2, "ปร.2", "แบบแสดงรายการ ปริมาณงาน และราคา ค่าครุภัณฑ์จัดซื้อ", 10)
+        head_row(p2, ["ลำดับที่", "รายการ", "จำนวน", "หน่วย", "ค่าครุภัณฑ์ ต่อหน่วย", "ค่าครุภัณฑ์ จำนวนเงิน",
+                      "ค่าติดตั้ง ต่อหน่วย", "ค่าติดตั้ง จำนวนเงิน", "รวม", "หมายเหตุ"])
+        eq = self.extras("equip")
+        first = p2.max_row + 1
+        for k, e in enumerate(eq, 1):
+            p2.append([k, e.get("item", ""), float(e["qty"]), e.get("unit", ""), float(e.get("mat") or 0), None,
+                       float(e.get("lab") or 0), None, None, e.get("note", "")])
+            i = p2.max_row
+            p2.cell(i, 6, f"=ROUND(C{i}*E{i},2)")
+            p2.cell(i, 8, f"=ROUND(C{i}*G{i},2)")
+            p2.cell(i, 9, f"=F{i}+H{i}")
+        if not eq:
+            p2.append(["", "(ไม่มีรายการ)"])
+        last = p2.max_row
+        p2.append(["", "รวม", None, None, None, f"=SUM(F{first}:F{last})", None, f"=SUM(H{first}:H{last})",
+                   f"=SUM(I{first}:I{last})"])
+        p2.cell(p2.max_row, 2).font = bold
+        sign(p2, 10)
+        p2k = wb.create_sheet("ปร.2 (ก)")
+        header(p2k, "ปร.2 (ก)", "แบบสรุปค่าครุภัณฑ์จัดซื้อ", 8)
+        head_row(p2k, ["ลำดับที่", "รายการ", "ค่าครุภัณฑ์", f"VAT {self.costing.vat:g}%", "รวมค่าครุภัณฑ์",
+                       "ค่าติดตั้ง", f"VAT {self.costing.vat:g}%", "รวมค่าติดตั้ง"])
+        tot = [0.0] * 6
+        for k, e in enumerate(eq, 1):
+            q = float(e["qty"])
+            mm, ll = q * float(e.get("mat") or 0), q * float(e.get("lab") or 0)
+            vals = [round(x, 2) for x in (mm, mm * v, mm * (1 + v), ll, ll * v, ll * (1 + v))]
+            tot = [a + b for a, b in zip(tot, vals)]
+            p2k.append([k, e.get("item", "")] + vals)
+        p2k.append(["", "รวมค่าครุภัณฑ์จัดซื้อ"] + [round(x, 2) for x in tot])
+        p2k.append(["", f"รวมทั้งสิ้น (รวมภาษีมูลค่าเพิ่ม)  {self.with_vat(self.extras_total('equip')):,.2f} บาท"])
+        sign(p2k, 8)
+        p3 = wb.create_sheet("ปร.3")
+        header(p3, "ปร.3", "แบบแสดงรายการ ปริมาณงาน และราคา ค่าใช้จ่ายพิเศษตามข้อกำหนด", 5)
+        head_row(p3, ["ลำดับที่", "รายการ", "จำนวนหน่วย", "ค่าใช้จ่ายรวม (รวม VAT)", "หมายเหตุ"])
+        sp = self.extras("special")
+        for k, e in enumerate(sp, 1):
+            amt = float(e["qty"]) * (float(e.get("mat") or 0) + float(e.get("lab") or 0))
+            p3.append([k, e.get("item", ""), f"{float(e['qty']):,.2f} {e.get('unit', '')}".strip(), self.with_vat(amt),
+                       e.get("note", "")])
+        if not sp:
+            p3.append(["", "(ไม่มีรายการ)"])
+        p3.append(["", "รวมค่าใช้จ่ายพิเศษตามข้อกำหนด", "", self.with_vat(self.extras_total("special")), ""])
+        p3.append(["", "แนบแบบแสดงการคำนวณและเหตุผลความจำเป็นของแต่ละรายการ"])
+        sign(p3, 5)
+        for ws, widths in ((p2, [8, 44, 10, 8, 14, 15, 13, 15, 16, 24]), (p2k, [8, 40, 15, 13, 15, 13, 13, 15]),
+                           (p3, [8, 50, 16, 20, 30])):
+            from openpyxl.utils import get_column_letter
+            for i, wdt in enumerate(widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = wdt
 
     def _material_sheets(self, wb, bold, head_row) -> None:
         from .materials import ALIASES, FORMWORK, _price

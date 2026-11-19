@@ -1,0 +1,845 @@
+{
+ "source": "หนังสือกรมบัญชีกลาง ด่วนที่สุด ที่ กค 0433.2/ว 480 ลงวันที่ 26 มิถุนายน 2569 บัญชีค่าแรงงาน/ดำเนินการ หมวด 3 งานระบบสุขาภิบาล และหมวด 4 งานระบบไฟฟ้า (เฉพาะรายการที่ใช้กับอาคารพักอาศัย)",
+ "pipe_rule": "ท่อ PVC: ข้อต่อ อุปกรณ์ท่อ ค่าวัสดุ 40 % (ระบายน้ำ) / 50 % (ประปา) ของราคาท่อ, เหล็กยึดท่อ 30 %, ทดสอบ ทำความสะอาด 10 %; ค่าแรงของทั้งสามรายการ 30 % ของค่าวัสดุ (ว480 3.7–3.8 หมายเหตุ 1–3)",
+ "pipe_extra": {
+  "3.7": {
+   "fittings": 0.4,
+   "hangers": 0.3,
+   "test": 0.1,
+   "labour": 0.3
+  },
+  "3.8": {
+   "fittings": 0.5,
+   "hangers": 0.3,
+   "test": 0.1,
+   "labour": 0.3
+  }
+ },
+ "sections": {
+  "3.7": "งานเดินท่อ PVC ระบบระบำยน้ำ",
+  "3.8": "งานเดินท่อ PVC ระบบประปำ",
+  "3.11": "งานติดตั้งอุปกรณ์ระบบประปำ และระดับดับเพลิง",
+  "3.13": "งานติดตั้งอุปกรณ์เหล็กหล่อ FCO, FD, RD, RFD, AVC",
+  "3.14": "ฝำเปิดสำหรับทำควำมสะอำด (Clean Out)",
+  "4.21": "VAG (300 Volt)",
+  "4.22": "VVF (750 Volt)",
+  "4.23": "VAF/G (300 Volt)",
+  "4.24": "VVF/G (750 Volt)",
+  "4.44": "PVC Condult (Yellow)",
+  "4.53": "Wiring Device",
+  "4.57": "C.B. 2 Pole",
+  "4.58": "ดวงโคมไฟฟ้ำ (Lighting Fixture)"
+ },
+ "labour": {
+  "3.7/Dia 1 1/2\"": {
+   "name": "Dia 1 1/2\"",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "3.7/Dia 2\"": {
+   "name": "Dia 2\"",
+   "unit": "เมตร",
+   "rate": 41.0,
+   "condition": ""
+  },
+  "3.7/Dia 2 1/2\"": {
+   "name": "Dia 2 1/2\"",
+   "unit": "เมตร",
+   "rate": 51.0,
+   "condition": ""
+  },
+  "3.7/Dia 3\"": {
+   "name": "Dia 3\"",
+   "unit": "เมตร",
+   "rate": 77.0,
+   "condition": ""
+  },
+  "3.7/Dia 4\"": {
+   "name": "Dia 4\"",
+   "unit": "เมตร",
+   "rate": 103.0,
+   "condition": ""
+  },
+  "3.7/Dia 6\"": {
+   "name": "Dia 6\"",
+   "unit": "เมตร",
+   "rate": 205.0,
+   "condition": ""
+  },
+  "3.8/Dia 1/2\"": {
+   "name": "Dia 1/2\"",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "3.8/Dia 3/4\"": {
+   "name": "Dia 3/4\"",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "3.8/Dia 1\"": {
+   "name": "Dia 1\"",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "3.8/Dia 1 1/4\"": {
+   "name": "Dia 1 1/4\"",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "3.8/Dia 1 1/2\"": {
+   "name": "Dia 1 1/2\"",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "3.8/Dia 2\"": {
+   "name": "Dia 2\"",
+   "unit": "เมตร",
+   "rate": 41.0,
+   "condition": ""
+  },
+  "3.8/Dia 2 1/2\"": {
+   "name": "Dia 2 1/2\"",
+   "unit": "เมตร",
+   "rate": 62.0,
+   "condition": ""
+  },
+  "3.8/Dia 3\"": {
+   "name": "Dia 3\"",
+   "unit": "เมตร",
+   "rate": 77.0,
+   "condition": ""
+  },
+  "3.8/Dia 4\"": {
+   "name": "Dia 4\"",
+   "unit": "เมตร",
+   "rate": 123.0,
+   "condition": ""
+  },
+  "3.8/Dia 6\"": {
+   "name": "Dia 6\"",
+   "unit": "เมตร",
+   "rate": 256.0,
+   "condition": ""
+  },
+  "3.11/SPRINGLER - Dia 1/2\"": {
+   "name": "SPRINGLER - Dia 1/2\"",
+   "unit": "ชุด",
+   "rate": 51.0,
+   "condition": "ท่อเดินลอย"
+  },
+  "3.11/STOP VALVE - Dia 1/2\"": {
+   "name": "STOP VALVE - Dia 1/2\"",
+   "unit": "ชุด",
+   "rate": 51.0,
+   "condition": ""
+  },
+  "3.11/ก็อกสนาม - Dia 1/2\"": {
+   "name": "ก็อกสนาม - Dia 1/2\"",
+   "unit": "ชุด",
+   "rate": 51.0,
+   "condition": ""
+  },
+  "3.11/ถังดับเพลิงเคมี": {
+   "name": "ถังดับเพลิงเคมี",
+   "unit": "ถัง",
+   "rate": 205.0,
+   "condition": ""
+  },
+  "3.13/Dia 2\"": {
+   "name": "Dia 2\"",
+   "unit": "ชุด",
+   "rate": 205.0,
+   "condition": ""
+  },
+  "3.13/Dia 2 1/2\"": {
+   "name": "Dia 2 1/2\"",
+   "unit": "ชุด",
+   "rate": 256.0,
+   "condition": ""
+  },
+  "3.13/Dia 3\"": {
+   "name": "Dia 3\"",
+   "unit": "ชุด",
+   "rate": 308.0,
+   "condition": ""
+  },
+  "3.13/Dia 4\"": {
+   "name": "Dia 4\"",
+   "unit": "ชุด",
+   "rate": 410.0,
+   "condition": ""
+  },
+  "3.13/Dia 6\"": {
+   "name": "Dia 6\"",
+   "unit": "ชุด",
+   "rate": 615.0,
+   "condition": ""
+  },
+  "3.14/Dia 2\"": {
+   "name": "Dia 2\"",
+   "unit": "ชุด",
+   "rate": 103.0,
+   "condition": ""
+  },
+  "3.14/Dia 2 1/2\"": {
+   "name": "Dia 2 1/2\"",
+   "unit": "ชุด",
+   "rate": 128.0,
+   "condition": ""
+  },
+  "3.14/Dia 3\"": {
+   "name": "Dia 3\"",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "3.14/Dia 4\"": {
+   "name": "Dia 4\"",
+   "unit": "ชุด",
+   "rate": 205.0,
+   "condition": ""
+  },
+  "3.14/Dia 6\"": {
+   "name": "Dia 6\"",
+   "unit": "ชุด",
+   "rate": 308.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 1 sq.mm.": {
+   "name": "VAF (300 Volt) 1 sq.mm.",
+   "unit": "เมตร",
+   "rate": 10.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 1.5 sq.mm.": {
+   "name": "VAF (300 Volt) 1.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 12.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 2.5 sq.mm.": {
+   "name": "VAF (300 Volt) 2.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 14.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 4 sq.mm.": {
+   "name": "VAF (300 Volt) 4 sq.mm.",
+   "unit": "เมตร",
+   "rate": 15.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 6 sq.mm.": {
+   "name": "VAF (300 Volt) 6 sq.mm.",
+   "unit": "เมตร",
+   "rate": 18.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 10 sq.mm.": {
+   "name": "VAF (300 Volt) 10 sq.mm.",
+   "unit": "เมตร",
+   "rate": 21.0,
+   "condition": ""
+  },
+  "4.21/VAF (300 Volt) 16 sq.mm.": {
+   "name": "VAF (300 Volt) 16 sq.mm.",
+   "unit": "เมตร",
+   "rate": 26.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 1 sq.mm.": {
+   "name": "VVF (750 Volt) 1 sq.mm.",
+   "unit": "เมตร",
+   "rate": 10.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 1.5 sq.mm.": {
+   "name": "VVF (750 Volt) 1.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 12.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 2.5 sq.mm.": {
+   "name": "VVF (750 Volt) 2.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 13.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 4 sq.mm.": {
+   "name": "VVF (750 Volt) 4 sq.mm.",
+   "unit": "เมตร",
+   "rate": 15.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 6 sq.mm.": {
+   "name": "VVF (750 Volt) 6 sq.mm.",
+   "unit": "เมตร",
+   "rate": 17.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 10 sq.mm.": {
+   "name": "VVF (750 Volt) 10 sq.mm.",
+   "unit": "เมตร",
+   "rate": 21.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 16 sq.mm.": {
+   "name": "VVF (750 Volt) 16 sq.mm.",
+   "unit": "เมตร",
+   "rate": 26.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 25 sq.mm.": {
+   "name": "VVF (750 Volt) 25 sq.mm.",
+   "unit": "เมตร",
+   "rate": 28.0,
+   "condition": ""
+  },
+  "4.22/VVF (750 Volt) 35 sq.mm.": {
+   "name": "VVF (750 Volt) 35 sq.mm.",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 1/1 sq.mm.": {
+   "name": "VAF/G (300 Volt) 1/1 sq.mm.",
+   "unit": "เมตร",
+   "rate": 12.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 1.5/1 sq.mm.": {
+   "name": "VAF/G (300 Volt) 1.5/1 sq.mm.",
+   "unit": "เมตร",
+   "rate": 14.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 2.5/1.5 sq.mm.": {
+   "name": "VAF/G (300 Volt) 2.5/1.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 16.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 4/2.5 sq.mm.": {
+   "name": "VAF/G (300 Volt) 4/2.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 18.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 6/4 sq.mm.": {
+   "name": "VAF/G (300 Volt) 6/4 sq.mm.",
+   "unit": "เมตร",
+   "rate": 23.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 10/4 sq.mm.": {
+   "name": "VAF/G (300 Volt) 10/4 sq.mm.",
+   "unit": "เมตร",
+   "rate": 25.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 16/6 sq.mm.": {
+   "name": "VAF/G (300 Volt) 16/6 sq.mm.",
+   "unit": "เมตร",
+   "rate": 29.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 25/6 sq.mm.": {
+   "name": "VAF/G (300 Volt) 25/6 sq.mm.",
+   "unit": "เมตร",
+   "rate": 36.0,
+   "condition": ""
+  },
+  "4.23/VAF/G (300 Volt) 35/10 sq.mm.": {
+   "name": "VAF/G (300 Volt) 35/10 sq.mm.",
+   "unit": "เมตร",
+   "rate": 36.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 1/1 sq.mm.": {
+   "name": "VVF/G (750 Volt) 1/1 sq.mm.",
+   "unit": "เมตร",
+   "rate": 12.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 1.5/1 sq.mm.": {
+   "name": "VVF/G (750 Volt) 1.5/1 sq.mm.",
+   "unit": "เมตร",
+   "rate": 14.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 2.5/1.5 sq.mm.": {
+   "name": "VVF/G (750 Volt) 2.5/1.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 16.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 4/2.5 sq.mm.": {
+   "name": "VVF/G (750 Volt) 4/2.5 sq.mm.",
+   "unit": "เมตร",
+   "rate": 18.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 6/4 sq.mm.": {
+   "name": "VVF/G (750 Volt) 6/4 sq.mm.",
+   "unit": "เมตร",
+   "rate": 21.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 10/4 sq.mm.": {
+   "name": "VVF/G (750 Volt) 10/4 sq.mm.",
+   "unit": "เมตร",
+   "rate": 26.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 16/6 sq.mm.": {
+   "name": "VVF/G (750 Volt) 16/6 sq.mm.",
+   "unit": "เมตร",
+   "rate": 29.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 25/6 sq.mm.": {
+   "name": "VVF/G (750 Volt) 25/6 sq.mm.",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "4.24/VVF/G (750 Volt) 35/10 sq.mm.": {
+   "name": "VVF/G (750 Volt) 35/10 sq.mm.",
+   "unit": "เมตร",
+   "rate": 36.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 100 mm.": {
+   "name": "PVC Conduit (yellow) dia 100 mm.",
+   "unit": "เมตร",
+   "rate": 49.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 80 mm.": {
+   "name": "PVC Conduit (yellow) dia 80 mm.",
+   "unit": "เมตร",
+   "rate": 43.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 65 mm.": {
+   "name": "PVC Conduit (yellow) dia 65 mm.",
+   "unit": "เมตร",
+   "rate": 33.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 50 mm.": {
+   "name": "PVC Conduit (yellow) dia 50 mm.",
+   "unit": "เมตร",
+   "rate": 36.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 40 mm.": {
+   "name": "PVC Conduit (yellow) dia 40 mm.",
+   "unit": "เมตร",
+   "rate": 31.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 32 mm.": {
+   "name": "PVC Conduit (yellow) dia 32 mm.",
+   "unit": "เมตร",
+   "rate": 28.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 25 mm.": {
+   "name": "PVC Conduit (yellow) dia 25 mm.",
+   "unit": "เมตร",
+   "rate": 26.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 20 mm.": {
+   "name": "PVC Conduit (yellow) dia 20 mm.",
+   "unit": "เมตร",
+   "rate": 24.0,
+   "condition": ""
+  },
+  "4.44/PVC Conduit (yellow) dia 15 mm.": {
+   "name": "PVC Conduit (yellow) dia 15 mm.",
+   "unit": "เมตร",
+   "rate": 21.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Single Switch 1 Gang": {
+   "name": "Switch and receptacle Single Switch 1 Gang",
+   "unit": "ชุด",
+   "rate": 82.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Single Switch 2 Gang": {
+   "name": "Switch and receptacle Single Switch 2 Gang",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Single Switch 3 Gang": {
+   "name": "Switch and receptacle Single Switch 3 Gang",
+   "unit": "ชุด",
+   "rate": 103.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Single Switch 4 Gang": {
+   "name": "Switch and receptacle Single Switch 4 Gang",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Tow Way Switch 1 Gang": {
+   "name": "Switch and receptacle Tow Way Switch 1 Gang",
+   "unit": "ชุด",
+   "rate": 87.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Tow Way Switch 2 Gang": {
+   "name": "Switch and receptacle Tow Way Switch 2 Gang",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Dimmer Switch 300 W.": {
+   "name": "Switch and receptacle Dimmer Switch 300 W.",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Dimmer Switch 500 W.": {
+   "name": "Switch and receptacle Dimmer Switch 500 W.",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Single Receptacle": {
+   "name": "Switch and receptacle Single Receptacle",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Single Receptacle 2P + G": {
+   "name": "Switch and receptacle Single Receptacle 2P + G",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Duplex Receptacle 2P + G": {
+   "name": "Switch and receptacle Duplex Receptacle 2P + G",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Duplex Receptacle 2P + G (WP)": {
+   "name": "Switch and receptacle Duplex Receptacle 2P + G (WP)",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Telephone Outlet": {
+   "name": "Switch and receptacle Telephone Outlet",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/T.V. Outlet": {
+   "name": "Switch and receptacle T.V. Outlet",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Computer Outlet": {
+   "name": "Switch and receptacle Computer Outlet",
+   "unit": "ชุด",
+   "rate": 113.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Bell Switch (Push Button)": {
+   "name": "Switch and receptacle Bell Switch (Push Button)",
+   "unit": "ชุด",
+   "rate": 82.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Bell": {
+   "name": "Switch and receptacle Bell",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Toilet Switch (3 Min. Delay)": {
+   "name": "Switch and receptacle Toilet Switch (3 Min. Delay)",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.53/Switch and receptacle/Glow Switch (On with Lamp)": {
+   "name": "Switch and receptacle Glow Switch (On with Lamp)",
+   "unit": "ชุด",
+   "rate": 92.0,
+   "condition": ""
+  },
+  "4.57/C.B. 2 Pole (10, 15, 20, 30. 40 AT)": {
+   "name": "C.B. 2 Pole (10, 15, 20, 30. 40 AT)",
+   "unit": "ชุด",
+   "rate": 113.0,
+   "condition": ""
+  },
+  "4.57/C.B. 2 Pole (10, 15, 20, 30 AT)": {
+   "name": "C.B. 2 Pole (10, 15, 20, 30 AT)",
+   "unit": "ชุด",
+   "rate": 113.0,
+   "condition": ""
+  },
+  "4.58/โคม Downlight/ขนาด dia 4\" - 6\"": {
+   "name": "โคม Downlight ขนาด dia 4\" - 6\"",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคม Downlight/ขนาด dia 8\"": {
+   "name": "โคม Downlight ขนาด dia 8\"",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคม Downlight/ขนาด dia 9\" - 10\"": {
+   "name": "โคม Downlight ขนาด dia 9\" - 10\"",
+   "unit": "ชุด",
+   "rate": 169.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กเปลือย/ขนาด 1 - 18 วัตต์": {
+   "name": "โคมกล่องเหล็กเปลือย ขนาด 1 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กเปลือย/ขนาด 1 - 36 วัตต์": {
+   "name": "โคมกล่องเหล็กเปลือย ขนาด 1 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กเปลือย/ขนาด 2 - 18 วัตต์": {
+   "name": "โคมกล่องเหล็กเปลือย ขนาด 2 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กเปลือย/ขนาด 2 - 36 วัตต์": {
+   "name": "โคมกล่องเหล็กเปลือย ขนาด 2 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กแบบอกไก่ (V-SHAPE)/ขนาด 1 - 18 วัตต์": {
+   "name": "โคมกล่องเหล็กแบบอกไก่ (V-SHAPE) ขนาด 1 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กแบบอกไก่ (V-SHAPE)/ขนาด 1 - 36 วัตต์": {
+   "name": "โคมกล่องเหล็กแบบอกไก่ (V-SHAPE) ขนาด 1 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กแบบอกไก่ (V-SHAPE)/ขนาด 2 - 18 วัตต์": {
+   "name": "โคมกล่องเหล็กแบบอกไก่ (V-SHAPE) ขนาด 2 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กแบบอกไก่ (V-SHAPE)/ขนาด 2 - 36 วัตต์": {
+   "name": "โคมกล่องเหล็กแบบอกไก่ (V-SHAPE) ขนาด 2 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคมโรงงาน/ขนาด 1 - 18 วัตต์": {
+   "name": "โคมโรงงาน ขนาด 1 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมโรงงาน/ขนาด 1 - 36 วัตต์": {
+   "name": "โคมโรงงาน ขนาด 1 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมโรงงาน/ขนาด 2 - 18 วัตต์": {
+   "name": "โคมโรงงาน ขนาด 2 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมโรงงาน/ขนาด 2 - 36 วัตต์": {
+   "name": "โคมโรงงาน ขนาด 2 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กครอบอคริลิก/ขนาด 1 - 18 วัตต์": {
+   "name": "โคมกล่องเหล็กครอบอคริลิก ขนาด 1 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กครอบอคริลิก/ขนาด 1 - 36 วัตต์": {
+   "name": "โคมกล่องเหล็กครอบอคริลิก ขนาด 1 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 118.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กครอบอคริลิก/ขนาด 2 - 18 วัตต์": {
+   "name": "โคมกล่องเหล็กครอบอคริลิก ขนาด 2 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมกล่องเหล็กครอบอคริลิก/ขนาด 2 - 36 วัตต์": {
+   "name": "โคมกล่องเหล็กครอบอคริลิก ขนาด 2 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 1 - 18 วัตต์": {
+   "name": "โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 1 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 1 - 36 วัตต์": {
+   "name": "โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 1 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 2 - 18 วัตต์": {
+   "name": "โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 2 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 2 - 36 วัตต์": {
+   "name": "โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 2 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 3 - 18 วัตต์": {
+   "name": "โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 3 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 174.0,
+   "condition": ""
+  },
+  "4.58/โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 3 - 36 วัตต์": {
+   "name": "โคมตะแกรงกรองแสง และสะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 3 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 205.0,
+   "condition": ""
+  },
+  "4.58/โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 1 - 18 วัตต์": {
+   "name": "โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 1 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 1 - 36 วัตต์": {
+   "name": "โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 1 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 2 - 18 วัตต์": {
+   "name": "โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 2 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 138.0,
+   "condition": ""
+  },
+  "4.58/โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 2 - 36 วัตต์": {
+   "name": "โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 2 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 3 - 18 วัตต์": {
+   "name": "โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 3 - 18 วัตต์",
+   "unit": "ชุด",
+   "rate": 174.0,
+   "condition": ""
+  },
+  "4.58/โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.)/ขนาด 3 - 36 วัตต์": {
+   "name": "โคมกรองแสงอคริลิก สะท้อนแสงอลูมิเนียม (ขนาด 0.30x0.60 ม. 0.30x1.20 ม., 0.60x0.60 ม. และ 0.60x1.20 ม.) ขนาด 3 - 36 วัตต์",
+   "unit": "ชุด",
+   "rate": 205.0,
+   "condition": ""
+  },
+  "4.58/โคม Floodlight/ขนาด 300 - 500 วัตต์ Halogen": {
+   "name": "โคม Floodlight ขนาด 300 - 500 วัตต์ Halogen",
+   "unit": "ชุด",
+   "rate": 154.0,
+   "condition": ""
+  },
+  "4.58/โคม Floodlight/ขนาด 70 - 250 วัตต์ MH, HPS": {
+   "name": "โคม Floodlight ขนาด 70 - 250 วัตต์ MH, HPS",
+   "unit": "ชุด",
+   "rate": 308.0,
+   "condition": ""
+  },
+  "4.58/โคม Floodlight/ขนาด 400 - 1000 วัตต์ MH, HPS": {
+   "name": "โคม Floodlight ขนาด 400 - 1000 วัตต์ MH, HPS",
+   "unit": "ชุด",
+   "rate": 615.0,
+   "condition": ""
+  },
+  "4.58/โคม Low Bay, High Bay/ขนาด 150 - 250 วัตต์ MV, MH, HPS": {
+   "name": "โคม Low Bay, High Bay ขนาด 150 - 250 วัตต์ MV, MH, HPS",
+   "unit": "ชุด",
+   "rate": 666.0,
+   "condition": ""
+  },
+  "4.58/โคม Low Bay, High Bay/ขนาด 400 วัตต์ MV, MH, HPS": {
+   "name": "โคม Low Bay, High Bay ขนาด 400 วัตต์ MV, MH, HPS",
+   "unit": "ชุด",
+   "rate": 1025.0,
+   "condition": ""
+  },
+  "4.58/โคมไฟกิ่งโคมติดผนัง โคมฝังผนังไฟหัวเสา/หลอด Incandescent, Compact Fluorescent": {
+   "name": "โคมไฟกิ่งโคมติดผนัง โคมฝังผนังไฟหัวเสา หลอด Incandescent, Compact Fluorescent",
+   "unit": "ชุด",
+   "rate": 169.0,
+   "condition": ""
+  },
+  "4.58/โคมไฟกิ่งโคมติดผนัง โคมฝังผนังไฟหัวเสา/หลอด HID 70 - 150 วัตต์": {
+   "name": "โคมไฟกิ่งโคมติดผนัง โคมฝังผนังไฟหัวเสา หลอด HID 70 - 150 วัตต์",
+   "unit": "ชุด",
+   "rate": 282.0,
+   "condition": ""
+  },
+  "4.58/โคมไฟสนามไฟถนน (ไม่รวมฐานเสา)/เสาสูง 1.00 - 2.50 เมตร": {
+   "name": "โคมไฟสนามไฟถนน (ไม่รวมฐานเสา) เสาสูง 1.00 - 2.50 เมตร",
+   "unit": "ชุด",
+   "rate": 564.0,
+   "condition": ""
+  },
+  "4.58/โคมไฟสนามไฟถนน (ไม่รวมฐานเสา)/เสาสูง 4.00 - 6.00 เมตร": {
+   "name": "โคมไฟสนามไฟถนน (ไม่รวมฐานเสา) เสาสูง 4.00 - 6.00 เมตร",
+   "unit": "ชุด",
+   "rate": 1281.0,
+   "condition": ""
+  },
+  "4.58/โคมไฟสนามไฟถนน (ไม่รวมฐานเสา)/เสาสูง 7.00 - 8.00 เมตร": {
+   "name": "โคมไฟสนามไฟถนน (ไม่รวมฐานเสา) เสาสูง 7.00 - 8.00 เมตร",
+   "unit": "ชุด",
+   "rate": 2050.0,
+   "condition": ""
+  }
+ }
+}

@@ -68,6 +68,8 @@ def to_project(res: DesignResult) -> Project:
                 p.finishes.append(Finish(f"บุผนัง {lv.name} {bay}", lv.name, "wall_tile",
                                          round(wet_wall_tiles(b, lv, bay), 3)))
                 p.fixtures += [Fixture(k, 1, f"{lv.name} {bay}") for k in FIXTURES]
+    from .mep import mep_lines
+    p.mep = mep_lines(b)
     for name, n in used.items():
         o = b.opening_type(name)
         p.openings.append(Opening(o.kind, o.name, o.width, o.height, n, o.material))

@@ -155,3 +155,74 @@ def test_estimate_uses_official_factor_and_loan_share():
     assert est.factor == round(mix, 4)
     est = estimate(Project.load(EXAMPLE), Rates(), costing=Costing(interest=5, factor_f=1.25))
     assert est.factor == 1.25 and "ไม่มีตาราง" in est.factor_note       # interest differs from the table
+
+
+def _house_with_bath():
+    import os
+    from conftest import ROOT
+    from wanicndesign.structure.building import Building
+    b = Building.load(os.path.join(ROOT, "examples", "building_2storey.json"))
+    b.levels[1].wet_bays = [b.panel_name(0, 0)]          # bathroom FL2 bay 1-2/A-B: 4 × 4 m, centre (2, 2)
+    return b
+
+
+def test_mep_quantities_from_the_model():
+    from wanicndesign.structure.mep import mep_lines, rooms
+    b = _house_with_bath()
+    lines = {d["item"]: d for d in mep_lines(b)}
+    n_rooms = len(rooms(b))
+    assert lines["สวิตช์ทางเดียว 1 ช่อง"]["qty"] == n_rooms
+    assert lines["เต้ารับคู่มีกราวด์ 2P+G"]["qty"] == 2 * (n_rooms - 1)          # none in the bathroom
+    # toilet 4": meter 1A (0, 0) → (2, 2) at +3.20 m, drop 1.5 m, allowance 10 %
+    assert lines['ท่อระบายน้ำ PVC 4"']["qty"] == pytest.approx((2 + 2 + 3.2 + 1.5) * 1.1)
+    assert lines['ท่อระบายน้ำ PVC 4"']["code"] == '3.7/Dia 4"'
+    assert lines['สต๊อปวาล์ว 1/2"']["qty"] == 3
+    fit = lines['ข้อต่อ อุปกรณ์ท่อ (ท่อระบายน้ำ PVC 4")']
+    assert fit["mats"] == [['ท่อ PVC ชั้น 8.5 ขนาด 4" (ระบายน้ำ)', 0.4]] and fit["labour_pct"] == 0.3
+    b.mep.enabled = False
+    assert mep_lines(b) == []
+
+
+def test_mep_prices_and_w480_rates(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path))
+    from wanicndesign.estimate import for_design
+    from wanicndesign.rates import Rates
+    from wanicndesign.structure.design import design
+    r = Rates(prices={'ท่อ PVC ชั้น 8.5 ขนาด 4" (ระบายน้ำ)': 150.0})
+    assert r.labour_rate('3.7/Dia 4"') == 103 and r.labour_rate("4.57/C.B. 2 Pole (10, 15, 20, 30. 40 AT)") == 113
+    assert r.labour_rate('4.58/โคม Downlight/ขนาด dia 4" - 6"') == 118
+    est = for_design(design(_house_with_bath()), r)
+    fit = next(x for x in est.rows if x.line.item == 'ข้อต่อ อุปกรณ์ท่อ (ท่อระบายน้ำ PVC 4")')
+    assert fit.material_rate == 60.0 and fit.labour_rate == pytest.approx(18.0)   # 40 % of 150, labour 30 % of that
+    pipe = next(x for x in est.rows if x.line.item == 'ท่อระบายน้ำ PVC 4"')
+    assert pipe.material_rate == 150.0 and pipe.labour_rate == 103
+
+
+def test_equipment_and_special_costs_forms(tmp_path):
+    from wanicndesign.structure.building import Costing
+    c = Costing(use_official=False, factor_f=1.2,
+                extras=[{"section": "equip", "item": "เครื่องปรับอากาศ 12,000 BTU", "qty": 2, "unit": "ชุด",
+                         "mat": 15000, "lab": 2000, "note": ""},
+                        {"section": "special", "item": "ค่าทดสอบดิน", "qty": 1, "unit": "งาน", "mat": 10000,
+                         "lab": 0, "note": ""}])
+    est = estimate(Project.load(EXAMPLE), Rates(), costing=c)
+    assert est.extras_total("equip") == 34000 and est.extras_total("special") == 10000
+    assert est.grand == pytest.approx(est.construction + 34000 * 1.07 + 10000 * 1.07, abs=0.02)
+    out = tmp_path / "f.xlsx"
+    est.to_xlsx(str(out))
+    wb = openpyxl.load_workbook(out)
+    for name in ("ปร.2", "ปร.2 (ก)", "ปร.3"):
+        assert name in wb.sheetnames
+    vals = [c.value for row in wb["ปร.4"].iter_rows() for c in row]
+    assert 36380.0 in vals and 10700.0 in vals
+
+
+def test_mep_and_costing_round_trip(tmp_path):
+    from wanicndesign.structure.building import Building
+    b = _house_with_bath()
+    b.mep.ac_points, b.mep.panel = 3, "2B"
+    b.costing.extras = [{"section": "equip", "item": "x", "qty": 1, "unit": "ชุด", "mat": 1, "lab": 0, "note": ""}]
+    p = tmp_path / "b.json"
+    b.save(str(p))
+    c = Building.load(str(p))
+    assert c.mep.ac_points == 3 and c.mep.panel == "2B" and c.costing.extras[0]["item"] == "x"
