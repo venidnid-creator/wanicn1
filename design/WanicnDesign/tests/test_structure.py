@@ -953,8 +953,8 @@ def test_precast_planks_load_two_beams_only():
 def test_tube_properties_and_aisc_fa():
     from wanicndesign.structure.truss import CC, Tube, fa_allow
     t = Tube(100, 3.2)
-    assert t.area == pytest.approx(10 ** 2 - 9.36 ** 2)
-    assert t.inertia == pytest.approx((10 ** 4 - 9.36 ** 4) / 12)
+    assert t.area < 10 ** 2 - 9.36 ** 2                                    # rounded corners take a little off
+    assert t.inertia < (10 ** 4 - 9.36 ** 4) / 12
     assert CC == pytest.approx(math.sqrt(2 * math.pi ** 2 * 2.04e6 / 2400))
     assert fa_allow(0) == pytest.approx(2400 / (5 / 3))                     # 0.6 Fy at zero slenderness
     lam = 150
@@ -985,3 +985,44 @@ def test_truss_roof_on_the_example():
     roof_beams = [x for x in res.beams if x.level == "ROOF" and x.kind == "beam"]
     assert all(x.w == pytest.approx(2400 * x.b * x.h, rel=1e-6) for x in roof_beams)   # tie beams only
     assert "MI2567-27" in res.all_refs()
+
+
+def test_tube_properties_match_catalogue_with_rounded_corners():
+    from wanicndesign.structure.truss import Tube
+    # JIS G 3466 / มอก. 107 catalogue: □50×50×2.3 A 4.252 cm², I 15.9 cm⁴; □100×100×3.2 A 12.13, I 187
+    assert Tube(50, 2.3).area == pytest.approx(4.252, rel=0.01)
+    assert Tube(50, 2.3).inertia == pytest.approx(15.9, rel=0.01)
+    assert Tube(100, 3.2).area == pytest.approx(12.13, rel=0.01)
+    assert Tube(100, 3.2).inertia == pytest.approx(187, rel=0.01)
+
+
+def test_roof_uplift_and_truss_connections():
+    from wanicndesign.structure.truss import OMEGA_BOLT, RHO_AIR, roof_uplift, weld_capacity, Tube
+    b = Building.load(BUILDING)
+    b.roof.system, b.roof.cover, b.province = "truss", "metal_sheet", "ภูเก็ต"      # light roof, group 4B
+    p, info = roof_uplift(b)
+    q = 0.5 * RHO_AIR * 25 ** 2 / 9.81
+    assert p == pytest.approx(1.0 * q * 0.7 * 1.6, rel=1e-6) and "4B" in info
+    b.wind.importance = "very_high"                                       # V̄ = TF · V50
+    assert roof_uplift(b)[0] == pytest.approx(1.15 * 0.5 * RHO_AIR * (1.08 * 25) ** 2 / 9.81 * 0.7 * 1.6, rel=1e-6)
+    b.wind.importance = "normal"
+    res = design(b)
+    t = res.trusses[1]
+    assert t.uplift > 0 and t.reaction_up < 0                              # the roof lifts under 0.6D + W
+    assert any(m.force_up for m in t.members)
+    assert t.seat["bolt_cap"] >= t.seat["tension"] and t.seat["fp"] <= t.seat["Fp"]
+    tube = Tube(50, 2.3)
+    assert weld_capacity(tube) == pytest.approx(0.6 * 4220 * 0.707 * 0.3 * 20 / 2.0)
+    assert OMEGA_BOLT == 2.0 and "MI2567-27C" in res.all_refs()
+
+
+def test_hip_roof_step_down_trusses():
+    b = Building.load(BUILDING)
+    b.roof.system, b.roof.shape = "truss", "hip"
+    res = design(b)
+    ends = [t for t in res.trusses if t.hip_cut is not None]
+    assert ends, "trusses near the hip ends step down"
+    end = min(ends, key=lambda t: t.hip_cut)
+    full = max(res.trusses, key=lambda t: t.rise)
+    assert end.rise < full.rise
+    assert end.rise == pytest.approx(end.hip_cut * math.tan(math.radians(b.roof.slope_deg)), rel=1e-6)

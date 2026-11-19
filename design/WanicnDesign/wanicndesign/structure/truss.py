@@ -40,11 +40,35 @@ CC = math.sqrt(2 * math.pi ** 2 * E_STEEL / FY_STEEL)
 #: Square tubes (มอก. 107): side × thickness, mm.
 TUBES = [(38, 1.6), (38, 2.3), (50, 1.6), (50, 2.3), (50, 3.2), (75, 2.3), (75, 3.2), (75, 4.5), (100, 2.3),
          (100, 3.2), (100, 4.5), (125, 3.2), (125, 4.5), (150, 4.5), (150, 6.0)]
-REFS = cite("MI2567-27", "AISC-ASD", "MI2567-8", "STATICS", "QD-PURLIN")
+REFS = cite("MI2567-27", "AISC-ASD", "MI2567-8", "STATICS", "QD-PURLIN", "STEEL-TUBE", "MI2567-22", "WIND-ROOF",
+            "MR2566-6", "MI2567-27C")
+
+
+def _rounded_square(side: float, r: float, n: int = 24):
+    """Polygon of a square of ``side`` with corner radius ``r`` centred on 0, anticlockwise."""
+    h = side / 2
+    pts = []
+    for cx, cy, a0 in ((h - r, h - r, 0), (-h + r, h - r, 90), (-h + r, -h + r, 180), (h - r, -h + r, 270)):
+        for k in range(n + 1):
+            a = math.radians(a0 + 90 * k / n)
+            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)) if r > 0 else (cx, cy))
+    return pts
+
+
+def _poly_props(pts):
+    """Area and second moment about the x axis through 0 of a closed polygon."""
+    A = Ix = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        c = x0 * y1 - x1 * y0
+        A += c
+        Ix += c * (y0 * y0 + y0 * y1 + y1 * y1)
+    return A / 2, Ix / 12
 
 
 @dataclass
 class Tube:
+    """Cold-formed square hollow section with the corner radii of EN 10219-2
+    (outside 2t, inside t) [STEEL-TUBE]."""
     side: float                  # mm
     t: float
 
@@ -52,15 +76,19 @@ class Tube:
     def name(self) -> str:
         return f"□{self.side:g}x{self.side:g}x{self.t:g}"
 
+    def _props(self):
+        b, t = self.side / 10, self.t / 10
+        Ao, Io = _poly_props(_rounded_square(b, 2 * t))
+        Ai, Ii = _poly_props(_rounded_square(b - 2 * t, t))
+        return Ao - Ai, Io - Ii
+
     @property
     def area(self) -> float:     # cm²
-        b, h = self.side / 10, (self.side - 2 * self.t) / 10
-        return b * b - h * h
+        return self._props()[0]
 
     @property
     def inertia(self) -> float:  # cm⁴
-        b, h = self.side / 10, (self.side - 2 * self.t) / 10
-        return (b ** 4 - h ** 4) / 12
+        return self._props()[1]
 
     @property
     def r(self) -> float:
@@ -89,7 +117,8 @@ class TrussMember:
     i: int
     j: int
     length: float                # m
-    force: float = 0.0           # kg, + tension
+    force: float = 0.0           # kg, + tension (dead + live)
+    force_up: float = 0.0        # kg under 0.6D + W (uplift), 0 when the roof is not lifted
 
 
 @dataclass
@@ -113,15 +142,23 @@ class TrussResult:
     note: str = ""
     mark: str = ""
     refs: str = REFS
+    hip_cut: float | None = None # step-down hip truss: distance from the hip end, m
+    uplift: float = 0.0          # net upward roof load under 0.6D + W, kg/m² of plan (0 = none)
+    reaction_up: float = 0.0     # support reaction under 0.6D + W (negative = pulls up), kg
+    welds: dict = field(default_factory=dict)   # group -> (force, capacity)
+    seat: dict = field(default_factory=dict)    # base plate and anchor bolts
 
 
-def geometry(span: float, slope_deg: float, depth: float, panels: int):
+def geometry(span: float, slope_deg: float, depth: float, panels: int, hip_cut: float | None = None):
     """Nodes (x, z) and members of a pitched Pratt truss: bottom nodes 0…n,
-    top nodes n+1…2n+1 above them; diagonals fall towards midspan."""
+    top nodes n+1…2n+1 above them; diagonals fall towards midspan. A
+    step-down hip truss (``hip_cut`` = its distance from the hip end, m)
+    has its top chord flat where the hip plane passes below the ridge."""
     n = panels
     t = math.tan(math.radians(slope_deg))
     xs = [span * k / n for k in range(n + 1)]
-    nodes = [(x, 0.0) for x in xs] + [(x, depth + min(x, span - x) * t) for x in xs]
+    cap = span if hip_cut is None else hip_cut
+    nodes = [(x, 0.0) for x in xs] + [(x, depth + min(x, span - x, cap) * t) for x in xs]
     top = lambda k: n + 1 + k
     mem = []
     for k in range(n):
@@ -167,24 +204,101 @@ def solve_truss(nodes, members, areas, loads, supports):
     return U, forces
 
 
-def _check(group, members, tube, w_chord):
-    """Worst ratio of a member group with this tube: (ratio, text)."""
+# ---------------------------------------------------------------------------
+# Wind uplift on the roof — ประกาศ มท. 2567 ข้อ 22 (roofs by มยผ. 1311), ผนวก ก
+# ---------------------------------------------------------------------------
+IW = {"low": 0.8, "normal": 1.0, "high": 1.15, "very_high": 1.15}     # importance factor (มยผ. 1311)
+RHO_AIR = 1.25                                                        # kg/m³
+
+
+def roof_uplift(b) -> tuple[float, str]:
+    """Net upward wind pressure on the roof (kg/m² of plan) and how it was found:
+    p = Iw · q · Ce · (CpCg external + CpiCgi internal), q = ½ρV̄², V̄ = V50 of the
+    province group (× TF for buildings of very high importance) [MI2567-22],
+    Ce = (h/10)^0.2 ≥ 0.9 open or 0.7 (h/12)^0.3 ≥ 0.7 rough terrain, net
+    coefficient from the roof (default 1.6 = −1.3 outside − 0.3 inside, the
+    severest low-rise roof value, safe for every slope) [WIND-ROOF]."""
+    from ..standards import provinces
+    data = provinces()
+    grp = data["provinces"].get(b.province, {}).get("wind_group", "1")
+    g = data["wind_groups"][grp]
+    v = g["v50"] * (g["tf"] if b.wind.importance == "very_high" else 1.0)
+    q = 0.5 * RHO_AIR * v * v / 9.81
+    lv = b.levels
+    rise = (min(b.xs[-1], b.ys[-1]) / 2 + b.roof.overhang) * math.tan(math.radians(b.roof.slope_deg))
+    h = max(1.0, lv[-1].elevation - lv[0].elevation + rise / 2)
+    ce = max(0.9, (h / 10) ** 0.2) if b.wind.terrain == "open" else max(0.7, 0.7 * (h / 12) ** 0.3)
+    iw = IW.get(b.wind.importance, 1.0)
+    p = iw * q * ce * b.roof.uplift_coef
+    where = b.province or "ไม่ระบุจังหวัด (ใช้กลุ่ม 1)"
+    return p, (f"{where} กลุ่ม {grp} V̄ = {v:.1f} ม./วินาที, q = {q:.1f}, Ce = {ce:.2f}, Iw = {iw:g}, "
+               f"สัมประสิทธิ์สุทธิ {b.roof.uplift_coef:g} → แรงยก {p:.1f} กก./ตร.ม.")
+
+
+# ---------------------------------------------------------------------------
+# Welds, base plate, anchor bolts — ประกาศ มท. 2567 ข้อ 27 (4) (จ), (ฉ)
+# ---------------------------------------------------------------------------
+FEXX = 4220.0                    # ksc, E60XX electrode (E6013 in common use)
+OMEGA_WELD = 2.00                # fillet weld, ข้อ 27 (4) (ฉ)
+OMEGA_BOLT = 2.00                # bolts in bearing connections, ข้อ 27 (4) (จ)
+FU_BOLT = 4080.0                 # ksc, grade 4.6 bolts / anchor rods (400 MPa)
+BOLTS = [("M12", 1.2), ("M16", 1.6), ("M20", 2.0), ("M24", 2.4)]
+
+
+def weld_capacity(tube: Tube) -> float:
+    """All-round fillet weld of a tube end: leg = tube wall (≥ 3 mm),
+    Rn = 0.6 FEXX × throat × length, allowable Rn / 2.00 (kg)."""
+    leg = max(0.3, tube.t / 10)
+    return 0.6 * FEXX * 0.707 * leg * 4 * tube.side / 10 / OMEGA_WELD
+
+
+def base_plate(reaction: float, uplift: float, col_b: float, col_h: float, tube: Tube, fc: float) -> dict:
+    """Seat of a truss on a concrete column: bearing fp ≤ 0.35 fc' (AISC ASD
+    J9), plate t = 2m√(fp/Fy) and for the bolt pull t = √(4T/Fy), two
+    anchor bolts for the uplift with Rn = 0.75 Fu Ab, allowable Rn/2.00."""
+    N = max(tube.side / 10 + 8.0, min(col_b, col_h) * 100 - 4.0)        # cm, 2 cm inside the column edge
+    A1 = N * N
+    fp = reaction / A1
+    Fp = 0.35 * fc
+    m = (N - 0.95 * tube.side / 10) / 2
+    t_bear = 2 * m * math.sqrt(fp / FY_STEEL)
+    tension = max(0.0, -uplift)
+    for name, d in BOLTS:
+        cap = 0.75 * FU_BOLT * math.pi * d * d / 4 / OMEGA_BOLT
+        if 2 * cap >= tension:
+            break
+    t_pull = math.sqrt(4 * (tension / 2) / FY_STEEL) if tension else 0.0
+    t = max(0.6, t_bear, t_pull)
+    t = math.ceil(t * 10 / 3 - 1e-9) * 3 / 10                         # 6, 9, 12 … mm
+    return {"plate": f"PL {N * 10:.0f}x{N * 10:.0f}x{t * 10:.0f} มม.", "fp": fp, "Fp": Fp, "bolts": f"2-{name}",
+            "bolt_cap": 2 * cap, "tension": tension, "ok": fp <= Fp and 2 * cap >= tension, "bolt_d": d}
+
+
+def _check(group, members, tube, w_chord, brace=0.0):
+    """Worst ratio of a member group with this tube over the gravity and the
+    uplift forces: (ratio, text). ``brace``: unbraced length (m) of the bottom
+    chord out of plane when the uplift puts it in compression."""
     worst = (0.0, "")
     A, r = tube.area, tube.r
+    cases = []
     for m in members:
-        L = m.length * 100
+        cases.append((m, m.force, m.length, w_chord))
+        if m.force_up:
+            cases.append((m, m.force_up, max(m.length, brace) if group == "bottom" else m.length, 0.0))
+    for m, force, length, wc in cases:
+        L = length * 100
         lam = L / r
-        if m.force >= 0:
-            ratio = m.force / A / (0.60 * FY_STEEL)
+        if force >= 0:
+            ratio = force / A / (0.60 * FY_STEEL)
             if lam > 300:
                 ratio = max(ratio, 1.01)
-            text = f"ดึง {m.force:,.0f} กก. L/r {lam:.0f}"
+            text = f"ดึง {force:,.0f} กก. L/r {lam:.0f}"
         else:
-            fa = -m.force / A
+            fa = -force / A
             Fa = fa_allow(lam)
             ratio = fa / Fa
-            if group == "top" and w_chord:
-                M = w_chord * m.length ** 2 / 10 * 100           # kg-cm
+            if group == "top" and wc:
+                M = wc * m.length ** 2 / 10 * 100                # kg-cm
                 fb, Fb = M / tube.s, 0.60 * FY_STEEL
                 if fa / Fa <= 0.15:
                     ratio = fa / Fa + fb / Fb
@@ -193,47 +307,59 @@ def _check(group, members, tube, w_chord):
                     ratio = fa / Fa + 0.85 * fb / ((1 - fa / Fe) * Fb) if fa < Fe else 9.9
             if lam > 200:
                 ratio = max(ratio, 1.01)
-            text = f"อัด {-m.force:,.0f} กก. KL/r {lam:.0f}"
+            text = f"อัด {-force:,.0f} กก. KL/r {lam:.0f}" + (" (แรงยก)" if force is m.force_up else "")
         if ratio > worst[0]:
             worst = (ratio, text)
     return worst
 
 
-def design_truss(b, roof_res, line: str, span: float, spacing: float, supports=()) -> TrussResult:
+def design_truss(b, roof_res, line: str, span: float, spacing: float, supports=(), hip_cut=None,
+                 col=(0.2, 0.2)) -> TrussResult:
     r = b.roof
     depth = max(0.30, span / 20)                         # QuickDesign default D = L/20
     panels = max(4, 2 * math.ceil(span / 2 / 1.5))       # panels about 1.5 m, even
-    nodes, mem = geometry(span, r.slope_deg, depth, panels)
+    nodes, mem = geometry(span, r.slope_deg, depth, panels, hip_cut)
     n = panels
     top = lambda k: n + 1 + k
     cos = math.cos(math.radians(r.slope_deg))
-    out = TrussResult(line, span, nodes[top(n // 2)][1] - depth, depth, panels, spacing, supports=supports)
+    rise = max(z for _x, z in nodes) - depth
+    out = TrussResult(line, span, rise, depth, panels, spacing, supports=supports, hip_cut=hip_cut)
+    p_up, _info = roof_uplift(b)
+    dead_plan = roof_res.load_plan - roof_res.live_plan
     tubes = [Tube(*t) for t in TUBES]
     sec = {"top": tubes[0], "bottom": tubes[0], "web": tubes[0]}
-    for _round in range(4):
+    brace = r.chord_brace or 2 * span / n
+    for _round in range(5):
         sw = sum(sec[m.group].kg_m * m.length for m in mem)
-        for part in ("total", "live"):
-            w_plan = roof_res.live_plan if part == "live" else roof_res.load_plan + sw / (span + 2 * r.overhang) / spacing
+        sw_plan = sw / (span + 2 * r.overhang) / spacing
+        cases = {"total": roof_res.load_plan + sw_plan, "live": roof_res.live_plan,
+                 "uplift": 0.6 * (dead_plan + sw_plan) - p_up}             # กฎกระทรวง 2566 ข้อ 6 (2)
+        for part, w_plan in cases.items():
             loads = {}
             for k in range(n + 1):
                 trib = span / n * (0.5 if k in (0, n) else 1.0) + (r.overhang if k in (0, n) else 0.0)
                 loads[top(k)] = (0.0, -w_plan * spacing * trib)
             areas = [sec[m.group].area for m in mem]
             U, forces = solve_truss(nodes, mem, areas, loads, {0: (True, True), n: (False, True)})
+            R = sum(-fz for _fx, fz in loads.values()) / 2
+            mid = abs(U[2 * (n // 2) + 1]) * 100
             if part == "total":
                 for m, f in zip(mem, forces):
                     m.force = f
-                out.reaction = sum(-fz for _fx, fz in loads.values()) / 2
-                d_total = abs(U[2 * (n // 2) + 1]) * 100
+                out.reaction, d_total = R, mid
+            elif part == "live":
+                out.reaction_live, d_live = R, mid
             else:
-                out.reaction_live = sum(-fz for _fx, fz in loads.values()) / 2
-                d_live = abs(U[2 * (n // 2) + 1]) * 100
+                out.uplift = max(0.0, -w_plan)
+                out.reaction_up = R
+                for m, f in zip(mem, forces):
+                    m.force_up = f if w_plan < 0 else 0.0
         w_chord = roof_res.load_plan * spacing * cos                   # purlins between the joints
         changed = False
         for g in ("top", "bottom", "web"):
             group = [m for m in mem if m.group == g]
             for tube in tubes:
-                ratio, text = _check(g, group, tube, w_chord if g == "top" else 0.0)
+                ratio, text = _check(g, group, tube, w_chord if g == "top" else 0.0, brace)
                 if ratio <= 1.0:
                     break
             if tube.name != sec[g].name:
@@ -249,12 +375,26 @@ def design_truss(b, roof_res, line: str, span: float, spacing: float, supports=(
     out.weight = sum(sec[m.group].kg_m * m.length for m in mem)
     out.nodes, out.members = nodes, mem
     notes = []
+    for g in ("top", "bottom", "web"):
+        F = max(max(abs(m.force), abs(m.force_up)) for m in mem if m.group == g)
+        out.welds[g] = (F, weld_capacity(sec[g]))
+    out.seat = base_plate(out.reaction, out.reaction_up, col[0], col[1], sec["bottom"], b.fc_prime)
     if any(v[0] > 1.0 for v in out.ratios.values()):
         out.ok = False
         notes.append("ท่อเหล็กใหญ่สุดในตารางยังไม่พอ")
+    if any(F > cap for F, cap in out.welds.values()):
+        out.ok = False
+        notes.append("รอยเชื่อมรอบท่อไม่พอ ต้องใช้แผ่นประกับ")
+    if not out.seat["ok"]:
+        out.ok = False
+        notes.append("แผ่นรองฐานหรือสลักยึดไม่พอ")
     if d_live > out.deflection[2] or d_total > out.deflection[3]:
         out.ok = False
         notes.append("ระยะแอ่นตัวเกินเกณฑ์ตาราง 1")
+    if out.uplift:
+        notes.append(f"แรงยกสุทธิ {out.uplift:.0f} กก./ตร.ม. (0.6D + W) ค้ำยันจันทันล่างทุก {brace:.2f} ม.")
+    if hip_cut is not None:
+        notes.append(f"โครงถักขั้นบันไดของหลังคาปั้นหยา ห่างปลาย {hip_cut:.2f} ม.")
     notes.append(f"แอ่น {d_total * 10:.1f}/{out.deflection[3] * 10:.1f} มม. (จร {d_live * 10:.1f}/{out.deflection[2] * 10:.1f})")
     out.note = " ; ".join(notes)
     return out
@@ -277,14 +417,21 @@ def design_trusses(b, roof_res):
         if not (b.has_node(*a) and b.has_node(*c)):
             continue
         name = b.x_name(k) if along_x else b.y_name(k)
-        t = design_truss(b, roof_res, name, span, spacing, (a, c))
+        hip = None
+        if b.roof.shape == "hip":                       # step-down trusses near the hip ends
+            dist = min(coords[k], coords[-1] - coords[k]) + b.roof.overhang
+            if dist < span / 2 + b.roof.overhang - 1e-6:
+                hip = dist
+        col = (b.column_width, b.column_depth)
+        t = design_truss(b, roof_res, name, span, spacing, (a, c), hip, col)
         out.append(t)
         for node in (a, c):
             tot, live = reac.get(node, (0.0, 0.0))
             reac[node] = (tot + t.reaction, live + t.reaction_live)
     groups: dict = {}
     for t in out:
-        key = tuple(t.sections[g].name for g in ("top", "bottom", "web")) + (round(t.span, 2),)
+        key = tuple(t.sections[g].name for g in ("top", "bottom", "web")) + (round(t.span, 2),
+                                                                           round(t.hip_cut or 0, 2))
         groups.setdefault(key, []).append(t)
     for k, (_key, ts) in enumerate(sorted(groups.items(), key=lambda kv: -max(t.reaction for t in kv[1])), 1):
         for t in ts:

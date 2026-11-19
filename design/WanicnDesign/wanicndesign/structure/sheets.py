@@ -769,9 +769,16 @@ def truss_sheet(res, number: str) -> Sheet:
         for k in (0, t.panels):
             sh.poly([(ox + t.nodes[k][0] * s, base), (ox + t.nodes[k][0] * s - 2, base - 3),
                      (ox + t.nodes[k][0] * s + 2, base - 3)], "FRAME")
-        sh.text(ox + t.span * s / 2, base - 7, f"แรง (ตัน) + ดึง − อัด · ปฏิกิริยา {t.reaction:,.0f} กก. · "
-                f"{t.note}", TXT_S, "TEXT", "center")
-        y = base - 16
+        sh.text(ox, base - 7, f"แรง (ตัน) + ดึง − อัด · ปฏิกิริยา {t.reaction:,.0f} กก.", TXT_S)
+        for k_, part in enumerate(t.note.split(" ; ")[:3]):
+            sh.text(ox + t.span * s + 8, y - 22 - 4 * k_, part, TXT_S)
+        weld = ", ".join(f"{g} เชื่อมรอบ ขา {max(3, t.sections[g].t):g} มม." for g in ("top", "bottom", "web"))
+        sh.text(ox + t.span * s + 8, y - 6, f"ฐานรองรับ: {t.seat['plate']} สลัก {t.seat['bolts']} ฝังในหัวเสา", TXT_S)
+        sh.text(ox + t.span * s + 8, y - 10, f"ถอน {t.seat['tension']:,.0f} กก. / รับได้ {t.seat['bolt_cap']:,.0f} กก.",
+                TXT_S)
+        sh.text(ox + t.span * s + 8, y - 14, weld.replace("top", "บน").replace("bottom", "ล่าง").replace("web", "ค้ำ"),
+                TXT_S)
+        y = min(base - 16, y - 40)
     sh.text(x0, y0 + 4, "เหล็กท่อสี่เหลี่ยม มอก. 107 Fy ≤ 2,400 ksc (ประกาศ มท. 2567 ข้อ 27) · รอยเชื่อมเต็มรอบ "
             "ไม่น้อยกว่าความหนาท่อ · ทาสีกันสนิม", TXT_S)
     return sh

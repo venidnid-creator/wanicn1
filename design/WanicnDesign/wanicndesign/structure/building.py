@@ -58,6 +58,8 @@ class Roof:
     rafter_spacing: float = 1.00
     solar_load: float = 0.0        # rooftop solar panels, kg/m² (dead load, ประกาศ มท. 2567 ข้อ 11)
     system: str = "rafter"         # "rafter" (rafters on the roof beams) or "truss" (steel trusses on columns)
+    uplift_coef: float = 1.6       # net wind uplift coefficient on the roof (−1.3 outside − 0.3 inside)
+    chord_brace: float = 0.0       # bottom chord bracing spacing, m (0 = every second panel point)
     ceiling: str = "board"         # "plaster", "board", "none": deflection limits of ประกาศ มท. 2567 ตาราง 1
 
 

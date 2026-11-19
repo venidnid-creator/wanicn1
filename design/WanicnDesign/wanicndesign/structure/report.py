@@ -34,6 +34,7 @@ def ok(x) -> str:
 
 
 def write_report(res: DesignResult, path: str) -> None:
+    from .truss import roof_uplift
     from openpyxl import Workbook
     from openpyxl.styles import Font
     b, mat = res.building, res.concrete
@@ -105,9 +106,17 @@ def write_report(res: DesignResult, path: str) -> None:
         for t in res.trusses:
             for g, label in (("top", "จันทันบน"), ("bottom", "จันทันล่าง"), ("web", "เหล็กค้ำ/เสาตั้ง")):
                 ratio, text = t.ratios[g]
+                F, cap = t.welds[g]
                 rows.append((t.mark, t.line, round(t.span, 2), round(t.spacing, 2), label, t.sections[g].name,
                              round(t.sections[g].r, 2), text, round(ratio, 3), ok(ratio <= 1.0),
-                             f"{t.note} ; ปฏิกิริยา {t.reaction:,.0f} กก. ; น้ำหนัก {t.weight:,.0f} กก.", t.refs))
+                             f"รอยเชื่อมรอบท่อ {F:,.0f}/{cap:,.0f} กก. ; {t.note}", t.refs))
+            seat = t.seat
+            rows.append((t.mark, t.line, "", "", "แผ่นรองฐาน/สลักยึด", seat["plate"], "",
+                         f"กด {t.reaction:,.0f} กก. fp {seat['fp']:.1f} ≤ {seat['Fp']:.1f} ksc ; "
+                         f"ถอน {seat['tension']:,.0f} กก.", "", ok(seat["ok"]),
+                         f"{seat['bolts']} รับถอน {seat['bolt_cap']:,.0f} กก.", t.refs))
+        rows.append(("", "", "", "", "แรงยกจากลม", "", "", roof_uplift(b)[1], "", "", "0.6D + W ตามกฎกระทรวง 2566 "
+                     "ข้อ 6 (2)", "WIND-ROOF, MI2567-22"))
         _sheet(wb, "โครงถักหลังคา", ["Mark", "แนว", "ช่วง ม.", "ระยะห่าง ม.", "ชิ้นส่วน", "หน้าตัด", "r ซม.",
                                       "แรง", "อัตราส่วน", "ผล", "หมายเหตุ", "อ้างอิง"], rows,
                [6, 6, 7, 9, 14, 14, 7, 28, 9, 5, 50, 40])

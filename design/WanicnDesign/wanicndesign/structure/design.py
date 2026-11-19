@@ -334,12 +334,17 @@ def design_roof(b: Building) -> RoofResult:
     if r.system == "truss":                       # purlins span from truss to truss (grid lines)
         coords = b.xs if b.xs[-1] >= b.ys[-1] else b.ys
         L = max(c1 - c0 for c0, c1 in zip(coords, coords[1:]))
+    # wind uplift under 0.6D + W (กฎกระทรวง 2566 ข้อ 6 (2)); roofs by มยผ. 1311 (ประกาศ มท. 2567 ข้อ 22)
+    from .truss import roof_uplift
+    p_up, _info = roof_uplift(b)
+    up_p = max(0.0, p_up - 0.6 * (cover + r.solar_load) * cos) * r.purlin_spacing     # kg/m, upward
     # purlins carry no ceiling; rafters take the limits of the ceiling hung from the roof [MI2567-8]
-    purlin = _pick_c(w_p * cos * L * L / 8, w_p * sin * L * L / 8, "แป", L, w_p * cos,
+    purlin = _pick_c(max(w_p * cos, up_p) * L * L / 8, w_p * sin * L * L / 8, "แป", L, w_p * cos,
                      r.live_load * r.purlin_spacing * cos, ROOF_DEFL["none"])
     span = (short / 2 - r.overhang) / cos if short / 2 > r.overhang else short / 2 / cos
     w_r = (cover + r.frame_load + r.solar_load + r.live_load) * r.rafter_spacing
-    rafter = _pick_c(w_r * cos * span * span / 8, 0.0, "จันทัน", span, w_r * cos,
+    up_r = max(0.0, p_up - 0.6 * (cover + r.frame_load + r.solar_load) * cos) * r.rafter_spacing
+    rafter = _pick_c(max(w_r * cos, up_r) * span * span / 8, 0.0, "จันทัน", span, w_r * cos,
                      r.live_load * r.rafter_spacing * cos, ROOF_DEFL.get(r.ceiling, ROOF_DEFL["board"]))
     if r.system == "truss":
         rafter = SteelMember("จันทัน (ใช้โครงถัก)", 0.0, 0.0, 0.0, 0.0, 0.0, "-", 0.0, 0.0, 0.0, True)
@@ -348,7 +353,7 @@ def design_roof(b: Building) -> RoofResult:
             (ridge + hips) * 2 * rafter.kg_m
     return RoofResult(load_plan, r.live_load, plan_area, slope_area, ridge, hips, eave, purlin, rafter,
                       steel, cite("QD-ROOF", "MR2566-11", "QD-PURLIN", "MI2567-11" if r.solar_load else "",
-                                  "MR72" if r.solar_load else ""))
+                                  "MR72" if r.solar_load else "", "WIND-ROOF", "MR2566-6"))
 
 
 # ---------------------------------------------------------------------------
