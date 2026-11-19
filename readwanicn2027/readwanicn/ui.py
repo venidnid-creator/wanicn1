@@ -248,14 +248,19 @@ class StatsBox(QFrame):
 
     def show_info(self, info, cached=False):
         self._info = info
+        ahead = bool(info.latest) and update._key(VERSION) > update._key(info.latest)
         if info.latest:
-            self.download.setText(f"⬇ ดาวน์โหลดรุ่นล่าสุด v{info.latest}"
-                                  + (" (ใหม่กว่ารุ่นที่ใช้อยู่)" if info.newer else ""))
+            if ahead:                    # a test build newer than any published one
+                self.download.setText(f"⬇ ดาวน์โหลดรุ่นที่เผยแพร่ v{info.latest} (เก่ากว่ารุ่นที่ใช้อยู่)")
+            else:
+                self.download.setText(f"⬇ ดาวน์โหลดรุ่นล่าสุด v{info.latest}"
+                                      + (" (ใหม่กว่ารุ่นที่ใช้อยู่)" if info.newer else ""))
         lines = []
         if info.latest:
             day = f" ({info.published_th})" if getattr(info, "published_th", "") else ""
             lines.append(f"<span style='color:#E7A93B'>ปรับปรุงล่าสุด v{info.latest}{day}</span>")
-            state = "✓ เป็นรุ่นล่าสุดแล้ว" if not info.newer else "⬇ มีรุ่นใหม่ให้ดาวน์โหลด"
+            state = ("✓ รุ่นทดสอบ ใหม่กว่ารุ่นที่เผยแพร่" if update._key(VERSION) > update._key(info.latest)
+                     else "✓ เป็นรุ่นล่าสุดแล้ว" if not info.newer else "⬇ มีรุ่นใหม่ให้ดาวน์โหลด")
             lines.append(f"<span style='color:#5AA9FF'>รุ่นที่ใช้อยู่: v{VERSION} {state}</span>")
         else:
             lines.append(f"รุ่นที่ใช้อยู่: v{VERSION}")

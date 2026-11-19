@@ -309,5 +309,10 @@ def test_login_box_download_latest_button():
     box.show_info(update.ReleaseInfo(latest="2027.4.5"))
     assert box.download_url().endswith("/readwanicn-v2027.4.5/readwanicn2027-setup-2027.4.5.exe")
     assert "v2027.4.5" in box.download.text()
+    import readwanicn.ui as U
+    old, U.VERSION = U.VERSION, "2027.4.8"                         # a test build ahead of the release
+    box.show_info(update.ReleaseInfo(latest="2027.4.5"))
+    assert "เก่ากว่ารุ่นที่ใช้อยู่" in box.download.text() and "รุ่นทดสอบ" in box.body.text()
+    U.VERSION = old
     box.show_info(update.ReleaseInfo(latest="2099.1.0", newer=True, installer_url="https://example.invalid/s.exe"))
     assert box.download_url() == "https://example.invalid/s.exe" and "ใหม่กว่า" in box.download.text()
