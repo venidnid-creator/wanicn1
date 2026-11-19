@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 2027.4.7 — ปุ่มล้างข้อมูล (19 พ.ย. 2569, อนุมัติแล้ว — สร้างตัวติดตั้ง ไม่ release)
+## ReadWanicn2027 2027.4.7 — ปุ่มล้างข้อมูล (19 พ.ย. 2569, อนุมัติแล้ว — ตัวติดตั้ง run 44427000629 artifact 14484054265 ผ่าน, ไม่ release)
 - ถอดแบบตาม BOQ (`BoqDialog`): «📂 ถอดแบบไฟล์อื่น…» (`choose_other` → `clear()` → `read(path)`), «🗑 ล้างข้อมูล» (`clear(ask=True)`),
   หลังส่งออก CSV ถามว่าจะล้างเพื่อถอดชุดใหม่ไหม · `fix_marks()` แก้ «?» ที่แทนวรรณยุกต์ในชื่อแผ่น (พื?น → พื้น, น?า → น้ำ)
 - ปรับลดราคา (`ProcureDialog.clear_project`): «🗑 ล้างข้อมูล (เริ่มงานใหม่)» บันทึกงานเดิมก่อน แล้วล้างทุกช่อง/ตาราง และ `procure/last` = "" (ไม่เปิดงานเก่าเองอีก)
