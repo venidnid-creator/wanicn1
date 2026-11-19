@@ -40,9 +40,10 @@ def test_profile_shows_extra_bars_and_sections():
 
 def test_the_set_has_the_new_structural_sheets():
     titles = [s.title for s in D.build_set(_house(), {"project": "ทดสอบ"}) if s.group == "S"]
-    for t in ("รายละเอียดฐานราก", "รายละเอียดเสา", "รายละเอียดพื้น", "รายละเอียดคาน",
+    for t in ("รายละเอียดเสา", "รายละเอียดพื้น", "รายละเอียดคาน",
               "รายละเอียดการเสริมเหล็กคานทั่วไป"):
         assert t in titles, t
+    assert any(t.startswith("รายละเอียดฐานราก F") for t in titles)      # named by its footings
 
 
 def test_beam_plan_shows_levels():

@@ -2967,11 +2967,14 @@ def build_set(data, info=None,
         if L:
             add("S", "แปลนโครงหลังคา", lambda sh, _a: s_roof_frame(sh, E, L))
         add("S", "ตารางฐานราก เสา คาน พื้น",
-            lambda sh, _a: s_schedules(sh, E), "-")
+            lambda sh, _a: _set_scale(sh, STD.s_schedules_std(sh, E)), "1:20")
         add("S", "แบบขยายเหล็กเสริมฐานรากและคาน",
             lambda sh, _a: s_rebar_details(sh, E), "ตามระบุ")
         from core import wanic_struct_sheets as SS
-        add("S", "รายละเอียดฐานราก", lambda sh, _a: SS.s_footing_details(sh, E), "1:40")
+        fmarks = sorted({f["mark"] for f in E["footings"]})
+        for i_ in range(0, len(fmarks), 2):             # two footings a sheet (the original)
+            add("S", "รายละเอียดฐานราก " + " ".join(fmarks[i_:i_ + 2]),
+                lambda sh, _a, ms=fmarks[i_:i_ + 2]: _set_scale(sh, STD.s_footings_std(sh, E, ms)), "1:25")
         add("S", "รายละเอียดเสา", lambda sh, _a: SS.s_column_details(sh, E), "1:25")
         add("S", "รายละเอียดพื้น", lambda sh, _a: SS.s_slab_details(sh, E), "1:25")
         from core import wanic_stair_sheets as STS
