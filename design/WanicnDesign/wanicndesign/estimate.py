@@ -426,6 +426,9 @@ class Estimate:
         sign(s4, 4)
 
         self._extras_sheets(wb, header, head_row, sign, bold)
+        from .schedule import plan, write_plan
+        write_plan(plan(self, c.wage, c.workweek, c.crews), wb.create_sheet("แผนงานก่อสร้าง"),
+                   f"แผนงานก่อสร้าง (CPM) — {self.project_name}")
 
         # ---- material analysis ---------------------------------------------
         self._material_sheets(wb, bold, head_row)
@@ -771,6 +774,10 @@ class Contract:
         finally:
             lead.costing.extras = saved
         from .structure.report import references_sheet
+        from .schedule import plan, write_plan
+        for k, (label, est) in enumerate(self.items, 1):
+            write_plan(plan(est, c.wage, c.workweek, c.crews), wb.create_sheet(f"แผนงาน ({k})"),
+                       f"แผนงานก่อสร้าง (CPM) — {label}")
         references_sheet(wb, ["CGD2569", "CGD2569-MAT", "W480", "W480-MEP", "CGD-FACTORF"])
         wb.save(path)
 

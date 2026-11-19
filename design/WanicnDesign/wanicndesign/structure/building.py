@@ -154,6 +154,10 @@ class Costing:
     #: แบบ ปร.2 ค่าครุภัณฑ์จัดซื้อ (section "equip") and ปร.3 ค่าใช้จ่ายพิเศษตามข้อกำหนด ("special"):
     #: [{"section", "item", "qty", "unit", "mat", "lab", "note"}] — prices without VAT; VAT is added on the form
     extras: list = field(default_factory=list)
+    #: construction plan (schedule.plan): project values, not a rule of law
+    wage: float = 400.0            # บาท/คน/วัน used to turn ว480 labour amounts into crew-days
+    workweek: int = 6              # working days per week
+    crews: dict = field(default_factory=dict)   # task key → workers (defaults in schedule.LOGIC)
 
 
 @dataclass

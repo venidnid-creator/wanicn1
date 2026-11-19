@@ -260,3 +260,27 @@ def test_contract_uses_factor_f_of_the_whole_contract(tmp_path, monkeypatch):
     assert "อาคาร ก" in labels and "อาคาร ข" in labels
     assert any(str(v).startswith("='ปร.1 (2)'!I") for v in labels)
     assert any("งานหรือกลุ่มงาน  อาคาร ข" == c.value for row in wb["ปร.1 (2)"].iter_rows() for c in row)
+
+
+def test_cpm_plan_from_the_estimate(tmp_path, monkeypatch):
+    import math
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path))
+    from wanicndesign.estimate import for_design
+    from wanicndesign.schedule import plan
+    from wanicndesign.structure.design import design
+    est = for_design(design(_house_with_bath()))
+    p = plan(est, wage=400, week=6)
+    t = {x.key: x for x in p.tasks}
+    frame = t["frame"]
+    assert frame.days == math.ceil(frame.labour / (10 * 400))           # labour ÷ (crew × wage)
+    assert frame.es == t["earth"].ef and t["wall"].es >= frame.ef          # finish-to-start
+    assert t["mep"].es == t["wall"].es + math.ceil(t["wall"].days / 2)     # services start mid-masonry
+    assert p.days == max(x.ef for x in p.tasks)
+    crit = p.critical_path()
+    assert crit[0].key == "earth" and crit[-1].ef == p.days and all(x.slack == 0 for x in crit)
+    assert p.curve[-1][2] == pytest.approx(100.0)
+    assert all(b[2] >= a[2] for a, b in zip(p.curve, p.curve[1:]))       # S-curve never falls
+    assert plan(est, wage=800).days < p.days                                # more pay per day → fewer days
+    out = tmp_path / "p.xlsx"
+    est.to_xlsx(str(out))
+    assert "แผนงานก่อสร้าง" in openpyxl.load_workbook(out).sheetnames

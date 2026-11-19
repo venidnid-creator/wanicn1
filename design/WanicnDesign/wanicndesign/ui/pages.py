@@ -731,13 +731,16 @@ class CostPage(Page):
         self.ret = _spin(0, 0, 50, 1, 1, "%")
         self.interest = _spin(6, 0, 20, 0.25, 2, "%")
         self.vat = _spin(7, 0, 20, 1, 1, "%")
+        self.wage = _spin(400, 100, 2000, 10, 0, "บาท/คน/วัน")
+        self.workweek = _spin(6, 1, 7, 1, 0, "วัน/สัปดาห์")
         self.text = {k: QLineEdit() for k in ("owner", "location", "drawing_no", "chair", "member1", "member2",
                                               "preparer", "preparer_role")}
         for label, w in (("เดือนของราคาวัสดุ", self.month), ("วิธีคิด", self.method),
                          ("Factor F", self.official), ("เงินกู้ที่ไม่ต้องชำระภาษี (ส่วนของค่าก่อสร้าง)", self.loan),
                          ("Factor F (เมื่อไม่มีตารางที่ใช้ได้)", self.factor), ("เงินล่วงหน้าจ่าย", self.adv),
                          ("เงินประกันผลงานหัก", self.ret), ("ดอกเบี้ยเงินกู้", self.interest),
-                         ("ภาษีมูลค่าเพิ่ม", self.vat), ("หน่วยงานเจ้าของโครงการ", self.text["owner"]),
+                         ("ภาษีมูลค่าเพิ่ม", self.vat),
+                         ("แผนงาน: ค่าแรงต่อวัน", self.wage), ("แผนงาน: วันทำงาน", self.workweek), ("หน่วยงานเจ้าของโครงการ", self.text["owner"]),
                          ("สถานที่ก่อสร้าง", self.text["location"]), ("แบบเลขที่", self.text["drawing_no"]),
                          ("ประธานกรรมการกำหนดราคากลาง", self.text["chair"]), ("กรรมการ", self.text["member1"]),
                          ("กรรมการ", self.text["member2"]), ("ผู้ถอดแบบและคำนวณราคา", self.text["preparer"]),
@@ -833,7 +836,8 @@ class CostPage(Page):
         self.method.setCurrentIndex(max(0, self.method.findData(c.method)))
         self.official.setChecked(c.use_official)
         for w, v in ((self.loan, c.loan_share), (self.factor, c.factor_f), (self.adv, c.adv_pay), (self.ret, c.retention),
-                     (self.interest, c.interest), (self.vat, c.vat)):
+                     (self.interest, c.interest), (self.vat, c.vat), (self.wage, c.wage),
+                     (self.workweek, c.workweek)):
             w.setValue(v)
         for k, w in self.text.items():
             w.setText(getattr(c, k))
@@ -856,6 +860,7 @@ class CostPage(Page):
         c.factor_f, c.adv_pay, c.retention = self.factor.value(), self.adv.value(), self.ret.value()
         c.use_official, c.loan_share = self.official.isChecked(), self.loan.value()
         c.interest, c.vat = self.interest.value(), self.vat.value()
+        c.wage, c.workweek = self.wage.value(), int(self.workweek.value())
         for k, w in self.text.items():
             setattr(c, k, w.text().strip())
         rows = []
@@ -990,6 +995,11 @@ class ResultsPage(Page):
                          + f" → {est.grand:,.2f} บาท"
                          + (f" · {est.grand / est.area:,.0f} บาท/ตร.ม." if est.area else "")
                          + (f" · วัสดุยังไม่มีราคา {len(miss)} รายการ (หน้า 9)" if miss else ""))
+            from ..schedule import plan
+            c = res.building.costing
+            pl = plan(est, c.wage, c.workweek, c.crews)
+            lines.append(f"แผนงาน (CPM): {pl.days} วันทำงาน ≈ {pl.months:g} เดือน · งานวิกฤต: "
+                         + " → ".join(t.name.split(" (")[0] for t in pl.critical_path()))
         except Exception as e:                     # the structure result still shows
             lines.append(f"ราคากลาง: คำนวณไม่ได้ ({e})")
         lines.append("ผล: ผ่านทุกรายการ" if res.ok else "ผล: มีรายการไม่ผ่าน (สีแดง)")
