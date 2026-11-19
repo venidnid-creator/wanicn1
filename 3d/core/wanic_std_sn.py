@@ -779,9 +779,12 @@ def _labels(sh, notes, col_x, ytop, ybot, size=2.6):
         if ys[i] - h < floor_:
             ys[i] = floor_ + h
         floor_ = ys[i] + 6.4
-    for (p, lines), ty in zip(items, ys):
-        sh.line((col_x - 1.2, ty), (p[0] + (1.6 if p[0] < col_x else -1.6), p[1]), "text", 0.18)
-        _ahead(sh, p, (col_x, ty), 2.0, "text")
+    for (p, lines), ty in zip(items, ys):                    # level from the text, one turn down to the item
+        knee = (p[0] + 4.0, ty) if abs(ty - p[1]) > 0.4 else None
+        sh.line((col_x - 1.2, ty), knee or p, "text", 0.18)
+        if knee:
+            sh.line(knee, p, "text", 0.18)
+        _ahead(sh, p, knee or (col_x, ty), 2.0, "text")
         for j, ln in enumerate(lines):
             sh.text((col_x, ty - 0.9 - j * 4.6), ln, size)
 
@@ -1069,6 +1072,31 @@ BRANCHES = [("โถส้วม (หม้อน้ำ)", "WC.", "1/2", "4", "2
             ("ช่องระบายน้ำทิ้งที่พื้น", "FD.", "-", "-", "-", "2")]
 
 
+def _clear_columns(fx, E, k, inner, gap=0.03):
+    """The fitting slid along its wall off any column standing in the room's
+    corner, so nothing is set into the structure."""
+    lib = E["lib"]
+    fx = dict(fx)
+    for _ in range(2):
+        rx = D.fixture_rect(fx)
+        fx0, fy0 = min(p[0] for p in rx), min(p[1] for p in rx)
+        fx1, fy1 = max(p[0] for p in rx), max(p[1] for p in rx)
+        for c in (c for c in E["columns"] if c["floor"] == k):
+            h = float(lib.get(c["mark"], {}).get("b", 0.2)) / 2
+            cx0, cy0, cx1, cy1 = c["x"] - h, c["y"] - h, c["x"] + h, c["y"] + h
+            if fx1 <= cx0 or fx0 >= cx1 or fy1 <= cy0 or fy0 >= cy1:
+                continue
+            # slide the short way out, along the room
+            moves = [(cx1 - fx0 + gap, 0), (cx0 - fx1 - gap, 0), (0, cy1 - fy0 + gap), (0, cy0 - fy1 - gap)]
+            x0, y0, x1, y1 = inner
+            ok = [m for m in moves if x0 - 1e-6 <= fx0 + m[0] and fx1 + m[0] <= x1 + 1e-6 and
+                  y0 - 1e-6 <= fy0 + m[1] and fy1 + m[1] <= y1 + 1e-6]
+            if ok:
+                dx, dy = min(ok, key=lambda m: abs(m[0]) + abs(m[1]))
+                fx["x"], fx["y"] = float(fx["x"]) + dx, float(fx["y"]) + dy
+    return fx
+
+
 def _bath_one(sh, E, k, rm, cx, ytop, k_mm, no):
     """One bathroom's sanitary plan at ``k_mm`` mm a metre, its top-left at
     (cx - w/2, ytop): walls, fittings, the soil / waste pipes to the stack
@@ -1093,7 +1121,7 @@ def _bath_one(sh, E, k, rm, cx, ytop, k_mm, no):
     sh.items[n0:] = STD.clip_items(sh.items[n0:], bb)
     inner = STD._inner(E, k, rm)
     fxs = [f["fx"] for f in STD.bath_fixtures(E, k, rm)]
-    fxs = [STD.fit_inside(f, inner) for f in fxs]
+    fxs = [_clear_columns(STD.fit_inside(f, inner), E, k, inner) for f in fxs]
     for f in fxs:
         STD.fixture_plan(sh, v, f, inner)
     # the sizes, wall to wall
@@ -1132,9 +1160,7 @@ def _bath_one(sh, E, k, rm, cx, ytop, k_mm, no):
             STD_flex = _flex
             STD_flex(sh, v(*at(0.10, a)), v(*at(off_s, a)))
         ats.append(a)
-        tag = 'Ø4"S' if soil else 'Ø2"W'
-        q = v(*pf)
-        sh.text((q[0] + 1.5, q[1] + 1.2), tag, 2.0, "left", "pipe")
+
     fd = next((f for f in fxs if f.get("type") == "FD"), None)
     a_end = hi if not ground else (lo + hi) / 2
     ats.append(a_end)
@@ -1533,3 +1559,305 @@ def sn_hangers(sh, E):
                                 ("มม. (นิ้ว)", "แนวดิ่ง (ม.)", "แนวนอน (ม.)", "แนวดิ่ง (ม.)", "แนวนอน (ม.)")])
     sh.text((tx, yb - 12), "ขนาดของเหล็กเส้นที่ใช้แขวนท่อเดินในแนวระดับ", 3.2, "left", "text", True)
     _rows(sh, tx, yb - 17, [60, 46], HANGER_ROD, [("ขนาดท่อ มม. (นิ้ว)", "เส้นผ่านศูนย์กลางเหล็ก (มม.)")])
+
+
+# -- the details, drawn again (round 2): continuous pipes, fittings clear of the wall, tidy notes
+
+def _fillet(pts, r):
+    """A polyline with its corners rounded (radius r), for pipe bends."""
+    if len(pts) < 3 or r <= 0:
+        return list(pts)
+    out = [pts[0]]
+    for a, b, c in zip(pts, pts[1:], pts[2:]):
+        u = (a[0] - b[0], a[1] - b[1])
+        w = (c[0] - b[0], c[1] - b[1])
+        lu, lw = math.hypot(*u) or 1, math.hypot(*w) or 1
+        rr = min(r, lu / 2, lw / 2)
+        p0 = (b[0] + u[0] / lu * rr, b[1] + u[1] / lu * rr)
+        p1 = (b[0] + w[0] / lw * rr, b[1] + w[1] / lw * rr)
+        for i in range(7):                                   # a quadratic Bézier through the corner
+            t = i / 6
+            out.append(((1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * b[0] + t * t * p1[0],
+                        (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * b[1] + t * t * p1[1]))
+    out.append(pts[-1])
+    return out
+
+
+def _pipe(sh, pts, d, w=0.4, r=None, sockets=(), mask=True):
+    """A pipe along ``pts`` (paper), ``d`` wide: both walls, continuous, the
+    bends rounded; a socket (a short wider band) at each point of ``sockets``."""
+    pts = _fillet(pts, d * 1.6 if r is None else r)
+    if mask:
+        for a, b in zip(pts, pts[1:]):
+            L = math.hypot(b[0] - a[0], b[1] - a[1]) or 1
+            nx, ny = -(b[1] - a[1]) / L * d / 2, (b[0] - a[0]) / L * d / 2
+            sh.fill([(a[0] + nx, a[1] + ny), (b[0] + nx, b[1] + ny), (b[0] - nx, b[1] - ny), (a[0] - nx, a[1] - ny)],
+                    "mask", 0.0)
+    for side in (-1, 1):
+        sh.poly(D._offset_line(pts, side * d / 2), "pipe", w, closed=False)
+    for s in sockets:
+        (x, y), vertical = s if isinstance(s[0], tuple) else (s, True)
+        if vertical:
+            sh.rect(x - d / 2 - 0.5, y - 1.3, x + d / 2 + 0.5, y + 1.3, "pipe", 0.3)
+        else:
+            sh.rect(x - 1.3, y - d / 2 - 0.5, x + 1.3, y + d / 2 + 0.5, "pipe", 0.3)
+
+
+def _wall_on_slab(sh, xa, xb, ybot, ytop):
+    """A wall standing on the slab: its two faces, the brick hatch, a break at the top."""
+    from core import wanic_std_sheets as STD
+    sh.fill([(xa, ybot), (xb, ybot), (xb, ytop), (xa, ytop)], "mask", 0.0)
+    sh.line((xa, ybot), (xa, ytop), "cut", 0.5)
+    sh.line((xb, ybot), (xb, ytop), "cut", 0.5)
+    y = ybot
+    while y < ytop - 0.5:
+        sh.line((xa, y), (xb, min(y + (xb - xa), ytop)), "hatch", 0.12)
+        y += 2.4
+    STD._break_h(sh, ytop, xa, xb)
+
+
+def _notes(sh, items, col_x, right=True, size=2.4, gap=5.4):
+    """Notes in an aligned column: each leader runs level from its text and
+    turns once to its item (arrowhead at the item); kept ``gap`` mm apart."""
+    items = sorted(items, key=lambda t: -t[0][1])
+    ys, last = [], 1e9
+    for p, lines in items:
+        ty = min(p[1], last - gap)
+        ys.append(ty)
+        last = ty - 4.4 * (len(lines) - 1)
+    for (p, lines), ty in zip(items, ys):
+        knee = (p[0] + (5.0 if right else -5.0), ty) if abs(ty - p[1]) > 0.4 else p
+        sh.line((col_x - (1.0 if right else -1.0), ty), knee, "text", 0.18)
+        if knee is not p:
+            sh.line(knee, p, "text", 0.18)
+        _ahead(sh, p, knee if knee is not p else (col_x, ty), 1.9, "text")
+        for j, ln in enumerate(lines):
+            sh.text((col_x, ty - 0.9 - j * 4.4), ln, size, "left" if right else "right")
+
+
+def _floor_mark(sh, x, y, text="ระดับผิวพื้น"):
+    sh.poly([(x, y), (x - 1.4, y + 2.2), (x + 1.4, y + 2.2)], "dim", 0.25)
+    sh.text((x + 2.2, y + 0.9), text, 2.3)
+
+
+def _det_lav(sh, ox, oy):
+    """อ่างล้างหน้า (LAV): the wall on the slab, the basin in front of its
+    face, the trap and the waste down through the slab, the vent up, the
+    cold water with its stop valve and air chamber."""
+    from core import wanic_std_sheets as STD
+    ys = oy + 22                                            # the floor
+    xa, xb = ox + 4, ox + 9
+    _slab(sh, ox - 8, ox + 64, ys, 7.0, label=False)
+    xf = xb                                                 # the wall's face
+    xw, xc = xf + 4.0, xf + 9.0                             # the waste / vent, the cold water
+    _pipe(sh, [(xw, ys + 22), (xw, oy + 6), (ox + 62, oy + 6)], 3.4, sockets=[((xw, ys + 20), True)])
+    _pipe(sh, [(xw, ys + 22), (xw, oy + 94)], 2.2, 0.35)
+    sh.line((xw - 2.2, oy + 94), (xw + 2.2, oy + 94), "pipe", 0.6)
+    _pipe(sh, [(xf + 19, ys + 32), (xf + 19, ys + 22), (xf + 24, ys + 22), (xf + 24, ys + 26),
+               (xw + 1.7, ys + 26)], 2.4, 0.35, r=2.2)                 # the P-trap and its arm
+    _pipe(sh, [(xc, ys - 7), (xc, ys + 52)], 1.6, 0.35)
+    sh.line((xc - 1.3, ys + 52), (xc + 1.3, ys + 52), "pipe", 0.7)      # the air chamber's cap
+    _pipe(sh, [(xc, ys + 29), (xf + 13, ys + 29)], 1.2, 0.3)
+    _gate(sh, xf + 13, ys + 29)
+    # the basin in front of the wall's face (masked: the pipes run behind it)
+    bas = [(xf, ys + 40), (xf + 30, ys + 40), (xf + 27, ys + 32), (xf + 4, ys + 32), (xf, ys + 35)]
+    sh.fill(bas, "mask", 0.0)
+    sh.poly(bas, "fixture", 0.5)
+    sh.line((xf + 19, ys + 32), (xf + 19, ys + 31), "fixture", 0.4)
+    sh.poly([(xf + 18, ys + 40), (xf + 18, ys + 44), (xf + 24, ys + 44)], "fixture", 0.45, closed=False)
+    _wall_on_slab(sh, xa, xb, ys, oy + 98)
+    _floor_mark(sh, ox + 46, ys)
+    _notes(sh, [((xw + 1.1, oy + 82), ['ท่อระบายอากาศ Ø1 1/2"']),
+                ((xc + 0.8, ys + 51), ["ปลั๊กอุดปลายท่อ (AIR CHAMBER 0.30 ม.)"]),
+                ((xf + 14.8, ys + 29), ['STOP VALVE Ø1/2"']),
+                ((xf + 25.2, ys + 23), ['ที่ดักกลิ่น Ø1 1/2"']),
+                ((xc + 0.8, ys + 12), ["ท่อประปา"]),
+                ((ox + 40, oy + 7.7), ['ท่อน้ำทิ้ง Ø2"'])], ox + 70)
+    _box_title(sh, ox + 40, oy - 6, "อ่างล้างหน้า ( LAV )")
+
+
+def _det_wc(sh, ox, oy):
+    """ส้วมชนิดถังน้ำล้าง (FLUSH TANK): the wall on the right, the bowl and
+    the tank in front of it, the soil down through the slab and its long
+    bend, the vent up the wall, the cold water to the stop valve."""
+    ys = oy + 26
+    xa, xb = ox + 60, ox + 65
+    _slab(sh, ox - 6, ox + 72, ys, 7.0, label=False)
+    xf = xa                                                  # the wall's face (to the left)
+    xs = xf - 20                                             # the soil, under the bowl's outlet
+    _pipe(sh, [(xs, ys + 2), (xs, oy + 6), (ox + 72, oy + 6)], 4.4, r=6.0, sockets=[((xs, ys - 9), True)])
+    xv = xf - 3.0
+    _pipe(sh, [(xv, oy + 6), (xv, oy + 96)], 2.2, 0.35)                 # the vent, off the soil's run
+    sh.line((xv - 2.2, oy + 96), (xv + 2.2, oy + 96), "pipe", 0.6)
+    xc = xf - 7.0
+    _pipe(sh, [(xc, ys - 7), (xc, ys + 58)], 1.6, 0.35)
+    sh.line((xc - 1.3, ys + 58), (xc + 1.3, ys + 58), "pipe", 0.7)
+    _pipe(sh, [(xc, ys + 22), (xf - 12.5, ys + 22)], 1.2, 0.3)
+    _gate(sh, xf - 11, ys + 22)
+    # the tank and the bowl, in front of the wall's face
+    tank = [(xf - 15, ys + 30), (xf, ys + 30), (xf, ys + 50), (xf - 15, ys + 50)]
+    bowl = [(xf - 15, ys + 30), (xf - 40, ys + 30), (xf - 40, ys + 27), (xf - 34, ys + 20), (xf - 30, ys + 12),
+            (xf - 30, ys), (xf - 16, ys), (xf - 16, ys + 12), (xf - 15, ys + 30)]
+    for poly in (tank, bowl):
+        sh.fill(poly, "mask", 0.0)
+        sh.poly(poly, "fixture", 0.5)
+    sh.rect(xf - 41, ys + 30, xf - 14, ys + 32, "fixture", 0.35)       # the seat
+    _wall_on_slab(sh, xa, xb, ys, oy + 98)
+    _floor_mark(sh, ox + 2, ys)
+    _notes(sh, [((xv - 1.1, oy + 84), ['ท่อระบายอากาศ Ø2"']),
+                ((xc - 0.8, ys + 57), ["ปลั๊กอุดปลายท่อ (AIR CHAMBER 0.30 ม.)"]),
+                ((xf - 12.8, ys + 22.4), ['STOP VALVE Ø1/2"']),
+                ((xc - 0.8, ys + 6), ["ท่อประปา"]),
+                ((xs - 2.2, ys - 14), ['ท่อโสโครก Ø4"']),
+                ((ox + 46, oy + 8.2), ['ข้องอยาว 90° ลงท่อโสโครก'])], ox - 10, right=False)
+    _box_title(sh, ox + 34, oy - 6, "ส้วมชนิดถังน้ำล้าง ( FLUSH TANK )")
+
+
+def _det_sh(sh, ox, oy):
+    """ฝักบัวอาบน้ำ (SH): the cold water up the wall's face to the mixing
+    valve, the arm and the head, the air chamber at the top."""
+    ys = oy + 22
+    xa, xb = ox + 4, ox + 9
+    _slab(sh, ox - 8, ox + 44, ys, 7.0, label=False)
+    xc = xb + 3.0
+    _pipe(sh, [(xc, ys - 7), (xc, ys + 66)], 1.6, 0.35)
+    sh.line((xc - 1.3, ys + 66), (xc + 1.3, ys + 66), "pipe", 0.7)
+    _pipe(sh, [(xc, ys + 56), (xc + 10, ys + 58), (xc + 13, ys + 56)], 1.2, 0.3, r=1.5)
+    head = [(xc + 11, ys + 56), (xc + 16, ys + 54), (xc + 12, ys + 52)]
+    sh.fill(head, "mask", 0.0)
+    sh.poly(head, "fixture", 0.45)
+    sh.rect(xc + 1.0, ys + 27, xc + 5.0, ys + 33, "fixture", 0.45)    # the mixing valve
+    sh.line((xc + 5.0, ys + 30), (xc + 9.0, ys + 30), "fixture", 0.45)
+    _wall_on_slab(sh, xa, xb, ys, oy + 98)
+    _floor_mark(sh, ox + 30, ys)
+    _notes(sh, [((xc + 0.8, ys + 65), ["AIR CHAMBER 0.30 ม."]), ((xc + 15, ys + 54), ["หัวฝักบัว"]),
+                ((xc + 9.0, ys + 30), ["วาล์วผสม / ก๊อกฝักบัว"]), ((xc + 0.8, ys + 10), ["ท่อประปา Ø1/2\""])], ox + 52)
+    _box_title(sh, ox + 34, oy - 6, "ฝักบัวอาบน้ำ ( SH )")
+
+
+def _det_rfd(sh, ox, oy):
+    """ช่องระบายน้ำฝน (RFD): the drain set in the roof slab, the pipe down
+    and its bend, continuous."""
+    ys = oy + 54
+    _slab(sh, ox - 6, ox + 66, ys, 8.0, label=False)
+    cx = ox + 26
+    _pipe(sh, [(cx, ys - 6), (cx, oy + 8), (ox + 66, oy + 8)], 6.0, r=8.0, sockets=[((cx, ys - 12), True)])
+    body = [(cx - 7, ys + 0.6), (cx + 7, ys + 0.6), (cx + 6, ys - 6), (cx - 6, ys - 6)]
+    sh.fill(body, "mask", 0.0)
+    sh.poly(body, "pipe", 0.45)
+    sh.rect(cx - 8, ys, cx + 8, ys + 1.6, "pipe", 0.5)
+    _floor_mark(sh, ox - 2, ys + 0.2, "ระดับผิวพื้นหลังคา")
+    _notes(sh, [((cx + 8, ys + 1), ["ตะแกรงรูระบายน้ำฝนแบบเรียบ (RFD)"]),
+                ((cx + 6.5, ys - 4), ["ฝังในพื้น คสล. ยาแนวกันซึม"]),
+                ((cx + 3, oy + 30), ['ท่อน้ำฝน RL Ø3"']), ((ox + 52, oy + 11), ["ข้องอยาว 90° ลงบ่อพัก"])], ox + 74)
+    _box_title(sh, ox + 34, oy - 6, "แบบขยายช่องระบายน้ำฝน ( RFD )")
+
+
+def _det_fd(sh, ox, oy, fco=False):
+    """FD / FCO: the cover in plan, then in section: the body in the slab,
+    the pipe down — through a P-trap (FD) or a long bend (FCO) — and on,
+    one continuous pipe, held by its hanger."""
+    cx = ox + 26
+    cy = oy + 96
+    sh.circle((cx, cy), 9.0, "pipe", 0.45)
+    if fco:
+        sh.circle((cx, cy), 7.0, "pipe", 0.3)
+        for i in range(-6, 7, 2):
+            h = math.sqrt(max(49 - i * i, 0))
+            sh.line((cx + i, cy - h), (cx + i, cy + h), "hatch", 0.15)
+    else:
+        for r in (2.5, 5.0, 7.5):
+            sh.circle((cx, cy), r, "pipe", 0.2)
+        for a in range(0, 360, 30):
+            ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+            sh.line((cx + 2.5 * ca, cy + 2.5 * sa), (cx + 7.5 * ca, cy + 7.5 * sa), "pipe", 0.15)
+    ys = oy + 70
+    _slab(sh, ox - 8, ox + 76, ys, 8.0, label=False)
+    if fco:
+        path = [(cx, ys - 7), (cx, oy + 36), (ox + 76, oy + 36)]
+        _pipe(sh, path, 4.0, r=9.0, sockets=[((cx, ys - 14), True), ((ox + 62, oy + 36), False)])
+    else:
+        path = [(cx, ys - 7), (cx, oy + 40), (cx + 9, oy + 40), (cx + 9, oy + 50), (ox + 76, oy + 50)]
+        _pipe(sh, path, 4.0, r=4.0, sockets=[((ox + 62, oy + 50), False)])
+    body = [(cx - 7, ys + 0.5), (cx + 7, ys + 0.5), (cx + 7, ys - 5), (cx + 3, ys - 8), (cx - 3, ys - 8), (cx - 7, ys - 5)]
+    sh.fill(body, "mask", 0.0)
+    sh.poly(body, "pipe", 0.45)
+    sh.line((cx - 7, ys - 0.8), (cx + 7, ys - 0.8), "pipe", 0.6)
+    yh = oy + (36 if fco else 50) + 2.4
+    sh.line((ox + 52, ys - 8), (ox + 52, yh), "pipe", 0.3)                        # the hanger
+    sh.line((ox + 49.5, yh), (ox + 54.5, yh), "pipe", 0.4)
+    _floor_mark(sh, ox + 56, ys)
+    notes = [((cx + 9, cy), ["ฝาสแตนเลส / ทองเหลือง" if fco else "ตะแกรงทองเหลือง (BRASS OR BRONZE)"]),
+             ((ox + 52, yh + 8), ["เหล็กแขวนท่อ"]),
+             ((ox + 72, oy + (36 if fco else 50) + 2.0), ["ชนิดของท่อดูในรายการประกอบแบบ"])]
+    if fco:
+        notes.append(((cx + 4, oy + 42), ["ข้องอ 90° รัศมีกว้าง"]))
+    else:
+        notes += [((cx + 2, oy + 58), ["ช่องระบายน้ำทิ้ง"]), ((cx + 11, oy + 44), ["ที่ดักกลิ่นรูป P"])]
+    _notes(sh, notes, ox + 84)
+    _box_title(sh, ox + 40, oy + 12, "ช่องสำหรับทำความสะอาดท่อที่พื้น ( FCO )" if fco else "ช่องระบายน้ำทิ้งที่พื้น ( FD )")
+
+
+def _det_co(sh, ox, oy):
+    """CO: the stack down through the slab and into the run by a 45° wye;
+    the run's end plugged as the cleanout; the hangers. All continuous."""
+    ys = oy + 84
+    _slab(sh, ox - 8, ox + 76, ys, 8.0, label=False)
+    xs = ox + 26
+    yr = oy + 36
+    _pipe(sh, [(xs, ys + 14), (xs, yr + 16), (xs + 12, yr + 3)], 4.0, r=4.0, sockets=[((xs, ys - 14), True)])
+    _pipe(sh, [(ox - 4, yr), (ox + 76, yr)], 4.0, sockets=[((ox + 8, yr), False), ((ox + 62, yr), False)])
+    sh.rect(ox - 6, yr - 3, ox - 4, yr + 3, "pipe", 0.6)                          # the plug
+    for xh in (ox + 16, ox + 56):
+        sh.line((xh, ys - 8), (xh, yr + 2.4), "pipe", 0.3)
+        sh.line((xh - 2.5, yr + 2.4), (xh + 2.5, yr + 2.4), "pipe", 0.4)
+    _floor_mark(sh, ox + 56, ys)
+    _notes(sh, [((xs + 2, ys + 10), ["ท่อแนวดิ่ง"]), ((ox + 56, ys - 20), ["เหล็กแขวนท่อ"]),
+                ((xs + 9, yr + 6), ["ข้อต่อสามทางวาย (Y) 45°"]), ((ox - 4, yr - 3), ["ช่องสำหรับทำความสะอาด อุดด้วยปลั๊ก"])],
+           ox + 84)
+    _box_title(sh, ox + 40, oy + 12, "ช่องสำหรับทำความสะอาดท่อใต้พื้น ( CO )")
+
+
+def _det_avc(sh, ox, oy):
+    """AVC: the vent's wall cap — the front, and the section through the wall."""
+    cx, cy = ox + 16, oy + 62
+    sh.arc((cx, cy), 12.0, 180, 360, "pipe", 0.45)
+    for r in (3.0, 6.0, 9.0):
+        sh.arc((cx, cy), r, 180, 360, "pipe", 0.2)
+    sh.line((cx - 12, cy), (cx + 12, cy), "pipe", 0.45)
+    xa, xb = ox + 46, ox + 52
+    _pipe(sh, [(xa - 1, cy), (ox + 76, cy)], 5.0)
+    _wall_on_slab(sh, xa, xb, oy + 38, oy + 88)
+    sh.fill([(xa - 4, cy - 10), (xa, cy - 10), (xa, cy + 10), (xa - 4, cy + 10)], "mask", 0.0)
+    sh.rect(xa - 4, cy - 10, xa, cy + 10, "pipe", 0.45)                            # the louvred cap
+    for i in range(5):
+        sh.line((xa - 4, cy - 8 + i * 4), (xa - 7, cy - 10 + i * 4), "pipe", 0.3)
+    _notes(sh, [((xa - 4, cy + 8), ["ฝาครอบกันแมลง สแตนเลส"]), ((ox + 70, cy + 2.5), ['ท่ออากาศ Ø2"V']),
+                ((xa + 3, oy + 80), ["ผนัง"])], ox + 84)
+    sh.text((cx, cy - 16), "รูปด้าน", 2.4, "center")
+    sh.text((xa + 3, oy + 32), "รูปตัด", 2.4, "center")
+    _box_title(sh, ox + 40, oy + 12, "แบบขยายฝาเปิดท่อระบายอากาศ ( AVC )")
+
+
+def sn_fixture_details(sh, E):
+    """SN-08 «แบบขยายการติดตั้งท่อ (แผ่นที่ 1)»: LAV, FLUSH TANK, SH, RFD."""
+    x0, y0, x1, y1 = D.drawing_area()
+    W = x1 - x0
+    _det_lav(sh, x0 + 10, y1 - 112)
+    _det_wc(sh, x0 + W * 0.66, y1 - 112)
+    _det_sh(sh, x0 + 10, y0 + 18)
+    _det_rfd(sh, x0 + W * 0.36, y0 + 18)
+    D.notes_block(sh, x0 + W * 0.74, y0 + 96, "หมายเหตุ", [
+        "1. ระดับติดตั้งสุขภัณฑ์และอุปกรณ์ ให้ตรวจสอบกับแบบสถาปัตยกรรมและคำแนะนำของผู้ผลิต",
+        "2. ทุกจุดจ่ายน้ำติดตั้ง STOP VALVE และท่อกันกระแทก (AIR CHAMBER) ยาวไม่น้อยกว่า 0.30 ม.",
+        "3. ท่อระบายน้ำทุกจุดต้องมีที่ดักกลิ่น และต่อท่ออากาศตามแบบ"], 2.6, 38)
+
+
+def sn_drain_details(sh, E):
+    """SN-09 «แบบขยายการติดตั้งท่อ (แผ่นที่ 2)»: FD, FCO, CO, AVC."""
+    x0, y0, x1, y1 = D.drawing_area()
+    W = x1 - x0
+    _det_fd(sh, x0 + 10, y1 - 118)
+    _det_fd(sh, x0 + W * 0.52, y1 - 118, fco=True)
+    _det_co(sh, x0 + 10, y0 + 4)
+    _det_avc(sh, x0 + W * 0.52, y0 + 4)
