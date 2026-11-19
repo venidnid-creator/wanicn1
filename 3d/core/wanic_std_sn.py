@@ -683,6 +683,30 @@ def _valve(sh, c, vertical=False):
                  (c[0] - 1.5, c[1] + 1.0)], "pipe", 0.3)
 
 
+def _cw_branches(sh, v, rm, n, wall, a0, off, fixtures, at, along, riser=False):
+    """The cold water inside a wet room: a pipe along the wall ``off``
+    inside it from ``a0`` past every fixture, a branch with a stop valve
+    to each (sink, basin, WC, shower)."""
+    fx = [f for f in fixtures if f.get("type", "").startswith(("WC", "LV", "SH", "BT", "SK", "UR"))]
+    if not fx:
+        return
+    alongs = [along(n, (float(f["x"]), float(f["y"]))) for f in fx]
+    lo, hi = min(alongs + [a0]), max(alongs + [a0])
+    _dashdot(sh, v(*at(n, wall, off, lo)), v(*at(n, wall, off, hi)), 0.3)
+    for f, a in zip(fx, alongs):
+        pf = (float(f["x"]), float(f["y"]))
+        tgt = v(*pf)
+        st = v(*at(n, wall, off, a))
+        L = math.hypot(tgt[0] - st[0], tgt[1] - st[1])
+        if L > 1.2:
+            k = max(0.0, (L - 1.6) / L)
+            end = (st[0] + (tgt[0] - st[0]) * k, st[1] + (tgt[1] - st[1]) * k)
+            _dashdot(sh, st, end, 0.25)
+        else:
+            end = st
+        sh.circle(end, 0.65, "pipe", 0.3)                            # the stop valve at the fixture
+
+
 def _outline(E, k):
     rms = [s["room"] for s in E["slabs"] if s["floor"] == k] or [s["room"] for s in E["slabs"]]
     return (min(r["x"] for r in rms), min(r["y"] for r in rms),
@@ -928,6 +952,15 @@ def sn_plan_std(sh, E, k):
         sh.circle(pm, 1.6, "pipe", 0.35)
         sh.text((pm[0], pm[1] - 0.7), "M", 1.6, "center", "pipe", True)
         _valve(sh, (pm[0], pm[1] + 3.2), True)
+        pp = v(bx1 - 1.3, Y0 - 2.4)                                # on to the public main, at the front
+        _dashdot(sh, (pm[0], pm[1] - 1.6), (pm[0], pp[1]), 0.3)
+        _valve(sh, (pm[0], pm[1] - 4.0), True)
+        sh.line((pp[0] - 1.6, pp[1]), (pp[0] + 1.6, pp[1]), "pipe", 0.6)       # capped, ready for the tap
+        for i in range(-6, 7):
+            xx = pp[0] + i * 3.0
+            sh.line((xx, pp[1] - 2.0), (xx + 1.8, pp[1] - 2.0), "pipe", 0.5)
+        notes.append(((pp[0] + 2.0, pp[1] - 2.0), ["รอรับน้ำประปาจากท่อประปาสาธารณะหน้าบ้าน",
+                                                   'ท่อ PVC Ø1/2" ชั้น 13.5 (ตามข้อกำหนดการประปา)']))
         _dashdot(sh, (pm[0], pm[1] + 1.6), (pm[0], pt[1] - r_tk), 0.3)
         bp = (pt[0] - v.len(0.95), pt[1])
         sh.rect(bp[0] - 2.0, bp[1] - 1.6, bp[0] + 2.0, bp[1] + 1.6, "pipe", 0.35)
@@ -950,7 +983,8 @@ def sn_plan_std(sh, E, k):
             _dashdot(sh, v(*ent), pin, 0.3)
             pv = v(*at(n, wall, 0.12, along(n, ent)))
             _valve(sh, pv, vertical=not n[0])
-            sh.circle(pin, 0.7, "pipe", 0.3)
+            _cw_branches(sh, v, rm, n, wall, along(n, ent), -0.25,
+                         [fx for fx in fixtures if in_room(fx, rm)], at, along)
         notes.append((v(*_snap(ring, (bx1 + 0.25, (by0 + by1) / 2))), ['ท่อประปา PVC Ø3/4"CW']))
         notes.append((pt, [f"ถังเก็บน้ำสำเร็จรูป {next((t_ for t_ in TANK_SIZES if t_ >= des['users'] * SAN.SEWAGE_L), TANK_SIZES[-1]):,} ลิตร",
                            'วางบนฐาน คสล. หนา 0.10 ม. · FLOAT VALVE Ø1/2"'.replace(" · ", " ")]))
@@ -1008,9 +1042,10 @@ def sn_plan_std(sh, E, k):
             _fco(sh, v(*at(n, wall, inner, amin)))
             sh.circle(pcs, 1.8, "pipe", 0.5)
             sh.circle(pcs, 0.8, "pipe", 0.4)
-            cw = v(*at(n, wall, inner, hi - 0.35))
+            cw = v(*at(n, wall, -0.42, hi - 0.10))
             sh.circle(cw, 1.0, "pipe", 0.3)
             sh.line((cw[0] - 0.7, cw[1] - 0.7), (cw[0] + 0.7, cw[1] + 0.7), "pipe", 0.25)
+            _cw_branches(sh, v, rm, n, wall, hi - 0.10, -0.42, mine, at, along, riser=True)
             notes.append((pcs, ['ท่อโสโครกแนวดิ่ง Ø4"SW ลงถังบำบัด', 'ท่ออากาศ Ø2"V ขึ้นทะลุหลังคา']))
             notes.append((cw, ['ท่อประปาแนวดิ่ง Ø3/4"CW พร้อมประตูน้ำ']))
             notes.append((v(*at(n, wall, inner, (amin + hi) / 2)), ['ท่อ PVC Ø4"S / Ø2"W แขวนใต้พื้น ลาด 1 : 100']))

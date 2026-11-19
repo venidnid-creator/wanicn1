@@ -1861,7 +1861,7 @@ def stair_plan_view(sh, E, e, k, box, sc, upper, sec_ref, num):
         ux, uy = (bx_ - ax) / Lw, (by_ - ay) / Lw
         _brick_band(sh, v(ax - uy * t / 2, ay + ux * t / 2), v(bx_ + uy * t / 2, by_ - ux * t / 2), 1.2)
     n1_ = len(sh.items)
-    D.draw_stairs(sh, v, E, k)
+    D.draw_stairs(sh, v, E, k, numbers=False)
     for i_, it in enumerate(sh.items[n1_:], n1_):        # sharper: steps 0.3, outline 0.5
         dashed = it[0] == "line" and it[4] or it[0] == "poly" and it[5]
         if dashed:

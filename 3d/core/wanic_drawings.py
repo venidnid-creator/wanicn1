@@ -849,10 +849,21 @@ def draw_rooms(sh, v, E, k, fcodes=None, area=True):
             sh.text((p[0], p[1] - 6.0), tag, 2.0, "center")
 
 
-def draw_stairs(sh, v, E, k):
+def draw_stairs(sh, v, E, k, numbers=True):
     s = E["settings"]
     for st in (x for x in E["stairs"] if x["floor"] == k):
         pl = B.stair_plan(st["st"], s)
+        if numbers:                                  # every step numbered from the foot (the standard)
+            lay = B.stair_layout(st["st"], s)
+            no, g = 0, float(lay["g"])
+            for f in lay["flights"]:
+                (px, py), (dx, dy) = f["p0"], f["d"]
+                side = float(f.get("w", 1.0)) * 0.27
+                for i in range(1, int(f["n"]) + 1):
+                    no += 1
+                    a = g * (i - 0.5)
+                    q = v(px + dx * a - dy * side, py + dy * a + dx * side)
+                    sh.text((q[0], q[1] - 0.75), str(no), 1.7, "center", "dim")
         for poly in pl["polys"]:
             sh.poly([v(*p) for p in poly], "wall", 0.25)
         for p, q in pl["treads"]:
@@ -862,10 +873,12 @@ def draw_stairs(sh, v, E, k):
             sh.line(v(*p), v(*q), "dim", 0.18)
         for p, q in B.stair_railing(st["st"], s)["plan"]:          # ราวบันได
             sh.line(v(*p), v(*q), "door", 0.25)
-        e, e2 = v(*w[0]), v(*w[1])                 # «ขึ้น» at the foot of the way up (the standard)
-        dx, dy = e[0] - e2[0], e[1] - e2[1]
-        L = math.hypot(dx, dy) or 1.0
-        masked_text(sh, (e[0] - dx / L * 2.5 + dy / L * 2.6, e[1] - dy / L * 2.5 - dx / L * 2.6 - 0.8), "ขึ้น", 2.2)
+        f0 = B.stair_layout(st["st"], s)["flights"][0]     # «ขึ้น» at the foot, across the walk line from the numbers
+        (px, py), (dx, dy) = f0["p0"], f0["d"]
+        g0 = float(B.stair_layout(st["st"], s)["g"])
+        sd = float(f0.get("w", 1.0)) * 0.27
+        q = v(px + dx * g0 * 1.0 + dy * sd, py + dy * g0 * 1.0 - dx * sd)
+        masked_text(sh, (q[0], q[1] - 0.9), "ขึ้น", 2.1)
     # upstairs: the stair below seen through its opening (ช่องบันได) and the
     # guard rail round the opening, as the standard upper floor plans
     outline = B.building_outline(E)
@@ -1217,7 +1230,7 @@ def a_floor(sh, E, k, codes, fcodes, sheets=None):
         STD.room_tag(sh, v(*STD.tag_spot(E, k, rm)), E, rm, sl, fcodes)
     draw_free(sh, v, E, k * E["H"], (k + 1) * E["H"], ("walls", "columns"))
     draw_stairs(sh, v, E, k)
-    draw_fixtures(sh, v, E, k)
+    draw_fixtures(sh, v, E, k, labels=False)          # their codes are on the bathroom sheets
     section_marks(sh, v, E, k, sheets or [], ext=ext)
     draw_wall_tags(sh, v, E, k, t)
     # the interior elevations of the bathrooms: A B C D, the sheet they are on
@@ -1229,8 +1242,13 @@ def a_floor(sh, E, k, codes, fcodes, sheets=None):
         ref = refs[min(i // 2, len(refs) - 1)] if refs else ""
         off = min(0.75, rm["w"] * 0.2)
         elev_marker(sh, v(rm["x"] + rm["w"] - off, rm["y"] + rm["d"] / 2), ref)
-        p = v(rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] - 0.55)
-        STD.detail_ref(sh, (p[0] - 8, p[1]), f"WC.{i + 1}", wc_ref, "ห้องน้ำ")
+        gx_ = grids(E)[0]                                  # the tag outside, on a leader (as the stair's)
+        cy_ = rm["y"] + rm["d"] * 0.8
+        a_ = v(rm["x"] + rm["w"] * 0.6, cy_)
+        b_ = v((gx_[-1] if gx_ else rm["x"] + rm["w"]) + ext + 0.9, cy_)
+        sh.line(a_, (b_[0] - 7.0, b_[1]), "dim", 0.13)
+        sh.circle(a_, 0.5, "dim", 0.25)
+        STD.detail_ref(sh, b_, f"WC.{i + 1}", wc_ref, "ห้องน้ำ")
     # the stairs: ST.n — see the stair detail
     from core import wanic_stair_sheets as STS
     st_refs = [s_.code for s_ in (sheets or []) if s_.title.startswith("แบบขยายบันได")]
