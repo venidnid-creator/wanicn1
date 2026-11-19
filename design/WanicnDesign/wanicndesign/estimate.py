@@ -63,6 +63,41 @@ def factor_f(cost: float, table, default: float = 1.0) -> float:
     return rows[-1][1]
 
 
+def _load_official():
+    import json
+    import os
+
+    from .rates import DATA_DIR
+    with open(os.path.join(DATA_DIR, "factor_f_2569.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+#: ตาราง Factor F งานก่อสร้างอาคาร, กรมบัญชีกลาง ว 481 (26 มิ.ย. 2569), interest 6 %, VAT 7 % [CGD-FACTORF].
+OFFICIAL_FF = _load_official()
+
+
+def official_factor(cost: float, advance: float, retention: float, no_vat: bool = False) -> float | None:
+    """Factor F of a construction cost (บาท) from the official building table for this advance payment and
+    retention (หลักเกณฑ์งานอาคาร 2569 ข้อ 9.3 ข้อ 2: F = D − (D − E)(A − B)/(C − B)); ``no_vat`` gives the
+    "รวมในรูป Factor" column (ข้อ 7). None when no official table has these conditions."""
+    tab = next((t for t in OFFICIAL_FF["tables"]
+                if abs(t["advance"] - advance) < 1e-9 and abs(t["retention"] - retention) < 1e-9), None)
+    if tab is None:
+        return None
+    col = 2 if no_vat else 3
+    a = cost / 1e6                                       # the table is in million baht
+    rows = tab["rows"]
+    if rows[-1][0] == ">" and a > rows[-1][1]:
+        return rows[-1][col]
+    pts = [(r[1], r[col]) for r in rows if r[0] != ">"]
+    if a <= pts[0][0]:
+        return pts[0][1]
+    for (b, d), (c, e) in zip(pts, pts[1:]):
+        if a <= c:
+            return d - (d - e) * (a - b) / (c - b)
+    return pts[-1][1]
+
+
 class Estimate:
     def __init__(self, project_name: str, lines: list[Line], rates: Rates, costing=None,
                  province: str = "", area: float = 0.0):
@@ -100,8 +135,37 @@ class Estimate:
 
     @property
     def factor(self) -> float:
+        return self._factor()[0]
+
+    @property
+    def factor_note(self) -> str:
+        return self._factor()[1]
+
+    def _factor(self) -> tuple[float, str]:
+        """Factor F and where it came from: the user's rows, the official CGD table, or the typed value.
+        Funded partly by a loan with no VAT (``loan_share`` %), the two columns are averaged by share (ข้อ 8)."""
         c = self.costing
-        return round(factor_f(self.total, c.factor_table, c.factor_f), 4)
+        if c.factor_table:
+            return round(factor_f(self.total, c.factor_table, c.factor_f), 4), \
+                "ตามตาราง Factor F ที่กรอก (เทียบอัตราส่วนระหว่างช่วง)"
+        ok = (c.use_official and abs(c.interest - OFFICIAL_FF["interest"]) < 1e-9
+              and abs(c.vat - OFFICIAL_FF["vat"]) < 1e-9)
+        f_vat = official_factor(self.total, c.adv_pay, c.retention) if ok else None
+        if f_vat is None:
+            why = "" if not c.use_official else \
+                (" (ไม่มีตารางทางการสำหรับเงื่อนไขนี้ — ตารางมีเงินล่วงหน้า 0/5/10/15 %, ประกันผลงาน 0/5/10 %, "
+                 "ดอกเบี้ย 6 %, VAT 7 %)")
+            return round(float(c.factor_f or 1.0), 4), "ตามค่าที่กรอก" + why
+        share = min(max(c.loan_share, 0.0), 100.0) / 100
+        f_loan = official_factor(self.total, c.adv_pay, c.retention, no_vat=True)
+        f = f_loan * share + f_vat * (1 - share)
+        note = (f"ตามตาราง Factor F งานก่อสร้างอาคาร กรมบัญชีกลาง ว 481 (26 มิ.ย. 2569) เงินล่วงหน้า {c.adv_pay:g} % "
+                f"ประกันผลงาน {c.retention:g} % ดอกเบี้ย 6 % VAT 7 % — ค่างานต้นทุน {self.total / 1e6:,.4f} ล้านบาท "
+                "เทียบอัตราส่วนระหว่างช่วง (ข้อ 9.3)")
+        if share:
+            note += (f"; เงินกู้ไม่เสียภาษี {share * 100:g} % ใช้ช่อง รวมในรูป Factor {f_loan:.4f} "
+                     f"และงบประมาณ {100 - share * 100:g} % ใช้ Factor F {f_vat:.4f} ตามสัดส่วน (ข้อ 8)")
+        return round(f, 4), note
 
     @property
     def construction(self) -> float:
@@ -272,7 +336,7 @@ class Estimate:
         sum_row = s1k.max_row
         for cell in s1k[sum_row]:
             cell.font = bold
-        how = ("ตามตาราง Factor F ที่กรอก (เทียบอัตราส่วนระหว่างช่วง)" if c.factor_table else "ตามค่าที่กรอก")
+        how = self.factor_note
         s1k.append([])
         for text in (f"Factor F {self.factor:.4f} — {how}", "เงื่อนไขการใช้ตาราง Factor F",
                      f"   เงินล่วงหน้าจ่าย {c.adv_pay:g} %", f"   เงินประกันผลงานหัก {c.retention:g} %",

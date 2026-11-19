@@ -83,7 +83,7 @@ def test_factor_f_and_price_in_words():
     assert factor_f(1e6, [], 1.25) == 1.25
     assert baht_text(1234.5) == "หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบสตางค์"
     assert baht_text(21000000) == "ยี่สิบเอ็ดล้านบาทถ้วน"
-    c = Costing(factor_f=1.2)
+    c = Costing(factor_f=1.2, use_official=False)
     est = estimate(Project.load(EXAMPLE), Rates(), costing=c)
     assert est.grand == pytest.approx(round(est.total * 1.2, 2), abs=0.02)
     c.method = "private"
@@ -126,3 +126,32 @@ def test_province_module_is_the_3d_copy():
         return
     mine = open(os.path.join(ROOT, "wanicndesign", "province.py"), encoding="utf-8").read()
     assert mine.split("\n", 1)[1] == open(src, encoding="utf-8").read()
+
+
+def test_official_factor_f_table_w481():
+    from wanicndesign.estimate import OFFICIAL_FF, official_factor
+    assert len(OFFICIAL_FF["tables"]) == 12 and OFFICIAL_FF["interest"] == 6.0
+    for t in OFFICIAL_FF["tables"]:                      # every row: Factor F = Factor × 1.07 (VAT)
+        assert len(t["rows"]) == 24
+        assert all(abs(r[3] - r[2] * 1.07) < 5.1e-4 for r in t["rows"])
+    # advance 0 %, retention 0 % — the first table of ว 481
+    assert official_factor(300_000, 0, 0) == 1.3073                       # ≤ 0.5 million
+    assert official_factor(5_000_000, 0, 0) == 1.3002
+    assert official_factor(7_500_000, 0, 0) == pytest.approx(1.3002 - (1.3002 - 1.2942) * 2.5 / 5)
+    assert official_factor(600_000_000, 0, 0) == 1.1787                   # > 500 million
+    assert official_factor(1_000_000, 0, 0, no_vat=True) == 1.2196        # รวมในรูป Factor
+    assert official_factor(1_000_000, 0, 5) == 1.3055                     # retention 5 %
+    assert official_factor(1_000_000, 3, 0) is None                       # no such table
+
+
+def test_estimate_uses_official_factor_and_loan_share():
+    from wanicndesign.estimate import official_factor
+    from wanicndesign.structure.building import Costing
+    est = estimate(Project.load(EXAMPLE), Rates(), costing=Costing())
+    assert est.factor == round(official_factor(est.total, 0, 0), 4) and "ว 481" in est.factor_note
+    c = Costing(loan_share=60)
+    est = estimate(Project.load(EXAMPLE), Rates(), costing=c)
+    mix = 0.6 * official_factor(est.total, 0, 0, True) + 0.4 * official_factor(est.total, 0, 0)
+    assert est.factor == round(mix, 4)
+    est = estimate(Project.load(EXAMPLE), Rates(), costing=Costing(interest=5, factor_f=1.25))
+    assert est.factor == 1.25 and "ไม่มีตาราง" in est.factor_note       # interest differs from the table

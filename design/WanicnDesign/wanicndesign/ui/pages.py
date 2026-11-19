@@ -660,7 +660,8 @@ class CostPage(Page):
     title = "9. ราคากลาง"
     hint = ("ราคาวัสดุของจังหวัดที่ตั้งโครงการ (หน้า 1) จากตารางสำนักงานพาณิชย์จังหวัด หรือกรอกเอง · "
             "ค่าวัสดุต่อหน่วยคิดจากสูตรวัสดุมวลรวม กรมบัญชีกลาง 2569 · ค่าแรง ว480 · "
-            "Factor F กรอกค่าเดียว หรือกรอกแถวจากตาราง Factor F ฉบับที่ใช้ (โปรแกรมเทียบอัตราส่วนระหว่างช่วง)")
+            "Factor F จากตารางกรมบัญชีกลาง ว 481 (26 มิ.ย. 2569) ตามเงินล่วงหน้าและประกันผลงาน "
+            "เทียบอัตราส่วนระหว่างช่วงตามหลักเกณฑ์งานอาคาร ข้อ 9.3")
     PRICE_COLS = ["วัสดุ", "หน่วย", "ราคาต่อหน่วย (บาท)", "ที่มา"]
 
     def __init__(self, parent=None):
@@ -687,6 +688,8 @@ class CostPage(Page):
         self.month = QLineEdit()
         self.method = _combo([("gov", "ราคากลางราชการ (Factor F รวม VAT แล้ว)"),
                               ("private", "งานเอกชน (บวก VAT)")], "gov")
+        self.official = QCheckBox("ใช้ตาราง Factor F ทางการ (กรมบัญชีกลาง ว 481, 26 มิ.ย. 2569 ดอกเบี้ย 6 %)")
+        self.loan = _spin(0, 0, 100, 5, 0, "%")
         self.factor = _spin(1.0, 0.5, 3.0, 0.0001, 4)
         self.adv = _spin(0, 0, 50, 1, 1, "%")
         self.ret = _spin(0, 0, 50, 1, 1, "%")
@@ -695,7 +698,8 @@ class CostPage(Page):
         self.text = {k: QLineEdit() for k in ("owner", "location", "drawing_no", "chair", "member1", "member2",
                                               "preparer", "preparer_role")}
         for label, w in (("เดือนของราคาวัสดุ", self.month), ("วิธีคิด", self.method),
-                         ("Factor F (เมื่อไม่กรอกตาราง)", self.factor), ("เงินล่วงหน้าจ่าย", self.adv),
+                         ("Factor F", self.official), ("เงินกู้ที่ไม่ต้องชำระภาษี (ส่วนของค่าก่อสร้าง)", self.loan),
+                         ("Factor F (เมื่อไม่มีตารางที่ใช้ได้)", self.factor), ("เงินล่วงหน้าจ่าย", self.adv),
                          ("เงินประกันผลงานหัก", self.ret), ("ดอกเบี้ยเงินกู้", self.interest),
                          ("ภาษีมูลค่าเพิ่ม", self.vat), ("หน่วยงานเจ้าของโครงการ", self.text["owner"]),
                          ("สถานที่ก่อสร้าง", self.text["location"]), ("แบบเลขที่", self.text["drawing_no"]),
@@ -704,7 +708,8 @@ class CostPage(Page):
                          ("ตำแหน่ง", self.text["preparer_role"])):
             f.addRow(label, w)
         self.lay.addLayout(f)
-        self.lay.addWidget(QLabel("<b>ตาราง Factor F</b> (ค่างานต้นทุน บาท → Factor F) ตามเงื่อนไขด้านบน"))
+        self.lay.addWidget(QLabel("<b>ตาราง Factor F ของผู้ใช้</b> (ค่างานต้นทุน บาท → Factor F) — กรอกเมื่อใช้ตารางอื่น "
+                                  "เช่น ดอกเบี้ยที่ประกาศใหม่; ถ้ามีแถว จะใช้แทนตารางทางการ"))
         self.ftable = QTableWidget(0, 2)
         self.ftable.setHorizontalHeaderLabels(["ค่างานต้นทุน (บาท)", "Factor F"])
         self.ftable.setMaximumHeight(150)
@@ -763,7 +768,8 @@ class CostPage(Page):
         c = self.building.costing
         self.month.setText(c.price_month)
         self.method.setCurrentIndex(max(0, self.method.findData(c.method)))
-        for w, v in ((self.factor, c.factor_f), (self.adv, c.adv_pay), (self.ret, c.retention),
+        self.official.setChecked(c.use_official)
+        for w, v in ((self.loan, c.loan_share), (self.factor, c.factor_f), (self.adv, c.adv_pay), (self.ret, c.retention),
                      (self.interest, c.interest), (self.vat, c.vat)):
             w.setValue(v)
         for k, w in self.text.items():
@@ -782,6 +788,7 @@ class CostPage(Page):
         c = self.building.costing
         c.price_month, c.method = self.month.text().strip(), self.method.currentData()
         c.factor_f, c.adv_pay, c.retention = self.factor.value(), self.adv.value(), self.ret.value()
+        c.use_official, c.loan_share = self.official.isChecked(), self.loan.value()
         c.interest, c.vat = self.interest.value(), self.vat.value()
         for k, w in self.text.items():
             setattr(c, k, w.text().strip())

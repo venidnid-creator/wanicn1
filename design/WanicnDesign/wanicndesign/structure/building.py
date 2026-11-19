@@ -133,11 +133,13 @@ class Costing:
     drawing_no: str = ""           # แบบเลขที่
     price_month: str = ""          # month of the province prices, e.g. "ต.ค. 2569"
     method: str = "gov"            # "gov": Factor F holds VAT; "private": VAT on top
-    factor_f: float = 1.0          # used when factor_table is empty
+    use_official: bool = True      # Factor F from the CGD building table (ว 481, 26 มิ.ย. 2569) when it has these conditions
+    loan_share: float = 0.0        # % of the cost paid by a loan with no VAT (ข้อ 9.3 ข้อ 7–8)
+    factor_f: float = 1.0          # used when no table applies
     factor_table: list = field(default_factory=list)   # [[ค่างานต้นทุน (บาท), Factor F], …] from the CGD table
     adv_pay: float = 0.0           # เงินล่วงหน้าจ่าย %
     retention: float = 0.0         # เงินประกันผลงานหัก %
-    interest: float = 6.0          # ดอกเบี้ยเงินกู้ %
+    interest: float = 6.0          # ดอกเบี้ยเงินกู้ % (กรมบัญชีกลางประกาศ 26 มิ.ย. 2569: ร้อยละ 6 ต่อปี)
     vat: float = 7.0               # ภาษีมูลค่าเพิ่ม %
     chair: str = ""                # ประธานกรรมการกำหนดราคากลาง
     member1: str = ""
