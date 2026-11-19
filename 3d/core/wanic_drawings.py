@@ -3006,7 +3006,7 @@ def build_set(data, info=None,
         for i_ in range(0, len(fmarks), 2):             # two footings a sheet (the original)
             add("S", "รายละเอียดฐานราก " + " ".join(fmarks[i_:i_ + 2]),
                 lambda sh, _a, ms=fmarks[i_:i_ + 2]: _set_scale(sh, STD.s_footings_std(sh, E, ms)), "1:25")
-        add("S", "รายละเอียดเสา", lambda sh, _a: SS.s_column_details(sh, E), "1:25")
+        # รายละเอียดเสา: in ตารางเสา (S-07), as the standard set — no sheet of its own
         add("S", "รายละเอียดพื้น รอยต่อเสา ครีบ คสล.", lambda sh, _a: _set_scale(sh, STD.s_slab_std(sh, E)), "1:20")
         from core import wanic_stair_sheets as STS
         for i, e in enumerate(STS.stairs_to_detail(E)):     # one flight a sheet (the standard's S-14, S-15)
@@ -3023,8 +3023,10 @@ def build_set(data, info=None,
             add("S", "รอยต่อเหล็กรูปพรรณ แผ่นรองเสา ส้นโครง Truss",
                 lambda sh, _a: ST.s_steel_connections(sh, E, data), "ตามระบุ")
     if "SN" in groups:
-        add("SN", "สารบัญแบบ สัญลักษณ์ รายการประกอบแบบสุขาภิบาล",
-            lambda sh, all_: sn_index(sh, all_, E), "-")
+        from core import wanic_std_sn as SNS                 # the standard's SN-01..SN-03
+        add("SN", "สารบัญแบบและสัญลักษณ์ระบบสุขาภิบาล", lambda sh, all_: SNS.sn_index_std(sh, all_, E), "-")
+        add("SN", "รายการประกอบแบบ (แผ่นที่ 1)", lambda sh, _a: SNS.sn_spec(sh, E, 1), "-")
+        add("SN", "รายการประกอบแบบ (แผ่นที่ 2)", lambda sh, _a: SNS.sn_spec(sh, E, 2), "-")
         for k in floors:
             add("SN", f"แปลนระบบสุขาภิบาลชั้น {k + 1}",
                 lambda sh, _a, k=k: sn_plan(sh, E, k))

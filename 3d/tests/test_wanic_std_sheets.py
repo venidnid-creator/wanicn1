@@ -63,3 +63,15 @@ def test_slab_joint_and_stair_flight_sheets():
     for s in fl:
         t = " ".join(s.texts())
         assert "เหล็กหลัก" in t and "ทุกมุม" in t and "@" in t
+
+
+def test_sn_index_symbols_and_specification():
+    """SN-01 as the standard (sheet list, pipe types, drawn symbols) and the
+    specification on SN-02, SN-03 with the design values."""
+    sheets = [s for s in D.build_set(house(), INFO) if s.group == "SN"]
+    assert [s.title for s in sheets[:3]] == ["สารบัญแบบและสัญลักษณ์ระบบสุขาภิบาล",
+                                             "รายการประกอบแบบ (แผ่นที่ 1)", "รายการประกอบแบบ (แผ่นที่ 2)"]
+    t = " ".join(sheets[0].texts())
+    for w in ("ชนิดท่อที่ใช้ในการก่อสร้าง", "สัญลักษณ์ประกอบแบบระบบสุขาภิบาล", "ประตูน้ำ (GATE VALVE)", "SN-03"):
+        assert w in t, w
+    assert "ข้อมูลการออกแบบ" in " ".join(sheets[2].texts())
