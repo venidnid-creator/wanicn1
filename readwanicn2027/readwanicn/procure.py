@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -185,6 +186,7 @@ class Item:
     header: bool = False            # หัวข้อ/กลุ่มงาน (ไม่มีปริมาณและราคา)
     special: bool = False           # ค่าใช้จ่ายพิเศษตามข้อกำหนด: ไม่ปรับลด
     equip: bool = False             # งานครุภัณฑ์จัดซื้อ: Factor = VAT 1.07
+    factor: float = 0.0             # Factor F ของรายการตามไฟล์ BOQ (คอลัมน์ F / FN) — ใช้ตามนั้น ไม่เปลี่ยน
     # ว78
     domestic: float = 100.0         # ร้อยละพัสดุในประเทศ
     steel: bool | None = None       # None = ให้โปรแกรมตัดสินจากชื่อ
@@ -500,6 +502,8 @@ def _map_columns(labels) -> dict:
     col["amount"] = first(lambda s: s in ("เป็นเงิน", "จำนวนเงิน") or s.startswith("ราคาที่ปรับลด")
                           and "ต่อหน่วย" not in s)
     col["unit_price"] = first(lambda s: s.startswith("ราคาต่อหน่วย"))
+    col["factor"] = first(lambda s: s in ("f", "fn", "f_n", "factor", "factorf", "factorfn", "ค่าfactorf")
+                          or s.startswith("factorf"))
     return col
 
 
@@ -541,6 +545,8 @@ def parse_rows(rows) -> list:
         code, level = split_code(name)
         it = Item(name=name, unit=text(_cell(row, col["unit"])), qty=qty, mat_unit=mu, mat_amt=ma,
                   lab_unit=lu, lab_amt=la, cost=cost, no=text(_cell(row, col["no"])), code=code, level=level)
+        fx = g("factor") if col.get("factor") is not None else 0.0
+        it.factor = fx if 1.0 <= fx < 3.0 else 0.0
         it.header = not qty and not cost
         it.special = "ค่าใช้จ่ายพิเศษ" in name
         it.equip = "ครุภัณฑ์" in name and it.header is False
@@ -604,7 +610,11 @@ def read_bill(path) -> Project:
         raise ValueError("ไม่พบตารางรายการ — ต้องมีหัวตาราง «รายการ», «หน่วย» และ «จำนวน/ปริมาณ»")
     p = Project(items=best, source=str(path))
     all_rows = [r for _n, rows in read_rows(path) for r in rows] if not best_rows else best_rows
-    p.factor = _find_factor(all_rows)
+    # Factor F as the BOQ gives it: the F column of its lines (the one most lines carry), else a
+    # «Factor F …» cell — kept exactly, never worked back from the ราคากลาง
+    line_f = Counter(round(it.factor, 6) for it in p.items if it.factor and not it.header and not it.equip
+                     and not it.special)
+    p.factor = line_f.most_common(1)[0][0] if line_f else _find_factor(all_rows)
     for k, v in _find_info(all_rows).items():
         setattr(p, k, v)
     _mark_groups(p.items)
@@ -682,7 +692,10 @@ class Result651:
 
 
 def effective_factor(p: Project) -> float:
-    """Factor F: the one in the file when it gives the ราคากลาง entered, else the one that does."""
+    """Factor F: the one in the BOQ file, exactly as it is (never changed); only a bill without
+    one gets the F that turns its ค่างานต้นทุน into the ราคากลาง entered."""
+    if p.factor:
+        return p.factor
     cost = p.cost_total
     target = p.mid_price - special_total(p) - r2(p.equip_total * VAT_FACTOR)
     if cost <= 0:
@@ -713,7 +726,7 @@ def compute_651(p: Project) -> Result651:
                 row.mid_up = r2(row.mid * up)
                 row.reduced = row.mid_up                    # ค่าใช้จ่ายพิเศษไม่ปรับลด
             else:
-                row.factor = VAT_FACTOR if it.equip else f
+                row.factor = VAT_FACTOR if it.equip else (it.factor or f)
                 row.mid = it.cost * row.factor              # not rounded: the total is ค่างานต้นทุน × F
                 row.mid_up = row.mid * up
                 row.reduced = r2(row.mid_up * red.ratio)

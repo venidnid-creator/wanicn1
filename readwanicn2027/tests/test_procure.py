@@ -464,3 +464,21 @@ def test_procure_window_clear_for_a_new_job(app, tmp_path, monkeypatch):
     assert d.settings.value("procure/last") == "" and "ยังไม่ได้รับข้อมูล" in d.src.text()
     assert list(tmp_path.glob("*.rwprice.json"))                 # the old job was saved first
     d.close()
+
+
+def test_factor_f_kept_as_in_the_boq(tmp_path):
+    """The F of the BOQ (a column F / FN on every line) is used exactly — not worked back
+    from the ราคากลาง entered (1.3432 stayed 1.3432, not 1.3400)."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["ลำดับ", "รายการ", "หน่วย", "จำนวน", "ราคาต่อหน่วย", "ราคาทุน", "FN", "ราคาต่อหน่วย × FN", "ราคากลาง"])
+    ws.append([1, "งานถางป่าขุดตอ", "ตร.ม.", 6900, 1.95, 13455, 1.3432, 2.61, 13473.37])
+    ws.append([2, "งานตัดดิน", "ลบ.ม.", 1800, 51.96, 93528, 1.3432, 69.79, 125626.80])
+    f = tmp_path / "boq.xlsx"
+    wb.save(f)
+    p = P.read_bill(f)
+    assert p.factor == 1.3432 and all(it.factor == 1.3432 for it in p.leaves)
+    p.mid_price, p.offer = 140_000.0, 135_000.0                # a rounded ราคากลาง typed in
+    res = P.compute_651(p)
+    assert res.factor == 1.3432 and all(r.factor == 1.3432 for r in res.rows if not r.item.header)
