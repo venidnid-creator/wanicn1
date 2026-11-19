@@ -50,3 +50,16 @@ def test_door_window_cards_like_the_standard():
     assert any(x.startswith("ติดตั้งบริเวณ") for x in t)
     for x in t:
         D.dxf_text(x).encode("cp874")
+
+
+def test_slab_joint_and_stair_flight_sheets():
+    """The standard's S-16 (slab sections, column joints, the rib) and one RC
+    stair flight a sheet, with their bars and sizes."""
+    sheets = D.build_set(house(), INFO)
+    sl = next(s for s in sheets if s.title == "รายละเอียดพื้น รอยต่อเสา ครีบ คสล.")
+    t = " ".join(sl.texts())
+    assert "(ด้านสั้น)" in t and "รอยต่อเสา" in t and "แบบขยายครีบ คสล. รอบอาคาร" in t
+    fl = [s for s in sheets if s.title.startswith("รายละเอียดบันได คสล.")]
+    for s in fl:
+        t = " ".join(s.texts())
+        assert "เหล็กหลัก" in t and "ทุกมุม" in t and "@" in t

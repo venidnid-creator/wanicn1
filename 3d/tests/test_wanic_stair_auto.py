@@ -84,7 +84,7 @@ def test_the_dialog_and_the_detail_sheets():
     SA.apply(d, dlg.stair)
     titles = [s.title for s in D.build_set(d, {"project": "x"}, ("A", "S"))]
     assert "แบบขยายบันได ST.1 (แปลน)" in titles and "แบบขยายบันได ST.1 (รูปตัด)" in titles   # the standard's ST.n
-    assert "รายละเอียดบันได คสล." in titles
+    assert any(t.startswith("รายละเอียดบันได คสล. ST.1") for t in titles)       # one flight a sheet
 
 
 def test_the_floor_above_is_opened_and_railed():

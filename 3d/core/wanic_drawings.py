@@ -2342,47 +2342,78 @@ def s_foundation(sh, E):
 
 
 def s_beams(sh, E, lvl):
+    """แปลนคาน as the standard set: the beams as solid double lines, each with
+    its mark (the level only where it differs from the sheet's), hollow
+    columns, the slabs with a diagonal and their tag, openings crossed
+    («ช่องบันได», «โล่ง» under the roof)."""
+    from collections import Counter
     v, sc = plan_view(sh, E, pad=5.0)
     draw_grid(sh, v, E, ext=3.7, at=(2.2, 2.9))
     lib = E["lib"]
-    for bm in (b for b in E["beams"] if b["level"] == lvl):
+    beams = [b for b in E["beams"] if b["level"] == lvl]
+    zs = Counter(round(float(b.get("z", 0.0)), 2) for b in beams)
+    z0 = zs.most_common(1)[0][0] if zs else lvl * E["H"]
+    for bm in beams:
         b = float(lib.get(bm["mark"], {}).get("b", 0.2))
         (x0, y0), (x1, y1) = bm["p0"], bm["p1"]
         L = math.hypot(x1 - x0, y1 - y0) or 1
         nx, ny = -(y1 - y0) / L, (x1 - x0) / L
         for sg in (-1, 1):
             sh.line(v(x0 + nx * b / 2 * sg, y0 + ny * b / 2 * sg),
-                    v(x1 + nx * b / 2 * sg, y1 + ny * b / 2 * sg), "struct",
-                    0.35, True)
-        m = v((x0 + x1) / 2 + nx * 0.25, (y0 + y1) / 2 + ny * 0.25)
-        sh.text(m, f"{bm['mark']} {float(bm.get('z', 0.0)):+.2f}", 2.2, "center", "struct", True,
-                90 if abs(x1 - x0) < 1e-6 else 0)
+                    v(x1 + nx * b / 2 * sg, y1 + ny * b / 2 * sg), "struct", 0.3)
+        z = round(float(bm.get("z", 0.0)), 2)
+        lab = bm["mark"] if abs(z - z0) < 0.005 else f"{bm['mark']}{z:+.2f}"
+        vert = abs(x1 - x0) < 1e-6
+        off = b / 2 + 0.06 + (0.0 if vert else 0.0)
+        m = v((x0 + x1) / 2 + nx * off, (y0 + y1) / 2 + ny * off)
+        m = (m[0] - 1.0, m[1]) if vert else (m[0], m[1] + 0.8)
+        sh.text(m, lab, 2.5, "center", "struct", False, 90 if vert else 0)
     H_ = E["H"]
     draw_free(sh, v, E, lvl * H_ - H_ / 2 if lvl else -9.0, lvl * H_ + H_ / 2, ("beams", "columns"))
     cols = [c for c in E["columns"] if c["floor"] == min(lvl, E["n"] - 1)] \
         if lvl < E["n"] else [c for c in E["columns"] if c["floor"] == E["n"] - 1]
+    below = {(round(c["x"], 3), round(c["y"], 3)) for c in E["columns"] if c["floor"] == lvl - 1}
     for c in cols:
         b = float(lib.get(c["mark"], {}).get("b", 0.2))
-        pts = [v(c["x"] - b / 2, c["y"] - b / 2), v(c["x"] + b / 2, c["y"] - b / 2),
-               v(c["x"] + b / 2, c["y"] + b / 2), v(c["x"] - b / 2, c["y"] + b / 2)]
-        sh.fill(pts, "column", 0.15)
-        p = v(c["x"] - b / 2, c["y"] - b / 2)
-        sh.text((p[0] - 0.5, p[1] - 3), c["mark"], 1.8, "right", "struct")
+        sh.rect(*v(c["x"] - b / 2, c["y"] - b / 2), *v(c["x"] + b / 2, c["y"] + b / 2), "column", 0.45)
+        if 0 < lvl < E["n"] and (round(c["x"], 3), round(c["y"], 3)) not in below:
+            p = v(c["x"] + b / 2, c["y"] - b / 2)                # a post starting on a beam (CX)
+            sh.text((p[0] + 0.8, p[1] - 3), c["mark"], 2.4, "left", "struct")
+    holes = B.holes_by_floor(E).get(lvl, []) if lvl < E["n"] else []
+
+    def crossed(x0, y0, x1, y1, word):
+        sh.line(v(x0, y0), v(x1, y1), "struct", 0.15)
+        sh.line(v(x0, y1), v(x1, y0), "struct", 0.15)
+        c = v((x0 + x1) / 2, (y0 + y1) / 2)
+        sh.text((c[0], c[1] + 1.2), word, 2.4, "center", "struct")
     if lvl < E["n"]:
         for sl in (s for s in E["slabs"] if s["floor"] == lvl):
             rm = sl["room"]
             a = v(rm["x"], rm["y"])
             b_ = v(rm["x"] + rm["w"], rm["y"] + rm["d"])
             sh.line(a, b_, "struct", 0.13)
-            c = v(rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2)
+            cx, cy = rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2
+            for hx0, hy0, hx1, hy1 in holes:                     # the tag off the stair opening
+                if hx0 - 0.5 < cx < hx1 + 0.5 and hy0 - 0.5 < cy < hy1 + 0.5:
+                    gaps = [(hx0 - rm["x"], ((rm["x"] + hx0) / 2, cy)), (rm["x"] + rm["w"] - hx1, ((hx1 + rm["x"] + rm["w"]) / 2, cy)),
+                            (hy0 - rm["y"], (cx, (rm["y"] + hy0) / 2)), (rm["y"] + rm["d"] - hy1, (cx, (hy1 + rm["y"] + rm["d"]) / 2))]
+                    cx, cy = max(gaps)[1]
+            c = v(cx, cy)
             sh.circle(c, 4, "struct", 0.25)
-            sh.text((c[0], c[1] - 1.1), sl["mark"], 2.4, "center", "struct",
-                    True)
+            sh.text((c[0], c[1] - 1.1), sl["mark"], 2.6, "center", "struct", True)
+        for hx0, hy0, hx1, hy1 in holes:
+            sh.rect(*v(hx0, hy0), *v(hx1, hy1), "struct", 0.3)
+            crossed(hx0, hy0, hx1, hy1, "ช่องบันได")
+    else:                                                       # under the roof: open panels (the standard)
+        for sl in (s for s in E["slabs"] if s["floor"] == E["n"] - 1):
+            rm = sl["room"]
+            crossed(rm["x"], rm["y"], rm["x"] + rm["w"], rm["y"] + rm["d"], "โล่ง")
     x0_, y0_, x1_, y1_ = drawing_area()
     name = "แปลนคานคอดิน และพื้นชั้น 1" if lvl == 0 else \
         "แปลนคานหลังคา" if lvl == E["n"] else f"แปลนคาน และพื้นชั้น {lvl + 1}"
     from core import wanic_std_sheets as STD
     STD.caption_marks(sh, ((x0_ + x1_) / 2 - 50, y0_ + 14), name, f"1:{sc}", None, None, 100.0)
+    sh.text(((x0_ + x1_) / 2 - 50, y0_ + 3.5), f"ระดับหลังคานทั่วไป {z0:+.2f} ม. (เว้นแต่ระบุ)", 2.4, "left")
 
 
 def s_roof_frame(sh, E, L):
@@ -2976,11 +3007,13 @@ def build_set(data, info=None,
             add("S", "รายละเอียดฐานราก " + " ".join(fmarks[i_:i_ + 2]),
                 lambda sh, _a, ms=fmarks[i_:i_ + 2]: _set_scale(sh, STD.s_footings_std(sh, E, ms)), "1:25")
         add("S", "รายละเอียดเสา", lambda sh, _a: SS.s_column_details(sh, E), "1:25")
-        add("S", "รายละเอียดพื้น", lambda sh, _a: SS.s_slab_details(sh, E), "1:25")
+        add("S", "รายละเอียดพื้น รอยต่อเสา ครีบ คสล.", lambda sh, _a: _set_scale(sh, STD.s_slab_std(sh, E)), "1:20")
         from core import wanic_stair_sheets as STS
-        for i, e in enumerate(STS.stairs_to_detail(E)):
-            add("S", "รายละเอียดบันได คสล." + (f" ({i + 1})" if i else ""),
-                lambda sh, _a, e=e: STS.s_stair_detail(sh, E, e), "1:20")
+        for i, e in enumerate(STS.stairs_to_detail(E)):     # one flight a sheet (the standard's S-14, S-15)
+            nfl = len(B.stair_layout(e["st"], E["settings"])["flights"])
+            for fi in range(nfl):
+                add("S", f"รายละเอียดบันได คสล. ST.{i + 1}" + (f" ช่วงที่ {fi + 1}" if nfl > 1 else ""),
+                    lambda sh, _a, e=e, fi=fi, no=i + 1: _set_scale(sh, STS.s_stair_flight(sh, E, e, fi, no)), "1:20")
         for lines in SS.beam_sheets(E):
             add("S", "รายละเอียดคาน", lambda sh, _a, lines=lines: SS.s_beam_details(sh, E, lines), "1:30")
         add("S", "รายละเอียดการเสริมเหล็กคานทั่วไป", lambda sh, _a: SS.s_typical_beam(sh, E), "1:50")
