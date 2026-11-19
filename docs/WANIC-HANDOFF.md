@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 — Factor F ตาม BOQ · ปร.1–ปร.4 พร้อมพิมพ์ · ผลการอ่านทีละหน้า (19 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
+## ReadWanicn2027 — Factor F ตาม BOQ · ปร.1–ปร.4 พร้อมพิมพ์ · ผลการอ่านทีละหน้า (19 พ.ย. 2569, อนุมัติแล้ว — รุ่น 2027.4.8 ไม่ release; ลายเซ็น ปร. เป็นตาราง 4 คอลัมน์จัดตรง)
 - Factor F: `Item.factor` อ่านคอลัมน์ F/FN ของแต่ละบรรทัด, `p.factor` = ค่าที่บรรทัดส่วนใหญ่ใช้ (ไม่มีค่อยหา «Factor F …»);
   `effective_factor()` คืน p.factor เสมอถ้ามี (ไม่คำนวณกลับจากราคากลาง — เคสผู้ใช้ 1.3432 กลายเป็น 1.3400)
 - `boqforms.py`: ปร.4 · ปร.1 (ก) · ปร.1 · ปร.2 · ปร.3 (หลักเกณฑ์ 2569 ตามชื่อแบบใน 3d/core/wanic_takeoff) → .xlsx A4 (`to_xlsx`) + PDF ต่อ 1 ชุด BOQ;

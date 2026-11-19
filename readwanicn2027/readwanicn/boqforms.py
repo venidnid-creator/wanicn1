@@ -45,14 +45,15 @@ def _head(rep: Report, code: str, title: str, info: dict, attach: str = ""):
 
 
 def _sign(rep: Report, info: dict):
+    """(ลงชื่อ) …… ตำแหน่ง — the dotted lines one under the other, the names centred under them."""
     rows = []
-    for role in ("ประธานกรรมการกำหนดราคากลาง", "กรรมการกำหนดราคากลาง", "กรรมการกำหนดราคากลาง"):
-        rows += [[C(""), C(f"(ลงชื่อ) {DOTS[:38]} {role}", align="center")],
-                 [C(""), C(f"( {DOTS[:40]} )", align="center")]]
-    rows += [[C(""), C(f"(ลงชื่อ) {DOTS[:38]} ผู้ถอดแบบและคำนวณราคา", align="center")],
-             [C(""), C(f"( {info.get('preparer') or DOTS[:40]} )", align="center")]]
+    people = [("ประธานกรรมการกำหนดราคากลาง", ""), ("กรรมการกำหนดราคากลาง", ""), ("กรรมการกำหนดราคากลาง", ""),
+              ("ผู้ถอดแบบและคำนวณราคา", info.get("preparer") or "")]
+    for role, name in people:
+        rows += [[C(""), C("(ลงชื่อ)", align="right"), C(DOTS[:36], align="center"), C(role)],
+                 [C(""), C(""), C(f"( {name or DOTS[:34]} )", align="center"), C("")]]
     rep.p(" ", size=6)
-    rep.blocks.append(Table([], rows, [30, 70], 10.5, border=0))
+    rep.blocks.append(Table([], rows, [22, 10, 36, 32], 10.5, border=0))
 
 
 def _kind(ln) -> str:
