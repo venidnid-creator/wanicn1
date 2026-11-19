@@ -126,7 +126,7 @@ def test_schedules_and_systems():
     assert "ตารางโหลด" in t and "เมนเบรกเกอร์" in t
     sn = next(s for s in S.values() if s.title == "แปลนระบบสุขาภิบาลชั้น 1")
     t = " ".join(sn.texts())
-    assert "ถังบำบัด" in t and "S Ø4\"" in t and "W Ø2\"" in t
+    assert "ถังบำบัด" in t and "Ø4\"S" in t and "Ø2\"W" in t
     m = next(s for s in S.values() if s.group == "M")
     assert "FCU" in " ".join(m.texts())
 

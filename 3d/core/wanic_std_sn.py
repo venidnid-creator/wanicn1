@@ -439,7 +439,7 @@ def _dashed(sh, a, b, w=0.3):
     sh.line(a, b, "text", w, True)
 
 
-def _pipe_tag(sh, p, text, angle=0.0, size=2.3):
+def _pipe_tag(sh, p, text, angle=0.0, size=2.7):
     sh.text(p, text, size, "center", "text", False, angle)
 
 
@@ -490,7 +490,7 @@ def sn_riser(sh, E):
         sh.text((x0 + 52, Y(z) + 0.8), "±0.00" if z == 0 else f"+{z:.2f}", 2.6)
     gl = float(E.get("GL", -0.3))
     sh.line((x0 + 2, Y(gl)), (x1 - 2, Y(gl)), "text", 0.15, True)
-    sh.text((x0 + 7, Y(gl) - 3.2), f"ระดับดินเดิม {gl:+.2f}", 2.3)
+    sh.text((x1 - 4, Y(gl) - 3.6), f"ระดับดินเดิม {gl:+.2f}", 2.7, "right")
     # the stacks
     xs = x0 + 112                                            # the soil stack
     xv = xs - 9                                              # the vent
@@ -506,16 +506,16 @@ def sn_riser(sh, E):
     sh.line((xv, Y(zb) + 2.0), (xs, Y(zb) + 4.5), "text", 0.3, True)          # the vent off the stack's foot
     # the vent through the roof
     sh.line((xv - 1.8, Y(n * H + 0.9)), (xv + 1.8, Y(n * H + 0.9)), "text", 0.4)
-    sh.text((xv + 3, Y(n * H + 0.9) - 0.8), "VTR (ท่ออากาศผ่านหลังคา)", 2.3)
+    sh.text((xv + 3, Y(n * H + 0.9) - 0.8), "VTR (ท่ออากาศผ่านหลังคา)", 2.7)
     for k in bfl:                                            # the branches of each floor's bathrooms
         z = k * H
         nb = sum(1 for kk, _r in baths if kk == k) or 1
         _arrow(sh, (xs - 30, Y(z) + 6), (xs, Y(z) + 6), 0.55)
-        sh.text((xs - 30, Y(z) + 7.4), f'Ø4"S (WC × {nb})', 2.3)
+        sh.text((xs - 30, Y(z) + 7.4), f'Ø4"S (WC × {nb})', 2.7)
         _arrow(sh, (xw + 26, Y(z) + 3), (xw, Y(z) + 3), 0.4)
-        sh.text((xw + 4, Y(z) + 4.2), 'Ø2"W (FD, LAV)', 2.2)
+        sh.text((xw + 4, Y(z) + 4.2), 'Ø2"W (FD, LAV)', 2.7)
         _dashed(sh, (xv - 22, Y(z) + 14), (xv, Y(z) + 14), 0.3)
-        sh.text((xv - 22, Y(z) + 15.2), 'Ø2"V', 2.3)
+        sh.text((xv - 22, Y(z) + 15.2), 'Ø2"V', 2.7)
     # the septic tank, to its left
     tx, tw, th = xs - 62, 26.0, 22.0
     ty = Y(gl) - 1.5 - th
@@ -532,8 +532,8 @@ def sn_riser(sh, E):
         i += 2.5
     sh.rect(tx + tw / 2 - 2.5, ty + th, tx + tw / 2 + 2.5, ty + th + 1.4, "text", 0.3)
     _arrow(sh, (tx, ty + th - 7), (tx - 20, ty + th - 7), 0.6)
-    sh.text((tx - 20, ty + th - 5.6), 'Ø4"SW', 2.3)
-    sh.text((tx - 1, ty + th - 11.6), "ต่อลงบ่อพักท่อระบายน้ำ", 2.3, "right")
+    sh.text((tx - 20, ty + th - 5.6), 'Ø4"SW', 2.7)
+    sh.text((tx - 1, ty + th - 11.6), "ต่อลงบ่อพักท่อระบายน้ำ", 2.7, "right")
     st = des["septic"]
     notes = [f"ถังบำบัดน้ำเสียสำเร็จรูป ST ขนาด {st['litres']:,} ลิตร"
              + (f" × {st['count']} ถัง" if st["count"] > 1 else "") + f" (ผู้ใช้ {users} คน)",
@@ -541,16 +541,16 @@ def sn_riser(sh, E):
              "วางบนทรายบดอัดแน่น 0.10 ม. และคอนกรีตหยาบ 0.05 ม.",
              "การติดตั้งให้เป็นไปตามมาตรฐานผู้ผลิต"]
     for j, t in enumerate(notes):
-        sh.text((tx - 4, ty - 7 - j * 4.4), t, 2.4)
+        sh.text((tx - 4, ty - 7 - j * 4.4), t, 2.7)
     # the kitchen through the grease trap
     if des.get("kitchens"):
         gx = xs + 40
         sh.rect(gx, Y(zb) - 4, gx + 9, Y(zb) + 2, "text", 0.4)
-        sh.text((gx + 4.5, Y(zb) - 2.6), "GT", 2.0, "center", "text", True)
+        sh.text((gx + 4.5, Y(zb) - 2.6), "GT", 2.7, "center", "text", True)
         _arrow(sh, (gx + 26, Y(-0.05)), (gx + 9, Y(zb) + 1), 0.4)
-        sh.text((gx + 12, Y(-0.05) + 1.2), 'Ø2"K จากซิงก์ครัว', 2.2)
+        sh.text((gx + 12, Y(-0.05) + 1.2), 'Ø2"K จากซิงก์ครัว', 2.7)
         sh.line((gx, Y(zb) - 1), (xw, Y(zb) - 1), "text", 0.4)
-        sh.text((gx - 1, Y(zb) - 7.6), f"บ่อดักไขมัน GT {des['grease']['litres']} ลิตร", 2.2, "right")
+        sh.text((gx - 1, Y(zb) - 7.6), f"บ่อดักไขมัน GT {des['grease']['litres']} ลิตร", 2.7, "right")
     # the water: from the meter (right) to the tank, the pump, up the riser
     xr = xs + 78                                             # the riser
     ztopw = max(bfl) * H + 0.6
@@ -561,12 +561,12 @@ def sn_riser(sh, E):
         z = k * H + 0.6 if k else 0.6
         _dashdot(sh, (xr, Y(z)), (xr - 16, Y(z)), 0.3)
         _gate(sh, xr - 8, Y(z))
-        sh.text((xr - 16, Y(z) + 1.2), "→ ห้องน้ำ", 2.2, "right")
+        sh.text((xr - 16, Y(z) + 1.2), "→ ห้องน้ำ", 2.7, "right")
     xt = xr + 60                                             # the tank
     _dashdot(sh, (xr, yw), (xt - 26, yw), 0.35)
-    sh.text(((xr + xt - 26) / 2, yw + 1.0), 'Ø3/4"CW', 2.3, "center")
+    sh.text(((xr + xt - 26) / 2, yw + 1.0), 'Ø3/4"CW', 2.7, "center")
     sh.rect(xt - 30, yw - 2.4, xt - 22, yw + 2.4, "text", 0.35)              # the booster pump
-    sh.text((xt - 26, yw - 0.9), "BP", 2.0, "center", "text", True)
+    sh.text((xt - 26, yw - 0.9), "BP", 2.7, "center", "text", True)
     _dashdot(sh, (xt - 22, yw), (xt - 6, yw), 0.35)
     # the by-pass round the pump, with its check valve
     yb2 = yw + 9
@@ -575,7 +575,7 @@ def sn_riser(sh, E):
     _dashdot(sh, (xt - 10, yb2), (xt - 10, yw), 0.3)
     _gate(sh, (xr + xt - 10) / 2 + 6, yb2)
     sh.line(((xr + xt - 10) / 2 + 5.4, yb2 - 1.2), ((xr + xt - 10) / 2 + 6.6, yb2 + 1.2), "text", 0.3)
-    sh.text(((xr + xt) / 2 - 2, yb2 + 1.4), 'Ø3/4" BY PASS', 2.1, "center")
+    sh.text(((xr + xt) / 2 - 2, yb2 + 1.4), 'Ø3/4" BY PASS', 2.7, "center")
     th2 = 30.0
     sh.rect(xt - 6, yw - 3, xt + 8, yw - 3 + th2, "text", 0.45)               # the storage tank
     for j in range(1, 9):
@@ -590,15 +590,13 @@ def sn_riser(sh, E):
     sh.text((x1 - 34, yw - 0.8), "M", 1.8, "center", "text", True)
     _gate(sh, x1 - 41, yw)
     _gate(sh, x1 - 27, yw)
-    sh.text((x1 - 4, yw + 1.4), "จากท่อประปา", 2.2, "right")
-    def note(p, q, lines):
-        sh.circle(p, 0.45, "text", 0.2)
-        sh.line(p, q, "text", 0.15)
-        w = max(len(t) for t in lines) * 1.25
-        sh.line(q, (q[0] + w, q[1]), "text", 0.15)
+    sh.text((x1 - 4, yw + 1.4), "จากท่อประปา", 2.7, "right")
+    def note(p, q, lines):                                   # a leader with its arrowhead at the item
+        sh.line((q[0] - 1.0, q[1]), p, "text", 0.18)
+        _ahead(sh, p, q, 2.0, "text")
         for j, t in enumerate(lines):
-            sh.text((q[0] + 1, q[1] + 0.9 - j * 4.4), t, 2.3)
-    note((xt + 8, yw - 3 + th2 * 0.7), (xt + 14, yw - 3 + th2 + 22),
+            sh.text((q[0], q[1] - 0.9 - j * 4.6), t, 2.6)
+    note((xt + 8, yw - 3 + th2 * 0.7), (xt + 14, Y(H) + 20),
          [f"ถังเก็บน้ำสำเร็จรูป {tank:,} ลิตร", f"(ผู้ใช้ {users} คน × 200 ลิตร/วัน)",
           'FLOAT VALVE Ø1/2" · BALL VALVE Ø1/2"', "วางบนฐาน คสล. หนา 0.10 ม."])
     note((xt - 26, yw - 2.4), (xt - 52, Y(gl) - 10),
@@ -612,33 +610,77 @@ def sn_riser(sh, E):
 
 def _cb(sh, c, s=2.2):
     """A catch basin (☒)."""
-    sh.rect(c[0] - s, c[1] - s, c[0] + s, c[1] + s, "pipe", 0.4)
+    sh.rect(c[0] - s, c[1] - s, c[0] + s, c[1] + s, "pipe", 0.45)
     sh.line((c[0] - s, c[1] - s), (c[0] + s, c[1] + s), "pipe", 0.25)
     sh.line((c[0] - s, c[1] + s), (c[0] + s, c[1] - s), "pipe", 0.25)
 
 
-def _flow(sh, a, b, w=0.5):
-    """The perimeter drain from a to b (paper), dashed, with an arrow midway."""
-    sh.line(a, b, "pipe", w, True)
+def _ahead(sh, tip, frm, size=2.2, layer="pipe"):
+    """A filled arrowhead at ``tip`` pointing away from ``frm``."""
+    L = math.hypot(tip[0] - frm[0], tip[1] - frm[1]) or 1.0
+    ux, uy = (tip[0] - frm[0]) / L, (tip[1] - frm[1]) / L
+    sh.fill([tip, (tip[0] - ux * size - uy * size * 0.38, tip[1] - uy * size + ux * size * 0.38),
+             (tip[0] - ux * size + uy * size * 0.38, tip[1] - uy * size - ux * size * 0.38)], layer, 0.0)
+
+
+def _flow(sh, a, b, w=0.55):
+    """The perimeter drain from a to b (paper): long dashes, an arrow midway."""
     L = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
     ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
-    m = ((a[0] + b[0]) / 2 + ux * 1.5, (a[1] + b[1]) / 2 + uy * 1.5)
-    sh.fill([m, (m[0] - ux * 2.4 - uy * 1.0, m[1] - uy * 2.4 + ux * 1.0),
-             (m[0] - ux * 2.4 + uy * 1.0, m[1] - uy * 2.4 - ux * 1.0)], "pipe", 0.0)
+    t = 0.0
+    while t < L:
+        t1 = min(t + 4.5, L)
+        sh.line((a[0] + ux * t, a[1] + uy * t), (a[0] + ux * t1, a[1] + uy * t1), "pipe", w)
+        t = t1 + 1.6
+    m = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+    _ahead(sh, (m[0] + ux * 1.6, m[1] + uy * 1.6), m, 2.6)
 
 
-def _tank(sh, c, r, hatch=True):
-    sh.circle(c, r, "pipe", 0.45)
+def _hatched(sh, c, r, inner=True, hatch=True):
+    """A tank in plan: a circle, 45° hatching clipped to it, the inner circle."""
+    sh.circle(c, r, "pipe", 0.5)
     if hatch:
-        i = -r
-        while i < r:
-            h = math.sqrt(max(r * r - i * i, 0.0))
-            a = (c[0] + i - h * 0.0, c[1])
-            sh.line((c[0] + i * 0.7071 - h * 0.7071, c[1] + i * 0.7071 + h * 0.7071 - 2 * i * 0.7071),
-                    (c[0] + i * 0.7071 + h * 0.7071, c[1] - i * 0.7071 + h * 0.7071 - 2 * h * 0.7071 + 0.0),
-                    "hatch", 0.12)
-            i += 1.2
-    sh.circle(c, r * 0.22, "pipe", 0.25)
+        ux, uy, nx, ny = 0.7071, 0.7071, -0.7071, 0.7071
+        o = -r + 0.8
+        while o < r:
+            h = math.sqrt(max(r * r - o * o, 0.0))
+            p = (c[0] + nx * o, c[1] + ny * o)
+            sh.line((p[0] - ux * h, p[1] - uy * h), (p[0] + ux * h, p[1] + uy * h), "hatch", 0.15)
+            o += 0.9
+    if inner:
+        sh.fill([(c[0] + r * 0.28 * math.cos(i * math.pi / 8), c[1] + r * 0.28 * math.sin(i * math.pi / 8))
+                 for i in range(16)], "mask", 0.0)
+        sh.circle(c, r * 0.28, "pipe", 0.35)
+
+
+def _flex(sh, p, q):
+    """A flexible joint (ข้อต่ออ่อน) on the pipe p→q, at p."""
+    L = math.hypot(q[0] - p[0], q[1] - p[1]) or 1.0
+    ux, uy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+    nx, ny = -uy, ux
+    a, b = (p[0] - ux * 1.2, p[1] - uy * 1.2), (p[0] + ux * 1.2, p[1] + uy * 1.2)
+    sh.fill([(a[0] + nx * 0.7, a[1] + ny * 0.7), (b[0] + nx * 0.7, b[1] + ny * 0.7),
+             (b[0] - nx * 0.7, b[1] - ny * 0.7), (a[0] - nx * 0.7, a[1] - ny * 0.7)], "mask", 0.0)
+    sh.poly([(a[0] + nx * 0.7, a[1] + ny * 0.7), (b[0] + nx * 0.7, b[1] + ny * 0.7),
+             (b[0] - nx * 0.7, b[1] - ny * 0.7), (a[0] - nx * 0.7, a[1] - ny * 0.7)], "pipe", 0.25)
+    for i in range(3):
+        m = (a[0] + ux * (0.6 + i * 0.6), a[1] + uy * (0.6 + i * 0.6))
+        sh.line((m[0] + nx * 0.7, m[1] + ny * 0.7), (m[0] - nx * 0.7, m[1] - ny * 0.7), "pipe", 0.15)
+
+
+def _fco(sh, c):
+    """A cleanout (FCO) at a pipe's end."""
+    sh.circle(c, 1.0, "pipe", 0.35)
+    sh.line((c[0] - 1.0, c[1]), (c[0] + 1.0, c[1]), "pipe", 0.3)
+
+
+def _valve(sh, c, vertical=False):
+    if vertical:
+        sh.poly([(c[0] - 1.0, c[1] - 1.5), (c[0] + 1.0, c[1] + 1.5), (c[0] - 1.0, c[1] + 1.5),
+                 (c[0] + 1.0, c[1] - 1.5)], "pipe", 0.3)
+    else:
+        sh.poly([(c[0] - 1.5, c[1] - 1.0), (c[0] + 1.5, c[1] + 1.0), (c[0] + 1.5, c[1] - 1.0),
+                 (c[0] - 1.5, c[1] + 1.0)], "pipe", 0.3)
 
 
 def _outline(E, k):
@@ -647,194 +689,332 @@ def _outline(E, k):
             max(r["x"] + r["w"] for r in rms), max(r["y"] + r["d"] for r in rms))
 
 
+def _side(rm, box, prefer=("N", "E", "W", "S")):
+    """The exterior side of a room nearest the outside: (name, wall coordinate, outward normal)."""
+    bx0, by0, bx1, by1 = box
+    d = {"W": rm["x"] - bx0, "E": bx1 - rm["x"] - rm["w"], "S": rm["y"] - by0, "N": by1 - rm["y"] - rm["d"]}
+    best = min(prefer, key=lambda k_: (round(d[k_], 3), prefer.index(k_)))
+    wall = {"W": bx0, "E": bx1, "S": by0, "N": by1}[best]
+    n = {"W": (-1, 0), "E": (1, 0), "S": (0, -1), "N": (0, 1)}[best]
+    return best, wall, n
+
+
+def _perim(rect, a, b):
+    """The shorter way round the rectangle ``rect`` from point a to point b
+    (both on its edge), as a list of points."""
+    x0, y0, x1, y1 = rect
+    W, H = x1 - x0, y1 - y0
+    P = 2 * (W + H)
+
+    def t(p):
+        x, y = p
+        if abs(y - y0) < 1e-6:
+            return x - x0
+        if abs(x - x1) < 1e-6:
+            return W + (y - y0)
+        if abs(y - y1) < 1e-6:
+            return W + H + (x1 - x)
+        return 2 * W + H + (y1 - y)
+    corners = [(0.0, (x0, y0)), (W, (x1, y0)), (W + H, (x1, y1)), (2 * W + H, (x0, y1))]
+    ta, tb = t(a), t(b)
+    fwd = (tb - ta) % P
+    out = [a]
+    if fwd <= P / 2:
+        for tc, c in sorted(corners, key=lambda q: (q[0] - ta) % P):
+            if 0 < (tc - ta) % P < fwd:
+                out.append(c)
+    else:
+        for tc, c in sorted(corners, key=lambda q: (ta - q[0]) % P):
+            if 0 < (ta - tc) % P < P - fwd:
+                out.append(c)
+    out.append(b)
+    return out
+
+
+def _snap(rect, p):
+    """The point of the rectangle's edge nearest p."""
+    x0, y0, x1, y1 = rect
+    x, y = min(max(p[0], x0), x1), min(max(p[1], y0), y1)
+    d = [(abs(x - x0), (x0, y)), (abs(x - x1), (x1, y)), (abs(y - y0), (x, y0)), (abs(y - y1), (x, y1))]
+    return min(d)[1]
+
+
+def _labels(sh, notes, col_x, ytop, ybot, size=2.6):
+    """The notes in a column at ``col_x``, top to bottom in the order of
+    their points, each on a horizontal leader ending in an arrowhead at its
+    point (the standard's way); kept 6 mm apart, pushed up from ``ybot``."""
+    items = sorted(notes, key=lambda t: -t[0][1])
+    ys, last = [], ytop + 8
+    for p, lines in items:                                   # downwards: no closer than the one above
+        ty = min(p[1], ytop, last - 6.4)
+        ys.append(ty)
+        last = ty - 4.6 * (len(lines) - 1)
+    floor_ = ybot
+    for i in range(len(items) - 1, -1, -1):                  # upwards: off the floor and the one below
+        h = 4.6 * (len(items[i][1]) - 1)
+        if ys[i] - h < floor_:
+            ys[i] = floor_ + h
+        floor_ = ys[i] + 6.4
+    for (p, lines), ty in zip(items, ys):
+        sh.line((col_x - 1.2, ty), (p[0] + (1.6 if p[0] < col_x else -1.6), p[1]), "text", 0.18)
+        _ahead(sh, p, (col_x, ty), 2.0, "text")
+        for j, ln in enumerate(lines):
+            sh.text((col_x, ty - 0.9 - j * 4.6), ln, size)
+
+
 def sn_plan_std(sh, E, k):
-    """แปลนระบบสุขาภิบาลชั้น k+1 as the standard (SN-05, SN-06). The ground
-    floor: the drain round the building (concrete Ø0.20 ม. ลาด 1:200, catch
-    basins at the corners and no more than 12 m apart, the flow, the start
-    0.60 m deep, the outlet), the septic tank by the bathroom and the soil
-    pipes to it, the grease trap by the kitchen, the water from the meter to
-    the storage tank and the pump, a branch with a valve to each wet room,
-    the roof's downpipes; the notes on the tanks. Upper floors: the stacks
-    and risers of each bathroom."""
+    """แปลนระบบสุขาภิบาลชั้น k+1 as the standard (SN-05, SN-06): the floor
+    plan (walls, doors, the stair, the rooms and their levels, the
+    fixtures), the sizes; the ground floor's drain round the building
+    (concrete Ø0.20 ม. ลาด 1:200, catch basins at the corners and no more
+    than 12 m apart, the flow, the start 0.60 m deep, the outlet), the
+    septic tank outside the bathroom with the bathroom's pipes gathered
+    outside the wall into it (flexible joints where they leave the
+    building, a cleanout at the far end), the grease trap outside the
+    kitchen, the water: meter, storage tank and pump at the front, the main
+    round the building with a valve into each wet room, the downpipes;
+    upstairs each bathroom's pipes gathered to its stack. Every note is in
+    one column on the right with an arrow to its item."""
     from core import wanic_sanitary as SAN
     from core import wanic_std_sheets as STD
-    v, sc = D.plan_view(sh, E, pad=4.6)
+    x0, y0, x1, y1 = D.drawing_area()
+    colw = 104.0
+    v, sc = D.plan_view(sh, E, box=(x0, y0 + 16, x1 - colw, y1), pad=4.6)
     t = float(E["settings"].get("wall_t") or 0.1)
     D.draw_grid(sh, v, E, ext=3.7, at=(2.2, 2.9))
     D.draw_walls(sh, v, E, k, t, None, swings=True, tags=False)
     D.draw_stairs(sh, v, E, k)
     D.draw_fixtures(sh, v, E, k, labels=False)
-    for sl in (s for s in E["slabs"] if s["floor"] == k):          # the rooms and their levels
+    boxes = D.stair_boxes(E, k)
+    for sl in (s_ for s_ in E["slabs"] if s_["floor"] == k):          # the rooms and their levels
         rm = sl["room"]
-        p = v(rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2)
+        cx, cy = D.label_spot(rm, boxes)
+        p = v(cx, cy)
         z = float(sl.get("z", 0.0)) - (0.05 if (rm.get("name") or "").startswith("ห้องน้ำ") else 0.0)
-        sh.text((p[0], p[1] + 1.4), rm.get("name") or "ห้อง", 2.6, "center", "text", True)
-        sh.text((p[0], p[1] - 2.6), "±0.00" if abs(z) < 0.005 else f"{z:+.2f}", 2.3, "center")
-    bx0, by0, bx1, by1 = _outline(E, k)
+        D.masked_text(sh, (p[0], p[1] + 1.4), rm.get("name") or "ห้อง", 2.7, "center", True)
+        D.masked_text(sh, (p[0], p[1] - 2.8), "±0.00" if abs(z) < 0.005 else f"{z:+.2f}", 2.4)
+    box = _outline(E, k)
+    bx0, by0, bx1, by1 = box
     baths = [rm for kk, rm in D.bathrooms(E) if kk == k]
+    kit = [s_["room"] for s_ in E["slabs"] if s_["floor"] == k and "ครัว" in (s_["room"].get("name") or "")]
     fixtures = [f["fx"] for f in E["fixtures"] if f["floor"] == k]
-    x0, y0, x1, y1 = D.drawing_area()
     des = SAN.design(E)
     notes = []
+    col_x = x1 - colw + 8
+
+    def in_room(fx, rm):
+        return rm["x"] - 0.01 <= float(fx["x"]) <= rm["x"] + rm["w"] + 0.01 and \
+            rm["y"] - 0.01 <= float(fx["y"]) <= rm["y"] + rm["d"] + 0.01
+
+    def along(n, q):                 # the coordinate along a wall with normal n
+        return q[1] if n[0] else q[0]
+
+    def at(n, wall, off, a):         # the point off the wall (outward) at ``a`` along it
+        return (wall + n[0] * off, a) if n[0] else (a, wall + n[1] * off)
     if k == 0:
-        o = 1.6                                                     # the drain 1.60 m outside the walls
+        o = 1.6
         X0, Y0, X1, Y1 = bx0 - o, by0 - o, bx1 + o, by1 + o
         corners = [(X0, Y1), (X1, Y1), (X1, Y0), (X0, Y0)]
-        # catch basins: the corners and along each side, no more than 12 m apart
         cbs = []
-        for a, b in zip(corners, corners[1:] + corners[:1]):
-            L = math.hypot(b[0] - a[0], b[1] - a[1])
+        for a_, b_ in zip(corners, corners[1:] + corners[:1]):
+            L = math.hypot(b_[0] - a_[0], b_[1] - a_[1])
             nseg = max(1, math.ceil(L / 12.0))
             for i in range(nseg):
-                cbs.append((a[0] + (b[0] - a[0]) * i / nseg, a[1] + (b[1] - a[1]) * i / nseg))
-        out = (X1, Y0)                                              # the outlet: the front-right corner
-        start = (X0, Y1)                                            # the start (the far corner), 0.60 m deep
-        for path in ([(X0, Y1), (X1, Y1), (X1, Y0)], [(X0, Y1), (X0, Y0), (X1, Y0)]):
-            for a, b in zip(path, path[1:]):
-                L = math.hypot(b[0] - a[0], b[1] - a[1])
+                cbs.append((a_[0] + (b_[0] - a_[0]) * i / nseg, a_[1] + (b_[1] - a_[1]) * i / nseg))
+        start, out = (X1, Y1), (X0, Y0)                             # the start at the back right, out at the front left
+        for path in ([(X1, Y1), (X0, Y1), (X0, Y0)], [(X1, Y1), (X1, Y0), (X0, Y0)]):
+            for a_, b_ in zip(path, path[1:]):
+                L = math.hypot(b_[0] - a_[0], b_[1] - a_[1])
                 nseg = max(1, math.ceil(L / 12.0))
                 for i in range(nseg):
-                    pa = (a[0] + (b[0] - a[0]) * i / nseg, a[1] + (b[1] - a[1]) * i / nseg)
-                    pb = (a[0] + (b[0] - a[0]) * (i + 1) / nseg, a[1] + (b[1] - a[1]) * (i + 1) / nseg)
+                    pa = (a_[0] + (b_[0] - a_[0]) * i / nseg, a_[1] + (b_[1] - a_[1]) * i / nseg)
+                    pb = (a_[0] + (b_[0] - a_[0]) * (i + 1) / nseg, a_[1] + (b_[1] - a_[1]) * (i + 1) / nseg)
                     da, db = v(*pa), v(*pb)
                     L2 = math.hypot(db[0] - da[0], db[1] - da[1]) or 1
                     ux, uy = (db[0] - da[0]) / L2, (db[1] - da[1]) / L2
-                    _flow(sh, (da[0] + ux * 2.4, da[1] + uy * 2.4), (db[0] - ux * 2.4, db[1] - uy * 2.4))
+                    _flow(sh, (da[0] + ux * 2.6, da[1] + uy * 2.6), (db[0] - ux * 2.6, db[1] - uy * 2.6))
         for c in cbs:
             _cb(sh, v(*c))
         po = v(*out)
-        _flow(sh, (po[0], po[1] - 2.4), (po[0], po[1] - 16))
-        notes.append((v((X0 + X1) / 2, Y1), "ท่อคอนกรีตท้องตลาด Ø0.20 ม. ลาด 1 : 200", "up"))
-        notes.append((v(*start), "จุดต้นท่อลึก 0.60 ม.", "upl"))
-        notes.append(((po[0], po[1] - 12), "ต่อลงบ่อพักท่อระบายน้ำสาธารณะ", "downr"))
-        notes.append((v(X1, (Y0 + Y1) / 2), "บ่อพักท่อระบายน้ำ 0.40 × 0.40 ม. ฝา คสล.", "right"))
-        # the septic tank outside the (first) bathroom, the grease trap outside the kitchen
-        def outside(rm, gap=0.55):
-            cx, cy = rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2
-            ds = [(cx - bx0, (bx0 - gap, cy)), (bx1 - cx, (bx1 + gap, cy)),
-                  (cy - by0, (cx, by0 - gap)), (by1 - cy, (cx, by1 + gap))]
-            return min(ds)[1]
+        _flow(sh, (po[0], po[1] - 2.6), (po[0], po[1] - 14))
+        # the drain's sizes: 1.60 from the walls, both ways
+        for a_, b_, q in (((X0, by0 - 0.0), (bx0, by0), "x"),):
+            pass
+        ytop_d = v(0, Y1)[1] + 4
+        sh.line(v(X1, Y1), (v(X1, 0)[0], ytop_d + 1.4), "dim", 0.12)
+        sh.line(v(bx1, by1), (v(bx1, 0)[0], ytop_d + 1.4), "dim", 0.12)
+        STD._hdim(sh, v(bx1, 0)[0], v(X1, 0)[0], ytop_d, f"{o:.2f}")
+        notes.append((v(X1, (Y0 + Y1) / 2 + 0.6), ["ท่อคอนกรีตท้องตลาด Ø0.20 ม. ลาด 1 : 200"]))
+        notes.append(((v(X1, Y1)[0] + 2.2, v(X1, Y1)[1]), ["จุดต้นท่อลึก 0.60 ม."]))
+        cb_note = min(cbs, key=lambda c: (abs(c[0] - X1), -c[1] if c[1] < Y1 else 9))
+        cbn = v(X1, Y0)
+        notes.append(((cbn[0] + 2.2, cbn[1]), ["บ่อพักท่อระบายน้ำสำเร็จรูป",
+                                                                                 "ขนาด 0.40 × 0.40 ม. พร้อมฝา คสล."]))
+        sh.text((po[0] + 2.0, po[1] - 14), "ต่อลงบ่อพักท่อระบายน้ำสาธารณะ", 2.4)
+        # the septic tank and the bathroom's pipes
         st = des["septic"]
-        r_st = 0.55
-        if baths:
-            ct = outside(baths[0], r_st + 0.12)
-            _tank(sh, v(*ct), v.len(r_st))
-            # the soil pipes: each WC to the tank (orthogonal), the waste (FD, LAV) too
-            for fx in fixtures:
+        r_st = 0.5
+        used = []
+        for bi, rm in enumerate(baths[:1]):
+            side, wall, n = _side(rm, box, ("N", "E", "W", "S"))
+            used.append(side)
+            lo = (rm["y"] if n[0] else rm["x"]) + 0.15
+            hi = (rm["y"] + rm["d"] if n[0] else rm["x"] + rm["w"]) - 0.15
+            ct = at(n, wall, 0.98, (lo + hi) / 2)
+            _hatched(sh, v(*ct), v.len(r_st))
+            col_off = 0.32
+            mine = [fx for fx in fixtures if in_room(fx, rm)]
+            ats = []
+            for fx in mine:
                 typ = fx.get("type", "")
-                p = (float(fx["x"]), float(fx["y"]))
-                soil = typ.startswith("WC") or typ == "UR"
-                if not (soil or typ.startswith(("LV", "FD", "SH", "BT"))):
+                if not (typ.startswith(("WC", "UR", "LV", "SH", "BT", "FD"))):
                     continue
-                q = (p[0], ct[1]) if abs(ct[0] - p[0]) > abs(ct[1] - p[1]) else (ct[0], p[1])
-                sh.poly([v(*p), v(*q), v(*ct)], "pipe", 0.6 if soil else 0.35, closed=False)
-                lp = v(*p)
-                sh.text((lp[0] + 1.4, lp[1] - 3.2), 'S Ø4"' if soil else 'W Ø2"', 1.9, "left", "pipe")
-            fdp = v(baths[0]["x"] + baths[0]["w"] * 0.5, baths[0]["y"] + baths[0]["d"] * 0.28)
-            sh.rect(fdp[0] - 1.1, fdp[1] - 1.1, fdp[0] + 1.1, fdp[1] + 1.1, "pipe", 0.3)
-            sh.text((fdp[0] + 1.8, fdp[1] - 3.4), 'FD Ø2"', 2.0)
+                soil = typ.startswith(("WC", "UR"))
+                pf = (float(fx["x"]), float(fx["y"]))
+                a_ = along(n, pf)
+                pw = at(n, wall, 0.0, a_)
+                pc = at(n, wall, col_off, a_)
+                sh.line(v(*pf), v(*pc), "pipe", 0.7 if soil else 0.4)
+                _flex(sh, v(*at(n, wall, 0.12, a_)), v(*pc))
+                ats.append(a_)
+            fda = (lo + hi) / 2 - 0.4
+            fd = (rm["x"] + rm["w"] * 0.5, rm["y"] + rm["d"] * 0.35)        # the floor drain
+            fq = v(*fd)
+            sh.rect(fq[0] - 1.1, fq[1] - 1.1, fq[0] + 1.1, fq[1] + 1.1, "pipe", 0.3)
+            sh.circle(fq, 0.6, "pipe", 0.2)
+            a_ = along(n, fd)
+            sh.line(fq, v(*at(n, wall, col_off, a_)), "pipe", 0.4)
+            ats.append(a_)
+            ca = along(n, ct)
+            ats.append(ca)
+            amin, amax = min(ats), max(ats)
+            sh.line(v(*at(n, wall, col_off, amin)), v(*at(n, wall, col_off, amax)), "pipe", 0.8)
+            for e_ in (amin, amax):
+                if abs(e_ - ca) > 0.05:
+                    _fco(sh, v(*at(n, wall, col_off, e_)))
+            pa_, pb_ = v(*at(n, wall, col_off, ca)), v(*at(n, wall, 0.98 - r_st, ca))
+            sh.line(pa_, pb_, "pipe", 0.8)
+            _ahead(sh, pb_, pa_, 2.4)
             cb = min(cbs, key=lambda c: math.hypot(c[0] - ct[0], c[1] - ct[1]))
-            sh.line(v(*ct), v(*cb), "pipe", 0.35)                    # the treated water to the drain
-            notes.append((v(*ct), f"ถังบำบัดน้ำเสียสำเร็จรูป ST {st['litres']:,} ลิตร", "right"))
-        kit = [s["room"] for s in E["slabs"] if s["floor"] == k and "ครัว" in (s["room"].get("name") or "")]
-        if kit:
-            cg = outside(kit[0], 0.45)
-            _tank(sh, v(*cg), v.len(0.30), hatch=False)
-            sinks = [fx for fx in fixtures if fx.get("type", "").startswith("SK")]
+            pt0, pt1 = v(*ct), v(*cb)
+            sh.line(pt0, pt1, "pipe", 0.45)
+            _flex(sh, ((pt0[0] + pt1[0]) / 2, (pt0[1] + pt1[1]) / 2), pt1)
+            notes.append((v(*at(n, wall, 0.98 + r_st, ca)), [f"ถังบำบัดน้ำเสียสำเร็จรูป {st['litres']:,} ลิตร"]))
+            notes.append((v(*at(n, wall, col_off, (amin + ca) / 2)), ['ท่อ PVC Ø4"S / Ø2"W ลาด 1 : 100']))
+            notes.append((fq, ['FD Ø2" (ฟลอร์เดรนกันกลิ่น)']))
+        # the grease trap outside the kitchen
+        for rm in kit[:1]:
+            side, wall, n = _side(rm, box, tuple(x for x in ("E", "W", "N", "S") if x not in used) or ("E",))
+            used.append(side)
+            sinks = [fx for fx in fixtures if fx.get("type", "").startswith("SK") and in_room(fx, rm)]
             src = (float(sinks[0]["x"]), float(sinks[0]["y"])) if sinks else \
-                (kit[0]["x"] + kit[0]["w"] / 2, kit[0]["y"] + kit[0]["d"] / 2)
-            q = (src[0], cg[1]) if abs(cg[0] - src[0]) > abs(cg[1] - src[1]) else (cg[0], src[1])
-            sh.poly([v(*src), v(*q), v(*cg)], "pipe", 0.35, closed=False)
+                (rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2)
+            cg = at(n, wall, 0.75, along(n, src))
+            _hatched(sh, v(*cg), v.len(0.30), inner=True, hatch=False)
+            pw = v(*at(n, wall, 0.75 - 0.30, along(n, src)))
+            sh.line(v(*src), pw, "pipe", 0.45)
+            _ahead(sh, pw, v(*src), 2.0)
+            _flex(sh, v(*at(n, wall, 0.12, along(n, src))), pw)
             cb = min(cbs, key=lambda c: math.hypot(c[0] - cg[0], c[1] - cg[1]))
-            sh.line(v(*cg), v(*cb), "pipe", 0.35)
-            notes.append((v(*cg), f"ถังดักไขมันสำเร็จรูป GT {des['grease']['litres']} ลิตร", "right"))
-        # the water: the meter at the front, the storage tank and the pump, the branches
-        mt = (bx0 + 1.4, Y0 - 0.9)                                  # the meter at the front, left
-        pm, pt = v(*mt), v(bx0 + 1.4, by0 - 0.8)
-        sh.circle(pm, 1.8, "pipe", 0.3)
-        sh.text((pm[0], pm[1] - 0.8), "M", 1.7, "center", "pipe", True)
-        notes.append((pm, 'ชุดมาตรวัดน้ำ Ø1/2" (ผู้รับจ้างเป็นผู้ติดตั้ง)', "downl"))
-        _tank(sh, pt, v.len(0.45), hatch=False)
-        sh.rect(pt[0] - 9.5, pt[1] - 1.8, pt[0] - 5.5, pt[1] + 1.8, "pipe", 0.3)
-        sh.text((pt[0] - 7.5, pt[1] - 0.8), "BP", 1.6, "center", "pipe", True)
-        notes.append((pt, "ถังเก็บน้ำสำเร็จรูป + เครื่องสูบน้ำ (BP)", "left"))
-        _dashdot(sh, (pm[0], pm[1] + 1.8), (pm[0], pt[1] - v.len(0.45)), 0.3)
-        wet = baths + kit
-        ym = v(0, by0 - 0.35)[1]                                    # the CW main along the front
-        _dashdot(sh, (pt[0] - 5.5, pt[1]), (pt[0] - v.len(0.45), pt[1]), 0.3)
-        xs_ = [v(rm["x"] + rm["w"] * 0.25, 0)[0] for rm in wet]
-        if xs_:
-            _dashdot(sh, (pt[0] + v.len(0.45), pt[1]), (pt[0] + 6, pt[1]), 0.3)
-            _dashdot(sh, (pt[0] + 6, pt[1]), (pt[0] + 6, ym), 0.3)
-            _dashdot(sh, (pt[0] + 6, ym), (max(xs_), ym), 0.3)
-            for rm, xq in zip(wet, xs_):
-                yt = v(0, rm["y"] + 0.4)[1]
-                _dashdot(sh, (xq, ym), (xq, yt), 0.3)
-                _gate(sh, xq, (ym + v(0, by0)[1]) / 2, vertical=True)
-                sh.text((xq + 1.6, yt - 3.6), 'Ø1/2"CW', 2.0)
-            sh.text(((pt[0] + 6 + max(xs_)) / 2, ym + 1.0), 'Ø3/4"CW', 2.2, "center")
-        # the roof's downpipes at the corners into the nearest catch basin
+            sh.line(v(*cg), v(*cb), "pipe", 0.45)
+            notes.append((v(*at(n, wall, 1.05, along(n, src))), [f"ถังดักไขมันสำเร็จรูป {des['grease']['litres']} ลิตร"]))
+        # the water at the front right: meter, storage tank, pump; the main round the building
+        tk = (bx1 - 1.3, by0 - 0.85)
+        pm = v(bx1 - 1.3, Y0 - 0.9)
+        pt = v(*tk)
+        r_tk = v.len(0.38)
+        sh.rect(pt[0] - v.len(0.5), pt[1] - v.len(0.5), pt[0] + v.len(0.5), pt[1] + v.len(0.5), "pipe", 0.2, True)
+        _hatched(sh, pt, r_tk, inner=False)
+        sh.circle(pm, 1.6, "pipe", 0.35)
+        sh.text((pm[0], pm[1] - 0.7), "M", 1.6, "center", "pipe", True)
+        _valve(sh, (pm[0], pm[1] + 3.2), True)
+        _dashdot(sh, (pm[0], pm[1] + 1.6), (pm[0], pt[1] - r_tk), 0.3)
+        bp = (pt[0] - v.len(0.95), pt[1])
+        sh.rect(bp[0] - 2.0, bp[1] - 1.6, bp[0] + 2.0, bp[1] + 1.6, "pipe", 0.35)
+        sh.text((bp[0], bp[1] - 0.7), "BP", 1.6, "center", "pipe", True)
+        _dashdot(sh, (pt[0] - r_tk, pt[1]), (bp[0] + 2.0, bp[1]), 0.3)
+        ring = (bx0 - 0.25, by0 - 0.25, bx1 + 0.25, by1 + 0.25)
+        m0 = (bx1 - 2.3, by0 - 0.25)
+        _dashdot(sh, (bp[0] - 2.0, bp[1]), v(*m0), 0.3) if False else None
+        _dashdot(sh, (bp[0] - 2.0, bp[1]), (bp[0] - 4.0, bp[1]), 0.3)
+        _dashdot(sh, (bp[0] - 4.0, bp[1]), (bp[0] - 4.0, v(0, m0[1])[1]), 0.3)
+        mstart = (v.inv(bp[0] - 4.0, 0)[0] if hasattr(v, "inv") else bx1 - 2.4, m0[1])
+        for rm in baths[:1] + kit[:1]:
+            side, wall, n = _side(rm, box, ("E", "N", "W", "S"))
+            ent = at(n, wall, 0.25, (rm["y"] + rm["d"] * 0.15) if n[0] else (rm["x"] + rm["w"] * 0.85))
+            ent = _snap(ring, ent)
+            path = _perim(ring, _snap(ring, mstart), ent)
+            for a_, b_ in zip(path, path[1:]):
+                _dashdot(sh, v(*a_), v(*b_), 0.3)
+            pin = v(*at(n, wall, -0.25, along(n, ent)))
+            _dashdot(sh, v(*ent), pin, 0.3)
+            pv = v(*at(n, wall, 0.12, along(n, ent)))
+            _valve(sh, pv, vertical=not n[0])
+            sh.circle(pin, 0.7, "pipe", 0.3)
+        notes.append((v(*_snap(ring, (bx1 + 0.25, (by0 + by1) / 2))), ['ท่อประปา PVC Ø3/4"CW']))
+        notes.append((pt, [f"ถังเก็บน้ำสำเร็จรูป {next((t_ for t_ in TANK_SIZES if t_ >= des['users'] * SAN.SEWAGE_L), TANK_SIZES[-1]):,} ลิตร",
+                           'วางบนฐาน คสล. หนา 0.10 ม. · FLOAT VALVE Ø1/2"'.replace(" · ", " ")]))
+        notes.append((bp, ["เครื่องสูบน้ำเพิ่มแรงดัน (BOOSTER PUMP)", "ชนิดแรงดันคงที่ ไม่น้อยกว่า 200 วัตต์"]))
+        notes.append((pm, ['ชุดมาตรวัดน้ำ Ø1/2" (ผู้รับจ้างเป็นผู้ติดตั้ง)']))
         if E["settings"].get("roof", "none") != "none":
             for c in ((bx0, by1), (bx1, by1), (bx0, by0)):
                 pq = v(*c)
-                sh.circle(pq, 1.1, "pipe", 0.3)
-                sh.circle(pq, 0.3, "pipe", 0.5)
+                sh.circle(pq, 1.2, "pipe", 0.3)
+                sh.circle(pq, 0.35, "pipe", 0.6)
                 cb = min(cbs, key=lambda q: math.hypot(q[0] - c[0], q[1] - c[1]))
-                sh.line(pq, v(*cb), "pipe", 0.25)
-            pq = v(bx0, by1)
-            sh.text((pq[0] + 1.6, pq[1] + 1.4), 'RL Ø2 1/2"', 2.0)
+                pc = v(*cb)
+                sh.line(pq, pc, "pipe", 0.3)
+                _ahead(sh, (pc[0] - (2.2 if pc[0] > pq[0] else -2.2) * 0.7, pc[1] - (2.2 if pc[1] > pq[1] else -2.2) * 0.7), pq, 2.0)
+            notes.append((v(bx1, by1), ['ท่อน้ำฝน RL Ø2 1/2" ลงบ่อพัก']))
+        # the tanks' specification, under the column
         groups = (("ถังบำบัดน้ำเสีย", [f"ถังบำบัดน้ำเสียสำเร็จรูปชนิดไร้อากาศมีตัวกลาง",
                                       f"ขนาด {st['litres']:,} ลิตร" + (f" × {st['count']} ถัง" if st["count"] > 1 else "")
                                       + f" สำหรับผู้ใช้ {des['users']} คน",
                                       f"มอก. 2550 ขนาด {st['size']} ม.", "การติดตั้งให้เป็นไปตามมาตรฐานผู้ผลิต"]),
-                  ("ถังดักไขมัน", [f"ถังดักไขมันสำเร็จรูป ขนาดไม่น้อยกว่า {des['grease']['litres']} ลิตร",
-                                    f"ขนาดภายนอก {des['grease']['size']} ม.", "รับน้ำจากซิงก์ครัว",
+                  ("ถังดักไขมัน", [f"ถังดักไขมันสำเร็จรูป ไม่น้อยกว่า {des['grease']['litres']} ลิตร",
+                                    f"ขนาดภายนอก {des['grease']['size']} ม. รับน้ำจากซิงก์ครัว",
                                     "ตักไขมันทุก 1–2 สัปดาห์"]))
-        for i, (head, lines) in enumerate(groups):                  # the tank notes, two columns, lower right
-            sw = x1 - 186 + i * 94
-            y_ = y0 + 50
-            sh.text((sw, y_), head, 3.2, "left", "text", True)
-            sh.line((sw, y_ - 1.4), (sw + len(head) * 2.0, y_ - 1.4), "text", 0.35)
-            y_ -= 7
+        y_ = y0 + 64
+        for head, lines in groups:
+            sh.text((col_x, y_), head, 3.2, "left", "text", True)
+            sh.line((col_x, y_ - 1.4), (col_x + len(head) * 2.0, y_ - 1.4), "text", 0.35)
+            y_ -= 6.5
             for ln in lines:
-                sh.text((sw, y_), ln, 2.5)
-                y_ -= 4.8
+                sh.text((col_x, y_), ln, 2.5)
+                y_ -= 4.6
+            y_ -= 4
+        ybot = y0 + 76
     else:
-        # upper floors: each bathroom's soil stack and CW riser by its outer wall
         for rm in baths:
-            cs = v(rm["x"] + rm["w"] - 0.25, rm["y"] + rm["d"] - 0.25)          # the outer corner, over the tank
-            sh.circle(cs, 1.6, "pipe", 0.45)
-            sh.circle(cs, 0.5, "pipe", 0.6)
-            notes.append((cs, 'ท่อโสโครกแนวดิ่ง Ø4"SW ลงถังบำบัด · Ø2"V ขึ้นหลังคา', "right"))
-            for fx in fixtures:
-                if not (rm["x"] <= float(fx["x"]) <= rm["x"] + rm["w"] and rm["y"] <= float(fx["y"]) <= rm["y"] + rm["d"]):
-                    continue
+            side, wall, n = _side(rm, box, ("N", "E", "W", "S"))
+            inner = -0.18                                            # under the slab, inside the wall
+            mine = [fx for fx in fixtures if in_room(fx, rm)]
+            lo = (rm["y"] if n[0] else rm["x"]) + 0.25
+            hi = (rm["y"] + rm["d"] if n[0] else rm["x"] + rm["w"]) - 0.25
+            cs = at(n, wall, inner, hi)
+            pcs = v(*cs)
+            ats = [hi]
+            for fx in mine:
                 typ = fx.get("type", "")
-                p = v(float(fx["x"]), float(fx["y"]))
-                soil = typ.startswith("WC")
-                sh.poly([p, (p[0], cs[1]), cs], "pipe", 0.6 if soil else 0.35, closed=False)
-                sh.text((p[0] + 1.4, p[1] - 3.2), 'S Ø4"' if soil else 'W Ø2"', 1.9, "left", "pipe")
-            cw = v(rm["x"] + rm["w"] - 0.25, rm["y"] + rm["d"] - 0.60)
+                if not typ.startswith(("WC", "UR", "LV", "SH", "BT", "FD")):
+                    continue
+                soil = typ.startswith(("WC", "UR"))
+                pf = (float(fx["x"]), float(fx["y"]))
+                a_ = along(n, pf)
+                sh.line(v(*pf), v(*at(n, wall, inner, a_)), "pipe", 0.7 if soil else 0.4)
+                ats.append(a_)
+            amin = min(ats)
+            sh.line(v(*at(n, wall, inner, amin)), pcs, "pipe", 0.8)
+            _fco(sh, v(*at(n, wall, inner, amin)))
+            sh.circle(pcs, 1.8, "pipe", 0.5)
+            sh.circle(pcs, 0.8, "pipe", 0.4)
+            cw = v(*at(n, wall, inner, hi - 0.35))
             sh.circle(cw, 1.0, "pipe", 0.3)
-            notes.append((cw, 'ท่อประปาแนวดิ่ง Ø3/4"CW พร้อมประตูน้ำ', "right"))
-    # the notes, on shelves outside the plan
-    bxr = v(_outline(E, k)[2] + (1.6 if k == 0 else 0.6), 0)[0]
-    used = []
-    for p, text, side in notes:
-        lx = v(_outline(E, k)[0] - (1.6 if k == 0 else 0.6), 0)[0] - 4
-        tx = bxr + 4 if side in ("right", "upr", "downr") else (lx if side in ("left", "downl", "upl") else p[0])
-        ty = p[1] + (9 if side in ("up", "upr", "upl") else -9 if side in ("downr", "downl") else 0)
-        while any(abs(ty - u) < 5.2 and abs(tx - ux) < 60 for ux, u in used):
-            ty -= 5.4
-        used.append((tx, ty))
-        sh.circle(p, 0.45, "text", 0.2)
-        sh.line(p, (tx, ty), "text", 0.15)
-        w = len(text) * 1.2
-        if side in ("left", "downl", "upl"):
-            sh.line((tx - w, ty), (tx, ty), "text", 0.15)
-            sh.text((tx - 1, ty + 0.9), text, 2.3, "right")
-        else:
-            sh.line((tx, ty), (tx + w, ty), "text", 0.15)
-            sh.text((tx + 1, ty + 0.9), text, 2.3)
-    STD.caption_marks(sh, ((x0 + x1) / 2 - 60, y0 + 12), f"แปลนระบบสุขาภิบาลชั้น {k + 1}", f"1:{sc}",
+            sh.line((cw[0] - 0.7, cw[1] - 0.7), (cw[0] + 0.7, cw[1] + 0.7), "pipe", 0.25)
+            notes.append((pcs, ['ท่อโสโครกแนวดิ่ง Ø4"SW ลงถังบำบัด', 'ท่ออากาศ Ø2"V ขึ้นทะลุหลังคา']))
+            notes.append((cw, ['ท่อประปาแนวดิ่ง Ø3/4"CW พร้อมประตูน้ำ']))
+            notes.append((v(*at(n, wall, inner, (amin + hi) / 2)), ['ท่อ PVC Ø4"S / Ø2"W แขวนใต้พื้น ลาด 1 : 100']))
+        ybot = y0 + 20
+    _labels(sh, notes, col_x, y1 - 12, ybot)
+    STD.caption_marks(sh, ((x0 + x1 - colw) / 2 - 50, y0 + 12), f"แปลนระบบสุขาภิบาลชั้น {k + 1}", f"1:{sc}",
                       None, None, 100.0)

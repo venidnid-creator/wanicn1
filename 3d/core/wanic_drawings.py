@@ -799,16 +799,49 @@ def elev_marker(sh, p, ref="", r=3.0):
         sh.text((x, y - 0.7), ref, 1.5, "center")
 
 
+def stair_boxes(E, k):
+    """The stairs' footprints seen on floor k (its own flights and the well
+    of the stair from the floor below), as (x0, y0, x1, y1)."""
+    out = []
+    for e in E["stairs"]:
+        if e["floor"] in (k, k - 1):
+            r = B.stair_layout(e["st"], E["settings"])["rect"]
+            out.append((min(p[0] for p in r), min(p[1] for p in r), max(p[0] for p in r), max(p[1] for p in r)))
+    return out
+
+
+def label_spot(rm, boxes, margin=0.15):
+    """Where a room's name goes: the middle, or — when a stair takes it —
+    the middle of the largest free strip of the room beside the stair."""
+    x0, y0, x1, y1 = rm["x"], rm["y"], rm["x"] + rm["w"], rm["y"] + rm["d"]
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    hit = [b for b in boxes if b[0] - margin < cx < b[2] + margin and b[1] - margin < cy < b[3] + margin]
+    if not hit:
+        return cx, cy
+    bx0, by0, bx1, by1 = hit[0]
+    strips = [((bx0 - x0) * (y1 - y0), ((x0 + bx0) / 2, cy)), ((x1 - bx1) * (y1 - y0), ((bx1 + x1) / 2, cy)),
+              ((by0 - y0) * (x1 - x0), (cx, (y0 + by0) / 2)), ((y1 - by1) * (x1 - x0), (cx, (by1 + y1) / 2))]
+    area, spot = max(strips)
+    return spot if area > 0.6 else (cx, cy)
+
+
+def masked_text(sh, p, text, h, align="center", bold=False):
+    """Text on a white patch (the mask layer), so lines under it never cross it."""
+    w = len(str(text)) * h * 0.56 + 1.2
+    x0 = p[0] - w / 2 if align == "center" else (p[0] - 0.6 if align == "left" else p[0] - w + 0.6)
+    sh.fill([(x0, p[1] - 0.9), (x0 + w, p[1] - 0.9), (x0 + w, p[1] + h * 1.05), (x0, p[1] + h * 1.05)], "mask", 0.0)
+    sh.text(p, text, h, align, "text", bold)
+
+
 def draw_rooms(sh, v, E, k, fcodes=None, area=True):
+    boxes = stair_boxes(E, k)
     for sl in (s for s in E["slabs"] if s["floor"] == k):
         rm = sl["room"]
-        cx, cy = rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2
+        cx, cy = label_spot(rm, boxes)
         p = v(cx, cy)
-        sh.text((p[0], p[1] + 1.5), rm.get("name") or "ห้อง", 2.8, "center",
-                "text", True)
+        masked_text(sh, (p[0], p[1] + 1.5), rm.get("name") or "ห้อง", 2.8, "center", True)
         if area:
-            sh.text((p[0], p[1] - 2.5), f"{rm['w'] * rm['d']:.2f} ตร.ม.", 2.0,
-                    "center")
+            masked_text(sh, (p[0], p[1] - 2.5), f"{rm['w'] * rm['d']:.2f} ตร.ม.", 2.0)
         if fcodes:
             f = CAT.finish_of(rm)
             lv = f"±{sl['z']:.2f}" if sl["z"] == 0 else f"+{sl['z']:.2f}"
@@ -829,8 +862,10 @@ def draw_stairs(sh, v, E, k):
             sh.line(v(*p), v(*q), "dim", 0.18)
         for p, q in B.stair_railing(st["st"], s)["plan"]:          # ราวบันได
             sh.line(v(*p), v(*q), "door", 0.25)
-        e = v(*w[-1])
-        sh.text((e[0], e[1] + 1.2), "ขึ้น", 2.0, "center", "dim")
+        e, e2 = v(*w[0]), v(*w[1])                 # «ขึ้น» at the foot of the way up (the standard)
+        dx, dy = e[0] - e2[0], e[1] - e2[1]
+        L = math.hypot(dx, dy) or 1.0
+        masked_text(sh, (e[0] - dx / L * 2.5 + dy / L * 2.6, e[1] - dy / L * 2.5 - dx / L * 2.6 - 0.8), "ขึ้น", 2.2)
     # upstairs: the stair below seen through its opening (ช่องบันได) and the
     # guard rail round the opening, as the standard upper floor plans
     outline = B.building_outline(E)
@@ -848,8 +883,8 @@ def draw_stairs(sh, v, E, k):
                 dx, dy = (0.0, off) if abs(p[1] - q[1]) < 1e-9 else (off, 0.0)
                 sh.line(v(p[0] + dx, p[1] + dy), v(q[0] + dx, q[1] + dy), "door", 0.25)
         c = v((hx0 + hx1) / 2, (hy0 + hy1) / 2)
-        sh.text((c[0], c[1] + 1.5), "ช่องบันได", 2.0, "center", "text", True)
-        sh.text((c[0], c[1] - 1.5), "ลง", 2.0, "center", "dim")
+        masked_text(sh, (c[0], c[1] + 1.5), "ช่องบันได", 2.2, "center", True)
+        masked_text(sh, (c[0], c[1] - 1.8), "ลง", 2.2)
 
 
 def fixture_spec(t):

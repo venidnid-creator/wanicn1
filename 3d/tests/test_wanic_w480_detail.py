@@ -904,8 +904,9 @@ def test_bath_section_safety_septic_and_3d_picture():
     sheets = D.build_set(d, {"project": "ทดสอบ", "plan_picture": pic}, ("A", "SN"))
     with_pic = [s for s in sheets if any(it[0] == "image" for it in s.items)]
     bare = [s.title for s in sheets if s not in with_pic]     # only the full index / specification sheets
-    assert all("สารบัญ" in t or "รายการประกอบแบบ" in t or t.startswith("รูปด้านภายใน") for t in bare), bare
-    assert len(with_pic) >= len(sheets) - 4
+    assert all("สารบัญ" in t or "รายการประกอบแบบ" in t or t.startswith(("รูปด้านภายใน", "แปลนระบบสุขาภิบาล"))
+               for t in bare), bare                           # the sanitary plans: their notes take the space
+    assert len(with_pic) >= len(sheets) - 6
     sn = next(s for s in sheets if s.title.startswith("แบบขยายถังบำบัด"))
     assert any("ท่อระบายอากาศ" in t for t in sn.texts())
     assert any("ตารางเลือกขนาดถังบำบัด" in t for t in sn.texts())
