@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 cad/vendor/libredwg/win64/
 readwanicn2027/readwanicn/_license_key.py
+_wanic_license_key.py

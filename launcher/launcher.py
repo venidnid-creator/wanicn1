@@ -410,6 +410,18 @@ class StartWindow(QWidget):
         ready = QLabel(t["ready"].format(v=_version()))
         ready.setStyleSheet(f"color: {c['muted']};")
         row.addWidget(ready)
+        try:                                              # อายุการใช้งาน: «ใช้ได้ถึง … · เหลือ … วัน»
+            import wanic_license
+            text, color = wanic_license.badge_text(wanic_license.License())
+            badge = QLabel(text)
+            badge.setObjectName("licenseBadge")
+            badge.setStyleSheet(f"background: {color}; color: white; font-weight: bold;"
+                                " border-radius: 14px; padding: 0 14px;")
+            badge.setFixedHeight(30)
+            row.addSpacing(12)
+            row.addWidget(badge, 0, Qt.AlignVCenter)
+        except Exception:                                 # noqa: BLE001 — never block the start screen
+            pass
         row.addStretch(1)
         lab = QLabel(t["theme"])
         lab.setStyleSheet(f"color: {c['muted']};")
@@ -831,6 +843,9 @@ def main() -> int:
     app.setFont(font)
     import wanic_login
     if not wanic_login.require():
+        return 0
+    import wanic_license                                  # อายุการใช้งาน 1 ปี (ติดตั้งทับไม่นับใหม่)
+    if not wanic_license.require():
         return 0
     files = [Path(a) for a in sys.argv[1:] if not a.startswith("-")]
     if files:

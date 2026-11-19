@@ -678,6 +678,10 @@ def main() -> int:
     from core import wanic_login
     if not wanic_login.require():
         return 0
+    # อายุการใช้งาน 1 ปี นับจากวันที่เริ่มใช้ (ติดตั้งทับไม่นับใหม่)
+    from core import wanic_license
+    if not wanic_license.require(warn=False):
+        return 0
     # The Rust engine: if the last start with it on never
     # drew its first frame, this one goes back to the normal engine (and
     # says so below); --python-engine does it for one run.
