@@ -645,7 +645,8 @@ def for_design(res, rates: Rates | None = None) -> Estimate:
     from .structure.to_project import to_project
     b = res.building
     project = to_project(res)
-    rates = rates or Rates(override_file=os.path.join(DATA_DIR, "labour_override.json"))
+    from .rates import override_path
+    rates = rates or Rates(override_file=override_path())
     book, month = province_prices(b.province)
     rates.prices = {**book, **rates.prices}          # typed prices win over the book
     costing = copy.deepcopy(b.costing)

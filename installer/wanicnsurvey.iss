@@ -5,6 +5,7 @@
 ;   dist\launcher\   (wanicnsurvey.exe)
 ;   dist\ingecad\    (ingecad.exe)
 ;   dist\ingetrazo\  (ingetrazo.exe)
+;   dist\wanicndesign\ (wanicndesign.exe)
 ; Build:  ISCC.exe /DMyAppVersion=2026.10.28 installer\wanicnsurvey.iss
 ; Needs Inno Setup 6.5 or newer (for Thai.isl).
 
@@ -13,6 +14,7 @@
 #define LauncherExe "launcher\wanicnsurvey.exe"
 #define CadExe "cad\ingecad.exe"
 #define ModelExe "3d\ingetrazo.exe"
+#define DesignExe "design\wanicndesign.exe"
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0-dev"
@@ -87,9 +89,11 @@ Name: "dxfassoc"; Description: "{cm:DxfAssoc}"; GroupDescription: "{cm:FileAssoc
 Source: "..\dist\launcher\*"; DestDir: "{app}\launcher"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\ingecad\*"; DestDir: "{app}\cad"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\ingetrazo\*"; DestDir: "{app}\3d"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\wanicndesign\*"; DestDir: "{app}\design"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\branding\wanicnsurvey.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\branding\wanicnsurvey-cad.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\branding\wanicnsurvey-3d.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\branding\wanicnsurvey-design.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "license-th.txt"; DestDir: "{app}"; DestName: "อ่านก่อน-ข้อตกลง.txt"; Flags: ignoreversion
 Source: "..\NOTICE.md"; DestDir: "{app}"; DestName: "ลิขสิทธิ์-NOTICE.txt"; Flags: ignoreversion
@@ -98,6 +102,7 @@ Source: "..\NOTICE.md"; DestDir: "{app}"; DestName: "ลิขสิทธิ์
 Name: "{autoprograms}\{#MyAppName}\WANICNSURVEY"; Filename: "{app}\{#LauncherExe}"; IconFilename: "{app}\wanicnsurvey.ico"
 Name: "{autoprograms}\{#MyAppName}\WANICNSURVEY CAD (2 มิติ)"; Filename: "{app}\{#CadExe}"; IconFilename: "{app}\wanicnsurvey-cad.ico"
 Name: "{autoprograms}\{#MyAppName}\WANICNSURVEY 3D"; Filename: "{app}\{#ModelExe}"; IconFilename: "{app}\wanicnsurvey-3d.ico"
+Name: "{autoprograms}\{#MyAppName}\ออกแบบอาคาร ประมาณราคา (WanicnDesign)"; Filename: "{app}\{#DesignExe}"; IconFilename: "{app}\wanicnsurvey-design.ico"
 Name: "{autodesktop}\WANICNSURVEY"; Filename: "{app}\{#LauncherExe}"; IconFilename: "{app}\wanicnsurvey.ico"; Tasks: desktopicon
 
 [Registry]

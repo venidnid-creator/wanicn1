@@ -20,7 +20,7 @@ Step "Python environment (.venv)"
 if (-not (Test-Path ".venv")) { py -3.12 -m venv .venv }
 $py = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 & $py -m pip install --upgrade pip
-& $py -m pip install PySide6==6.11.2 numpy "ezdxf>=1.4.4" "manifold3d>=3.5.3" Pillow pyproj pyinstaller
+& $py -m pip install PySide6==6.11.2 numpy "ezdxf>=1.4.4" "manifold3d>=3.5.3" Pillow pyproj pyinstaller "openpyxl>=3.1" pywin32
 & $py -m pip install "openskp @ git+https://github.com/iamahsanmehmood/openskp@291700bc213655a00461838de71e5f206311e619#subdirectory=packages/python"
 
 Step "DWG converters for CAD (IngeCAD's patched LibreDWG)"
@@ -61,6 +61,10 @@ Step "Freeze WANICNSURVEY CAD"
 Push-Location cad;  & $py -m PyInstaller --noconfirm --distpath ..\dist --workpath ..\build\cad packaging\ingecad.spec; Pop-Location
 Step "Freeze WANICNSURVEY 3D"
 Push-Location 3d;   & $py -m PyInstaller --noconfirm --distpath ..\dist --workpath ..\build\3d ingetrazo.spec; Pop-Location
+Step "Freeze WanicnDesign (ออกแบบอาคาร ประมาณราคา)"
+Push-Location design\WanicnDesign; & $py -m PyInstaller --noconfirm --distpath ..\..\dist --workpath ..\..\build\design wanicndesign.spec; Pop-Location
+& "dist\wanicndesign\wanicndesign.exe" --check
+if ($LASTEXITCODE -ne 0) { throw "WanicnDesign self-test failed" }
 Step "Freeze the start screen"
 & $py -m PyInstaller --noconfirm --distpath dist --workpath build\launcher launcher\launcher.spec
 

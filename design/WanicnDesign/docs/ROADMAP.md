@@ -170,8 +170,12 @@ BOQ ออกรายการปูพื้น ฝ้า บุผนัง �
 - ส่งออก MS Project / XML, ปรับงวดงานตามสัญญาจริง (งวดตามผลงานที่กำหนดเอง)
 - ส่งออก IFC และ SketchUp
 
-## ช่วงที่ 9 — ตัวติดตั้งบน Windows
-- ใช้ระบบสร้างตัวติดตั้งที่มีใน repo (`installer/`, `build-windows.ps1`)
+## ช่วงที่ 9 — ตัวติดตั้งบน Windows (เสร็จแล้ว)
+- WanicnDesign อยู่ในตัวติดตั้งชุดเดียวกับ WANICNSURVEY (`installer/wanicnsurvey.iss`): ติดตั้งที่ `{app}\design`,
+  การ์ด «ออกแบบอาคาร» ในหน้าเริ่มต้น, เมนู Start, ไอคอน `branding/wanicnsurvey-design.*`
+- `design/WanicnDesign/wanicndesign.spec` (PyInstaller) รวมตารางข้อมูลทั้งหมด; `wanicndesign.exe --check` ทดสอบชุดติดตั้ง
+  (ตาราง ว480 สูตรวัสดุ Factor F จังหวัด → ออกแบบ → ราคากลาง → แผนงาน); ไฟล์ของผู้ใช้เก็บใน `%APPDATA%\WANICNSURVEY`
+- สร้างบนเครื่อง: `build-windows.bat`; บน GitHub: Actions ▸ build-windows ▸ Run workflow (ทดสอบ 121 รายการก่อนสร้าง)
 
 ---
 

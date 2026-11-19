@@ -19,6 +19,25 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 LABOUR_FILE = os.path.join(DATA_DIR, "labour_2569.json")
 
 
+def user_dir() -> str:
+    """Where the user's own files go (labour overrides): %APPDATA%\\WANICNSURVEY\\WanicnDesign, never the
+    install folder, which Windows does not let a program write to."""
+    env = os.environ.get("WANIC_DESIGN_DIR")
+    if env:
+        return env
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "WANICNSURVEY", "WanicnDesign")
+
+
+def override_path() -> str:
+    """The labour override file; an older one kept beside the data (source checkouts) is still read."""
+    old = os.path.join(DATA_DIR, "labour_override.json")
+    new = os.path.join(user_dir(), "labour_override.json")
+    if os.path.exists(old) and not os.path.exists(new):
+        return old
+    return new
+
+
 def q2(v: float) -> float:
     """Round half up to 2 decimals, as the price forms print quantities."""
     return math.floor(abs(float(v)) * 100 + 0.5 + 1e-9) / 100 * (1 if v >= 0 else -1)
@@ -70,6 +89,7 @@ class Rates:
                 with open(self.override_file, encoding="utf-8") as f:
                     current = json.load(f)
             current[code] = float(rate)
+            os.makedirs(os.path.dirname(self.override_file) or ".", exist_ok=True)
             with open(self.override_file, "w", encoding="utf-8") as f:
                 json.dump(current, f, ensure_ascii=False, indent=1)
 

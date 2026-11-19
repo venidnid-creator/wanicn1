@@ -7,7 +7,7 @@ ROOT = Path(SPECPATH).resolve().parent
 BR = ROOT / "branding"
 
 datas = [(str(BR / "wanicnsurvey.ico"), "branding")]
-for name in ("wanicnsurvey", "wanicnsurvey-cad", "wanicnsurvey-3d"):
+for name in ("wanicnsurvey", "wanicnsurvey-cad", "wanicnsurvey-3d", "wanicnsurvey-design"):
     datas.append((str(BR / "png" / f"{name}-128.png"), "branding"))
 
 a = Analysis(

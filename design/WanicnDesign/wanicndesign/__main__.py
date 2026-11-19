@@ -19,7 +19,9 @@ import sys
 from .model import Project
 from .rates import DATA_DIR, Rates
 
-OVERRIDE = os.path.join(DATA_DIR, "labour_override.json")
+from .rates import override_path
+
+OVERRIDE = override_path()
 
 
 def _rates(args) -> Rates:

@@ -7,6 +7,7 @@ The suite installs as::
     <install dir>\\launcher\\wanicnsurvey.exe   (this window)
     <install dir>\\cad\\ingecad.exe             WANICNSURVEY CAD (2D)
     <install dir>\\3d\\ingetrazo.exe            WANICNSURVEY 3D
+    <install dir>\\design\\wanicndesign.exe     ออกแบบอาคาร ประมาณราคา (WanicnDesign)
 
 From a source checkout the sibling folders' main.py run instead.
 Usage: ``wanicnsurvey [file]`` - a file on the command line goes straight
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout,
                                QMessageBox, QPushButton, QVBoxLayout, QWidget)
 
 PRODUCT = "WANICNSURVEY"
-TAGLINE = "สำรวจ · เขียนแบบ 2 มิติ · ขึ้นโมเดล 3 มิติ — ใช้งานได้ฟรี"
+TAGLINE = "สำรวจ · เขียนแบบ 2 มิติ · ขึ้นโมเดล 3 มิติ · ออกแบบอาคาร ประมาณราคา — ใช้งานได้ฟรี"
 DEVELOPER = "ลิขสิทธิ์ © 2569 นายเวนิช ธัมมะวงษ์ วิศวกรสำรวจ"
 CREDIT = ("พัฒนาต่อยอดจากซอฟต์แวร์เสรี IngeCAD และ IngeTrazo "
           "ของ Marco Sumari Tellez · GPL-3.0 · ใช้งานได้ฟรี")
@@ -35,6 +36,9 @@ NAVY, ORANGE, BRASS, IVORY, MUTED = "#0F2A44", "#C46420", "#C9A14A", "#F6F3EC", 
 
 CAD_EXT = {".dwg", ".dxf"}
 MODEL_EXT = {".igz", ".skp", ".dae", ".obj", ".stl", ".glb", ".gltf"}
+DESIGN_EXT = {".json"}                     # WanicnDesign building models
+EXES = {"cad": "ingecad.exe", "3d": "ingetrazo.exe", "design": "wanicndesign.exe"}
+SOURCES = {"cad": "cad/main.py", "3d": "3d/main.py", "design": "design/WanicnDesign/main.py"}
 
 
 def _frozen() -> bool:
@@ -60,9 +64,9 @@ def asset(name: str) -> Path:
 def command(which: str) -> list[str] | None:
     root = suite_root()
     if _frozen():
-        exe = root / which / ("ingecad.exe" if which == "cad" else "ingetrazo.exe")
+        exe = root / which / EXES[which]
         return [str(exe)] if exe.exists() else None
-    script = root / which / "main.py"
+    script = root / SOURCES[which]
     return [sys.executable, str(script)] if script.exists() else None
 
 
@@ -80,6 +84,8 @@ def program_for(path: Path) -> str | None:
         return "cad"
     if ext in MODEL_EXT:
         return "3d"
+    if ext in DESIGN_EXT:
+        return "design"
     return None
 
 
@@ -176,7 +182,7 @@ class StartWindow(QWidget):
         self.setWindowTitle(PRODUCT)
         self.setWindowIcon(QIcon(str(asset("wanicnsurvey.ico"))))
         self.setAcceptDrops(True)
-        self.resize(940, 680)
+        self.resize(1180, 700)
         self.setObjectName("root")
         self.setStyleSheet(f"QWidget#root {{ background: {IVORY}; }}")
 
@@ -212,10 +218,14 @@ class StartWindow(QWidget):
                    "แปลน รูปตัด งานสำรวจ เส้นชั้นความสูง ดินตัด/ดินถม · DWG / DXF", "#E8772E")
         model = Card(asset("wanicnsurvey-3d-128.png"), "โมเดล 3 มิติ",
                      "ขึ้นรูป ดัน/ดึง วัดระยะ ถอดปริมาณ ภูมิประเทศ · IGZ / SKP", "#3BA3D8")
+        build = Card(asset("wanicnsurvey-design-128.png"), "ออกแบบอาคาร",
+                     "โครงสร้าง ค.ส.ล. · แบบก่อสร้าง · ราคากลาง · แผนงาน", "#C9A14A")
         cad.clicked.connect(lambda: self.launch("cad"))
         model.clicked.connect(lambda: self.launch("3d"))
+        build.clicked.connect(lambda: self.launch("design"))
         cards.addWidget(cad, 1)
         cards.addWidget(model, 1)
+        cards.addWidget(build, 1)
         outer.addLayout(cards)
 
         # actions
@@ -270,13 +280,14 @@ class StartWindow(QWidget):
     def open_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "เปิดไฟล์", "",
-            "ไฟล์ที่รองรับ (*.dwg *.dxf *.igz *.skp *.dae *.obj *.stl *.glb *.gltf);;"
-            "แบบ 2 มิติ (*.dwg *.dxf);;โมเดล 3 มิติ (*.igz *.skp *.dae *.obj *.stl *.glb *.gltf)")
+            "ไฟล์ที่รองรับ (*.dwg *.dxf *.igz *.skp *.dae *.obj *.stl *.glb *.gltf *.json);;"
+            "แบบ 2 มิติ (*.dwg *.dxf);;โมเดล 3 มิติ (*.igz *.skp *.dae *.obj *.stl *.glb *.gltf);;"
+            "โมเดลอาคาร WanicnDesign (*.json)")
         if path:
             self.open_paths([Path(path)])
 
     def open_paths(self, paths: list[Path]) -> None:
-        for which in ("cad", "3d"):
+        for which in ("cad", "3d", "design"):
             mine = [p for p in paths if program_for(p) == which]
             if mine:
                 self.launch(which, mine)
