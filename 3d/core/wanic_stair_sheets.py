@@ -266,10 +266,10 @@ def s_stair_flight(sh, E, e, fi, no=1):
     x0, y0, x1, y1 = D.drawing_area()
     span = (u_hi - u_lo) + (fbb if not land_lo else 0) + 0.6
     k = 1000.0 / next(sc for sc in (20, 25, 30, 40, 50) if span * 1000 / sc <= (x1 - x0) - 118
-                      and (H + 1.0) * 1000 / sc <= (y1 - y0) - 70)
+                      and (H + 1.0) * 1000 / sc <= (y1 - y0) - 95)
     sc = round(1000 / k)
     ox = x0 + 44 + (-u_lo + (fbb if not land_lo else 0.0) + 0.5) * k
-    oy = max(y0 + 75 + 0.6 * k, (y0 + y1) / 2 - H * k / 2 + 6)
+    oy = max(y0 + 45 + 0.6 * k, (y0 + y1) / 2 - H * k / 2 - 12)
 
     def P(u, z):
         return (ox + u * k, oy + z * k)
@@ -351,13 +351,15 @@ def s_stair_flight(sh, E, e, fi, no=1):
         q = P(u, u * R_ / g - off + cs + 0.02)
         STD._dot(sh, q, 0.45)
         u += tsp * math.cos(ang)
-    # -- labels at the right, kept apart
+    # -- labels at the right, kept apart: every bar named (size and spacing)
     tx = P(u_hi, 0)[0] + (fbb * k if not land_hi else 0) + 20
-    pts = [(P(uk - l4 * 0.5, (uk - l4 * 0.5) * R_ / g - cs), f"เหล็กบน {bname} มม.@{bsp:.2f} ยาว L/4"),
-           (P(u_top * 0.55 + g * 0.5 - c, (int(u_top * 0.55 / g) + 1) * R_ - c), f"{tname} มม. ทุกมุม (ขั้นบันได)"),
-           (P(u_top * 0.6, u_top * 0.6 * R_ / g - off + cs), f"เหล็กหลัก {bname} มม.@{bsp:.2f} (ล่าง)"),
-           (P(u_top * 0.4, u_top * 0.4 * R_ / g - off + cs + 0.02), f"เหล็กกันร้าว {tname} มม.@{tsp:.2f}"),
-           (P(u_top * 0.3, u_top * 0.3 * R_ / g - off / 2), f"ท้องบันไดหนา {ts:.2f} ม.")]
+    um = (int(u_top * 0.5 / g)) * g
+    pts = [(P(uk - l4 * 0.5, (uk - l4 * 0.5) * R_ / g - cs), f"เหล็กบน {bname} มม.@{bsp:.2f}"),
+           (P(l4 * 0.6, l4 * 0.6 * R_ / g - cs), f"เหล็กบน {bname} มม.@{bsp:.2f}"),
+           (P(um + g - c, um / g * R_ + R_ - c), f"{tname} มม. ทุกมุม"),
+           (P(um + c, um / g * R_ + R_ * 0.6), f"เหล็กขั้นบันได {tname} มม. ทุกขั้น"),
+           (P(u_top * 0.62, u_top * 0.62 * R_ / g - off + cs), f"เหล็กหลัก {bname} มม.@{bsp:.2f} (ล่าง)"),
+           (P(u_top * 0.4, u_top * 0.4 * R_ / g - off + cs + 0.02), f"เหล็กกันร้าว {tname} มม.@{tsp:.2f}")]
     last = None
     for q, lab in sorted(pts, key=lambda t: -t[0][1]):
         ty = q[1] if last is None else min(q[1], last - 6.0)
@@ -366,17 +368,37 @@ def s_stair_flight(sh, E, e, fi, no=1):
         sh.line(q, (tx - 2, ty), "text", 0.15)
         sh.line((tx - 2, ty), (tx + len(lab) * 1.3, ty), "text", 0.15)
         sh.text((tx + 0.5, ty + 0.9), lab, 2.5)
-    # -- sizes and levels
-    yb = P(0, -max(fbh, bs["h"]) - 0.6)[1] - 8
+    # -- sizes: the run above with dashed extension lines (the standard), the bar lengths along
+    #    the slope, the landing bars, the waist and landing thickness, the beam depth
+    yt = P(0, H)[1] + 26
     chain = ([u_lo] if land_lo else []) + [0.0, u_top] + ([u_hi] if land_hi else [])
-    for a, b_ in zip(chain, chain[1:]):
-        txt = f"{n - 1}@{g:.2f} = {u_top:.2f}" if (a, b_) == (0.0, u_top) else f"{b_ - a:.2f}"
-        STD._hdim(sh, P(a, 0)[0], P(b_, 0)[0], yb, txt)
-    STD._hdim(sh, P(chain[0], 0)[0], P(chain[-1], 0)[0], yb - 7, f"{chain[-1] - chain[0]:.2f}")
-    for xq in (chain[0], chain[-1]):
-        sh.line(P(xq, -0.05), (P(xq, 0)[0], yb - 8.4), "dim", 0.12, True)
-    xv = P(u_hi, 0)[0] + (fbb * k if not land_hi else 0) + 9                 # the rise, beside the flight
+    for a_, b_ in zip(chain, chain[1:]):
+        txt = f"{n - 1}@{g:.2f} = {u_top:.2f}" if (a_, b_) == (0.0, u_top) else f"{b_ - a_:.2f}"
+        STD._hdim(sh, P(a_, 0)[0], P(b_, 0)[0], yt, txt)
+    STD._hdim(sh, P(chain[0], 0)[0], P(chain[-1], 0)[0], yt + 7, f"{chain[-1] - chain[0]:.2f}")
+    for uq in chain:                                        # dashed down to the stair
+        zq = 0.0 if uq <= 0.0 else (H if uq >= u_top else uq * R_ / g)
+        sh.line(P(uq, zq), (P(uq, 0)[0], yt + (8.4 if uq in (chain[0], chain[-1]) else 1.4)), "dim", 0.12, True)
+    sh.line(P(chain[0], H), P(chain[-1], H), "dim", 0.12, True)          # the upper level across (the standard)
+    cosA = math.cos(ang)
+    so = R_ * k * cosA + 9                                  # clear of the steps
+    STD.adim(sh, P(0.0, -c), P(l4, l4 * R_ / g - cs), so, f"{l4 / cosA:.2f}")
+    STD.adim(sh, P(uk - l4, (uk - l4) * R_ / g - cs), P(uk, H - c), so, f"{l4 / cosA:.2f}")
+    if land_lo:
+        STD._hdim(sh, P(u_lo + bs["b"], 0)[0], P(0.0, 0)[0], P(0, -ts)[1] - 5, f"{-u_lo - bs['b']:.2f}")
+        xl = P(u_lo, 0)[0] - 7
+        STD._vdim(sh, xl, P(0, -ts)[1], P(0, 0)[1], f"{ts:.2f}", left=True)
+        STD._vdim(sh, xl - 9, P(0, -bs["h"])[1], P(0, 0)[1], f"{bs['h']:.2f}", left=True)
+    if land_hi:
+        STD._hdim(sh, P(uk, 0)[0], P(u_hi - bs["b"], 0)[0], P(0, H - ts)[1] - 5, f"{u_hi - bs['b'] - uk:.2f}")
+    um2 = u_top * 0.10                                       # the waist, square to the slope
+    pa = (um2, um2 * R_ / g - off)
+    pb = (pa[0] - ts * math.sin(ang), pa[1] + ts * math.cos(ang))
+    STD.adim(sh, P(*pb), P(*pa), 5, f"{ts:.3f}".rstrip("0"))
+    xv = tx + 64                                             # the rise, beyond the labels
     STD._vdim(sh, xv, P(0, 0)[1], P(0, H)[1], "")
+    sh.line(P(u_hi, H), (xv + 1.4, P(0, H)[1]), "dim", 0.12, True)
+    sh.line(P(u_hi, 0), (xv + 1.4, P(0, 0)[1]), "dim", 0.12, True)
     sh.text((xv - 1.2, (P(0, 0)[1] + P(0, H)[1]) / 2), f"{n} @ {R_ * 100:.2f} ซม. = {H:.2f} ม.",
             2.5, "center", "dim", angle=90)
     z_base = float(fl[fi].get("z0", 0.0))
@@ -395,7 +417,8 @@ def s_stair_flight(sh, E, e, fi, no=1):
             sh.text((q[0] - 2.0, q[1] + 0.8), lab, 2.4, "right", "dim")
         else:
             sh.text((q[0] + 2.0, q[1] + 3.0), lab, 2.4, "left", "dim")
-    STD._title(sh, P((chain[0] + chain[-1]) / 2, 0)[0], yb - 22, f"ST.{no}", f"1:{sc}",
+    yb = P(0, -max(fbh, bs["h"]) - 0.6)[1] - 8
+    STD._title(sh, P((chain[0] + chain[-1]) / 2, 0)[0], yb - 6, f"ST.{no}", f"1:{sc}",
                f"({names[0]} – {names[1]})")
     D.notes_block(sh, x1 - 96, y1 - 10, "หมายเหตุ", [
         f"1. ท้องบันไดหนา {ts * 100:.0f} ซม. ออกแบบเป็นพื้นทางเดียวพาดตามแนวบันได",

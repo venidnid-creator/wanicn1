@@ -2822,19 +2822,21 @@ def _hdim(sh, xa, xb, y, text, size=2.3):
 
 
 def _title(sh, x, y, name, scale="1:20", note=""):
+    """«S1 1:20» on a rule; the note under it (« · » starts a new line)."""
     """«S1 1:20» on a rule (the standard's detail titles)."""
     sh.text((x, y), f"{name}   {scale}", 3.8, "center", "text", True)
     w = (len(name) + len(scale) + 3) * 1.9
     sh.line((x - w / 2 - 2, y - 1.6), (x + w / 2 + 2, y - 1.6), "text", 0.4)
-    if note:
-        sh.text((x, y - 6.0), note, 2.5, "center")
+    for i, ln in enumerate(str(note).split(" · ") if note else []):
+        sh.text((x, y - 6.0 - i * 4.2), ln, 2.5, "center")
 
 
-def slab_section(sh, E, mark, cx, ytop, k=50.0):
-    """A suspended slab across its short span (the standard's S1, S2): the
-    slab between its beams, bottom bars hooked up, top bars over the
-    supports L/4 hooked down into the beams, the cross bars as dots; the
-    thickness, the span «(ด้านสั้น)» and the title."""
+def slab_section(sh, E, mark, cx, ytop, k=50.0, slot=150.0):
+    """A suspended slab across its short span, whole, as the standard's S1,
+    S2: the slab on its two beams, the bottom mat with 180° hooks up and the
+    top mat with hooks down, both hooked into the beams, the cross bars as
+    dots; the thickness, the span between the beam centres «(ด้านสั้น)», the
+    bar spacing «#» (both ways) and the title at its own scale."""
     lib = E["lib"]
     sp = lib.get(mark, {})
     t = float(sp.get("t", 0.10))
@@ -2845,62 +2847,43 @@ def slab_section(sh, E, mark, cx, ytop, k=50.0):
     lvl = next((s["floor"] for s in E["slabs"] if s["mark"] == mark), 1)
     bm = [lib[b["mark"]] for b in E["beams"] if b["level"] == lvl and b["mark"] in lib] or [{"b": 0.2, "h": 0.4}]
     bb, bh = float(bm[0].get("b", 0.2)), float(bm[0].get("h", 0.4))
-    brk = L > 2.4                                            # long spans: drawn with a break in the middle
-    DL = 2.6 if brk else L
-    x0 = cx - (DL + bb) * k / 2 + bb * k / 2
+    sc = next((v for v in (20, 25, 30, 40, 50) if (L + bb) * 1000 / v <= slot - 26), 50)
+    k = 1000.0 / sc
+    x0 = cx - L * k / 2
 
-    def X(u):
-        return x0 + u * k
-
-    def Z(z):
-        return ytop + z * k
-    gap = (1.2, 1.4) if brk else None
-    # concrete: the slab and the beam stubs
-    for ua, ub in (((-bb / 2, gap[0]), (gap[1], DL + bb / 2)) if brk else ((-bb / 2, DL + bb / 2),)):
-        sh.line((X(ua), Z(0)), (X(ub), Z(0)), "cut", 0.5)
-    for ua, ub in (((bb / 2, gap[0]), (gap[1], DL - bb / 2)) if brk else ((bb / 2, DL - bb / 2),)):
-        sh.line((X(ua), Z(-t)), (X(ub), Z(-t)), "cut", 0.5)
-    if brk:
-        _break_v(sh, X(gap[0]), Z(-t), Z(0))
-        _break_v(sh, X(gap[1]), Z(-t), Z(0))
-    for uc in (0.0, DL):
-        sh.poly([(X(uc - bb / 2), Z(0)), (X(uc - bb / 2), Z(-bh)), (X(uc + bb / 2), Z(-bh)), (X(uc + bb / 2), Z(0))],
-                "cut", 0.5, closed=False)
-        _break_h(sh, Z(-bh), X(uc - bb / 2), X(uc + bb / 2))
+    def P(u, z):
+        return (x0 + u * k, ytop + z * k)
+    hd = min(bh, 0.30)                                          # the beams shown to a break
+    # concrete
+    sh.line(P(-bb / 2, 0), P(L + bb / 2, 0), "cut", 0.5)
+    sh.line(P(bb / 2, -t), P(L - bb / 2, -t), "cut", 0.5)
+    for uc in (0.0, L):
+        sh.poly([P(uc - bb / 2, 0), P(uc - bb / 2, -hd), P(uc + bb / 2, -hd), P(uc + bb / 2, 0)], "cut", 0.5,
+                closed=False)
+        _break_h(sh, P(0, -hd)[1], P(uc - bb / 2, 0)[0], P(uc + bb / 2, 0)[0])
     c = 0.025
-    # bottom bars, hooked up at the beams
-    segs = ((-bb / 2 + 0.04, gap[0]), (gap[1], DL + bb / 2 - 0.04)) if brk else ((-bb / 2 + 0.04, DL + bb / 2 - 0.04),)
-    for i, (ua, ub) in enumerate(segs):
-        pts = [(X(ua), Z(-t + c)), (X(ub), Z(-t + c))]
-        if i == 0:
-            pts.insert(0, (X(ua), Z(-t + c + 0.06)))
-        if i == len(segs) - 1:
-            pts.append((X(ub), Z(-t + c + 0.06)))
-        sh.poly(pts, "rebar", 0.45, closed=False)
-    # top bars over each support, L/4 into the span, hooked down into the beam
-    l4 = min(L / 4, (gap[0] - 0.05) if brk else L / 4)
-    for uc, sg in ((0.0, 1), (DL, -1)):
-        ua = uc - sg * (bb / 2 - 0.04)
-        sh.poly([(X(ua), Z(-0.15)), (X(ua), Z(-c)), (X(uc + sg * l4), Z(-c)), (X(uc + sg * l4), Z(-c - 0.03))],
-                "rebar", 0.45, closed=False)
-    # the cross bars (dots)
-    u = bb / 2 + 0.05
-    while u < DL - bb / 2 - 0.04:
-        if not (brk and gap[0] - 0.05 < u < gap[1] + 0.05):
-            _dot(sh, (X(u), Z(-t + c + 0.016)), 0.45)
-            if u < l4 or u > DL - l4:
-                _dot(sh, (X(u), Z(-c - 0.016)), 0.45)
+    e_ = bb / 2 - 0.04                                           # into the beams
+    hk = 0.045
+    # bottom mat: 180° hooks up at both ends; top mat: hooks down
+    sh.poly([P(-e_ + hk, -t + c + hk), P(-e_, -t + c + hk), P(-e_, -t + c), P(L + e_, -t + c), P(L + e_, -t + c + hk),
+             P(L + e_ - hk, -t + c + hk)], "rebar", 0.45, closed=False)
+    sh.poly([P(-e_, -c - 0.12), P(-e_, -c), P(L + e_, -c), P(L + e_, -c - 0.12)], "rebar", 0.45, closed=False)
+    u = bb / 2 + 0.03
+    while u < L - bb / 2 - 0.02:                                # the cross bars (dots), both mats
+        _dot(sh, P(u, -t + c + 0.014), 0.42)
+        _dot(sh, P(u, -c - 0.014), 0.42)
         u += s_
-    # labels, sizes, title
-    lab = f"{bname} มม.@{s_:.3f} #".replace(".000", "")
-    _leader(sh, (X(0.3), Z(-c)), X(0.6), Z(0) + 7, lab)
-    _leader(sh, (X(DL / 2 if not brk else 0.9), Z(-t + c)), X(1.0 if not brk else 1.0) + 4, Z(-t) - 7, lab)
-    sh.text((X(l4 / 2), Z(0) + 1.0), "L/4", 2.2, "center", "dim")
-    _vdim(sh, X(DL + bb / 2) + 6, Z(-t), Z(0), f"{t:.2f}")
-    yb = Z(-bh) - 8
-    _hdim(sh, X(0), X(DL), yb, f"{L:.2f}")
-    sh.text((X(DL / 2), yb - 3.6), f"{mark} (ด้านสั้น)", 2.4, "center")
-    _title(sh, X(DL / 2), yb - 12, mark)
+    lab = f"{bname} มม.@{s_:.3f}#".replace("0#", "#").replace("0#", "#")
+    um = L / 2 + s_ / 2
+    _leader(sh, P(um, -c), P(um, 0)[0] + 2, P(0, 0)[1] + 8, lab)
+    _leader(sh, P(um, -t + c), P(um, 0)[0] + 2, P(0, -t)[1] - 8, lab)
+    _vdim(sh, P(L + bb / 2, 0)[0] + 8, P(0, -t)[1], P(0, 0)[1], f"{t:.2f}")
+    yb = P(0, -hd)[1] - 9
+    for uc in (0.0, L):                                         # the span between the beam centres
+        sh.line(P(uc, -hd - 0.04), (P(uc, 0)[0], yb - 1.4), "dim", 0.12)
+    _hdim(sh, P(0, 0)[0], P(L, 0)[0], yb, f"{L:.2f}")
+    sh.text((P(L / 2, 0)[0], yb - 3.8), f"{mark} (ด้านสั้น)", 2.4, "center")
+    _title(sh, P(L / 2, 0)[0], yb - 13, mark, f"1:{sc}")
     return yb - 20
 
 
@@ -2977,9 +2960,11 @@ def column_joint(sh, E, x, ytop, kind, k=50.0):
             z_ += 0.15
         _hdim(sh, P(c, 0)[0], P(c + 0.30, 0)[0], P(0, 0)[1] + 5, "0.30")
         _leader(sh, P(b - c, -bh - 0.5), P(b + 0.5, 0)[0], P(0, -bh - 0.5)[1], f"{cm} ({n} {cname} มม.)")
-        _leader(sh, P(b + 0.6, -bh / 2), P(b + 0.95, 0)[0] + 3, P(0, -bh / 2)[1] + 6, f"คาน {bmark}")
-        _title(sh, P(b / 2 + 0.3, 0)[0], P(0, -bh - 0.9)[1] - 10, f"รอยต่อเสา {cm} กับคาน {bmark}",
-               note="เหล็กยืนเสางอฉากเข้าคาน ยาว 0.30 ม.")
+        _leader(sh, P(b + 0.6, -bh / 2), P(b + 0.95, 0)[0] + 3, P(0, 0)[1] + 7, f"คาน {bmark}")
+        _hdim(sh, P(0, 0)[0], P(b, 0)[0], P(0, -bh - 0.9)[1] - 5, f"{b:.2f}")
+        _vdim(sh, P(b + 0.9, 0)[0] + 7, P(0, -bh)[1], P(0, 0)[1], f"{bh:.2f}")
+        _title(sh, P(b / 2 + 0.3, 0)[0], P(0, -bh - 0.9)[1] - 15, f"รอยต่อเสา {cm} กับคาน {bmark}",
+               note=f"หมายเหตุ เสา {cm} ขึ้นจากฐานราก ถึงคานหลังคา {bmark} · เหล็กยืนงอฉากเข้าคาน ยาว 0.30 ม.")
     else:
         lap = max(0.30, 40 * d / 1000)
         sh.line(P(0, -bh - 0.7), P(0, lap + 0.4), "cut", 0.5)
@@ -3001,11 +2986,13 @@ def column_joint(sh, E, x, ytop, kind, k=50.0):
             z_ += 0.10 if 0 <= z_ <= lap else 0.15
         _vdim(sh, P(0, 0)[0] - 6, P(0, 0)[1], P(0, lap)[1], f"{lap:.2f}", left=True)
         sh.text((P(0, 0)[0] - 8, P(0, lap / 2)[1] - 5.5), "(40d)", 2.2, "right", "dim")
-        _leader(sh, P(b + 0.5, -bh / 2), P(b + 0.85, 0)[0] + 3, P(0, -bh / 2)[1] + 8, f"คาน {bmark}")
+        _leader(sh, P(b + 0.5, -bh / 2), P(b + 0.85, 0)[0] + 3, P(0, 0)[1] + 5, f"คาน {bmark}")
         _leader(sh, P(b - c, lap / 2), P(b + 0.4, 0)[0], P(0, lap / 2)[1] + 4,
                 "ทาบเหล็กยืนเหนือพื้น · ปลอกเสริม @0.10")
-        _title(sh, P(b / 2 + 0.3, 0)[0], P(0, -bh - 0.7)[1] - 10, f"รอยต่อเสา {cm} ที่ระดับพื้นชั้น 2",
-               note=f"ระยะทาบ 40 เท่าของเหล็ก = {lap:.2f} ม.")
+        _hdim(sh, P(0, 0)[0], P(b, 0)[0], P(0, -bh - 0.7)[1] - 5, f"{b:.2f}")
+        _vdim(sh, P(b + 0.8, 0)[0] + 7, P(0, -bh)[1], P(0, 0)[1], f"{bh:.2f}")
+        _title(sh, P(b / 2 + 0.3, 0)[0], P(0, -bh - 0.7)[1] - 15, f"รอยต่อเสา {cm} ที่ระดับพื้นชั้น 2",
+               note=f"หมายเหตุ ทาบเหล็กยืนเหนือพื้น 40 เท่า = {lap:.2f} ม. · ปลอกเสริมช่วงทาบ @0.10")
 
 
 def edge_rib(sh, E, x, ytop, k=50.0):
@@ -3052,17 +3039,104 @@ def s_slab_std(sh, E):
     ground = [m for m in marks if int(lib.get(m, {}).get("ground") or 0)]
     W = x1 - x0
     items = [("s", m) for m in hung[:3]] + [("g", m) for m in ground[:1]]
+    if D.bathrooms(E):
+        items.append(("d", None))
     items = items[:3]
-    for i, (kind, m) in enumerate(items):                   # the slabs across the top, each in its slot
-        cx = x0 + W * (i + 0.5) / len(items)
+    wt = {"s": 2.2, "g": 1.4, "d": 1.3}                     # the slots: the slab sections widest
+    tot = sum(wt[kd] for kd, _m in items)
+    xa = x0
+    for kind, m in items:                                   # the slabs across the top, each in its slot
+        sw = W * wt[kind] / tot
+        cx = xa + sw / 2
+        xa += sw
         if kind == "s":
-            slab_section(sh, E, m, cx, y1 - 26, k)
-        else:
+            slab_section(sh, E, m, cx, y1 - 30, k, sw)
+        elif kind == "g":
             ground_slab(sh, E, m, cx - 40, y1 - 26, k)
+        else:
+            drop_detail(sh, E, cx, y1 - 42, 100.0)
     ym = y0 + 112                                           # the joints and the rib, the lower half
-    column_joint(sh, E, x0 + 26, ym, "top", k)
+    column_joint(sh, E, x0 + 30, ym, "top", k)
     if E["n"] > 1:
         column_joint(sh, E, x0 + W * 0.40, ym - 8, "lap", k)
     edge_rib(sh, E, x0 + W * 0.72, ym + 4, k)
     sh.scale = "1:20"
     return 20
+
+
+def adim(sh, p, q, off, text, size=2.3):
+    """An aligned size from p to q (paper), set ``off`` mm to the left of
+    p→q: extension lines, the line, ticks, the text along it (the standard's
+    sizes along the stair)."""
+    import math as _m
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    L = _m.hypot(dx, dy) or 1.0
+    ux, uy = dx / L, dy / L
+    nx, ny = -uy, ux
+    a = (p[0] + nx * off, p[1] + ny * off)
+    b = (q[0] + nx * off, q[1] + ny * off)
+    sg = 1 if off >= 0 else -1
+    for s0, s1 in ((p, a), (q, b)):
+        sh.line((s0[0] + nx * sg * 1.0, s0[1] + ny * sg * 1.0), (s1[0] + nx * sg * 1.4, s1[1] + ny * sg * 1.4),
+                "dim", 0.13)
+    sh.line(a, b, "dim", 0.15)
+    for t in (a, b):
+        sh.line((t[0] - 0.8 * (ux + nx), t[1] - 0.8 * (uy + ny)), (t[0] + 0.8 * (ux + nx), t[1] + 0.8 * (uy + ny)),
+                "dim", 0.3)
+    ang = _m.degrees(_m.atan2(dy, dx))
+    if ang > 90 or ang < -90:
+        ang += 180
+    m = ((a[0] + b[0]) / 2 + nx * sg * 0.9, (a[1] + b[1]) / 2 + ny * sg * 0.9)
+    sh.text(m, text, size, "center", "dim", angle=ang)
+
+
+def drop_detail(sh, E, cx, ytop, k=50.0, drop=0.05):
+    """ขยาย พื้นห้องน้ำลดระดับ (the standard's «ขยาย 2»): the beam between a
+    room and the bathroom, the bathroom slab ``drop`` lower, both slabs'
+    bars hooked into the beam, the beam's bars; the sizes and levels."""
+    lib = E["lib"]
+    sl = next((lib[s["mark"]] for s in E["slabs"] if s["floor"] > 0 and s["mark"] in lib),
+              next((lib[s["mark"]] for s in E["slabs"] if s["mark"] in lib), {"t": 0.10, "bars": "RB9@0.20"}))
+    t = float(sl.get("t", 0.10))
+    _n, bname, _d, s_ = D._bars(sl.get("bars"))
+    bmk = next((b["mark"] for b in E["beams"] if b["level"] == 1 and b["mark"] in lib), "B1")
+    bb, bh = float(lib.get(bmk, {}).get("b", 0.2)), float(lib.get(bmk, {}).get("h", 0.4))
+    W = 0.40
+    x = cx - bb * k / 2
+
+    def P(u, z):
+        return (x + u * k, ytop + z * k)
+    # concrete: the room slab, the beam, the lower bathroom slab
+    sh.poly([P(-W, 0), P(bb, 0), P(bb, -drop), P(bb + W, -drop)], "cut", 0.5, closed=False)
+    sh.poly([P(-W, -t), P(0, -t), P(0, -bh), P(bb, -bh), P(bb, -drop - t), P(bb + W, -drop - t)], "cut", 0.5,
+            closed=False)
+    _break_v(sh, P(-W, 0)[0], P(0, -t)[1], P(0, 0)[1])
+    _break_v(sh, P(bb + W, 0)[0], P(0, -drop - t)[1], P(0, -drop)[1])
+    c = 0.025
+    sh.rect(*P(c, -bh + c), *P(bb - c, -c), "rebar", 0.25)                 # the beam's stirrup and bars
+    for uu in (c + 0.015, bb - c - 0.015):
+        for zz in (-c - 0.015, -bh + c + 0.015):
+            _dot(sh, P(uu, zz), 0.55)
+    # the slabs' bars: top bars hooked down into the beam, bottom bars into it
+    sh.poly([P(-W, -c), P(bb - c - 0.03, -c), P(bb - c - 0.03, -c - 0.12)], "rebar", 0.45, closed=False)
+    sh.poly([P(-W, -t + c), P(c + 0.06, -t + c)], "rebar", 0.45, closed=False)
+    sh.poly([P(bb + W, -drop - c), P(c + 0.03, -drop - c), P(c + 0.03, -drop - c - 0.12)], "rebar", 0.45,
+            closed=False)
+    sh.poly([P(bb + W, -drop - t + c), P(bb - c - 0.06, -drop - t + c)], "rebar", 0.45, closed=False)
+    lab = f"{bname} มม.@{(s_ or 0.2):.3f}#".replace("0#", "#").replace("0#", "#")
+    _leader(sh, P(-W * 0.2, -c), P(-W * 0.2, 0)[0] + 4, P(0, 0)[1] + 13, lab)
+    _leader(sh, P(bb / 2, -bh / 2), P(bb + W * 0.5, 0)[0], P(0, -bh)[1] - 3, f"คาน {bmk}")
+    for zz, txt, uu, up in ((0.0, "ระดับพื้นห้อง ±0.00", -W * 0.92, 0.0),
+                            (-drop, f"ระดับพื้นห้องน้ำ {-drop:+.2f}", bb + W * 0.35, 6.0)):
+        q = P(uu, zz)
+        qa = (q[0], q[1] + up)
+        if up:
+            sh.line(q, qa, "dim", 0.13)
+        sh.poly([qa, (qa[0] - 1.4, qa[1] + 2.2), (qa[0] + 1.4, qa[1] + 2.2)], "dim", 0.2)
+        sh.text((qa[0] + 2.0, qa[1] + 1.0), txt, 2.3, "left", "dim")
+    _vdim(sh, P(bb + W, 0)[0] + 6, P(0, -drop)[1], P(0, 0)[1], f"{drop:.2f}")
+    sh.line(P(bb, 0), (P(bb + W, 0)[0] + 7.4, P(0, 0)[1]), "dim", 0.12, True)
+    _vdim(sh, P(-W, 0)[0] - 4, P(0, -t)[1], P(0, 0)[1], f"{t:.2f}", left=True)
+    _hdim(sh, P(0, 0)[0], P(bb, 0)[0], P(0, -bh)[1] - 5, f"{bb:.2f}")
+    _title(sh, P(bb / 2, 0)[0], P(0, -bh)[1] - 15, "ขยาย 1", f"1:{round(1000 / k)}",
+           f"(พื้นห้องน้ำลดระดับ {drop:.2f} ม.)")
