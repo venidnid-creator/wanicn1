@@ -302,3 +302,328 @@ def ee_panel_std(sh, E):
     from core import wanic_std_sheets as STD
     STD.caption_marks(sh, (x0 + 4, y0 + 30), "รายละเอียดแผงเมนสวิตช์", "ไม่ตามมาตราส่วน", None, None,
                       100.0)
+
+
+# -- EE-03.. the lighting and the socket plans --------------------------------------------------
+
+def _base(sh, E, k, colw=70.0):
+    """The floor plan under the electrical layers: grid and sizes, walls and
+    doors, the stair (numbered), the fittings, the rooms clear of the stair."""
+    x0, y0, x1, y1 = D.drawing_area()
+    bx = D.bbox(E, 3.2)
+    box = (x0, y0 + 16, x1 - colw, y1)
+    fits = (bx[2] - bx[0]) * 1000 / 75 <= box[2] - box[0] and (bx[3] - bx[1]) * 1000 / 75 <= box[3] - box[1] - 14
+    v, sc = D.plan_view(sh, E, box=box, pad=3.2, scale=75 if fits else None)
+    t = float(E["settings"].get("wall_t") or 0.1)
+    D.draw_grid(sh, v, E, ext=3.0, at=(1.6, 2.3))
+    D.draw_walls(sh, v, E, k, t, None, swings=True, tags=False)
+    D.draw_stairs(sh, v, E, k)
+    D.draw_fixtures(sh, v, E, k, labels=False)
+    return v, sc
+
+
+def _free_spot(rm, items, boxes):
+    """The point of the room farthest from its symbols (and off the stair)."""
+    best, bp = -1.0, (rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2)
+    for i in (0.2, 0.3, 0.5, 0.7, 0.8):
+        for j in (0.10, 0.22, 0.5, 0.78, 0.90):
+            p = (rm["x"] + rm["w"] * i, rm["y"] + rm["d"] * j)
+            if any(b[0] - 0.55 < p[0] < b[2] + 0.55 and b[1] - 0.18 < p[1] < b[3] + 0.18 for b in boxes):
+                continue
+            dw = min(p[0] - rm["x"], rm["x"] + rm["w"] - p[0], p[1] - rm["y"], rm["y"] + rm["d"] - p[1])
+            d = min([abs(p[0] - q[0]) + abs(p[1] - q[1]) * 1.6 for q in items] + [dw * 2.2] or [9.0])
+            if d > best + 0.05:
+                best, bp = d, p
+    return bp
+
+
+def _room_label(sh, v, E, k, rm, spot):
+    p = v(*spot)
+    D.masked_text(sh, (p[0], p[1] + 1.2), rm.get("name") or "ห้อง", 2.5, "center", True)
+
+
+def _doors(E, k, rm):
+    from core import wanic_building as B
+    return [op for op in E["openings"] if op["floor"] == k and op["type"] != "window" and
+            B._on_edge(rm, float(op["op"]["x"]), float(op["op"]["y"]), tol=0.06)]
+
+
+def _edge_of(rm, x, y):
+    """(edge name, inward normal) of the room edge through (x, y)."""
+    d = {"W": abs(x - rm["x"]), "E": abs(x - rm["x"] - rm["w"]), "S": abs(y - rm["y"]), "N": abs(y - rm["y"] - rm["d"])}
+    e = min(d, key=d.get)
+    return e, {"W": (1, 0), "E": (-1, 0), "S": (0, 1), "N": (0, -1)}[e]
+
+
+def _switch_spot(E, k, rm, inner):
+    """By the first door, on its latch side, just inside the wall."""
+    ds = _doors(E, k, rm)
+    x0, y0, x1, y1 = inner
+    if not ds:
+        return (x0 + 0.15, y0 + 0.30)
+    op = ds[0]["op"]
+    x, y = float(op["x"]), float(op["y"])
+    w = float(op.get("w") or 0.9)
+    e, n = _edge_of(rm, x, y)
+    if e in ("S", "N"):
+        sx = min(max(x + w / 2 + 0.20, x0 + 0.12), x1 - 0.12)
+        sy = y0 + 0.12 if e == "S" else y1 - 0.12
+    else:
+        sy = min(max(y + w / 2 + 0.20, y0 + 0.12), y1 - 0.12)
+        sx = x0 + 0.12 if e == "W" else x1 - 0.12
+    return (sx, sy)
+
+
+def _ortho(sh, a, b, w=0.35):
+    """A wiring run a→b with one corner (horizontal first)."""
+    if abs(a[0] - b[0]) < 0.05 or abs(a[1] - b[1]) < 0.05:
+        sh.line(a, b, "elec", w)
+    else:
+        sh.poly([a, (b[0], a[1]), b], "elec", w, closed=False)
+
+
+def _home(sh, p, text, up=True):
+    """The home run: a short arrow off the item, to the right, «n/LP» over it."""
+    a = (p[0] + 2.0, p[1])
+    q = (p[0] + 8.0, p[1] + 2.5)
+    sh.line(a, q, "elec", 0.35)
+    sh.fill([q, (q[0] - 2.2, q[1] - 0.2), (q[0] - 1.4, q[1] - 1.8)], "elec", 0.0)
+    D.masked_text(sh, (q[0] + 0.6, q[1] + 0.2), text, 2.2, "left", True)
+
+
+def _side_notes(sh, x, y, lines, title="หมายเหตุ"):
+    sh.text((x, y), title, 3.0, "left", "text", True)
+    sh.line((x, y - 1.3), (x + 20, y - 1.3), "text", 0.3)
+    y -= 6.0
+    for t in lines:
+        for j, ln in enumerate(D._wrap(t, 36)):
+            sh.text((x + (3 if j else 0), y), ln, 2.4)
+            y -= 4.4
+        y -= 1.0
+    return y
+
+
+def _assign(cs, kind, counts):
+    """Hand out circuit numbers to a sequence of points (``counts`` per room
+    in order): the circuits of ``kind`` filled up in turn."""
+    nums = [c["no"] for c in cs if c["kind"] == kind]
+    cap = 10 if kind == "light" else 8
+    out, i, used = [], 0, 0
+    for n in counts:
+        room = []
+        for _ in range(n):
+            if used >= cap and i < len(nums) - 1:
+                i, used = i + 1, 0
+            room.append(nums[i] if nums else 0)
+            used += 1
+        out.append(room)
+    return out
+
+
+def ee_light_plan(sh, E, k):
+    """แปลนไฟฟ้าแสงสว่าง ชั้น k+1 (the standard's EE-03, EE-04): the lights
+    on the ceilings, the switch of each room by its door with its letter,
+    the lights of a switch marked with the same letter, the wiring, the
+    home run of each circuit «n/LP», the panel."""
+    from core import wanic_building as B
+    from core import wanic_mep as MEP
+    from core import wanic_std_sheets as STD
+    x0, y0, x1, y1 = D.drawing_area()
+    v, sc = _base(sh, E, k)
+    P = circuits(E)
+    recs = [r for r in MEP.plan({}, E)]
+    allc = _assign(P["circuits"], "light", [r["lights"] for r in recs])
+    boxes = D.stair_boxes(E, k)
+    letter = 0
+    homes = set()
+    for rec, nums in zip(recs, allc):
+        if rec["floor"] != k:
+            continue
+        rm = rec["room"]
+        inner = B.room_inner(E, rm, k)
+        ix0, iy0, ix1, iy1 = inner
+        n = rec["lights"]
+        cols = max(1, int(round(math.sqrt(n * (ix1 - ix0) / max(iy1 - iy0, 0.1)))))
+        rows = max(1, int(math.ceil(n / cols)))
+        pts = []
+        for j in range(rows):
+            row = [(ix0 + (ix1 - ix0) * (i + 0.5) / cols, iy0 + (iy1 - iy0) * (j + 0.5) / rows) for i in range(cols)]
+            pts += row if j % 2 == 0 else row[::-1]                 # a snake, for one tidy run
+        pts = pts[:n]
+        lt = "abcdefghijklmnopqrstuvwxyz"[letter % 26]
+        letter += 1
+        sw = _switch_spot(E, k, rm, inner)
+        _room_label(sh, v, E, k, rm, _free_spot(rm, pts + [sw], boxes))
+        q = v(*sw)
+        _sym("sw1")(sh, *q)
+        sh.text((q[0] + 1.6, q[1] + 1.2), lt, 2.3, "left", "elec", True)
+        prev = q
+        for p, c in zip(pts, nums):
+            pp = v(*p)
+            _ortho(sh, prev, pp)
+            prev = pp
+        for p, c in zip(pts, nums):
+            pp = v(*p)
+            _sym("down")(sh, *pp)
+            sh.text((pp[0] + 1.8, pp[1] - 3.4), lt, 2.1, "left", "elec", True)
+            if c not in homes:                                        # the circuit's home run, once
+                homes.add(c)
+                _home(sh, pp, f"{c}/LP")
+    if k == 0:
+        lp = _lp_spot(E)
+        _sym("lp")(sh, *v(*lp))
+    _side_notes(sh, x1 - 66, y1 - 10, [
+        "1. ตัวอักษร a, b, c … ที่ดวงโคม คือสวิตช์ที่ควบคุมดวงโคมนั้น",
+        "2. n/LP คือสายวงจรย่อยที่ n กลับแผงเมนสวิตช์ LP (ดูรายละเอียดแผงเมนสวิตช์)",
+        "3. สายวงจรแสงสว่าง 2-2.5/G2.5 IEC 01 ในท่อ uPVC Ø15 มม. เดินเหนือฝ้า",
+        "4. สวิตช์สูงจากพื้น 1.20 ม. ดวงโคมตามสัญลักษณ์งานระบบไฟฟ้า"])
+    STD.caption_marks(sh, ((x0 + x1 - 70) / 2 - 50, y0 + 12), f"แปลนไฟฟ้าแสงสว่าง ชั้น {k + 1}", f"1:{sc}",
+                      None, None, 100.0)
+
+
+def _lp_spot(E):
+    """The panel: on the inner face of the front wall of the first room,
+    near its left end."""
+    from core import wanic_building as B
+    sl = next((s for s in E["slabs"] if s["floor"] == 0), None)
+    if sl is None:
+        return (0.3, 0.3)
+    x0, y0, x1, y1 = B.room_inner(E, sl["room"], 0)
+    return (x0 + 0.45, y0 + 0.12)
+
+
+def _socket_spots(E, k, rm, inner, n):
+    """``n`` socket places along the room's walls, clear of its doors and
+    windows: the middles of the longest free stretches first."""
+    from core import wanic_building as B
+    x0, y0, x1, y1 = inner
+    ops = [op for op in E["openings"] if op["floor"] == k and
+           B._on_edge(rm, float(op["op"]["x"]), float(op["op"]["y"]), tol=0.06)]
+    walls = [("S", (x0, y0), (x1, y0)), ("E", (x1, y0), (x1, y1)), ("N", (x1, y1), (x0, y1)), ("W", (x0, y1), (x0, y0))]
+    free = []
+    for name, a, b in walls:
+        horiz = name in ("S", "N")
+        lo, hi = (min(a[0], b[0]), max(a[0], b[0])) if horiz else (min(a[1], b[1]), max(a[1], b[1]))
+        cuts = []
+        for op in ops:
+            e, _n = _edge_of(rm, float(op["op"]["x"]), float(op["op"]["y"]))
+            if e != name:
+                continue
+            c = float(op["op"]["x"] if horiz else op["op"]["y"])
+            w = float(op["op"].get("w") or 0.9)
+            cuts.append((c - w / 2 - 0.15, c + w / 2 + 0.15))
+        s0 = lo + 0.25
+        for c0, c1 in sorted(cuts) + [(hi - 0.25, hi)]:
+            if c0 - s0 > 0.3:
+                free.append((c0 - s0, name, (s0 + c0) / 2))
+            s0 = max(s0, c1)
+    free.sort(reverse=True)
+    out = []
+    for L, name, m in free[:n]:
+        if name == "S":
+            out.append((m, y0 + 0.10))
+        elif name == "N":
+            out.append((m, y1 - 0.10))
+        elif name == "E":
+            out.append((x1 - 0.10, m))
+        else:
+            out.append((x0 + 0.10, m))
+    return out
+
+
+def ee_power_plan(sh, E, k):
+    """แปลนเต้ารับไฟฟ้า ชั้น k+1 (the standard's EE-05, EE-06): the sockets on
+    the walls (their height where it is not 0.30 m), the water heaters'
+    boxes, the air-conditioners' points, the wiring and the home runs
+    «n/LP» of every circuit; the panel."""
+    from core import wanic_building as B
+    from core import wanic_mep as MEP
+    from core import wanic_std_sheets as STD
+    x0, y0, x1, y1 = D.drawing_area()
+    v, sc = _base(sh, E, k)
+    P = circuits(E)
+    cs = P["circuits"]
+    recs = [r for r in MEP.plan({}, E)]
+    allc = _assign(cs, "socket", [r["outlets"] for r in recs])
+    heaters = iter([c for c in cs if c["kind"] == "heater"])
+    acs = iter([c for c in cs if c["kind"] == "ac"])
+    boxes = D.stair_boxes(E, k)
+    homes = set()
+    for rec, nums in zip(recs, allc):
+        heater = next(heaters) if rec["heater"] else None
+        acc = next(acs) if rec["ac"] else None
+        if rec["floor"] != k:
+            continue
+        rm = rec["room"]
+        inner = B.room_inner(E, rm, k)
+        wet = rec["kind"] == "wet" or "ครัว" in (rm.get("name") or "")
+        spots = _socket_spots(E, k, rm, inner, rec["outlets"])
+        taken = list(spots)
+        from core import wanic_std_sn as SNS                    # the wiring along the walls, round the room
+        ix0, iy0, ix1, iy1 = inner
+        ring = (ix0 + 0.10, iy0 + 0.10, ix1 - 0.10, iy1 - 0.10)
+        on = [SNS._snap(ring, p) for p in spots]
+
+        def _t(q):
+            x, y = q
+            W_, H_ = ring[2] - ring[0], ring[3] - ring[1]
+            if abs(y - ring[1]) < 1e-6:
+                return x - ring[0]
+            if abs(x - ring[2]) < 1e-6:
+                return W_ + y - ring[1]
+            if abs(y - ring[3]) < 1e-6:
+                return W_ + H_ + ring[2] - x
+            return 2 * W_ + H_ + ring[3] - y
+        order = sorted(range(len(on)), key=lambda i: _t(on[i]))
+        for a_, b_ in zip(order, order[1:]):
+            path = SNS._perim(ring, on[a_], on[b_])
+            sh.poly([v(*q) for q in path], "elec", 0.3, closed=False)
+        spots = [on[i] for i in order]
+        nums = [nums[i] for i in order] if len(nums) == len(order) else nums
+        for i, (p, c) in enumerate(zip(spots, nums)):
+            pp = v(*p)
+            _sym("sockwp" if wet else "sock")(sh, *pp)
+            if wet:                                                  # the height, toward the room
+                cxr = (inner[0] + inner[2]) / 2
+                left = p[0] > cxr
+                sh.text((pp[0] + (-3.0 if left else 3.0), pp[1] - 3.6), "+1.20M", 2.1,
+                        "right" if left else "left", "elec", True)
+            if c not in homes:
+                homes.add(c)
+                _home(sh, pp, f"{c}/LP")
+        if heater is not None:
+            ix0, iy0, ix1, iy1 = inner
+            sh_fx = next((f["fx"] for f in E["fixtures"] if f["floor"] == k and f["fx"].get("type") == "SH" and
+                          D._inside(f["fx"], rm)), None)
+            hp = (float(sh_fx["x"]), float(sh_fx["y"])) if sh_fx else (ix1 - 0.15, (iy0 + iy1) / 2)
+            taken.append(hp)
+            hq = v(*hp)
+            _sym("wh")(sh, *hq)
+            _home(sh, hq, f"{heater['no']}/LP")
+        if acc is not None and rec.get("ac_wall"):
+            wl = rec["ac_wall"]
+            mx, my = (wl["p0"][0] + wl["p1"][0]) / 2, (wl["p0"][1] + wl["p1"][1]) / 2
+            ix0, iy0, ix1, iy1 = inner
+            cx, cy = (ix0 + ix1) / 2, (iy0 + iy1) / 2
+            dx, dy = cx - mx, cy - my                                 # into the room
+            L = math.hypot(dx, dy) or 1.0
+            if abs(dx) > abs(dy):
+                mx, my = (ix0 + 0.35 if dx > 0 else ix1 - 0.35), min(max(my, iy0 + 0.6), iy1 - 0.6)
+            else:
+                mx, my = min(max(mx, ix0 + 0.6), ix1 - 0.6), (iy0 + 0.2 if dy > 0 else iy1 - 0.2)
+            taken.append((mx, my))
+            aq = v(mx, my)
+            _sym("ac")(sh, *aq)
+            ty = aq[1] + (4.2 if dy > 0 and abs(dy) >= abs(dx) else -4.6)
+            D.masked_text(sh, (aq[0], ty), f"{acc['no']}/LP  {acc['load']}", 2.1, "center", True)
+        _room_label(sh, v, E, k, rm, _free_spot(rm, taken, boxes))
+    if k == 0:
+        _sym("lp")(sh, *v(*_lp_spot(E)))
+    _side_notes(sh, x1 - 66, y1 - 10, [
+        "1. เต้ารับสูงจากพื้น 0.30 ม. เว้นแต่ระบุ (+1.20M = สูง 1.20 ม. ห้องน้ำ ครัว ชนิดมีฝาปิดกันน้ำ)",
+        "2. n/LP คือสายวงจรย่อยที่ n กลับแผงเมนสวิตช์ LP",
+        "3. สายวงจรเต้ารับ 2-2.5/G2.5 IEC 01 ในท่อ uPVC Ø15 มม. เดินในผนังและเหนือฝ้า",
+        "4. เครื่องทำน้ำอุ่นและเครื่องปรับอากาศใช้วงจรเฉพาะ ขนาดสายตามแผงเมนสวิตช์",
+        "5. วงจรเต้ารับ ห้องน้ำ และเครื่องทำน้ำอุ่น มีเครื่องตัดไฟรั่ว (RCBO) 30 mA"])
+    STD.caption_marks(sh, ((x0 + x1 - 70) / 2 - 50, y0 + 12), f"แปลนเต้ารับไฟฟ้า ชั้น {k + 1}", f"1:{sc}",
+                      None, None, 100.0)

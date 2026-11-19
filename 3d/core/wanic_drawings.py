@@ -3100,9 +3100,10 @@ def build_set(data, info=None,
         add("EE", "สารบัญแบบงานระบบไฟฟ้า สัญลักษณ์ และรายละเอียดข้อกำหนด",
             lambda sh, all_: EES.ee_index_std(sh, all_, E), "-")
         add("EE", "รายละเอียดแผงเมนสวิตช์", lambda sh, _a: EES.ee_panel_std(sh, E), "ไม่ตามมาตราส่วน")
+        for k in floors:                                     # the standard: the lighting plans, then the sockets
+            add("EE", f"แปลนไฟฟ้าแสงสว่าง ชั้น {k + 1}", lambda sh, _a, k=k: EES.ee_light_plan(sh, E, k))
         for k in floors:
-            add("EE", f"แปลนระบบไฟฟ้าชั้น {k + 1}",
-                lambda sh, _a, k=k: ee_plan(sh, E, k))
+            add("EE", f"แปลนเต้ารับไฟฟ้า ชั้น {k + 1}", lambda sh, _a, k=k: EES.ee_power_plan(sh, E, k))
     if "M" in groups:
         for k in floors:
             add("M", f"แปลนระบบปรับอากาศและระบายอากาศชั้น {k + 1}",

@@ -103,3 +103,25 @@ def test_sn_bathrooms_details_and_hangers():
     assert "( FD )" in t and "( FCO )" in t and "( CO )" in t and "( AVC )" in t
     t = " ".join(sheets["แบบขยายและตารางระยะการแขวนท่อ"].texts())
     assert "100 (4)" in t and "เส้นผ่านศูนย์กลางเหล็ก (มม.)" in t
+
+
+def test_ee_lighting_and_socket_plans():
+    """EE as the standard: a lighting plan and a socket plan per floor, the
+    switches lettered, every circuit's home run «n/LP» matching the panel."""
+    from core import wanic_std_ee as EES
+    from core import wanic_building as B_
+    d = house()
+    sheets = D.build_set(d, INFO)
+    ee = [s for s in sheets if s.group == "EE"]
+    titles = [s.title for s in ee]
+    assert any(t.startswith("แปลนไฟฟ้าแสงสว่าง ชั้น") for t in titles)
+    assert any(t.startswith("แปลนเต้ารับไฟฟ้า ชั้น") for t in titles)
+    E = B_.elements(d)
+    nos = {c["no"] for c in EES.circuits(E)["circuits"]}
+    runs = set()
+    for s in ee:
+        for t in s.texts():
+            head = t.split("/LP")[0]
+            if "/LP" in t and head.isdigit():
+                runs.add(int(head))
+    assert runs and runs <= nos
