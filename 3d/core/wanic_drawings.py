@@ -3096,12 +3096,13 @@ def build_set(data, info=None,
         add("SN", "ภาพ 3 มิติ การต่อท่อน้ำดี ท่อน้ำเสีย ถังบำบัด",
             lambda sh, _a: sn_iso(sh, data, E), "-")
     if "EE" in groups:
-        add("EE", "สารบัญแบบ สัญลักษณ์ ตารางโหลด รายการประกอบแบบไฟฟ้า",
-            lambda sh, all_: ee_index(sh, all_, E), "-")
+        from core import wanic_std_ee as EES                 # the standard's EE-01, EE-02
+        add("EE", "สารบัญแบบงานระบบไฟฟ้า สัญลักษณ์ และรายละเอียดข้อกำหนด",
+            lambda sh, all_: EES.ee_index_std(sh, all_, E), "-")
+        add("EE", "รายละเอียดแผงเมนสวิตช์", lambda sh, _a: EES.ee_panel_std(sh, E), "ไม่ตามมาตราส่วน")
         for k in floors:
             add("EE", f"แปลนระบบไฟฟ้าชั้น {k + 1}",
                 lambda sh, _a, k=k: ee_plan(sh, E, k))
-        add("EE", "ผังวงจรไฟฟ้า (Single Line Diagram)", lambda sh, _a: ee_single_line(sh, E), "-")
     if "M" in groups:
         for k in floors:
             add("M", f"แปลนระบบปรับอากาศและระบายอากาศชั้น {k + 1}",

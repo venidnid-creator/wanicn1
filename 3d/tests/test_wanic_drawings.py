@@ -123,7 +123,9 @@ def test_schedules_and_systems():
     assert "GB1" in t and "C1" in t                           # the column schedule and the beam sections
     ee = next(s for s in S.values() if s.code == "EE-01")
     t = " ".join(ee.texts())
-    assert "ตารางโหลด" in t and "เมนเบรกเกอร์" in t
+    assert "สัญลักษณ์งานระบบไฟฟ้า" in t and "รายละเอียดข้อกำหนด" in t
+    t = " ".join(next(s for s in S.values() if s.code == "EE-02").texts())
+    assert "kWh METER" in t and "RCBO" in t and "IEC 01" in t
     sn = next(s for s in S.values() if s.title == "แปลนระบบสุขาภิบาลชั้น 1")
     t = " ".join(sn.texts())
     assert "ถังบำบัด" in t and "Ø4\"S" in t and "Ø2\"W" in t
