@@ -2308,6 +2308,38 @@ def _bar_th(text) -> str:
     return f"{n} {name} มม." if n else str(text or "")
 
 
+def _dot(sh, c, r):
+    """A main bar in a section: a filled round dot."""
+    import math as _m
+    sh.fill([(c[0] + r * _m.cos(i * _m.pi / 6), c[1] + r * _m.sin(i * _m.pi / 6)) for i in range(12)], "hatch", 0.0)
+
+
+def sec_dims(sh, x, y, w, hh, b, h, size=2.3):
+    """The size of a section as the original: the width above, the height on
+    the left, each with extension lines and a tick (/) at both ends."""
+    ya = y + hh + 3.0
+    sh.line((x, ya), (x + w, ya), "dim", 0.15)
+    for xq in (x, x + w):
+        sh.line((xq, y + hh + 0.8), (xq, ya + 1.2), "dim", 0.13)            # extension line
+        sh.line((xq - 0.8, ya - 0.8), (xq + 0.8, ya + 0.8), "dim", 0.3)     # tick
+    sh.text((x + w / 2, ya + 0.8), f"{b:.2f}", size, "center", "dim")
+    xa = x - 3.0
+    sh.line((xa, y), (xa, y + hh), "dim", 0.15)
+    for yq in (y, y + hh):
+        sh.line((x - 0.8, yq), (xa - 1.2, yq), "dim", 0.13)
+        sh.line((xa - 0.8, yq - 0.8), (xa + 0.8, yq + 0.8), "dim", 0.3)
+    sh.text((xa - 0.8, y + hh / 2), f"{h:.2f}", size, "center", "dim", angle=90)
+
+
+def stirrup(sh, x0, y0, x1, y1, r=1.4):
+    """The stirrup (ป.) with its 135° hooks in the top right corner, as the
+    standard and the original: two short legs bent into the core."""
+    sh.rect(x0, y0, x1, y1, "rebar", 0.25)
+    L = r * 2.2
+    for (ax, ay) in ((x1 - r, y1), (x1, y1 - r)):
+        sh.line((ax, ay), (ax - L * 0.707, ay - L * 0.707), "rebar", 0.25)
+
+
 def column_cell(sh, cx, cy, spec, k):
     """A column section centred at (cx, cy) with its size and bars."""
     from core import wanic_struct_sheets as SS
@@ -2317,7 +2349,7 @@ def column_cell(sh, cx, cy, spec, k):
     w, hh = b * k, h * k
     sh.rect(x, y, x + w, y + hh, "struct", 0.45)
     c = 0.035 * k
-    sh.rect(x + c * 0.7, y + c * 0.7, x + w - c * 0.7, y + hh - c * 0.7, "rebar", 0.2)
+    stirrup(sh, x + c * 0.7, y + c * 0.7, x + w - c * 0.7, y + hh - c * 0.7, max(1.0, c * 0.6))
     n = max(n, 4)
     per = [n // 4 + (1 if i < n % 4 else 0) for i in range(4)]
     corners = [(x + c, y + c), (x + w - c, y + c), (x + w - c, y + hh - c), (x + c, y + hh - c)]
@@ -2325,16 +2357,10 @@ def column_cell(sh, cx, cy, spec, k):
         a, b_ = corners[i], corners[(i + 1) % 4]
         for j in range(per[i]):
             t = j / per[i]
-            sh.fill([(a[0] + (b_[0] - a[0]) * t + dx, a[1] + (b_[1] - a[1]) * t + dy)
-                     for dx, dy in ((-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5))], "hatch", 0.0)
-    sh.line((x, y + hh + 2), (x + w, y + hh + 2), "dim", 0.13)
-    for xq in (x, x + w):
-        sh.line((xq - 0.5, y + hh + 1.5), (xq + 0.5, y + hh + 2.5), "dim", 0.2)
-    sh.text((x + w / 2, y + hh + 2.7), f"{b:.2f}", 1.8, "center", "dim")
-    sh.line((x - 2, y), (x - 2, y + hh), "dim", 0.13)
-    sh.text((x - 2.7, y + hh / 2), f"{h:.2f}", 1.8, "center", "dim", angle=90)
-    sh.text((cx, y - 4.0), _bar_th(spec.get("main")), 2.1, "center")
-    sh.text((cx, y - 7.6), _bar_th(spec.get("tie")), 2.1, "center")
+            _dot(sh, (a[0] + (b_[0] - a[0]) * t, a[1] + (b_[1] - a[1]) * t), 0.7)
+    sec_dims(sh, x, y, w, hh, b, h)
+    sh.text((cx, y - 4.6), _bar_th(spec.get("main")), 2.6, "center")
+    sh.text((cx, y - 8.8), _bar_th(spec.get("tie")), 2.6, "center")
 
 
 def column_schedule(sh, E, x, ytop, ybot, w=70.0):
@@ -2356,7 +2382,7 @@ def column_schedule(sh, E, x, ytop, ybot, w=70.0):
         if st:
             stump[m] = lib.get(st, {})
     rows.append(("พื้นชั้น 1 ±0.00", stump))
-    lw = 22.0
+    lw = 28.0
     cw = max(26.0, (w - lw) / max(len(marks), 1))
     W = lw + cw * len(marks)
     head = 12.0
@@ -2377,9 +2403,9 @@ def column_schedule(sh, E, x, ytop, ybot, w=70.0):
         j = len(rows) - 1 - jt
         yb_ = ybot + j * rh
         sh.line((x, yb_ + rh), (x + W, yb_ + rh), "text", 0.25)
-        sh.text((x + 1.5, yb_ + rh - 3.6), lab, 2.0, "left", "text", True)     # the level at the row's top line
+        sh.text((x + 1.5, yb_ + rh - 4.0), lab, 2.6, "left", "text", True)     # the level at the row top line
         if j == 0:
-            sh.text((x + 1.5, yb_ + rh / 2), "ตอม่อ", 2.2)
+            sh.text((x + 1.5, yb_ + rh / 2), "ตอม่อ", 2.8)
         for i, m in enumerate(marks):
             spec = cells.get(m)
             cxp, cyp = x + lw + (i + 0.5) * cw, yb_ + rh / 2
@@ -2395,7 +2421,7 @@ def column_schedule(sh, E, x, ytop, ybot, w=70.0):
             else:
                 column_cell(sh, cxp, cyp, spec, k)
         above = cells
-    sh.text((x + 1.5, ybot + 1.5), "ฐานราก", 2.0, "left", "text", True)
+    sh.text((x + 1.5, ybot + 1.5), "ฐานราก", 2.6, "left", "text", True)
     caption_marks(sh, (x + 8, ybot - 12), "ตารางเสา", "1:20", None, None, W - 16)
     return W
 
@@ -2410,25 +2436,21 @@ def beam_card(sh, mark, spec, x, y, k=1000.0 / 20, note=""):
     bn, bname = SS._count(spec.get("bot"))
     sh.rect(x, y, x + w, y + hh, "struct", 0.45)
     c = 0.03 * k
-    sh.rect(x + c * 0.7, y + c * 0.7, x + w - c * 0.7, y + hh - c * 0.7, "rebar", 0.2)
+    stirrup(sh, x + c * 0.7, y + c * 0.7, x + w - c * 0.7, y + hh - c * 0.7, max(1.0, c * 0.6))
     for n, yy in ((tn, y + hh - c), (bn, y + c)):
         for i in range(max(n, 1)):
             bx = x + c + (w - 2 * c) * (i / (n - 1) if n > 1 else 0.5)
-            sh.fill([(bx - 0.55, yy - 0.55), (bx + 0.55, yy - 0.55), (bx + 0.55, yy + 0.55), (bx - 0.55, yy + 0.55)],
-                    "hatch", 0.0)
-    sh.line((x, y + hh + 2), (x + w, y + hh + 2), "dim", 0.13)
-    sh.text((x + w / 2, y + hh + 2.7), f"{b:.2f}", 1.8, "center", "dim")
-    sh.line((x - 2, y), (x - 2, y + hh), "dim", 0.13)
-    sh.text((x - 2.8, y + hh / 2), f"{h:.2f}", 1.8, "center", "dim", angle=90)
+            _dot(sh, (bx, yy), 0.75)
+    sec_dims(sh, x, y, w, hh, b, h)
     for txt, yy in ((f"{tn} {tname} มม.", y + hh - c), (_bar_th(spec.get("stir")), y + hh / 2),
                     (f"{bn} {bname} มม.", y + c)):
-        sh.line((x + w - c, yy), (x + w + 6, yy), "text", 0.13)
-        sh.text((x + w + 6.5, yy - 0.7), txt, 2.0)
-    sh.text((x - 8, y - 9), mark, 3.2, "left", "text", True)
-    sh.text((x + w + 18, y - 9), f"1:{1000 / k:.0f}", 3.0, "right")
-    sh.line((x - 10, y - 10.5), (x + w + 20, y - 10.5), "text", 0.35)
+        sh.line((x + w - c, yy), (x + w + 7, yy), "text", 0.15)
+        sh.text((x + w + 7.5, yy - 0.9), txt, 2.6)
+    sh.text((x - 8, y - 10), mark, 4.0, "left", "text", True)
+    sh.text((x + w + 22, y - 10), f"1:{1000 / k:.0f}", 3.6, "right")
+    sh.line((x - 10, y - 11.8), (x + w + 24, y - 11.8), "text", 0.4)
     if note:
-        sh.text(((x - 10 + x + w + 20) / 2, y - 15), note, 2.0, "center")
+        sh.text(((x - 10 + x + w + 24) / 2, y - 17), note, 2.6, "center")
 
 
 def s_schedules_std(sh, E):
@@ -2442,9 +2464,9 @@ def s_schedules_std(sh, E):
     # the beam sections: a grid of four over the rest of the sheet (the original);
     # few beams → drawn twice as large (1:10), clearer than the original
     bx0 = x0 + W + 18
-    per = 4
+    k = 1000.0 / (10 if len(beams) <= 6 else 20)
+    per = 3 if k > 60 else 4
     cw = (x1 - bx0) / per
-    k = 1000.0 / (10 if len(beams) <= 8 else 20)
     hmax = max([float(lib[m].get("h", 0.4)) for m in beams] or [0.4]) * k
     cols = sorted(m for m in used if lib.get(m, {}).get("kind") in ("column", "stump"))
     nb, nc = -(-len(beams) // per), -(-len(cols) // per)
@@ -2457,7 +2479,7 @@ def s_schedules_std(sh, E):
         bw, bh = float(sp.get("b", 0.2)) * k, float(sp.get("h", 0.4)) * k
         yc_ = y1 - 12 - r * rh - rh / 2                  # the row's middle
         note = next((v for p_, v in sorted(names.items(), key=lambda t: -len(t[0])) if m.startswith(p_)), "")
-        beam_card(sh, m, sp, bx0 + c * cw + cw / 2 - bw / 2 - 10, yc_ - bh / 2 + 10, k, note)
+        beam_card(sh, m, sp, bx0 + c * cw + (cw - bw - 44) / 2 + 6, yc_ - bh / 2 + 10, k, note)
     # the columns and stumps at the same scale, rows under the beams (the original's CN row)
     for i, m in enumerate(cols):
         r, c = divmod(i, per)
@@ -2467,11 +2489,12 @@ def s_schedules_std(sh, E):
         cyp = y1 - 12 - (nb + r) * rh - rh / 2 + 10
         column_cell(sh, cxp, cyp, sp, k)
         yt = cyp - hh / 2 - 6
-        sh.text((cxp - 20, yt - 9), m, 3.2, "left", "text", True)
-        sh.text((cxp + 20, yt - 9), f"1:{1000 / k:.0f}", 3.0, "right")
-        sh.line((cxp - 22, yt - 10.5), (cxp + 22, yt - 10.5), "text", 0.35)
-        sh.text((cxp, yt - 15), "ตอม่อ (ฐานราก – พื้นชั้น 1)" if sp.get("kind") == "stump" else "เสา (พื้นชั้น 1 – อะเส)",
-                2.0, "center")
+        yt -= 4
+        sh.text((cxp - 20, yt - 10), m, 4.0, "left", "text", True)
+        sh.text((cxp + 22, yt - 10), f"1:{1000 / k:.0f}", 3.6, "right")
+        sh.line((cxp - 22, yt - 11.8), (cxp + 24, yt - 11.8), "text", 0.4)
+        sh.text((cxp + 1, yt - 17), "(ตอม่อ ฐานราก – พื้นชั้น 1)" if sp.get("kind") == "stump"
+                else "(เสา พื้นชั้น 1 – อะเส)", 2.6, "center")
     sh.scale = "1:20"
     return 20
 
@@ -2552,59 +2575,84 @@ def footing_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
     for i in range(int((w + 0.1) / 0.06)):
         uu = -w / 2 - 0.05 + i * 0.06
         sh.circle(P(uu + 0.03, zb - lean - sand / 2), 0.15, "hatch", 0.1)
-    # the mesh: the bars along the cut, the cross bars as dots
+    # the mesh: the bars along the cut with both ends bent up (the original), the cross bars as dots
     cov = 0.075
-    sh.poly([P(-w / 2 + cov, zb + cov + 0.12), P(-w / 2 + cov, zb + cov), P(w / 2 - cov, zb + cov),
-             P(w / 2 - cov, zb + cov + 0.12)], "rebar", 0.4, closed=False)
+    hook = max(0.15, t - 2 * cov)
+    sh.poly([P(-w / 2 + cov, zb + cov + hook), P(-w / 2 + cov, zb + cov), P(w / 2 - cov, zb + cov),
+             P(w / 2 - cov, zb + cov + hook)], "rebar", 0.5, closed=False)
     n_, name, _d, s_ = D._bars(sp.get("bars"))
     s_ = s_ or 0.15
     m = int((w - 2 * cov) / s_)
     for i in range(m + 1):
-        uu = -w / 2 + cov + i * (w - 2 * cov) / max(m, 1)
-        sh.circle(P(uu, zb + cov + 0.02), 0.45, "rebar", 0.3)
-    # piles
+        uu = -w / 2 + cov + 0.03 + i * (w - 2 * cov - 0.06) / max(m, 1)
+        _dot(sh, P(uu, zb + cov + 0.025), 0.5)
+    # the ring bar (เหล็กรัดรอบ) round the top of the footing: a bar along the cut, a dot at each end
+    ring = sp.get("ring") or "RB9"
+    zr = zt - cov
+    sh.line(P(-w / 2 + cov, zr), P(-b / 2 - 0.02, zr), "rebar", 0.4)
+    sh.line(P(b / 2 + 0.02, zr), P(w / 2 - cov, zr), "rebar", 0.4)
+    for uu in (-w / 2 + cov + 0.02, w / 2 - cov - 0.02):
+        _dot(sh, P(uu, zr - 0.02), 0.5)
+    # piles: to a break line under the footing, as the original
     piles = int(sp.get("piles") or 0)
     pb = float(sp.get("pile_b", 0.18))
     pts = B.pile_points(sp, 0.0, 0.0) if piles else []
+    plen = 1.0
     for px in sorted({round(p_[0], 3) for p_ in pts}):
-        sh.rect(*P(px - pb / 2, zb - lean - sand - 1.0), *P(px + pb / 2, zb), "struct", 0.3, True)
+        x_a, x_b = P(px - pb / 2, 0)[0], P(px + pb / 2, 0)[0]
+        ytop_, ybot_ = P(0, zb - lean - sand)[1], P(0, zb - lean - sand - plen)[1]
+        sh.line((x_a, ytop_), (x_a, ybot_), "cut", 0.45)
+        sh.line((x_b, ytop_), (x_b, ybot_), "cut", 0.45)
+        sh.line((x_a, P(0, zb)[1]), (x_a, ytop_), "cut", 0.3)              # into the footing 0.05+
+        sh.line((x_b, P(0, zb)[1]), (x_b, ytop_), "cut", 0.3)
+        mx = (x_a + x_b) / 2                                                   # the break (S) line
+        sh.poly([(x_a - 1, ybot_), (mx - 0.8, ybot_), (mx, ybot_ + 1.2), (mx + 0.4, ybot_ - 1.2),
+                 (mx + 0.8, ybot_), (x_b + 1, ybot_)], "cut", 0.3, closed=False)
     # the labels on the right, level with their points
     tx = P(w / 2 + 0.55, 0)[0]
     labels = [((b / 2, (top + zt) / 2), "ตอม่อ ดูขยายเสา"),
+              ((w / 2 - cov - 0.02, zr - 0.02), f"เหล็กรัดรอบ {ring} มม."),
+              ((w / 2 - cov, zb + cov + hook * 0.6), "งอขึ้นปลายเหล็กตะแกรง"),
               ((w / 2 - cov - 0.05, zb + cov + 0.02), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]} มม.@{(D._bars(sp.get('bars'))[3] or 0.15):.3f} 2 ทาง"),
               ((w / 2, zb - lean / 2), f"คอนกรีตหยาบ 1:3:5 หนา {lean:.2f} ม."),
               ((w / 2, zb - lean - sand / 2), f"ทรายหยาบอัดแน่น หนา {sand:.2f} ม.")]
     if piles:
-        labels.append(((max(p_[0] for p_ in pts), zb - lean - sand - 0.6),
-                       f"เสาเข็ม {pb:.2f}x{pb:.2f} ยาว {float(sp.get('pile_len', 6)):.0f} ม. จำนวน {piles} ต้น"))
+        labels.append(((max(p_[0] for p_ in pts) + pb / 2, zb - lean - sand - 0.6),
+                       f"{sp.get('pile_name') or f'เสาเข็ม {pb:.2f}x{pb:.2f} ม.'} ยาว {float(sp.get('pile_len', 6)):.0f} ม."
+                       f" จำนวน {piles} ต้น"))
     last = None
     for (uu, zz), lab in labels:                         # top first, kept 4.5 mm apart
         q = P(uu, zz)
-        ty = q[1] if last is None else min(q[1], last - 4.5)
+        ty = q[1] if last is None else min(q[1], last - 5.5)
         last = ty
-        sh.circle(q, 0.4, "text", 0.18)
-        sh.line(q, (tx - 2, ty), "text", 0.13)
-        sh.line((tx - 2, ty), (tx + len(lab) * 1.0, ty), "text", 0.13)
-        sh.text((tx + 0.5, ty + 0.8), lab, 1.9)
+        sh.circle(q, 0.45, "text", 0.2)
+        sh.line(q, (tx - 2, ty), "text", 0.15)
+        sh.line((tx - 2, ty), (tx + len(lab) * 1.25, ty), "text", 0.15)
+        sh.text((tx + 0.5, ty + 0.9), lab, 2.4)
     # heights on the left
     xl = P(-w / 2 - 0.3, 0)[0]
     for za, zb_ in ((zt, 0.0), (zb, zt), (zb - lean - sand, zb)):
         a, b2 = P(0, za)[1], P(0, zb_)[1]
-        sh.line((xl, a), (xl, b2), "dim", 0.13)
+        sh.line((xl, a), (xl, b2), "dim", 0.15)
         for yq in (a, b2):
-            sh.line((xl - 0.6, yq - 0.6), (xl + 0.6, yq + 0.6), "dim", 0.2)
-        sh.text((xl - 1.0, (a + b2) / 2 - 0.7), f"{zb_ - za:.2f}", 1.8, "right", "dim")
+            sh.line((xl - 1.2, yq), (P(-w / 2, 0)[0] - 1.0, yq), "dim", 0.13)       # extension line
+            sh.line((xl - 0.8, yq - 0.8), (xl + 0.8, yq + 0.8), "dim", 0.3)
+        sh.text((xl - 1.2, (a + b2) / 2 - 0.9), f"{zb_ - za:.2f}", 2.3, "right", "dim")
     # the width under it and the section's name
     yb = P(0, zb - lean - sand - (1.1 if piles else 0.15))[1] - 4
-    D.dim_chain(sh, lambda x_, y_: P(x_, 0)[0:1] + (yb,) if False else (P(x_, 0)[0], yb + (y_ - 0) * 0),
-                [-w / 2, -b / 2, b / 2, w / 2], 0.0, "x")
+    # the chain: through the pile centres when on piles (the original), else the stump faces
+    xs = sorted({round(v, 3) for v in [-w / 2, w / 2, 0.0] + [p_[0] for p_ in pts]}) if pts else \
+        [-w / 2, -b / 2, b / 2, w / 2]
+    ys = sorted({round(v, 3) for v in [-l_ / 2, l_ / 2, 0.0] + [p_[1] for p_ in pts]}) if pts else \
+        [-l_ / 2, -b / 2, b / 2, l_ / 2]
+    D.dim_chain(sh, lambda x_, y_: (P(x_, 0)[0], yb), xs, 0.0, "x")
     D.dim_chain(sh, lambda x_, y_: (P(x_, 0)[0], yb - 5), [-w / 2, w / 2], 0.0, "x")
     for i, xq in enumerate((ox - 4, ox + 4)):
         sh.circle((xq, yb - 13), 3.2, "text", 0.25)
         sh.text((xq, yb - 13.9), str(n_sec), 2.4, "center", "text", True)
     sh.line((ox - 0.8, yb - 13), (ox + 0.8, yb - 13), "text", 0.3)
     # the plan: under the section, or beside it (one footing on the sheet)
-    py0 = yb - 30 - l_ * k / 2
+    py0 = yb - 38 - l_ * k / 2
     pox = ox
     if side:
         pox = tx + 72 + w / 2 * k
@@ -2619,23 +2667,37 @@ def footing_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
         sh.line(Q(t_, -l_ / 2 + cov), Q(t_, l_ / 2 - cov), "rebar", 0.1, True)
         tl = -l_ / 2 + cov + i * (l_ - 2 * cov) / max(mm, 1)
         sh.line(Q(-w / 2 + cov, tl), Q(w / 2 - cov, tl), "rebar", 0.1, True)
-    sh.text((Q(w / 2, 0)[0], Q(0, -l_ / 2)[1] - 4.5), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]}@{s_:.3f} ม. 2 ทาง",
-            1.9, "right")
-    for p_ in pts:
-        sh.circle(Q(*p_), pb / 2 * k, "struct", 0.25)
-    D.dim_chain(sh, lambda x_, y_: (Q(x_, 0)[0], Q(0, l_ / 2)[1] + 4), [-w / 2, -b / 2, b / 2, w / 2], 0.0, "x")
-    D.dim_chain(sh, lambda x_, y_: (Q(-w / 2, 0)[0] - 14, Q(0, y_)[1]), [-l_ / 2, -b / 2, b / 2, l_ / 2], 0.0, "y")
+    sh.text((Q(w / 2, 0)[0], Q(0, -l_ / 2)[1] - 5), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]}@{s_:.3f} ม. 2 ทาง",
+            2.4, "right")
+    sh.rect(*Q(-w / 2 + cov, -l_ / 2 + cov), *Q(w / 2 - cov, l_ / 2 - cov), "rebar", 0.3)     # the ring bar
+    import math as _m
+    for p_ in pts:                                        # the piles: a hexagon with its circle (the original)
+        c_ = Q(*p_)
+        r_ = pb / 2 * k * 1.15
+        sh.poly([(c_[0] + r_ * _m.cos(_m.pi / 6 + i * _m.pi / 3), c_[1] + r_ * _m.sin(_m.pi / 6 + i * _m.pi / 3))
+                 for i in range(6)], "struct", 0.35)
+        sh.circle(c_, pb / 2 * k * 0.55, "struct", 0.25)
+    D.dim_chain(sh, lambda x_, y_: (Q(x_, 0)[0], Q(0, l_ / 2)[1] + 4), xs, 0.0, "x")
+    D.dim_chain(sh, lambda x_, y_: (Q(x_, 0)[0], Q(0, l_ / 2)[1] + 10), [-w / 2, w / 2], 0.0, "x")
+    D.dim_chain(sh, lambda x_, y_: (Q(-w / 2, 0)[0] - 8, Q(0, y_)[1]), ys, 0.0, "y")
+    D.dim_chain(sh, lambda x_, y_: (Q(-w / 2, 0)[0] - 14, Q(0, y_)[1]), [-l_ / 2, l_ / 2], 0.0, "y")
+    for (u_, v_) in ((-w / 2, l_ / 2), (w / 2, l_ / 2)):            # extension lines of the chains
+        sh.line(Q(u_, v_), (Q(u_, 0)[0], Q(0, l_ / 2)[1] + 11.2), "dim", 0.13)
+    for v_ in (-l_ / 2, l_ / 2):
+        sh.line(Q(-w / 2, v_), (Q(-w / 2, 0)[0] - 15.2, Q(0, v_)[1]), "dim", 0.13)
     for sx in (-1, 1):                                    # the cut n–n
-        a_ = Q(sx * (w / 2 + 0.15), 0.0)
+        e_ = Q(sx * w / 2, 0.0)
+        off = 21.0 if sx < 0 else 5.0                       # left: beyond the size chains
+        a_ = (e_[0] + sx * off, e_[1])
         sh.line(a_, (a_[0] + sx * 3, a_[1]), "text", 0.4)
-        sh.circle((a_[0] + sx * 6.2, a_[1]), 3.0, "text", 0.25)
-        sh.text((a_[0] + sx * 6.2, a_[1] - 0.9), str(n_sec), 2.3, "center", "text", True)
+        sh.circle((a_[0] + sx * 6.4, a_[1]), 3.2, "text", 0.25)
+        sh.text((a_[0] + sx * 6.4, a_[1] - 1.0), str(n_sec), 2.6, "center", "text", True)
     # the name box «F1 1:25»
     by = py0 - l_ * k / 2 - 16
     sh.rect(pox - 22, by, pox + 22, by + 7, "text", 0.35)
     sh.line((pox, by), (pox, by + 7), "text", 0.25)
-    sh.text((pox - 11, by + 2.2), mark, 2.8, "center", "text", True)
-    sh.text((pox + 11, by + 2.2), f"1:{sc}", 2.6, "center")
+    sh.text((pox - 11, by + 2.0), mark, 3.4, "center", "text", True)
+    sh.text((pox + 11, by + 2.0), f"1:{sc}", 3.2, "center")
 
 
 def s_footings_std(sh, E, marks):
@@ -2643,16 +2705,16 @@ def s_footings_std(sh, E, marks):
     x0, y0, x1, y1 = D.drawing_area()
     lib = E["lib"]
     big = max(max(float(lib[m]["w"]), float(lib[m].get("l", lib[m]["w"]))) for m in marks)
-    if len(marks) == 1:                                   # one footing: section beside its plan, large
+    if len(marks) == 1:                                   # one footing: section over its plan (the original), large
         sp = lib[marks[0]]
-        w = float(sp["w"])
-        sc = next((s_ for s_ in (20, 25, 30, 40, 50) if (2 * w + 1.0) * 1000 / s_ + 108 <= (x1 - x0)
-                   and (big + float(sp["depth"]) + 0.8) * 1000 / s_ + 110 <= (y1 - y0)), 50)
+        w, l_ = float(sp["w"]), float(sp.get("l", sp["w"]))
+        tall = 0.35 + float(sp["depth"]) + 0.15 + (1.1 if int(sp.get("piles") or 0) else 0.0)
+        sc = next((s_ for s_ in (20, 25, 30, 40, 50) if (tall + l_) * 1000 / s_ + 86 <= (y1 - y0)
+                   and (w + 0.9) * 1000 / s_ + 75 <= (x1 - x0) * 0.62), 50)
         k = 1000.0 / sc
-        ox = x0 + 30 + (w / 2 + 0.45) * k
-        footing_detail(sh, E, marks[0], 1, ox, y1 - 6, sc, side=True)
-        yb = y1 - 6 - 14 - (0.35 + float(sp["depth"])) * k - big * k - 24
-        footing_notes(sh, E, marks, x0 + 30, min(yb, y1 - 6 - 14 - (0.35 + float(sp["depth"]) + 1.0) * k - 30))
+        ox = x0 + 32 + (w / 2 + 0.45) * k
+        footing_detail(sh, E, marks[0], 1, ox, y1 - 2, sc)
+        footing_notes(sh, E, marks, x0 + (x1 - x0) * 0.66, y1 - 30, stacked=True)
         sh.scale = f"1:{sc}"
         return sc
     cw = (x1 - x0) / len(marks)
@@ -2665,7 +2727,7 @@ def s_footings_std(sh, E, marks):
     return sc
 
 
-def footing_notes(sh, E, marks, x, y):
+def footing_notes(sh, E, marks, x, y, stacked=False):
     """The footing schedule and the footing notes beside the detail."""
     lib = E["lib"]
     sh.text((x, y), "ตารางฐานราก", 3.2, "left", "text", True)
@@ -2679,11 +2741,15 @@ def footing_notes(sh, E, marks, x, y):
     yt = D.table(sh, x, y - 3, [("เบอร์", 14, "center"), ("ขนาด (ม.)", 24, "center"), ("หนา", 12, "center"),
                                 ("เหล็กตะแกรง", 26, "center"), ("เสาเข็ม", 18, "center"), ("จำนวน", 14, "center")],
                  rows, 2.1, 5.5, 6.5)
-    D.notes_block(sh, x + 130, y, "หมายเหตุ", [
-        "1. ฐานรากแผ่ ใช้เมื่อดินรับน้ำหนักบรรทุกปลอดภัยได้ไม่น้อยกว่า 10 ตัน/ตร.ม.",
+    D.notes_block(sh, x if stacked else x + 130, yt - 12 if stacked else y, "หมายเหตุ", [
+        ("1. ฐานรากวางบนเสาเข็ม เสาเข็มต้องรับน้ำหนักปลอดภัยได้ไม่น้อยกว่าที่ระบุในรายการคำนวณ "
+         "ตัดหัวเข็มให้ได้ระดับ และฝังหัวเข็มในฐานราก 0.05 ม."
+         if any(int(lib[m_].get("piles") or 0) for m_ in marks) else
+         "1. ฐานรากแผ่ ใช้เมื่อดินรับน้ำหนักบรรทุกปลอดภัยได้ไม่น้อยกว่า 10 ตัน/ตร.ม."),
         "2. ก่อนเทคอนกรีตฐานราก ให้บดอัดดินก้นหลุม รองด้วยทรายหยาบอัดแน่น หนา 0.05 ม. "
         "และคอนกรีตหยาบ 1:3:5 หนา 0.05 ม.",
         "3. ระยะหุ้มคอนกรีตเหล็กตะแกรงฐานราก 7.5 ซม. ปลายเหล็กงอขอ 90 องศา",
         "4. เหล็กยืนตอม่อ งอฉากวางบนเหล็กตะแกรงยาวไม่น้อยกว่า 0.25 ม.",
         "5. ตำแหน่งและระดับฐานรากให้ตรวจสอบกับแปลนฐานรากและสภาพหน้างาน",
-    ], 2.2, 90)
+        "6. เหล็กรัดรอบฐานราก วางรอบขอบบนฐานราก ทาบต่อไม่น้อยกว่า 40 เท่าของขนาดเหล็ก",
+    ], 2.5, 50 if stacked else 90)
