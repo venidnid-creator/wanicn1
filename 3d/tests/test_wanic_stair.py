@@ -118,5 +118,6 @@ def test_railing_inset_and_joined():
         bal = r["posts"][1]                               # the first tread's baluster
         off = abs((bal[0][0] - x) * nx + (bal[0][1] - y) * ny)
         assert abs(off - (0.5 - B.RAIL_INSET)) < 1e-6, (typ, off)
-        for (a, b), (c, _d) in zip(r["rails"], r["rails"][1:]):
+        well = r["rails"][:r["well"]]
+        for (a, b), (c, _d) in zip(well, well[1:]):
             assert math.dist(b, c) < 1e-6, typ              # no gap between the rail's pieces

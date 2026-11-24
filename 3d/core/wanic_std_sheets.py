@@ -940,7 +940,7 @@ def section_stairs(sh, E, P, U, C, at, rect):
             elif c0 > at:
                 sh.rect(*P(u_a, z - t), *P(u_b, z), "wall", 0.18)
         # the railing seen: the rail, the balusters
-        rl = B.stair_railing(e["st"], s)
+        rl = B.stair_railing(e["st"], s, B.floor_bounds(E, e.get("floor", 0)))
         for a_, b_ in rl["rails"]:
             if min(C(a_[0], a_[1]), C(b_[0], b_[1])) >= at - 0.6:
                 sh.line(P(U(a_[0], a_[1]), z_f + a_[2]), P(U(b_[0], b_[1]), z_f + b_[2]), "door", 0.35)

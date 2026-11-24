@@ -555,11 +555,11 @@ def compute(data, gate: bool = False) -> dict:
         concrete(g, "บันได", vol, "พื้นที่หน้าตัดขั้นบันได × กว้าง + ชานพัก + คาน/เสารับบันได")
         formwork(g, "บันได", area, "ท้องบันได + ข้าง 2 ด้าน + ลูกตั้ง")
     outline = B.building_outline(E)
-    rail = sum(B.stair_railing(e["st"], s)["length"] for e in E["stairs"]) + sum(
+    rail = sum(B.stair_railing(e["st"], s, B.floor_bounds(E, e["floor"]))["length"] for e in E["stairs"]) + sum(
         math.dist(a, b) for e in E["stairs"] if e["floor"] + 1 < E["n"]
         for a, b in B.well_railing(e["st"], s, outline))
     if rail:                                          # ราวบันได as the standard plans
-        posts = sum(len(B.stair_railing(e["st"], s)["posts"]) for e in E["stairs"])
+        posts = sum(len(B.stair_railing(e["st"], s, B.floor_bounds(E, e["floor"]))["posts"]) for e in E["stairs"])
         bill.add(g, B.RAIL_TEXT, rail, "ม.", waste=5.0, mat_key="ราวบันไดไม้เนื้อแข็ง 2\"x4\"",
                  basis=f"ราวบันไดตามแนวลาด + ราวกันตกรอบช่องบันไดชั้นบน รวม {rail:.2f} ม. · "
                        f"ลูกกรงบันได {posts} ต้น (ทุกขั้น) สูง {B.RAIL_H:.2f} ม.",

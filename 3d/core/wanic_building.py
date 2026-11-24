@@ -1245,7 +1245,7 @@ def structure_members(data) -> tuple[list, dict]:
     for e in E["stairs"]:
         for g_ in stair_members(e["st"], s, e["floor"] * E["H"], stair_cols(E, e["floor"])):
             add(g_, "stair")
-        for g_ in railing_members(e["st"], s, e["floor"] * E["H"]):
+        for g_ in railing_members(e["st"], s, e["floor"] * E["H"], floor_bounds(E, e["floor"])):
             add(g_, "stair_rail")
         if e["floor"] + 1 < E["n"]:                   # the guard rail round the opening upstairs
             for g_ in well_railing_members(e["st"], s, (e["floor"] + 1) * E["H"], building_outline(E)):
@@ -2115,6 +2115,16 @@ STAIR_BEAM = (0.15, 0.30)
 STAIR_POST = 0.15
 
 
+def floor_bounds(E, floor):
+    """(x0, y0, x1, y1) of a floor's rooms (its outside walls), None without rooms."""
+    fl = (E.get("floors") or [])
+    rooms = (fl[floor].get("rooms") if floor < len(fl) and isinstance(fl[floor], dict) else None) or []
+    if not rooms:
+        return None
+    return (min(r["x"] for r in rooms), min(r["y"] for r in rooms),
+            max(r["x"] + r["w"] for r in rooms), max(r["y"] + r["d"] for r in rooms))
+
+
 def stair_cols(E, floor) -> list:
     """The (x, y) of the columns that stand on ``floor`` (what a landing beam can rest on)."""
     return [(c["x"], c["y"]) for c in E.get("columns") or [] if c.get("floor", 0) == floor]
@@ -2179,6 +2189,21 @@ def stair_beams(stp, s, z, cols=None) -> list:
                 sb["name"] = sb["name"] + " (ฝากเสาสองด้าน)"
         sb["end_cols"] = tuple(ends)
         sb["on_cols"] = all(ends)
+        if sb["on_cols"]:
+            # on the frame's axis (through the columns' centres): its faces in
+            # line with the frame, nothing sticking out (the owner)
+            def snap(pt):
+                c_ = min(cols, key=lambda c: math.hypot(c[0] - pt[0], c[1] - pt[1]))
+                return c_
+            c0_, c1_ = snap(sb["p0"]), snap(sb["p1"])
+            if abs(c0_[0] - c1_[0]) < 1e-6 or abs(c0_[1] - c1_[1]) < 1e-6:
+                vert_ = abs(c0_[0] - c1_[0]) < 1e-6
+                if vert_:
+                    sb["p0"] = (c0_[0], sb["p0"][1], top)
+                    sb["p1"] = (c0_[0], sb["p1"][1], top)
+                else:
+                    sb["p0"] = (sb["p0"][0], c0_[1], top)
+                    sb["p1"] = (sb["p1"][0], c0_[1], top)
         out.append(sb)
     return out
 
@@ -2212,7 +2237,7 @@ RAIL_INSET = 0.05                     # the balusters 5 cm in from the stair's e
 RAIL_TEXT = 'ราวบันไดไม้เนื้อแข็ง 2"x4" ทาสี ลูกกรงเหล็กแป๊บดำ ขนาด 1" ทาสี'
 
 
-def stair_railing(stp, s) -> dict:
+def stair_railing(stp, s, bounds=None) -> dict:
     """The railing on the open side of a stair (the well of a U or L stair,
     else the right of the way up): {"rails": [((x, y, z), (x, y, z))] the top
     rail's straight pieces, "posts": [((x, y, z0), (x, y, z1))], "plan":
@@ -2272,8 +2297,91 @@ def stair_railing(stp, s) -> dict:
                 top = min(top, z0 + n * R_ + RAIL_H)  # under the level piece at the top
             out["posts"].append((at(u, z0 + (k + 1) * R_), at(u, top)))
         prev_end = e
+    out["well"] = len(out["rails"])                   # the pieces of the continuous well rail
+    _outer_railing(lay, out, bounds)
     out["length"] = sum(math.dist(a, b) for a, b in out["rails"])
     return out
+
+
+def _outer_railing(lay, out, bounds):
+    """ราวด้านนอก (the owner, as the standard section): the open side of every
+    flight and the open edges of the landing get a rail too — one chain from
+    the foot of the first flight round the landing to the top of the last —
+    except where the side runs along the outside wall (``bounds`` x0, y0,
+    x1, y1 of the floor)."""
+    fl, R_, g = lay["flights"], lay["R"], lay["g"]
+    inset = RAIL_INSET
+
+    def on_wall(p, q):
+        if not bounds:
+            return False
+        x0, y0, x1, y1 = bounds
+        near = lambda v, a: abs(v - a) <= 0.30          # noqa: E731
+        return ((near(p[0], x0) and near(q[0], x0)) or (near(p[0], x1) and near(q[0], x1))
+                or (near(p[1], y0) and near(q[1], y0)) or (near(p[1], y1) and near(q[1], y1)))
+
+    def piece(a, b):
+        out["rails"].append((a, b))
+        out["plan"].append(((a[0], a[1]), (b[0], b[1])))
+    for i, f in enumerate(fl):
+        (x, y), (dx, dy) = f["p0"], f["d"]
+        nx, ny = dy, -dx
+        if len(fl) > 1:
+            other = fl[1] if i == 0 else fl[i - 1]
+            sgn = 1.0 if (other["p0"][0] - x) * nx + (other["p0"][1] - y) * ny >= 0 else -1.0
+        else:
+            sgn = 1.0
+        so = -sgn                                     # the side away from the well
+        e0 = (x + nx * f["w"] / 2 * so, y + ny * f["w"] / 2 * so)
+        e1 = (e0[0] + dx * f["L"], e0[1] + dy * f["L"])
+        if on_wall(e0, e1):
+            continue
+        off = (f["w"] / 2 - inset) * so
+
+        def at(u, z, x=x, y=y, dx=dx, dy=dy, nx=nx, ny=ny, off=off):
+            return (x + dx * u + nx * off, y + dy * u + ny * off, z)
+        z0, n, L = f["z0"], f["n"], f["L"]
+        # balanced heights (the owner): where a flight meets a landing its
+        # rail is at the landing rail's height, so the two meet square at the
+        # corner; at the floor it starts over the first nosing
+        a = at(0.0, z0 + (RAIL_H if z0 > 1e-6 else R_ + RAIL_H))
+        e = at(L, z0 + n * R_ + RAIL_H)
+        piece(a, e)
+        out["posts"].append(((a[0], a[1], z0 + R_), a))
+        out["posts"].append(((e[0], e[1], z0 + n * R_), e))
+        for k in range(n):
+            u = (k + 0.5) * g
+            top = a[2] + (e[2] - a[2]) * u / L               # up to the rail's line
+            out["posts"].append((at(u, z0 + (k + 1) * R_), at(u, top)))
+    # the landing's open edges (not the side the flights come onto, not on a wall)
+    if fl:
+        f0 = fl[0]
+        top0 = (f0["p0"][0] + f0["d"][0] * f0["L"], f0["p0"][1] + f0["d"][1] * f0["L"])
+    for ld in lay["landings"]:
+        pts = ld["pts"]
+        cx = sum(p[0] for p in pts) / 4
+        cy = sum(p[1] for p in pts) / 4
+        edges = [(pts[i], pts[(i + 1) % 4]) for i in range(4)]
+        inner = min(edges, key=lambda e_: math.dist(((e_[0][0] + e_[1][0]) / 2, (e_[0][1] + e_[1][1]) / 2), top0))
+        zt = ld["z"] + RAIL_H
+        for p_, q_ in edges:
+            if (p_, q_) == inner or on_wall(p_, q_):
+                continue
+            # 5 cm in from the edge, toward the landing's middle
+            mx_, my_ = (p_[0] + q_[0]) / 2, (p_[1] + q_[1]) / 2
+            Le = math.dist(p_, q_) or 1.0
+            ux, uy = (q_[0] - p_[0]) / Le, (q_[1] - p_[1]) / Le
+            ix, iy = -uy, ux
+            if (cx - mx_) * ix + (cy - my_) * iy < 0:
+                ix, iy = -ix, -iy
+            a = (p_[0] + ix * inset, p_[1] + iy * inset, zt)          # on the flights' rail lines:
+            b = (q_[0] + ix * inset, q_[1] + iy * inset, zt)          # the corners meet
+            piece(a, b)
+            m = max(1, int(math.dist(a, b) / g))
+            for k in range(m + 1):
+                t = k / m
+                px, py = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+                out["posts"].append(((px, py, ld["z"]), (px, py, zt)))
 
 
 def stair_hole(stp, s) -> tuple:
@@ -2383,9 +2491,9 @@ def building_outline(E) -> tuple:
             max(r["x"] + r["w"] for r in rooms), max(r["y"] + r["d"] for r in rooms))
 
 
-def railing_members(stp, s, z) -> list:
+def railing_members(stp, s, z, bounds=None) -> list:
     """The railing in 3D: the hardwood rail 50×100 mm and the Ø 1" balusters."""
-    r = stair_railing(stp, s)
+    r = stair_railing(stp, s, bounds)
     out = []
     for a, b in r["rails"]:
         out.append(_member("structure", "stair_rail", "ราวบันได", "rect", dict(b=50.0, h=100.0),

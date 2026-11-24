@@ -51,7 +51,7 @@ def a_stair_detail(sh, E, e):
         sh.poly([v(*p) for p in poly], "wall", 0.35)
     for a, b in pl["treads"]:
         sh.line(v(*a), v(*b), "wall", 0.18)
-    for p, q in B.stair_railing(st, s)["plan"]:       # ราวบันได on the open side
+    for p, q in B.stair_railing(st, s, B.floor_bounds(E, e.get("floor", 0)))["plan"]:       # ราวบันได on the open side
         sh.line(v(*p), v(*q), "door", 0.35)
     walk = [v(*p) for p in pl["walk"]]
     for a, b in zip(walk, walk[1:]):
@@ -163,7 +163,7 @@ def a_stair_detail(sh, E, e):
         "4. กฎกระทรวง ฉบับที่ 55: ลูกตั้งไม่เกิน 20 ซม. ลูกนอนไม่น้อยกว่า 22 ซม.",
         "   กว้างไม่น้อยกว่า 80 ซม. ทุกช่วงสูงไม่เกิน 3.00 ม. ต้องมีชานพัก",
         f"5. {B.RAIL_TEXT} สูง {B.RAIL_H:.2f} ม. จากจมูกขั้น",
-        "   ลูกกรงทุกขั้น ยาวรวม %.2f ม. (เส้นสีในแปลน = แนวราวบันได)" % B.stair_railing(st, s)["length"],
+        "   ลูกกรงทุกขั้น ยาวรวม %.2f ม. (เส้นสีในแปลน = แนวราวบันได)" % B.stair_railing(st, s, B.floor_bounds(E, e.get("floor", 0)))["length"],
         f"6. ท้องบันได ค.ส.ล. หนา {ts * 100:.0f} ซม. เหล็กเสริมตามแบบโครงสร้าง",
     ], 2.2, 80)
 

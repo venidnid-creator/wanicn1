@@ -871,7 +871,7 @@ def draw_stairs(sh, v, E, k, numbers=True):
         w = pl["walk"]
         for p, q in zip(w, w[1:]):
             sh.line(v(*p), v(*q), "dim", 0.18)
-        for p, q in B.stair_railing(st["st"], s)["plan"]:          # ราวบันได
+        for p, q in B.stair_railing(st["st"], s, B.floor_bounds(E, k))["plan"]:          # ราวบันได
             sh.line(v(*p), v(*q), "door", 0.25)
         f0 = B.stair_layout(st["st"], s)["flights"][0]     # «ขึ้น» at the foot, across the walk line from the numbers
         (px, py), (dx, dy) = f0["p0"], f0["d"]
