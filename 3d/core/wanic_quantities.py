@@ -541,12 +541,12 @@ def compute(data, gate: bool = False) -> dict:
             bars([("DB12", S.bar_count(max(ys) - min(ys), 0.15) * (max(xs) - min(xs))),
                   ("RB9", S.bar_count(max(xs) - min(xs), 0.20) * (max(ys) - min(ys)))])
         z_ = e["floor"] * E["H"]
-        for sb in B.stair_beams(e["st"], s, z_):       # คานรับบันได SB1 / SB2
+        for sb in B.stair_beams(e["st"], s, z_, B.stair_cols(E, e["floor"])):       # คานรับบันได SB1 / SB2
             Lb = math.dist(sb["p0"][:2], sb["p1"][:2])
             vol += sb["b"] * sb["h"] * Lb
             area += (sb["b"] + 2 * sb["h"]) * Lb
             bars([("DB12", 4 * Lb), ("RB6", S.bar_count(Lb, 0.15) * 2 * (sb["b"] + sb["h"]))])
-        for sp_ in B.stair_posts(e["st"], s, z_):      # เสารับคานชานพัก
+        for sp_ in B.stair_posts(e["st"], s, z_, B.stair_cols(E, e["floor"])):      # เสารับคานชานพัก
             Hp = sp_["p1"][2] - sp_["p0"][2]
             vol += sp_["b"] ** 2 * Hp
             area += 4 * sp_["b"] * Hp

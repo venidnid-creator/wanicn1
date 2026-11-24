@@ -27,6 +27,9 @@ class _Preview(QWidget):
         self.setCursor(Qt.OpenHandCursor)
         self.setToolTip("ลากบันไดเพื่อเลื่อนตำแหน่ง")
 
+    def _cols(self):
+        return B.stair_cols(B.elements(self.data), 0) if self.data else []
+
     def _frame(self):
         x0, y0, x1, y1 = SA.footprint(self.data)
         m = 28.0
@@ -94,12 +97,12 @@ class _Preview(QWidget):
         w = [T(*q) for q in pl["walk"]]
         p.drawPolyline(QPolygonF(w))
         p.drawText(w[0] + QPointF(-14, 14), "ขึ้น")
-        for b in B.stair_beams(self.stair, self.s, 0.0):  # the stair beams, dashed
+        for b in B.stair_beams(self.stair, self.s, 0.0, self._cols()):  # the stair beams, dashed
             p.setPen(QPen(QColor("#2563EB"), 2.0, Qt.DashLine))
             p.drawLine(T(*b["p0"][:2]), T(*b["p1"][:2]))
         p.setPen(QPen(QColor("#2563EB"), 1))
         p.setBrush(QColor("#2563EB"))
-        for c in B.stair_posts(self.stair, self.s, 0.0):
+        for c in B.stair_posts(self.stair, self.s, 0.0, self._cols()):
             q = T(*c["p0"][:2])
             p.drawRect(QRectF(q.x() - 3, q.y() - 3, 6, 6))
 

@@ -2426,7 +2426,7 @@ def s_beams(sh, E, lvl):
     # written) and the posts under SB2 — the stairs that start on this floor
     for st in (x for x in E["stairs"] if x["floor"] == lvl and lvl < E["n"]):
         zf = lvl * H_
-        for sb in B.stair_beams(st["st"], E["settings"], zf):
+        for sb in B.stair_beams(st["st"], E["settings"], zf, B.stair_cols(E, lvl)):
             (x0, y0, zb), (x1, y1, _z) = sb["p0"], sb["p1"]
             L = math.hypot(x1 - x0, y1 - y0) or 1
             nx, ny = -(y1 - y0) / L, (x1 - x0) / L
@@ -2441,7 +2441,7 @@ def s_beams(sh, E, lvl):
                 sh.text(m, lab, 2.2, "center", "struct", False, 90)
             else:
                 masked_text(sh, m, lab, 2.2)
-        for c in B.stair_posts(st["st"], E["settings"], zf):
+        for c in B.stair_posts(st["st"], E["settings"], zf, B.stair_cols(E, lvl)):
             q0, q1 = v(c["p0"][0] - c["b"] / 2, c["p0"][1] - c["b"] / 2), v(c["p0"][0] + c["b"] / 2, c["p0"][1] + c["b"] / 2)
             sh.rect(*q0, *q1, "column", 0.35)
     draw_free(sh, v, E, lvl * H_ - H_ / 2 if lvl else -9.0, lvl * H_ + H_ / 2, ("beams", "columns"))

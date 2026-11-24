@@ -1243,7 +1243,7 @@ def structure_members(data) -> tuple[list, dict]:
     if s.get("walls"):
         _walls(E, add)
     for e in E["stairs"]:
-        for g_ in stair_members(e["st"], s, e["floor"] * E["H"]):
+        for g_ in stair_members(e["st"], s, e["floor"] * E["H"], stair_cols(E, e["floor"])):
             add(g_, "stair")
         for g_ in railing_members(e["st"], s, e["floor"] * E["H"]):
             add(g_, "stair_rail")
@@ -2071,7 +2071,7 @@ def band_length(w, h, sill, door, band, wh) -> float:
     return L
 
 
-def stair_members(stp, s, z) -> list:
+def stair_members(stp, s, z, cols=None) -> list:
     """The flights (side profile extruded across the width) and the
     landing slabs of a stair, from :func:`stair_layout`."""
     lay = stair_layout(stp, s)
@@ -2100,10 +2100,10 @@ def stair_members(stp, s, z) -> list:
                            dict(b=_mm(max(xs) - min(xs)), h=_mm(max(ys) - min(ys))),
                            [(cx, cy, top - t), (cx, cy, top)], ifc="IfcSlab",
                            name=f"ชานพักบันได หนา {_cm(t)} ซม. · ระดับ {top:+.2f}"))
-    for b in stair_beams(stp, s, z):                   # คานรับบันได: under the first step, under the landing
+    for b in stair_beams(stp, s, z, cols):             # คานรับบันได: under the first step, under the landing
         out.append(_member("structure", "stair_beam", b["mark"], "rect", dict(b=_mm(b["b"]), h=_mm(b["h"])),
                            [b["p0"], b["p1"]], anchor="tc", ifc="IfcBeam", name=b["name"]))
-    for c in stair_posts(stp, s, z):                   # เสารับคานชานพัก
+    for c in stair_posts(stp, s, z, cols):             # เสารับคานชานพัก (only where no column line carries it)
         out.append(_member("structure", "stair_post", "SC", "rect", dict(b=_mm(c["b"]), h=_mm(c["b"])),
                            [c["p0"], c["p1"]], ifc="IfcColumn", name=c["name"]))
     return [g for g in out if g is not None]
@@ -2115,7 +2115,12 @@ STAIR_BEAM = (0.15, 0.30)
 STAIR_POST = 0.15
 
 
-def stair_beams(stp, s, z) -> list:
+def stair_cols(E, floor) -> list:
+    """The (x, y) of the columns that stand on ``floor`` (what a landing beam can rest on)."""
+    return [(c["x"], c["y"]) for c in E.get("columns") or [] if c.get("floor", 0) == floor]
+
+
+def stair_beams(stp, s, z, cols=None) -> list:
     """คานรับบันได: one under the first step of the stair (the foot never
     hangs in the air) and one along the outer edge of every landing —
     [{"p0", "p1" (x, y, z of the top), "b", "h", "mark", "name"}]."""
@@ -2139,17 +2144,36 @@ def stair_beams(stp, s, z) -> list:
         if (x - a[0]) * ix + (y - a[1]) * iy < 0:
             ix, iy = -ix, -iy
         top = z + ld["z"]
-        out.append({"p0": (a[0] + ix * bw / 2, a[1] + iy * bw / 2, top),
-                    "p1": (b[0] + ix * bw / 2, b[1] + iy * bw / 2, top), "b": bw, "h": bh, "mark": "SB2",
-                    "name": f"คานรับชานพัก SB2 {_cm(bw)}×{_cm(bh)} ซม. · ระดับ {top:+.2f}"})
+        sb = {"p0": (a[0] + ix * bw / 2, a[1] + iy * bw / 2, top),
+              "p1": (b[0] + ix * bw / 2, b[1] + iy * bw / 2, top), "b": bw, "h": bh, "mark": "SB2",
+              "name": f"คานรับชานพัก SB2 {_cm(bw)}×{_cm(bh)} ซม. · ระดับ {top:+.2f}", "on_cols": False}
+        # the landing against a column line (the outside wall): SB2 runs on that
+        # line from column to column round the landing, carried by them —
+        # a full edge beam as the standard section, no posts
+        near = []
+        for cx, cy in cols or []:
+            u = (cx - a[0]) * ux + (cy - a[1]) * uy
+            off = (cx - a[0]) * ix + (cy - a[1]) * iy
+            if -0.30 <= off <= bw + 0.05:
+                near.append((u, cx, cy))
+        left = [q for q in near if q[0] <= 0.05]
+        right = [q for q in near if q[0] >= L_ - 0.05]
+        if left and right:
+            u0, x0_, y0_ = max(left)
+            u1, x1_, y1_ = min(right)
+            sb.update(p0=(x0_, y0_, top), p1=(x1_, y1_, top), on_cols=True,
+                      name=f"คานรับชานพัก SB2 {_cm(bw)}×{_cm(bh)} ซม. · ระดับ {top:+.2f} (ฝากเสา)")
+        out.append(sb)
     return out
 
 
-def stair_posts(stp, s, z) -> list:
-    """เสารับคานชานพัก: at both ends of every landing beam, from the floor up
-    to the beam's soffit."""
+def stair_posts(stp, s, z, cols=None) -> list:
+    """เสารับคานชานพัก: at both ends of every landing beam that no column line
+    carries, from the floor up to the beam's soffit."""
     out = []
-    for b in stair_beams(stp, s, z)[1:]:
+    for b in stair_beams(stp, s, z, cols)[1:]:
+        if b.get("on_cols"):
+            continue
         for (px, py, top) in (b["p0"], b["p1"]):
             ux, uy = b["p1"][0] - b["p0"][0], b["p1"][1] - b["p0"][1]
             L_ = math.hypot(ux, uy) or 1.0
