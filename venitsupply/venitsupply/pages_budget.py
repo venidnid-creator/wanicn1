@@ -813,7 +813,7 @@ class ProcDialog(QDialog):
 
 class ProcPage(QWidget):
     HEAD = ["เลขที่", "วันที่ขอ", "ประเภท", "รายการ/โครงการ", "วิธี", "วงเงิน", "ผู้ขาย/ผู้รับจ้าง",
-            "ตามใบสั่ง/สัญญา", "เบิกจ่ายแล้ว", "กำหนดส่ง", "สถานะ"]
+            "ตามใบสั่ง/สัญญา", "เบิกจ่ายแล้ว", "กำหนดส่ง", "สถานะ", "กอง"]
 
     def __init__(self, win):
         super().__init__()
@@ -834,9 +834,11 @@ class ProcPage(QWidget):
         self.status.addItem(T("ทุกสถานะ"), None)
         for k in P.STATUSES:
             self.status.addItem(T(k), k)
+        self.div = QComboBox()                   # แยกตามกอง (จากรายการงบของกอง)
+        self.div.addItem(T("ทุกกอง"), None)
         self.search = QLineEdit()
         self.search.setPlaceholderText(T("ค้นหา…"))
-        for wdg in (self.kind, self.status):
+        for wdg in (self.kind, self.status, self.div):
             wdg.currentIndexChanged.connect(self.refresh)
             top.addWidget(wdg)
         self.search.textChanged.connect(self.refresh)
@@ -875,12 +877,33 @@ class ProcPage(QWidget):
 
     def refresh(self):
         s = self.win.store
+        cur = self.div.currentData()
+        tops = s.divisions()
+        if [self.div.itemData(i) for i in range(1, self.div.count())] != [d["id"] for d in tops]:
+            self.div.blockSignals(True)
+            self.div.clear()
+            self.div.addItem(T("ทุกกอง"), None)
+            for d in tops:
+                self.div.addItem(d["name"], d["id"])
+            self.div.setCurrentIndex(max(0, self.div.findData(cur)))
+            self.div.blockSignals(False)
+            cur = self.div.currentData()
+        self.div.setVisible(bool(tops))
+        top_of = {}
+
+        def top(did):
+            if did and did not in top_of:
+                t = s.top_division(did)
+                top_of[did] = (t["id"], t["name"]) if t else (None, "")
+            return top_of.get(did, (None, ""))
         rows = s.procurements(self.fy.value(), self.kind.currentData(), self.status.currentData(),
                               self.search.text().strip())
+        if cur:
+            rows = [p for p in rows if top(p["div_id"])[0] == cur]
         fill(self.t, [[p["number"], TD.thai(p["date_request"]), T(p["kind"]), p["title"],
                        (p["method"] or "").replace("วิธี", ""), float(p["amount"] or 0), p["vendor"],
                        float(p["contract_amount"] or 0), float(s.paid(p["id"])), TD.thai(p["due_date"]),
-                       T(p["status"])] for p in rows], ids=[p["id"] for p in rows])
+                       T(p["status"]), top(p["div_id"])[1]] for p in rows], ids=[p["id"] for p in rows])
         colors = {"ขออนุมัติ": "#B45309", "อนุมัติแล้ว": "#1A5FA6", "ก่อหนี้ผูกพัน": "#6D28D9",
                   "ตรวจรับแล้ว": "#0E7F4F", "เบิกจ่ายแล้ว": "#55657A", "ยกเลิก": RED}
         for r, p in enumerate(rows):

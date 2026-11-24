@@ -133,3 +133,34 @@ def budget(s: Store):
     road = max((b for b in s.budget_items(2570) if b["category"] == "ค่าที่ดินและสิ่งก่อสร้าง"),
                key=lambda b: b["amount"])
     proc(road["id"], "จ้าง", road["name"][:90], "2026-11-12", amount=road["amount"], stop="request")
+    hire_demo(s)
+
+
+def hire_demo(s: Store):
+    """จ้างเหมาบริการบุคคลธรรมดาแยกตามกอง (ชื่อผู้รับจ้างสมมติ)."""
+    if not s.q("SELECT 1 FROM divisions"):
+        s.seed_structure()
+    s.assign_divisions(2570)
+    tops = {d["name"]: d["id"] for d in s.divisions()}
+    fin, pal = tops["กองคลัง"], tops["สำนักปลัด"]
+    s.save_division(dict(officer_pos="เจ้าพนักงานพัสดุ", head_pos="ผู้อำนวยการกองคลัง"), fin)
+    j1 = s.save_job(dict(division_id=fin, title="ผู้ช่วยงานพัสดุ", line="ทั่วไป", qualification="ปวส./อนุปริญญา",
+                         difficulty=5, work_place="กองคลัง องค์การบริหารส่วนตำบลไม้ขาว"))
+    s.set_tasks(j1, [("จัดทำรายงานขอซื้อขอจ้างและเอกสารประกอบ", 20, 1200),
+                     ("ตรวจสอบเอกสารตรวจรับพัสดุ", 20, 1200),
+                     ("จัดทำเอกสารขอเบิกจ่ายเงิน", 20, 1200),
+                     ("ลงทะเบียนคุมทรัพย์สินและบัญชีวัสดุ", 20, 1400)])
+    j2 = s.save_job(dict(division_id=pal, title="ผู้ช่วยงานวิเคราะห์นโยบายและแผน", line="วิชาการ",
+                         qualification="ปริญญาตรี", difficulty=0))
+    s.set_tasks(j2, [("รวบรวมข้อมูลจัดทำแผนพัฒนาท้องถิ่น", 120, 200),
+                     ("ติดตามและรายงานผลการดำเนินงานตามแผน", 60, 480),
+                     ("จัดทำร่างข้อบัญญัติและเอกสารประกอบ", 240, 60)])
+    item = s.hire_budget_items(2570, fin)[0]
+    cid = s.save_contract(dict(job_id=j1, division_id=fin, budget_item_id=item["id"],
+                               person="นางสาวตัวอย่าง ทดลองจ้าง", address="(ข้อมูลสมมติ)", bank="ธนาคารกรุงไทย",
+                               bank_branch="ถลาง", account_no="000-0-00000-0", start="2026-10-01",
+                               end="2027-09-30", monthly=s.job_value(s.job(j1))["monthly"],
+                               inspector="นายตรวจรับ ตัวอย่าง"))
+    s.sign_contract(cid, "2026-10-01")
+    s.inspect_month(cid, "2026-10", date="2026-10-31")
+    s.pay_month(cid, "2026-10", "2026-11-02", "ฎ.31/2570")

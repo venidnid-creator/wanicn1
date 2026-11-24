@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS payments(
 
 FIELDS = ("fy", "number", "kind", "method", "title", "reason", "budget_item_id", "amount",
           "median_price", "vendor", "vendor_tax_id", "vendor_vat", "egp_no", "date_request",
-          "due_date", "rent_from", "rent_to", "exchange_asset_id", "committee", "requester", "note")
+          "due_date", "rent_from", "rent_to", "exchange_asset_id", "committee", "requester", "note",
+          "division_id")
 
 
 def suggest_method(amount, limit=SPECIFIC_LIMIT) -> str:
@@ -92,7 +93,8 @@ class ProcurementMixin:
         return self.one("SELECT IFNULL(SUM(amount),0) AS s FROM payments WHERE proc_id=?", (pid,))["s"]
 
     def procurements(self, fy=None, kind=None, status=None, text=""):
-        sql = ("SELECT p.*, b.name AS budget_name, b.category, b.type FROM procurements p "
+        sql = ("SELECT p.*, b.name AS budget_name, b.category, b.type, "
+               "COALESCE(p.division_id, b.division_id) AS div_id FROM procurements p "
                "LEFT JOIN budget_items b ON b.id=p.budget_item_id WHERE 1=1")
         args = []
         for col, v in (("p.fy", fy), ("p.kind", kind), ("p.status", status)):
@@ -131,6 +133,10 @@ class ProcurementMixin:
             # after the order only notes and dates may change
             d = {k: v for k, v in d.items() if k in ("note", "committee", "due_date", "egp_no", "vendor_tax_id")}
             lines = None
+        if d.get("budget_item_id") and not d.get("division_id"):
+            bi = self.budget_item(d["budget_item_id"])
+            if bi is not None and "division_id" in bi.keys() and bi["division_id"]:
+                d["division_id"] = bi["division_id"]          # the กอง that owns the budget
         if d.get("budget_item_id"):
             b = self.budget_item(d["budget_item_id"])
             fy = d.get("fy") or (cur["fy"] if cur else TD.fiscal_year(d.get("date_request") or TD.today()))

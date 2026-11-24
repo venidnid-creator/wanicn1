@@ -74,6 +74,8 @@ class Report:
                     f"<td align={self._al(i)}><b>{_e(self._fmt(i, v))}</b></td>"
                     for i, v in enumerate(self.totals)) + "</tr>")
             h.append("</table>")
+        if getattr(self, "after", ""):
+            h.append(self.after)
         h.append(self._signatures(st))
         h.append(f"<p style='font-size:10pt; color:#55657A'>พิมพ์เมื่อ {TD.thai(TD.today())} · "
                  f"{PRODUCT_TH} ({PRODUCT_EN}) · ผู้พัฒนา {DEVELOPER} {QUALIFICATION} · "
@@ -94,12 +96,19 @@ class Report:
         return v
 
     def _signatures(self, st) -> str:
+        """Signature blocks: a settings key («officer») or a tuple (role, name, position).
+        More than three signers wrap onto a second row."""
         cells = []
         for k in self.signers:
-            name = st.get(k) or "...................................................."
-            cells.append("<td align=center width='33%'><br><br>ลงชื่อ ......................................<br>"
-                         f"( {_e(name)} )<br>{_e(st.get(k + '_pos', ''))}</td>")
-        return "<br><table width='100%'><tr>" + "".join(cells) + "</tr></table>"
+            if isinstance(k, tuple):
+                role, name, pos = (list(k) + ["", "", ""])[:3]
+            else:
+                role, name, pos = "", st.get(k), st.get(k + "_pos", "")
+            name = name or "...................................................."
+            cells.append("<td align=center width='33%'><br><br>ลงชื่อ ......................................"
+                         f"{_e(role)}<br>( {_e(name)} )<br>{_e(pos)}</td>")
+        rows = [cells[i:i + 3] for i in range(0, len(cells), 3)]
+        return "<br><table width='100%'>" + "".join("<tr>" + "".join(r) + "</tr>" for r in rows) + "</table>"
 
 
 # ---------------------------------------------------------------- reports

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
 from . import DEVELOPER, PRODUCT_EN, PRODUCT_TH, QUALIFICATION, __version__
 from . import db as DB
 from . import i18n
+from . import hire_reports as HR
 from . import reports as R
 from . import thaidate as TD
 from .i18n import T
@@ -627,7 +628,9 @@ class ReportPage(QWidget):
                       ("รายงานสถานะการใช้จ่ายงบประมาณ", lambda s: R.budget_status(s, self.fy.value())),
                       ("สถานะงบประมาณตามหมวด", lambda s: R.budget_status(s, self.fy.value(), "category")),
                       ("ทะเบียนคุมการจัดซื้อจัดจ้าง", lambda s: R.proc_register(s, self.fy.value())),
-                      ("ทะเบียนคุมการเบิกจ่ายเงิน", lambda s: R.payment_register(s, self.fy.value()))]
+                      ("ทะเบียนคุมการเบิกจ่ายเงิน", lambda s: R.payment_register(s, self.fy.value())),
+                      ("ทะเบียนคุมสัญญาจ้างเหมาบุคคล", lambda s: HR.hire_register(s, self.fy.value())),
+                      ("สรุปงบจ้างเหมาบุคคลแยกตามกอง", lambda s: HR.division_summary(s, self.fy.value()))]
         for k, _ in self.kinds:
             self.list.addItem(T(k))
         self.list.currentRowChanged.connect(self.show)
@@ -766,7 +769,7 @@ class SettingsPage(QWidget):
 
 
 # ============================================================ main window
-NAV = ["หน้าหลัก", "งบประมาณ", "จัดซื้อจัดจ้าง", "สถิติ", "ครุภัณฑ์", "วัสดุ", "ยืม-คืน", "ตรวจสอบประจำปี", "รายงาน", "ตั้งค่า"]
+NAV = ["หน้าหลัก", "งบประมาณ", "จัดซื้อจัดจ้าง", "จ้างเหมาบุคคล", "สถิติ", "ครุภัณฑ์", "วัสดุ", "ยืม-คืน", "ตรวจสอบประจำปี", "รายงาน", "ตั้งค่า"]
 
 
 class MainWindow(QMainWindow):
@@ -812,6 +815,8 @@ class MainWindow(QMainWindow):
         self.home = HomePage(self)
         self.budget = BudgetPage(self)
         self.procs = ProcPage(self)
+        from .pages_hire import HirePage
+        self.hire = HirePage(self)
         self.stats = StatsPage(self)
         self.assets = AssetPage(self)
         self.materials = MaterialPage(self)
@@ -819,7 +824,7 @@ class MainWindow(QMainWindow):
         self.inspect = InspectPage(self)
         self.reports = ReportPage(self)
         self.settings_page = SettingsPage(self)
-        self.pages = [self.home, self.budget, self.procs, self.stats, self.assets, self.materials, self.loans, self.inspect, self.reports,
+        self.pages = [self.home, self.budget, self.procs, self.hire, self.stats, self.assets, self.materials, self.loans, self.inspect, self.reports,
                       self.settings_page]
         for p in self.pages:
             self.stack.addWidget(scrolled(p))
