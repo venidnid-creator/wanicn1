@@ -47,6 +47,9 @@ DEFAULTS = {
     #: การระบุมาตรฐานงานก่อสร้างและการควบคุมคุณภาพวัสดุเป็นอย่างดี (กฎกระทรวง 2566 ข้อ 8):
     #: True → φ 0.90 / 0.85 / 0.70; False → the lower set 0.75 / 0.70 / 0.60
     "qc": True,
+    #: ลดน้ำหนักบรรทุกจรที่ถ่ายลงเสา ตอม่อ ฐานราก ตามชั้น (กฎกระทรวง 2566 ข้อ 13) — off: the full
+    #: live load (the safe side); never for the uses of ข้อ 14 nor a live load over 500 kg/m²
+    "ll_reduce": False,
     "wind": 50.0,                    # kg/m² on the roof (uplift / pressure, informative)
     "finish": 50.0,                  # floor finish + ceiling, kg/m²
     "wall_kg_m2": 180.0,             # half-brick wall plastered both sides
@@ -78,6 +81,22 @@ LIVE_LOADS = [("บ้านพักอาศัย ห้องต่าง �
                "เวที โรงกีฬา · ทางเดินเชื่อมอาคาร", 500.0),
               ("ห้องเก็บหนังสือของห้องสมุด", 600.0),
               ("ลานจอดรถโดยสาร / รถยนต์บรรทุกเปล่า", 800.0)]
+#: กฎกระทรวง 2566 ข้อ 13: the share of the live load taken off by the floor's place counted
+#: down from the roof (0 the roof, 1–2 the floors next under it, 3 → 10 % … 7 and lower → 50 %)
+LL_REDUCTION = (0.0, 0.0, 0.0, 0.10, 0.20, 0.30, 0.40, 0.50)
+#: ข้อ 14: no reduction for these uses, nor where the live load is over 500 kg/m²
+LL_NO_REDUCTION = ("โรงมหรสพ ห้องประชุม หอประชุม ห้องสมุด หอสมุด พิพิธภัณฑ์ อัฒจันทร์ คลังสินค้า โรงงาน "
+                   "สถานศึกษา สถานพยาบาล ลานจอดรถ")
+
+
+def ll_reduction(from_roof: int) -> float:
+    return LL_REDUCTION[min(max(from_roof, 0), len(LL_REDUCTION) - 1)]
+
+
+def reduces_live(b_) -> bool:
+    return bool((b_ or {}).get("ll_reduce")) and float((b_ or {}).get("ll_floor", 0) or 0) <= 500.0
+
+
 #: also กฎกระทรวง 2566 ข้อ 11: หลังคา 50 · กันสาดคอนกรีต 100 · ดาดฟ้า 200 kg/m²
 LL_CANOPY = 100.0
 
@@ -895,6 +914,7 @@ def analyse(data) -> dict:
     col_load: dict = {}
     col_mom: dict = {}
     col_lv: dict = {}
+    col_live: dict = {}                              # the factored live part, per column and level
     for key, segs in runs.items():
         level, mark, axis, c = key
         segs.sort(key=lambda e: min(e["p0"][0], e["p1"][0]) if axis == "x" else min(e["p0"][1], e["p1"][1]))
@@ -1043,10 +1063,13 @@ def analyse(data) -> dict:
                     ends.append(lo_)
                 ends.append(hi_)
         pts = [((v, c) if axis == "x" else (c, v)) for v in ends]
-        for p, Rv in zip(pts, res.reactions):
+        ll_reac = ((getattr(res, "cases", None) or {}).get("LL") or None)
+        ll_reac = list(ll_reac.reactions) if ll_reac is not None else [0.0] * len(res.reactions)
+        for p, Rv, RL in zip(pts, res.reactions, ll_reac + [0.0] * len(res.reactions)):
             k_ = (round(p[0], 3), round(p[1], 3))
             col_load[k_] = col_load.get(k_, 0.0) + Rv
             col_lv[(k_, level)] = col_lv.get((k_, level), 0.0) + Rv
+            col_live[(k_, level)] = col_live.get((k_, level), 0.0) + L_ * RL
         # the moment a beam end hands its column (ACI coefficient wL²/16 at an
         # end built into a column, shared by the columns above and below)
         for p, sp_ in ((pts[0], spans[0]), (pts[-1], spans[-1])):
@@ -1065,6 +1088,14 @@ def analyse(data) -> dict:
             free_cols = FR.analyse_free(data, b_, out, col_load, col_lv)
     except Exception as e:                           # noqa: BLE001 - never stops the rest
         out.append(Member("beam", "ชิ้นส่วนเขียนอิสระ", f"คำนวณไม่ได้: {e}", "-", 9.9))
+    # กฎกระทรวง 2566 ข้อ 13: the live load each level hands a column, cut by the level's place
+    # under the roof (level n the roof → 0)
+    red_on = reduces_live(b_)
+
+    def ll_cut(k_, from_level=0):
+        if not red_on:
+            return 0.0
+        return sum(v * ll_reduction(n - lv) for (kk, lv), v in col_live.items() if kk == k_ and lv >= from_level)
     # -- columns: everything above, per column line (the ground floor's carries it all)
     cols_out = []
     for c_ in E["columns"]:
@@ -1072,7 +1103,8 @@ def analyse(data) -> dict:
             continue
         k_ = (round(c_["x"], 3), round(c_["y"], 3))
         spec = lib.get(c_["mark"], {})
-        Pu = col_load.get(k_, 0.0) + D_ * float(spec.get("b", 0.2)) * float(spec.get("h", 0.2)) * \
+        cut = ll_cut(k_)
+        Pu = col_load.get(k_, 0.0) - cut + D_ * float(spec.get("b", 0.2)) * float(spec.get("h", 0.2)) * \
             conc * float(s["floor_h"]) * n
         cap = column_capacity(spec, b_, fc)
         hh = max(float(spec.get("b", 0.2)), float(spec.get("h", 0.2)))
@@ -1096,7 +1128,8 @@ def analyse(data) -> dict:
                           + (f" · เสาชะลูด kLu/r = {slender:.0f} > 22 → ขยายโมเมนต์ δ = {delta:.2f} "
                              "(โครงไม่เซ k = 1.0 — ถ้าโครงเซได้ ให้วิศวกรตรวจเพิ่ม)" if delta > 1.0
                              else f" · kLu/r = {slender:.0f} ≤ 22 ไม่ต้องขยายโมเมนต์")
-                          + (" — เสาโก่งเดาะ (Pu ≥ 0.75Pc) ต้องขยายหน้าตัด" if delta >= 9.9 else ""), dia,
+                          + (" — เสาโก่งเดาะ (Pu ≥ 0.75Pc) ต้องขยายหน้าตัด" if delta >= 9.9 else "")
+                          + (f" · ลดน้ำหนักจร {cut:,.0f} กก. (กฎกระทรวง 2566 ข้อ 13)" if cut > 0.5 else ""), dia,
                           qty=Pu / ((D_ + L_) / 2.0) / 1000.0, qty_unit="ตัน ต่อเสา 1 ต้น"))
         cols_out.append((k_, Pu))
     # -- stumps (ตอม่อ): the ground-floor column's load plus its own weight, checked as a short column
@@ -1199,7 +1232,7 @@ def analyse(data) -> dict:
         k_ = (round(c_["x"], 3), round(c_["y"], 3))
         spec = lib.get(c_["mark"], {})
         f = -1 if c_ in E["stumps"] else int(c_.get("floor", 0))
-        P = sum(v for (kk, lv), v in col_lv.items() if kk == k_ and lv >= f + 1)
+        P = sum(v for (kk, lv), v in col_lv.items() if kk == k_ and lv >= f + 1) - ll_cut(k_, f + 1)
         P += float(spec.get("b", 0.2)) * float(spec.get("h", 0.2)) * conc * float(s["floor_h"]) * \
             max(1, n - max(f, 0)) * D_
         cards.append({"mark": c_["mark"], "x": c_["x"], "y": c_["y"], "floor": f, "P": P, "spec": spec,

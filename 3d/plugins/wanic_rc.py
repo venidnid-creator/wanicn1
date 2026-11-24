@@ -820,6 +820,12 @@ class RCPanel(QWidget):
             sp_.setValue(float(b_[key]))
             spins[key] = sp_
             form.addRow(th, sp_)
+        llr = QCheckBox("ลดน้ำหนักบรรทุกจรที่ลงเสา ตอม่อ ฐานราก ตามชั้น (กฎกระทรวง 2566 ข้อ 13)")
+        llr.setToolTip("หลังคาและสองชั้นถัดลงมา 0 % · ชั้นที่ 3 ลด 10 % · 4 → 20 % · 5 → 30 % · 6 → 40 % · "
+                       "7 ลงไป 50 %\nห้ามใช้ (ข้อ 14): " + C.LL_NO_REDUCTION +
+                       " และพื้นที่น้ำหนักจรเกิน 500 กก./ตร.ม. (โปรแกรมไม่ลดให้เอง)\nไม่ติ๊ก: คิดน้ำหนักจรเต็ม (ปลอดภัยกว่า)")
+        llr.setChecked(bool(b_.get("ll_reduce", False)))
+        form.addRow("การลดน้ำหนักจร", llr)
         fy = QDoubleSpinBox()
         fy.setRange(2400, 5000)
         fy.setDecimals(0)
@@ -861,6 +867,7 @@ class RCPanel(QWidget):
         calc = dict(d.get("calc") or {})
         calc["method"] = meth.currentData()
         calc["qc"] = qc.isChecked()
+        calc["ll_reduce"] = llr.isChecked()
         for k, sp_ in spins.items():
             calc[k] = sp_.value()
         for k, ed in texts.items():

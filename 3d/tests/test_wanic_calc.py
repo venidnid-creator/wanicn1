@@ -231,3 +231,26 @@ def test_beam_dead_and_live_apart_and_pictures_for_slabs_and_footings():
         p = QPainter(img)
         V.draw_any(p, QRectF(0, 0, 900, 480), m.diagram if m.diagram is not None else m.picture, m.name)
         p.end()
+
+
+def test_live_load_reduction_by_floor_from_the_roof():
+    """กฎกระทรวง 2566 ข้อ 13: off by default; on, the floors 3+ under the roof cut 10 % … 50 %."""
+    from core import wanic_rc as R
+    assert [C.ll_reduction(i) for i in range(9)] == [0, 0, 0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.50]
+
+    def pu(**calc):
+        d = B.default_data()
+        R.apply_grid(d, [4.0, 4.0], [4.0, 4.0], 6)
+        d["calc"] = calc
+        res = C.analyse(d)
+        col = next(m for m in res["members"] if m.group == "column" and "(4.00, 4.00)" in m.name
+                   and "ตอม่อ" not in m.name)
+        cards = {c["floor"]: c["P"] for c in res["cards"] if (c["x"], c["y"]) == (4.0, 4.0)}
+        return float(col.demand.split("Pu = ")[1].split(" ")[0]), cards, col.note
+    full, c0, _n = pu()
+    cut, c1, note = pu(ll_reduce=True)
+    assert cut < full and "ข้อ 13" in note
+    assert c1[3] == c0[3] and c1[4] == c0[4] and c1[5] == c0[5]   # the top three: nothing off
+    assert c1[2] < c0[2]
+    heavy, _c, _n = pu(ll_reduce=True, ll_floor=600.0)             # ข้อ 14: over 500 kg/m²
+    assert heavy > cut
