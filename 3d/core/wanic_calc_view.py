@@ -373,7 +373,7 @@ def draw_slab(p: QPainter, rect: QRectF, pic: dict, title: str = "") -> None:
         p.setBrush(tri)
         p.drawPolygon(QPolygonF([QPointF(x0, y0), QPointF(x0, y0 + H), L_]))
         p.drawPolygon(QPolygonF([QPointF(x0 + W, y0), QPointF(x0 + W, y0 + H), R_]))
-        note = "พื้นสองทาง: คานด้านสั้นรับรูปสามเหลี่ยม (ฟ้า) · คานด้านยาวรับรูปสี่เหลี่ยมคางหมู (เขียว) · เส้น 45°"
+        note = "พื้นสองทาง (เส้น 45°): คานด้านสั้นรับรูปสามเหลี่ยม (ฟ้า)\nคานด้านยาวรับรูปสี่เหลี่ยมคางหมู (เขียว)"
     p.setBrush(Qt.NoBrush)
     p.setPen(QColor("#111827"))
     p.drawText(QRectF(x0, y0 + H + 2, W, 14), Qt.AlignCenter, f"ด้านยาว b = {b:.2f} ม.")
@@ -419,7 +419,7 @@ def draw_slab(p: QPainter, rect: QRectF, pic: dict, title: str = "") -> None:
          "#15803D" if ok else "#B91C1C"),
         (("✓ ผ่าน" if ok else "✗ ไม่ผ่าน") + f" · ใช้ไป {pic['Mu'] / pic['cap'] * 100 if pic['cap'] else 999:,.0f} %",
          "#15803D" if ok else "#B91C1C"),
-        (note, "#374151")], width=sx1 - sx0)
+        ] + [(t, "#374151") for t in note.split("\n")], width=sx1 - sx0)
     p.restore()
 
 
@@ -475,7 +475,7 @@ def draw_footing(p: QPainter, rect: QRectF, pic: dict, title: str = "") -> None:
                  "#15803D" if ok else "#B91C1C"),
                 (("✓ ผ่าน" if ok else "✗ ไม่ผ่าน") + f" · ใช้ไป {share / float(pic['pc']) * 100 if pic['pc'] else 999:,.0f} %",
                  "#15803D" if ok else "#B91C1C"),
-                ("ฐานถ่ายน้ำหนักลงเข็มเท่ากันทุกต้น (ฐานแข็ง น้ำหนักตรงศูนย์)", "#374151")]
+                ("ฐานถ่ายน้ำหนักลงเข็มเท่ากันทุกต้น", "#374151"), ("(ฐานแข็ง น้ำหนักตรงศูนย์)", "#374151")]
     else:
         q, qa = float(pic["q"]), float(pic["qa"])
         ok = q <= qa + 1e-9
@@ -498,7 +498,8 @@ def draw_footing(p: QPainter, rect: QRectF, pic: dict, title: str = "") -> None:
                 (f"แรงดันดิน q = P / A = {q:,.2f} ตัน/ตร.ม.  เทียบ  qa = {qa:g}", "#15803D" if ok else "#B91C1C"),
                 (("✓ ผ่าน" if ok else "✗ ไม่ผ่าน") + f" · ใช้ไป {q / qa * 100 if qa else 999:,.0f} %",
                  "#15803D" if ok else "#B91C1C"),
-                ("ดินดันกลับเท่ากันทั้งฐาน (น้ำหนักตรงศูนย์) — ฐานงอขึ้น เหล็กตะแกรงล่างรับแรงดึง", "#374151")]
+                ("ดินดันกลับเท่ากันทั้งฐาน (น้ำหนักตรงศูนย์)", "#374151"),
+                ("ฐานงอขึ้น → เหล็กตะแกรงล่างรับแรงดึง", "#374151")]
     p.setPen(QColor("#111827"))
     p.drawText(QRectF(cx - W / 2, fy0 + T / 2 - 7, W, 14), Qt.AlignCenter, f"{pic.get('mark', '')}")
     _lines(p, rect.left() + rect.width() * 0.54, top + 20, rows, width=rect.width() * 0.45)

@@ -58,7 +58,7 @@ class Book:
         self.first = True
         self.n = 0
 
-    def page(self, title: str, tag: str):
+    def page(self, title: str, tag: str, sign: bool = True):
         if not self.first:
             self.w.newPage()
         self.first = False
@@ -74,7 +74,8 @@ class Book:
                    f"รายการคำนวณ : {title}")
         p.drawText(QRectF(self.W - 130 * mm, 6 * mm, 122 * mm, 12 * mm), Qt.AlignRight | Qt.AlignVCenter,
                    f"Page : {tag}  ({self.n})")
-        self.sign()
+        if sign:
+            self.sign()
 
     def sign(self):
         p, mm = self.p, self.mm
@@ -151,20 +152,146 @@ class Book:
 
 # ---- the pages ---------------------------------------------------------------------------
 
-def cover(bk: Book):
-    bk.page("", "cover")
+#: the chapters of the book, roof to piles (the order of the pages)
+CHAPTERS = (("roof", "1", "โครงหลังคา", "Roof"), ("slab", "2", "พื้น คสล. / บันได", "Slab"),
+            ("beam", "3", "คาน (หลังคา → ชั้นบน → คานคอดิน)", "Beam"),
+            ("column", "4", "เสา (ชั้นบน → ชั้นล่าง → ตอม่อ)", "Column"),
+            ("footing", "5", "ฐานราก", "Footing"), ("pile", "6", "เสาเข็ม", "Pile"),
+            ("lateral", "7", "แรงด้านข้าง (แผ่นดินไหว / ลม)", "Lateral"),
+            ("summary", "8", "สรุปผลการตรวจสอบ", "Summary"))
+
+
+def _house_sketch(bk: Book, x, y, w, h):
+    """A section through a house, roof to piles, its parts numbered as the
+    chapters of the book."""
     mm, p = bk.mm, bk.p
-    p.setPen(QPen(BLUE, 2))
-    for x0, x1, xc in ((30, 150, 32), (260, 380, 378)):
-        p.drawLine(QPointF(x0 * mm, 45 * mm), QPointF(x1 * mm, 45 * mm))
-        p.drawLine(QPointF(xc * mm, 35 * mm), QPointF(xc * mm, 75 * mm))
-        p.drawEllipse(QPointF(xc * mm, 45 * mm), 2.5 * mm, 2.5 * mm)
-    bk.text(0, 60, 404, 30, "รายการคำนวณโครงสร้าง", 22, align=Qt.AlignCenter)
+    X = lambda u: (x + u * w) * mm                           # noqa: E731 - local scale
+    Y = lambda v: (y + v * h) * mm                           # noqa: E731
+    ink = QPen(INK, 1.6)
+    p.setPen(ink)
+    p.setBrush(Qt.NoBrush)
+    p.drawPolyline(QPolygonF([QPointF(X(0.02), Y(0.26)), QPointF(X(0.5), Y(0.02)), QPointF(X(0.98), Y(0.26))]))
+    p.setBrush(QColor("#E5E7EB"))
+    for v in (0.28, 0.52):                                   # roof beam / floor slab with beams
+        p.drawRect(QRectF(X(0.10), Y(v), X(0.90) - X(0.10), (0.035 * h) * mm))
+    p.drawRect(QRectF(X(0.06), Y(0.76), X(0.94) - X(0.06), (0.03 * h) * mm))      # ground beams
+    for u in (0.12, 0.5, 0.86):
+        p.drawRect(QRectF(X(u), Y(0.315), (0.02 * w) * mm, Y(0.76) - Y(0.315)))  # columns and stumps
+        p.drawRect(QRectF(X(u - 0.05), Y(0.83), (0.12 * w) * mm, (0.05 * h) * mm))  # footings
+        p.setBrush(QColor("#F3F4F6"))
+        p.drawRect(QRectF(X(u + 0.003), Y(0.88), (0.014 * w) * mm, Y(0.99) - Y(0.88)))  # piles
+        p.setBrush(QColor("#E5E7EB"))
+    p.setBrush(Qt.NoBrush)
+    p.setPen(QPen(QColor("#92400E"), 1, Qt.DashLine))
+    p.drawLine(QPointF(X(0.0), Y(0.80)), QPointF(X(1.0), Y(0.80)))
+    tags = (("1", 0.5, 0.10), ("2", 0.30, 0.50), ("3", 0.70, 0.27), ("4", 0.535, 0.42), ("5", 0.62, 0.86),
+            ("6", 0.89, 0.95))
+    for t, u, v in tags:
+        cx, cy = X(u), Y(v)
+        p.setPen(QPen(BLUE, 1.2))
+        p.setBrush(QColor("white"))
+        p.drawEllipse(QPointF(cx, cy), 3.2 * mm, 3.2 * mm)
+        p.setBrush(Qt.NoBrush)
+        bk.text(u * w + x - 4, v * h + y - 4, 8, 8, t, 5.5, BLUE, Qt.AlignCenter, bold=True)
+
+
+def cover(bk: Book, res_all=None):
+    """ปก: the title, the project, what the book holds (roof → piles, with
+    a numbered section of the house), the standards, the result and the
+    signature boxes."""
+    import datetime as _dt
+    bk.page("", "cover", sign=False)
+    mm, p = bk.mm, bk.p
     i = bk.info
-    for k, (lab, val) in enumerate((("โครงการ", i.get("project", "")), ("เจ้าของ", i.get("owner", "")),
-                                    ("สถานที่", i.get("place", "")))):
-        bk.text(70, 100 + k * 24, 330, 20, f"{lab} :  {val}", 16)
-    bk.text(200, 255, 196, 12, "คำนวณโครงสร้างโดย WANICNSURVEY", 9, align=Qt.AlignRight | Qt.AlignVCenter)
+    p.setPen(QPen(BLUE, 3))
+    p.drawRect(QRectF(6 * mm, 6 * mm, bk.W - 12 * mm, bk.H - 12 * mm))
+    p.fillRect(QRectF(6 * mm, 6 * mm, bk.W - 12 * mm, 40 * mm), QColor("#1E3A8A"))
+    bk.text(14, 10, 380, 20, "รายการคำนวณโครงสร้าง", 20, QColor("white"), Qt.AlignLeft | Qt.AlignVCenter, True)
+    bk.text(14, 30, 380, 12, "STRUCTURAL CALCULATION  ·  คอนกรีตเสริมเหล็ก", 9, QColor("#BFDBFE"))
+    rows = (("โครงการ", i.get("project", "")), ("เจ้าของ", i.get("owner", "")), ("สถานที่", i.get("place", "")),
+            ("ผู้คำนวณ", i.get("engineer", "")), ("วันที่", i.get("date") or _thai_date(_dt.date.today())))
+    for k, (lab, val) in enumerate(rows):
+        bk.text(16, 56 + k * 14, 40, 12, lab, 8.5, QColor("#374151"), bold=True)
+        bk.text(56, 56 + k * 14, 170, 12, f":  {val}", 8.5)
+        p.setPen(QPen(QColor("#D1D5DB"), 1))
+        p.drawLine(QPointF(56 * mm, (68 + k * 14) * mm), QPointF(226 * mm, (68 + k * 14) * mm))
+    _house_sketch(bk, 250, 54, 140, 120)
+    bk.text(250, 176, 140, 8, "ลำดับรายการคำนวณ: จากหลังคา ลงถึงเสาเข็ม", 5.8, BLUE, Qt.AlignCenter)
+    y = 132
+    bk.text(16, y, 220, 9, "เนื้อหาในเล่ม", 7.5, BLUE, bold=True)
+    for k, (_key, num, th, _en) in enumerate(CHAPTERS):
+        bk.text(20, y + 10 + k * 8.2, 210, 8, f"{num}.  {th}", 6.4)
+    y2 = y + 10 + len(CHAPTERS) * 8.2 + 4
+    bk.text(16, y2, 220, 8, "มาตรฐานที่ใช้", 7.0, BLUE, bold=True)
+    bk.text(20, y2 + 7, 216, 7, "วสท. 011008 (คอนกรีต SDM) · ACI 318 · มยผ. 1301/1302-61 (แผ่นดินไหว)", 5.6)
+    bk.text(20, y2 + 13, 216, 7, "มยผ. 1311-50 (ลม) · กฎกระทรวงกำหนดการรับน้ำหนัก ความต้านทาน ความคงทนของอาคาร", 5.6)
+    if res_all is not None:
+        ms = res_all.get("members") or []
+        bad = sum(1 for m in ms if not m.ok)
+        ok = not bad
+        p.setPen(QPen(GREEN if ok else RED, 1.4))
+        p.setBrush(QColor("#ECFDF5") if ok else QColor("#FEF2F2"))
+        p.drawRoundedRect(QRectF(16 * mm, (y2 + 23) * mm, 220 * mm, 13 * mm), 2 * mm, 2 * mm)
+        p.setBrush(Qt.NoBrush)
+        bk.text(20, y2 + 23, 212, 13, (f"✓ ผลการตรวจสอบ: ผ่านทุกรายการ ({len(ms)} ชิ้นส่วน)" if ok
+                                       else f"✗ ผลการตรวจสอบ: ไม่ผ่าน {bad} จาก {len(ms)} ชิ้นส่วน"),
+                7.5, GREEN if ok else RED, bold=True)
+    for k, lab in enumerate(("ผู้คำนวณ", "วิศวกรผู้ตรวจสอบ")):
+        bx = 250 + k * 72
+        p.setPen(QPen(INK, 1))
+        p.drawRect(QRectF(bx * mm, 186 * mm, 66 * mm, 30 * mm))
+        bk.text(bx + 2, 187, 62, 7, lab, 5.6, QColor("#374151"))
+        bk.text(bx + 2, 201, 62, 7, "(..........................................)", 5.6, align=Qt.AlignCenter)
+        bk.text(bx + 2, 208, 62, 7, i.get("engineer", "") if k == 0 else "เลขทะเบียน ...................", 5.0,
+                QColor("#374151"), Qt.AlignCenter)
+    bk.text(16, 262, 300, 8, "เอกสารนี้ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจสอบและลงนามรับรองก่อนก่อสร้าง", 5.8, ORANGE)
+    bk.text(200, 262, 196, 8, "คำนวณโครงสร้างโดย WANICNSURVEY", 6, align=Qt.AlignRight | Qt.AlignVCenter)
+
+
+def _thai_date(d) -> str:
+    months = ("มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม",
+              "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม")
+    return f"{d.day} {months[d.month - 1]} {d.year + 543}"
+
+
+def behaviour_pages(bk: Book, members, title: str, tag: str, limit: int = 8):
+    """พฤติกรรมแรง: the load-behaviour pictures (slabs, footings) of the most
+    stressed member of each mark, four to a page — drawn as on screen, then
+    placed on the sheet."""
+    from PySide6.QtGui import QImage
+    from core import wanic_calc_view as V
+    best = {}
+    for m in members:
+        pic = getattr(m, "picture", None)
+        if not pic:
+            continue
+        mk = pic.get("mark") or m.name.split(" ", 1)[0]
+        if mk not in best or m.ratio > best[mk].ratio:
+            best[mk] = m
+    picks = sorted(best.values(), key=lambda m: m.name)[:limit]
+    for start in range(0, len(picks), 4):
+        bk.page(title, f"{tag}-{start // 4 + 1}")
+        for i, m in enumerate(picks[start:start + 4]):
+            img = QImage(1520, 792, QImage.Format_ARGB32)     # 760 × 396 at 2× — the text reads on A4
+            img.setDevicePixelRatio(2.0)
+            img.fill(QColor("white"))
+            pp = QPainter(img)
+            V.draw_any(pp, QRectF(6, 4, 748, 388), m.picture, m.name)
+            pp.end()
+            x, y = 12 + (i % 2) * 192, 34 + (i // 2) * 104
+            bk.p.drawImage(QRectF(x * bk.mm, y * bk.mm, 188 * bk.mm, 98 * bk.mm), img)
+            bk.p.setPen(QPen(QColor("#D1D5DB"), 1))
+            bk.p.drawRect(QRectF(x * bk.mm, y * bk.mm, 188 * bk.mm, 98 * bk.mm))
+
+
+def contents_page(bk: Book, starts: dict):
+    """สารบัญ: every chapter with the page it starts on (from a first pass)."""
+    bk.page("สารบัญ", "Contents")
+    rows = [("ลำดับ", "รายการ", "หน้า")]
+    for key, num, th, _en in CHAPTERS:
+        rows.append((num, th, str(starts[key])) if key in starts
+                    else ((num, QColor("#9CA3AF")), (th + " — ไม่มีในโครงการนี้", QColor("#9CA3AF")), ""))
+    bk.table(60, 40, [24, 220, 30], rows, 10, left=True)
 
 
 def basis_page(bk: Book, b_: dict):
@@ -413,10 +540,12 @@ def beam_plain(res) -> tuple:
 
 def beam_pages(bk: Book, res_all, b_, fc):
     k = 0
-    for m in res_all["members"]:
+    beams = [m for m in res_all["members"]
+             if m.group == "beam" and m.diagram is not None and hasattr(m.diagram, "spec")]
+    # จากบนลงล่าง: the roof ring beams, the upper floors, the ground beams last
+    beams.sort(key=lambda m: (bool(m.diagram.ground), -int(m.diagram.level)))
+    for m in beams:
         res = m.diagram
-        if m.group != "beam" or res is None or not hasattr(res, "spec"):
-            continue
         k += 1
         lvl = "ดิน (คานคอดิน)" if res.ground else f"{res.level}"
         bk.page(f"คาน   ชั้น {lvl}", f"Beam{k}")
@@ -449,7 +578,8 @@ def beam_pages(bk: Book, res_all, b_, fc):
 
 
 def column_pages(bk: Book, res_all, b_, fc):
-    cards = sorted(res_all.get("cards") or [], key=lambda c: (c["x"], c["y"], c["floor"]))
+    # จากบนลงล่าง: the top floor's columns first, the stumps (floor −1) last
+    cards = sorted(res_all.get("cards") or [], key=lambda c: (-c["floor"], c["x"], c["y"]))
     per_page = 6
     for start in range(0, len(cards), per_page):
         bk.page("เสา", f"Column-{start // per_page + 1}")
@@ -763,25 +893,51 @@ def advice_page(bk: Book, res_all, data):
 def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
     """Write the booklet; returns the number of pages. ``critical``: only the
     most stressed beam / column / slab / footing of each mark (a shorter book
-    for the permit)."""
+    for the permit). The pages go from the roof down to the piles, with a
+    contents page — the book is laid out twice: once to learn where each
+    chapter starts, once to write it."""
+    import os
+    import tempfile
     from core import wanic_calc_cards as CC
-    b_ = res_all["basis"]
-    fc = b_["fc"]
     CC.attach_lateral_moments(res_all, data)
     if critical:
         res_all = CC.critical_members(res_all)
+    fd, tmp = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    try:
+        starts = _write(res_all, data, tmp, info, critical, None)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    starts = {k: v + 1 for k, v in starts.items() if k != "_n"}     # the contents page comes in front
+    return _write(res_all, data, path, info, critical, starts)["_n"]
+
+
+def _write(res_all, data, path, info, critical, starts) -> dict:
+    b_ = res_all["basis"]
+    fc = b_["fc"]
+    from core import wanic_calc_cards as CC
     bk = Book(path, info)
-    cover(bk)
+    at = {}
+    last = []
+
+    def chapter(key=None):
+        """A chapter starts on the next page; the one before is dropped when
+        it wrote no page (a flat roof, no piles)."""
+        if last and bk.n < at[last[-1]]:
+            del at[last[-1]]
+        if key:
+            at[key] = bk.n + 1
+            last.append(key)
+    cover(bk, res_all)
+    if starts is not None:
+        contents_page(bk, starts)
     basis_page(bk, b_)
+    # 1 roof: the roof members, the truss, the purlins, the steel frame
+    chapter("roof")
     CC.roof_page(bk, res_all)
-    CC.slab_pages(bk, res_all, data, critical)
-    beam_pages(bk, res_all, b_, fc)
-    column_pages(bk, res_all, b_, fc)
-    CC.footing_pages(bk, res_all, data, critical)
-    pile_page(bk, data, b_)
-    for dz in res_all.get("stairs") or []:
-        if not critical or not all(m.ok for m in dz["members"]):
-            stair_page(bk, dz, b_)
     if (data or {}).get("truss"):
         from core import wanic_truss as T
         from core.wanic_truss_view import truss_pages
@@ -790,15 +946,6 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
             truss_pages(bk, tp, td)
         except ValueError:
             pass
-    if (data or {}).get("lateral"):
-        from core import wanic_lateral as LT
-        from core.wanic_lateral_view import lateral_pages
-        lateral_pages(bk, LT.analyse(data))
-    if (data or {}).get("flatslab"):
-        from core import wanic_flatslab as FS
-        from core.wanic_flatslab_view import flatslab_pages
-        fp, fr = FS.design_of(data)
-        flatslab_pages(bk, fp, fr)
     if (data or {}).get("purlin"):
         from core import wanic_purlin as PU
         from core.wanic_purlin_view import purlin_pages
@@ -808,16 +955,42 @@ def make_book(res_all, data, path, info: dict, critical: bool = False) -> int:
         from core import wanic_steel as S
         from core.wanic_steel_view import steel_pages
         steel_pages(bk, S.design_building(data))
+    # 2 slabs and stairs
+    chapter("slab")
+    CC.slab_pages(bk, res_all, data, critical)
+    behaviour_pages(bk, [m for m in res_all["members"] if m.group == "slab"], "พฤติกรรมแรง — พื้น", "SlabLoad")
+    if (data or {}).get("flatslab"):
+        from core import wanic_flatslab as FS
+        from core.wanic_flatslab_view import flatslab_pages
+        fp, fr = FS.design_of(data)
+        flatslab_pages(bk, fp, fr)
+    for dz in res_all.get("stairs") or []:
+        if not critical or not all(m.ok for m in dz["members"]):
+            stair_page(bk, dz, b_)
+    # 3 beams, 4 columns, 5 footings, 6 piles
+    chapter("beam")
+    beam_pages(bk, res_all, b_, fc)
+    chapter("column")
+    column_pages(bk, res_all, b_, fc)
+    chapter("footing")
+    CC.footing_pages(bk, res_all, data, critical)
+    behaviour_pages(bk, [m for m in res_all["members"] if m.group == "footing"], "พฤติกรรมแรง — ฐานราก",
+                    "FootLoad")
+    chapter("pile")
+    pile_page(bk, data, b_)
+    # 7 lateral, 8 summary
+    if (data or {}).get("lateral"):
+        from core import wanic_lateral as LT
+        from core.wanic_lateral_view import lateral_pages
+        chapter("lateral")
+        lateral_pages(bk, LT.analyse(data))
     ms = res_all["members"]
-    groups = ()
-    for title, tag, g in groups:
-        sel = [m for m in ms if m.group == g]
-        if sel:
-            list_page(bk, title, tag, sel)
+    chapter("summary")
     list_page(bk, "สรุปผลการตรวจสอบทุกชิ้นส่วน", "Summary", ms)
     reserve_page(bk, ms)
     checkload_page(bk, res_all, data)
     advice_page(bk, res_all, data)
-    n = bk.n
+    chapter()
+    at["_n"] = bk.n
     bk.close()
-    return n
+    return at
