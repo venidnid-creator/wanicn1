@@ -3200,6 +3200,10 @@ class BuildingPanel(QWidget):
             else:
                 rm.pop("finish", None)
         self._edit(rid, fn)
+        # ชุดห้องน้ำอัตโนมัติ: a room just named ห้องน้ำ / ห้องครัว gets its standard set
+        rm_ = next((r for r in self.rooms() if r["id"] == rid), None)
+        if rm_ is not None and str(rm_.get("name") or "").startswith(("ห้องน้ำ", "ห้องครัว")):
+            self.fill_standard_sets()
 
     def rotate_room(self, rid):
         def fn(rooms, i, rm):
@@ -3877,18 +3881,65 @@ class BuildingPanel(QWidget):
         dlg.open()                                   # never blocks
         self._stair_dialog = dlg
 
-    def copy_floor(self):
+    def copy_floor(self, ask: bool = True, openings=None, baths=None):
+        """⧉ คัดลอกชั้นนี้ขึ้นไป: a new floor above with the same rooms — it
+        asks whether the doors and windows and the bathroom fittings go up
+        too (``ask`` False: ``openings`` / ``baths`` say)."""
         d = self.data()
+        src = d["floors"][self.floor]
+        n_op = len(src.get("openings") or [])
+        n_fx = len(src.get("fixtures") or [])
+        if ask and (n_op or n_fx):
+            from PySide6.QtWidgets import QCheckBox
+            dlg = QDialog(self)
+            dlg.setWindowTitle("คัดลอกชั้นนี้ขึ้นไป")
+            lay = QVBoxLayout(dlg)
+            lay.addWidget(QLabel(f"สร้างชั้น {self.floor + 2} ที่มีห้องเหมือนชั้น {self.floor + 1} "
+                                 f"({len(src.get('rooms') or [])} ห้อง) — คัดลอกอะไรไปด้วย?"))
+            c_op = QCheckBox(f"ประตู-หน้าต่าง ({n_op} ชุด)")
+            c_op.setChecked(True)
+            c_fx = QCheckBox(f"สุขภัณฑ์ห้องน้ำ / ห้องครัว ({n_fx} ชิ้น)")
+            c_fx.setChecked(True)
+            c_op.setEnabled(n_op > 0)
+            c_fx.setEnabled(n_fx > 0)
+            lay.addWidget(c_op)
+            lay.addWidget(c_fx)
+            note = QLabel("ห้องน้ำที่ไม่ได้คัดลอกสุขภัณฑ์ จะได้ชุดมาตรฐานตามขนาดห้องอัตโนมัติ · "
+                          "บันไดไม่คัดลอก (ถามตำแหน่งบันไดต่อ)")
+            note.setWordWrap(True)
+            note.setStyleSheet("color:#6B7280")
+            lay.addWidget(note)
+            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            bb.button(QDialogButtonBox.Ok).setText("สร้างชั้น")
+            bb.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
+            bb.accepted.connect(dlg.accept)
+            bb.rejected.connect(dlg.reject)
+            lay.addWidget(bb)
+            if dlg.exec() != QDialog.Accepted:
+                return False
+            openings, baths = c_op.isChecked(), c_fx.isChecked()
+        openings = bool(n_op) if openings is None else bool(openings)
+        baths = bool(n_fx) if baths is None else bool(baths)
         nid = int(self._next_id(d)[1:])
         new = []
-        for rm in copy.deepcopy(d["floors"][self.floor]["rooms"]):
+        for rm in copy.deepcopy(src["rooms"]):
             new.append(dict(rm, id=f"r{nid}"))
             nid += 1
-        d["floors"].insert(self.floor + 1, {"rooms": new, "openings": [],
-                                            "stairs": []})
+        floor = {"rooms": new, "openings": [], "stairs": []}
+        d["floors"].insert(self.floor + 1, floor)
+        if openings:
+            for op in copy.deepcopy(src.get("openings") or []):
+                floor["openings"].append(dict(op, id=self._item_id(d, "o")))
+        if baths:
+            floor["fixtures"] = []
+            for fx in copy.deepcopy(src.get("fixtures") or []):
+                floor["fixtures"].append(dict(fx, id=self._item_id(d, "x")))
         self.floor += 1
         self._write(d)
+        if not baths:                                # ชุดห้องน้ำอัตโนมัติ
+            self.fill_standard_sets()
         QTimer.singleShot(0, self, lambda: _safe(self, lambda: self.auto_stairs(auto=True)))
+        return True
 
     def delete_floor(self):
         d = self.data()

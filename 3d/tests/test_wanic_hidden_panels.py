@@ -118,3 +118,35 @@ def test_move_axis_paste_same_place_and_free_beam():
     assert bp.add_free_beam((0.0, 2.0), (4.5, 2.0))
     fb = B.elements(bp.data())["free"]["beams"]
     assert len(fb) == 1 and abs(fb[0]["pts"][0][2] - 2 * float(B.settings_of(bp.data())["floor_h"])) < 1e-6
+
+
+def test_copy_floor_up_with_or_without_openings_and_baths():
+    """ค9: คัดลอกชั้นนี้ขึ้นไป — doors/windows and fittings copied when asked;
+    a bathroom left without them gets the standard set by itself."""
+    from views.main_window import MainWindow
+    win = MainWindow(defer_extensions=True)
+    _KEEP.append(win)
+    win.show()
+    _settle()
+    win.load_extensions()
+    _settle()
+    bp = win._wanic_building
+    d = bp.data()
+    d["floors"] = [{"rooms": [dict(id="r1", name="ห้องนอน", x=0, y=0, w=4, d=4),
+                              dict(id="r2", name="ห้องน้ำ", x=4, y=0, w=2, d=2)],
+                    "openings": [{"id": "o1", "type": "door", "x": 2.0, "y": 4.0}], "stairs": []}]
+    bp._write(d)
+    bp.floor = 0
+    bp.fill_standard_sets()
+    n_fx = len(bp.data()["floors"][0]["fixtures"])
+    assert n_fx > 0
+    bp.floor = 0
+    assert bp.copy_floor(ask=False, openings=True, baths=True)
+    f1 = bp.data()["floors"][1]
+    assert len(f1["openings"]) == 1 and len(f1["fixtures"]) == n_fx
+    ids = [it["id"] for f in bp.data()["floors"] for k in ("openings", "fixtures") for it in f.get(k) or []]
+    assert len(ids) == len(set(ids))                        # new ids, never shared
+    bp.floor = 1
+    assert bp.copy_floor(ask=False, openings=False, baths=False)
+    f2 = bp.data()["floors"][2]
+    assert not f2["openings"] and len(f2.get("fixtures") or []) == n_fx     # the set laid out by itself
