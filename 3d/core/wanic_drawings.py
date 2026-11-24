@@ -2422,6 +2422,28 @@ def s_beams(sh, E, lvl):
         m = (m[0] - 1.0, m[1]) if vert else (m[0], m[1] + 0.8)
         sh.text(m, lab, 2.5, "center", "struct", False, 90 if vert else 0)
     H_ = E["H"]
+    # คานรับบันได SB1 (under the first step) / SB2 (the landing's edge, its level
+    # written) and the posts under SB2 — the stairs that start on this floor
+    for st in (x for x in E["stairs"] if x["floor"] == lvl and lvl < E["n"]):
+        zf = lvl * H_
+        for sb in B.stair_beams(st["st"], E["settings"], zf):
+            (x0, y0, zb), (x1, y1, _z) = sb["p0"], sb["p1"]
+            L = math.hypot(x1 - x0, y1 - y0) or 1
+            nx, ny = -(y1 - y0) / L, (x1 - x0) / L
+            for sg in (-1, 1):
+                sh.line(v(x0 + nx * sb["b"] / 2 * sg, y0 + ny * sb["b"] / 2 * sg),
+                        v(x1 + nx * sb["b"] / 2 * sg, y1 + ny * sb["b"] / 2 * sg), "struct", 0.25, dash=True)
+            vert = abs(x1 - x0) < 1e-6
+            m = v((x0 + x1) / 2 + nx * (sb["b"] / 2 + 0.06), (y0 + y1) / 2 + ny * (sb["b"] / 2 + 0.06))
+            m = (m[0] - 1.0, m[1]) if vert else (m[0], m[1] + 0.8)
+            lab = sb["mark"] + (f"{zb - zf:+.2f}" if abs(zb - zf) > 0.005 else "")
+            if vert:
+                sh.text(m, lab, 2.2, "center", "struct", False, 90)
+            else:
+                masked_text(sh, m, lab, 2.2)
+        for c in B.stair_posts(st["st"], E["settings"], zf):
+            q0, q1 = v(c["p0"][0] - c["b"] / 2, c["p0"][1] - c["b"] / 2), v(c["p0"][0] + c["b"] / 2, c["p0"][1] + c["b"] / 2)
+            sh.rect(*q0, *q1, "column", 0.35)
     draw_free(sh, v, E, lvl * H_ - H_ / 2 if lvl else -9.0, lvl * H_ + H_ / 2, ("beams", "columns"))
     cols = [c for c in E["columns"] if c["floor"] == min(lvl, E["n"] - 1)] \
         if lvl < E["n"] else [c for c in E["columns"] if c["floor"] == E["n"] - 1]

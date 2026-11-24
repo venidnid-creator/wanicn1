@@ -2163,6 +2163,7 @@ def stair_posts(stp, s, z) -> list:
 #: the rail 0.90 m above the nosings (the plans show 0.80; 0.90 as the
 #: guard rails of กฎกระทรวง ฉบับที่ 55), one baluster on every tread.
 RAIL_H = 0.90
+RAIL_INSET = 0.05                     # the balusters 5 cm in from the stair's edge (the owner)
 RAIL_TEXT = 'ราวบันไดไม้เนื้อแข็ง 2"x4" ทาสี ลูกกรงเหล็กแป๊บดำ ขนาด 1" ทาสี'
 
 
@@ -2189,7 +2190,8 @@ def stair_railing(stp, s) -> dict:
             sgn = 1.0 if ox * nx + oy * ny >= 0 else -1.0
         else:
             sgn = 1.0
-        off = f["w"] / 2 * sgn                        # on the flight's edge: it meets the opening's corner
+        off = (f["w"] / 2 - RAIL_INSET) * sgn         # 5 cm in from the flight's edge
+        edge = f["w"] / 2 * sgn                       # the edge itself (where the opening's rail starts)
 
         def at(u, z, x=x, y=y, dx=dx, dy=dy, nx=nx, ny=ny, off=off):
             return (x + dx * u + nx * off, y + dy * u + ny * off, z)
@@ -2214,6 +2216,10 @@ def stair_railing(stp, s) -> dict:
             seg(a, b)
             seg(b, e)
             out["posts"].append(((e[0], e[1], z0 + n * R_), e))
+            # the joint: across the 5 cm to the opening's corner, where the
+            # guard rail round the opening upstairs goes on
+            c = (x + dx * L + nx * edge, y + dy * L + ny * edge, e[2])
+            seg(e, c)
         for k in range(n):                            # a baluster on every tread
             u = (k + 0.5) * g
             top = z0 + (k + 1.5) * R_ + RAIL_H

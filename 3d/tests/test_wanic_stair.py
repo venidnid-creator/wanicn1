@@ -100,3 +100,23 @@ def test_in_the_calculation_and_advice():
     from core.wanic_fix_view import apply
     apply(d, fix, {k: v for k, v in fix["changes"].items()})
     assert all(m.ok for m in C.analyse(d)["members"] if m.group == "stair")
+
+
+def test_railing_inset_and_joined():
+    """ค1: the balusters stand 5 cm in from the stair's edge, and the rail is
+    one continuous line (every piece starts where the last ended), ending
+    on the opening's corner upstairs."""
+    import math
+    s = B.settings_of(B.default_data())
+    for typ in ("straight", "U", "L"):
+        st = {"x": 5.0, "y": 5.0, "dir": 1, "type": typ, "w": 1.0}
+        r = B.stair_railing(st, s)
+        lay = B.stair_layout(st, s)
+        f = lay["flights"][0]
+        (x, y), (dx, dy) = f["p0"], f["d"]
+        nx, ny = dy, -dx
+        bal = r["posts"][1]                               # the first tread's baluster
+        off = abs((bal[0][0] - x) * nx + (bal[0][1] - y) * ny)
+        assert abs(off - (0.5 - B.RAIL_INSET)) < 1e-6, (typ, off)
+        for (a, b), (c, _d) in zip(r["rails"], r["rails"][1:]):
+            assert math.dist(b, c) < 1e-6, typ              # no gap between the rail's pieces
