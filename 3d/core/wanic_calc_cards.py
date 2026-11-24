@@ -84,9 +84,10 @@ def footing_rows(res_all, data, critical=False) -> list:
         w, l, t = (float(sp.get(x, 0)) for x in ("w", "l", "t"))
         depth = float(sp.get("depth") or 1.5)
         self_w = w * l * t * b_["concrete"]
-        soil_w = w * l * max(depth - t, 0) * 1800.0
         A = w * l
-        q = (P + self_w + soil_w) / A if A else 0.0               # kg/m², service
+        # q = (P + the footing) / A ≤ qa — the backfill replaces the soil dug out (net), the same
+        # formula as the calculation (wanic_calc.analyse) so the model and the book never differ
+        q = (P + self_w) / A if A else 0.0                        # kg/m², service
         st = lib.get(stumps.get(k), {}) if stumps.get(k) else {}
         c = float(st.get("b", 0.2))
         bar = R.parse_bar(sp.get("bars"))

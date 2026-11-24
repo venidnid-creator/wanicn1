@@ -490,7 +490,8 @@ def mark_fixes(res_all, data) -> list:
         if r["piles"]:
             ch["piles"] = max(r["piles"], math.ceil(load / (r.get("pcap", b_["pile_cap"]) * 1000)))
         elif r["q"] > r["soil"]:
-            side = math.ceil(math.sqrt(load / (b_["soil"] * 1000)) * 10) / 10
+            from core import wanic_autodesign as AU
+            side, t_ = AU.footing_side(r["P"], b_["soil"], float(r.get("depth") or 1.5), b_["concrete"])
             ch["w"] = ch["l"] = side
         if r["V2"] > r["Vc2"] or r["V1"] > r["Vc1"] or ch.get("w"):
             side = ch.get("w", r["w"])
@@ -521,7 +522,16 @@ def _fmt(k, v) -> str:
     return f"{_TH.get(k, k)} {v}"
 
 
-def apply_fixes(data, rounds: int = 4) -> list:
+def apply_fixes(data, rounds: int = 8) -> list:
+    """Change ``data`` until every member passes (footings sized per load and
+    grouped, one section for the ground-floor columns and stumps, then the
+    per-mark fixes), checked by a fresh analysis each round; one line per
+    changed mark. See wanic_autodesign."""
+    from core import wanic_autodesign as AU
+    return AU.design(data, rounds)["lines"]
+
+
+def apply_mark_fixes(data, rounds: int = 4) -> list:
     """Apply the per-mark fixes to data["library"] and re-analyse until
     everything passes (the loads change with the sizes), then the detailing
     minimums; returns one line per changed mark with its final values."""
@@ -618,9 +628,11 @@ def _footing_change(r, b_) -> dict:
         n = math.ceil(load / (r.get("pcap", b_["pile_cap"]) * 1000))
         if n > r["piles"]:
             ch["piles"] = n
-    elif r["q"] > r["soil"]:
-        side = math.ceil(math.sqrt(load / (b_["soil"] * 1000)) * 10) / 10
+    elif r["q"] > r["soil"]:                  # its own weight and the soil on it counted (wanic_autodesign)
+        from core import wanic_autodesign as AU
+        side, t_ = AU.footing_side(r["P"], b_["soil"], float(r.get("depth") or 1.5), b_["concrete"])
         ch["w"] = ch["l"] = side
+        ch["t"] = max(r["t"], t_)
     if r["V2"] > r["Vc2"] or r["V1"] > r["Vc1"] or ch.get("w"):
         side = ch.get("w", r["w"])
         t = max(r["t"], math.ceil(max(0.25, side / 5) * 20) / 20)

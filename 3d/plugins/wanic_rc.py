@@ -69,6 +69,23 @@ class RCPanel(QWidget):
         self.table.currentCellChanged.connect(lambda *_: self._show_checks())
         self.table.cellDoubleClicked.connect(lambda *_: self.fix_member() if self.step == "calc" else None)
         col.addWidget(self.table, 2)
+        # ดินรับน้ำหนักปลอดภัย: the user enters the site's value (default 5 t/m²)
+        from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout as _HB
+        srow = _HB()
+        self.soil_lbl = QLabel("ดินรับน้ำหนักปลอดภัย (ตัน/ตร.ม.)")
+        self.soil_lbl.setStyleSheet("font-weight: 700;")
+        srow.addWidget(self.soil_lbl)
+        self.soil_spin = QDoubleSpinBox()
+        self.soil_spin.setRange(1.0, 100.0)
+        self.soil_spin.setDecimals(1)
+        self.soil_spin.setSingleStep(0.5)
+        self.soil_spin.setSuffix(" ตัน/ตร.ม.")
+        self.soil_spin.setToolTip("ค่าจากผลเจาะสำรวจดิน/ทดสอบหน้างาน — ค่าเริ่มต้น 5 ตัน/ตร.ม. "
+                                  "ฐานรากทุกฐานออกแบบตามค่านี้")
+        self.soil_spin.editingFinished.connect(self._soil_changed)
+        srow.addWidget(self.soil_spin)
+        srow.addStretch(1)
+        col.addLayout(srow)
         self.checks = QTextEdit()
         self.checks.setReadOnly(True)
         self.checks.setMinimumHeight(120)
@@ -196,6 +213,20 @@ class RCPanel(QWidget):
         lay.addLayout(col, 1)
         self.steps.setCurrentRow(1)
 
+    def _soil_changed(self):
+        bp = self.building()
+        if bp is None:
+            return
+        d = bp.data()
+        calc = dict(d.get("calc") or {})
+        if abs(float(calc.get("soil", 0) or 0) - self.soil_spin.value()) < 1e-9:
+            return
+        calc["soil"] = self.soil_spin.value()
+        d["calc"] = calc
+        bp._write(d)
+        self._calc = None
+        self.refresh()
+
     # -- the building designer's data
     def building(self):
         return getattr(self.app.window, "_wanic_building", None)
@@ -271,6 +302,12 @@ class RCPanel(QWidget):
         self.diagram.setVisible(calc)
         self.checks.setVisible(not calc)
         self.basis_btn.setVisible(calc)
+        from core import wanic_calc as _C
+        self.soil_spin.blockSignals(True)
+        self.soil_spin.setValue(float(_C.basis(self.data())["soil"]))
+        self.soil_spin.blockSignals(False)
+        self.soil_spin.setVisible(self.step in ("footing", "calc"))
+        self.soil_lbl.setVisible(self.step in ("footing", "calc"))
         self.loads_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.cant_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.check_btn.setVisible(calc)
@@ -982,6 +1019,8 @@ class RCPanel(QWidget):
 
     def export_pdf(self):
         from core import wanic_calc as C
+        if not self._all_pass():
+            return
         from core.wanic_calc_view import report_pdf
         path, _ = QFileDialog.getSaveFileName(self, "รายการคำนวณโครงสร้าง", "รายการคำนวณโครงสร้าง.pdf",
                                               "PDF (*.pdf)")
@@ -992,6 +1031,8 @@ class RCPanel(QWidget):
 
     def export_book(self):
         from core import wanic_calc as C
+        if not self._all_pass():
+            return
         from core.wanic_calc_book import make_book
         path, _ = QFileDialog.getSaveFileName(self, "รูปเล่มรายการคำนวณ", "รายการคำนวณโครงสร้าง (A4).pdf",
                                               "PDF (*.pdf)")
@@ -1006,6 +1047,22 @@ class RCPanel(QWidget):
             "«Yes» = เล่มสั้นสำหรับขออนุญาต · «No» = พิมพ์ทุกชิ้นส่วน") == QMessageBox.Yes
         n = make_book(C.analyse(d), d, path, info, critical=crit)
         self.status.setText(f"บันทึกรูปเล่มรายการคำนวณ {n} หน้าแล้ว: {path}")
+
+    def _all_pass(self) -> bool:
+        """รายการคำนวณพิมพ์ได้เมื่อผ่านทุกรายการเท่านั้น: otherwise say what fails and offer the fix."""
+        from core import wanic_calc as C
+        from core import wanic_fail_view as FV
+        res = C.analyse(self.data())
+        bad = FV.failing(res)
+        if not bad:
+            return True
+        names = "\n".join(f"• {m.name} (ใช้กำลัง {m.ratio * 100:.0f} %)" for m in bad[:12])
+        more = f"\n… และอีก {len(bad) - 12} รายการ" if len(bad) > 12 else ""
+        if QMessageBox.warning(self, TITLE, f"ยังไม่ผ่าน {len(bad)} รายการ — พิมพ์รายการคำนวณได้เมื่อผ่านทุกรายการ\n\n"
+                               f"{names}{more}\n\nแก้ให้ผ่านตามมาตรฐานตอนนี้เลยไหม?",
+                               QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            self.apply_advice()
+        return False
 
     def export(self):
         path, _ = QFileDialog.getSaveFileName(self, "รายงานโครงสร้าง คสล.", "โครงสร้าง คสล.xlsx",

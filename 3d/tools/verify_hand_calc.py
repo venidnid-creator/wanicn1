@@ -154,13 +154,14 @@ add(gs, "กำลังรับแรงอัดล้วน φPn,max", "0.80
 
 # ---- 5. footing F1 under it, 2.30 × 2.30 × 0.50 m ----
 ft = member(lambda m: m.group == "footing" and "(4.90, 4.90)" in m.name)
-fw, ft_ = float(lib["F1"]["w"]), float(lib["F1"]["t"])
+fmk = next(f["mark"] for f in B.elements(d)["footings"] if abs(f["x"] - 4.9) < 1e-6 and abs(f["y"] - 4.9) < 1e-6)
+fw, ft_ = float(lib[fmk]["w"]), float(lib[fmk]["t"])
 P = Pst / D + fw * fw * ft_ * gc
-gf = f"ฐานราก F1 ที่ (4.90, 4.90) {fw:.2f}×{fw:.2f}×{ft_:.2f} ม."
+gf = f"ฐานราก {fmk} ที่ (4.90, 4.90) {fw:.2f}×{fw:.2f}×{ft_:.2f} ม."
 add(gf, "แรงดันดิน q (น้ำหนักใช้งาน)", "P = Pu/1.4 + น้ำหนักฐาน · q = P/A", P / fw ** 2 / 1000, num(ft.demand, r"q = ([\d.]+)"),
     "ตัน/ตร.ม.", 0.005)
 row = next(r for r in CC.footing_rows(res, d) if abs(r["x"] - 4.9) < 1e-6 and abs(r["y"] - 4.9) < 1e-6)
-dd_f = (ft_ - 0.075 - 0.012)
+dd_f = (ft_ - 0.075 - RC.parse_bar(lib[fmk]["bars"]).d / 1000)
 b0 = 4 * (sb + dd_f)                      # the stump stands on the footing
 vc2 = 0.85 * 1.06 * math.sqrt(fc) * b0 * 100 * dd_f * 100
 add(gf, "กำลังต้านแรงเฉือนทะลุ φVc", "0.85·1.06√fc′·b₀·d · b₀ = 4(c + d), c = ตอม่อ", vc2, row["Vc2"], "กก.", 0.005)

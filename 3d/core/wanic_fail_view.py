@@ -34,6 +34,10 @@ def auto_enabled() -> bool:
         return True
 
 
+GROUP_TH = {"beam": "คาน", "column": "เสา", "slab": "พื้น", "footing": "ฐานราก", "roof": "โครงหลังคา",
+            "stair": "บันได"}
+
+
 def failing(res_all) -> list:
     """The members that fail, worst first."""
     return sorted((m for m in res_all.get("members") or [] if not m.ok), key=lambda m: -m.ratio)
@@ -47,11 +51,17 @@ def signature(res_all) -> tuple:
 def proposals(data) -> tuple:
     """(trial document, [row]) — each row a dict: key (mark or STAIRS), kind,
     the change in words, why it failed in plain words, worst ratio."""
+    from core import wanic_autodesign as AU
     trial = copy.deepcopy(data)
-    lines = AD.apply_fixes(trial)
-    if not lines:
+    if not failing(C.analyse(data)):                  # «ผ่านทุกชิ้น» only when a fresh analysis says so
         return trial, []
+    out = AU.design(trial)
+    lines = out["lines"]
     res = C.analyse(data)
+    if not lines:
+        return trial, [{"key": m.name.split()[0], "kind": GROUP_TH.get(m.group, m.group), "change":
+                        "แก้อัตโนมัติไม่ได้ — ต้องแก้เอง (ดับเบิลคลิกแถวในขั้น 9)", "why": m.plain_text(),
+                        "ratio": m.ratio, "failing": True, "manual": True} for m in failing(res)]
     worst = {}
     for m in failing(res):
         mark = m.name.split()[0]
@@ -73,6 +83,10 @@ def proposals(data) -> tuple:
                              "ratio": 1.0, "failing": True})
             else:
                 next(r for r in rows if r["key"] == STAIRS)["change"] += " · " + line
+    for m in out["failing"]:                          # still failing after every round: said, never hidden
+        rows.append({"key": m.name.split()[0], "kind": GROUP_TH.get(m.group, m.group),
+                     "change": "ยังไม่ผ่านหลังปรับอัตโนมัติ — ต้องแก้เอง", "why": m.plain_text(),
+                     "ratio": m.ratio, "failing": True, "manual": True})
     rows.sort(key=lambda r: (not r["failing"], -r["ratio"]))
     assert before is not None
     return trial, rows
@@ -84,6 +98,29 @@ def apply_chosen(data, trial, keys) -> int:
     lib = dict(data.get("library") or {})
     tlib = trial.get("library") or {}
     n = 0
+    # the grouped marks per column point, only for the roles chosen (F → footings, C → columns,
+    # PC → stumps), with the new marks the grouping made (F2, C2 …)
+    def _role(k):
+        mk = str(k).split(" ", 1)[0]
+        if mk.startswith("PC"):
+            return "PC"
+        if mk.startswith("F") and mk[1:].isdigit():
+            return "F"
+        if mk.startswith("C") and mk[1:].isdigit():
+            return "C"
+        return None
+    roles = {r for r in map(_role, keys) if r}
+    if roles:
+        assign = copy.deepcopy(data.get("assign") or {})
+        for node, rec in (trial.get("assign") or {}).items():
+            for r in roles:
+                if r in rec:
+                    assign.setdefault(node, {})[r] = rec[r]
+        data["assign"] = assign
+        kinds = {"F": "footing", "C": "column", "PC": "stump"}
+        for mk, sp in tlib.items():
+            if mk not in lib and any(sp.get("kind") == kinds[r] for r in roles):
+                lib[mk] = copy.deepcopy(sp)
     for k in keys:
         if k == STAIRS:
             for f, tf in zip(data.get("floors") or [], trial.get("floors") or []):

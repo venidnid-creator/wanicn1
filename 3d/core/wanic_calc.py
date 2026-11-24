@@ -47,7 +47,7 @@ DEFAULTS = {
     "wind": 50.0,                    # kg/m² on the roof (uplift / pressure, informative)
     "finish": 50.0,                  # floor finish + ceiling, kg/m²
     "wall_kg_m2": 180.0,             # half-brick wall plastered both sides
-    "soil": 10.0,                    # allowable soil pressure, t/m²
+    "soil": 5.0,                     # allowable soil pressure, t/m² (the owner: default 5, the user enters the site value)
     "pile_cap": 8.0,                 # safe load per pile, t
     "defl": 180.0,                   # roof member deflection limit L/…
     # the booklet's signature (editable in «ค่าที่ใช้ออกแบบ…»)
