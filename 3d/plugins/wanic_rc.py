@@ -105,11 +105,17 @@ class RCPanel(QWidget):
         self.btn_box = QWidget()
         row = FlowLayout(self.btn_box, spacing=4)
         # «ปรับเหล็กให้ผ่านขั้นต่ำ» is part of «แก้ตามคำแนะนำ» (fix_selected stays for the code)
-        self.advice_btn = QPushButton("แก้ตามคำแนะนำ (เลือกได้)…")
+        self.advice_btn = QPushButton("🔧 แก้ไขให้ผ่าน…")
+        self.advice_btn.setStyleSheet("font-weight: 700; color: #B91C1C;")
         self.advice_btn.setToolTip("ปรับขนาด/เหล็กของทุกเบอร์ที่ไม่ผ่าน ตามคำแนะนำ แล้วคำนวณซ้ำจนผ่าน "
                                    "(รวมข้อกำหนดเหล็กขั้นต่ำ) — ถามยืนยันก่อน")
         self.advice_btn.clicked.connect(lambda _=False: self.apply_advice())
         row.addWidget(self.advice_btn)
+        self.only_bad = QPushButton("แสดงเฉพาะชิ้นที่ไม่ผ่าน")
+        self.only_bad.setCheckable(True)
+        self.only_bad.setToolTip("ซ่อนแถวที่ผ่านแล้ว — เหลือเฉพาะชิ้นที่ต้องแก้ (กดอีกครั้งเพื่อแสดงทั้งหมด)")
+        self.only_bad.toggled.connect(lambda _=False: self._apply_filter())
+        row.addWidget(self.only_bad)
         self.fix_one_btn = QPushButton("แก้ชิ้นที่เลือกให้ผ่าน…")
         self.fix_one_btn.setStyleSheet("font-weight: 700; color: #B91C1C;")
         self.fix_one_btn.setToolTip("เลือกแถวที่ไม่ผ่าน (หรือดับเบิลคลิกแถว) — กรอก/แก้ค่าที่แนะนำ "
@@ -289,6 +295,91 @@ class RCPanel(QWidget):
                     out.append(m)
         return out
 
+    # -- ผ่าน / ไม่ผ่าน on every step ---------------------------------------------------------
+    def _analysis(self):
+        """The calculation of the building as it is now (a fraction of a second);
+        None when it cannot be made (no building yet)."""
+        from core import wanic_calc as C
+        try:
+            self._calc = C.analyse(self.data())
+        except Exception:                            # noqa: BLE001 - the tables show without it
+            self._calc = None
+        return self._calc
+
+    @staticmethod
+    def _verdict(ratio):
+        if ratio is None:
+            return "— ยังไม่ได้ใช้"
+        return (f"✓ ผ่าน · ใช้ไป {ratio * 100:,.0f} %" if ratio <= 1.0 + 1e-9
+                else f"✗ ไม่ผ่าน · ใช้ไป {ratio * 100:,.0f} %")
+
+    @staticmethod
+    def _step_members(step, ms):
+        """The calculated members that belong to a step of the list."""
+        out = []
+        for m in ms:
+            stump = "ตอม่อ" in m.name
+            ground = "ชั้น ดิน" in m.name
+            if step == "calc" or (
+                    (step == "footing" and m.group == "footing")
+                    or (step == "stump" and m.group == "column" and stump)
+                    or (step == "ground" and m.group == "beam" and ground)
+                    or (step == "slab" and m.group in ("slab", "stair"))
+                    or (step == "upper" and ((m.group == "column" and not stump)
+                                             or (m.group == "beam" and not ground)))
+                    or (step == "roof" and m.group == "roof")):
+                out.append(m)
+        return out
+
+    def _flag_rows(self, fails):
+        """Failing rows in red (every cell), remembered for «แสดงเฉพาะชิ้นที่ไม่ผ่าน»."""
+        self._row_fail = list(fails)
+        red = QColor("#B91C1C")
+        for r, bad in enumerate(fails):
+            if not bad:
+                continue
+            for c in range(self.table.columnCount()):
+                it = self.table.item(r, c)
+                if it is not None and not it.text().startswith("✓"):     # what passes stays green
+                    it.setForeground(red)
+
+    def _apply_filter(self):
+        fails = getattr(self, "_row_fail", None) or []
+        only = self.only_bad.isChecked()
+        for r in range(self.table.rowCount()):
+            self.table.setRowHidden(r, only and r < len(fails) and not fails[r])
+        cur = self.table.currentRow()
+        if only and self.table.rowCount() and (cur < 0 or self.table.isRowHidden(cur)):
+            first = next((r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)), -1)
+            if first >= 0:
+                self.table.setCurrentCell(first, 1 if self.table.columnCount() > 1 else 0)
+        n = sum(1 for f in fails if f)
+        self.only_bad.setText(f"แสดงเฉพาะชิ้นที่ไม่ผ่าน ({n})" if n else "แสดงเฉพาะชิ้นที่ไม่ผ่าน")
+        self.only_bad.setVisible(self.step != "grid")
+
+    def _mark_steps(self):
+        """✓ / ✗ beside every step of the list (red when something in it fails)."""
+        ms = (self._calc or {}).get("members") or []
+        lib_bad = []
+        try:
+            lib_bad = [m for m, r in R.check_library(self.elements()["lib"]).items() if not r.ok]
+        except Exception:                            # noqa: BLE001 - the marks only
+            pass
+        for i, (key, label) in enumerate(STEPS):
+            it = self.steps.item(i)
+            if it is None:
+                continue
+            if key == "grid" or not ms:
+                it.setText(label)
+                it.setForeground(QColor("#111827"))
+                continue
+            bad = [m for m in self._step_members(key, ms) if not m.ok]
+            if key == "rebar":
+                bad = lib_bad
+            it.setText(label + ("   ✗" if bad else "   ✓"))
+            it.setForeground(QColor("#B91C1C") if bad else QColor("#15803D"))
+            it.setToolTip(f"ไม่ผ่าน {len(bad)} รายการ" if bad else "ผ่านทุกรายการ")
+
     def refresh(self):
         E = self.elements()
         label = dict(STEPS)[self.step]
@@ -296,7 +387,7 @@ class RCPanel(QWidget):
         self.roof_row.setVisible(self.step == "roof")
         self.grid_btn.setVisible(self.step == "grid")
         self.flat_btn.setVisible(self.step == "slab")
-        self.advice_btn.setVisible(self.step == "calc" or self.step in STEP_MARKS)
+        self.advice_btn.setVisible(self.step != "grid")
         self.fix_one_btn.setVisible(self.step == "calc")
         calc = self.step == "calc"
         self.diagram.setVisible(calc)
@@ -315,6 +406,9 @@ class RCPanel(QWidget):
         self.pile_btn.setVisible(calc or self.step == "footing")
         self.free_btn.setVisible(calc or self.step == "upper")
         self.select_btn.setVisible(not calc and self.step != "rebar")
+        self._row_fail = []
+        if self.step != "calc":
+            self._analysis()
         self._loading = True
         try:
             if self.step == "grid":
@@ -329,6 +423,8 @@ class RCPanel(QWidget):
                 self._members(E)
         finally:
             self._loading = False
+        self._apply_filter()
+        self._mark_steps()
         self._show_checks()
 
     def _fill(self, heads, rows, editable=()):
@@ -353,8 +449,9 @@ class RCPanel(QWidget):
                 enumerate(zip(nx, xs))]
         rows += [(f"แกน {n}", f"{y:.2f}", f"{y - ys[i - 1]:.2f}" if i else "—") for i, (n, y) in
                  enumerate(zip(ny, ys))]
-        self._fill(["เส้นแกน", "ตำแหน่ง (ม.)", "ระยะช่วง (ม.)"], rows)
         long_ = [r for r in rows if r[2] != "—" and float(r[2]) > 4.0 + 1e-6]
+        rows = [r + (("⚠ ช่วงยาวเกิน 4 ม. — ตรวจคาน" if r in long_ else "✓"),) for r in rows]
+        self._fill(["เส้นแกน", "ตำแหน่ง (ม.)", "ระยะช่วง (ม.)", "หมายเหตุ"], rows)
         src = "โหมดกริด" if (self.data() or {}).get("grid") else "ผังห้องในแผง «ออกแบบอาคาร»"
         self.note.setText(f"กริดมาจาก{src} — แกนตัวเลข {len(xs)} เส้น × "
                           f"แกนตัวอักษร {len(ys)} เส้น · เสา {len(E['columns'])} ต้น · "
@@ -375,17 +472,28 @@ class RCPanel(QWidget):
         for group in ("footings", "stumps", "columns", "beams", "slabs"):
             for e in E[group]:
                 count[e["mark"]] = count.get(e["mark"], 0) + 1
-        rows = []
+        worst = {}                                   # the worst ratio of every mark in this step
+        for mem in self._step_members(self.step, (self._calc or {}).get("members") or []):
+            mk = mem.name.split(" ", 1)[0]
+            worst[mk] = max(worst.get(mk, 0.0), mem.ratio)
+        rows, fails = [], []
         for m in marks:
             sp = lib[m]
             res = R.check(m, sp)
+            ratio = worst.get(m)
+            fails.append((ratio is not None and ratio > 1.0 + 1e-9) or not res.ok)
             rows.append([m, B.LIB_KINDS[sp["kind"]], count.get(m, 0)] +
-                        [sp.get(k, "") for k, _t in fields] + ["✓ ผ่าน" if res.ok else "⚠ ตรวจสอบ"])
-        self._fill(["เบอร์", "ชนิด", "จำนวน"] + [th for _k, th in fields] + ["ผลตรวจ"], rows,
+                        [sp.get(k, "") for k, _t in fields] +
+                        [self._verdict(ratio), "✓ ผ่าน" if res.ok else "✗ ไม่ผ่าน"])
+        self._fill(["เบอร์", "ชนิด", "จำนวน"] + [th for _k, th in fields] + ["ผลคำนวณ (ผ่าน/ไม่ผ่าน)",
+                                                                             "ตรวจเหล็กขั้นต่ำ"], rows,
                    editable=range(3, 3 + len(fields)))
         for r, m in enumerate(marks):
-            it = self.table.item(r, self.table.columnCount() - 1)
-            it.setForeground(QColor("#15803D") if R.check(m, lib[m]).ok else QColor("#B45309"))
+            for c in (self.table.columnCount() - 2, self.table.columnCount() - 1):
+                it = self.table.item(r, c)
+                it.setForeground(QColor("#B91C1C") if it.text().startswith("✗") else
+                                 QColor("#6B7280") if it.text().startswith("—") else QColor("#15803D"))
+        self._flag_rows(fails)
         self.table.setProperty("marks", marks)
         self.table.setProperty("fields", [k for k, _t in fields])
         notes = {"footing": "ฐานแผ่ / ฐานบนเสาเข็ม — ขนาด เหล็กตะแกรง ความลึก ทรายรอง คอนกรีตหยาบ และเสาเข็ม",
@@ -407,7 +515,23 @@ class RCPanel(QWidget):
         rows += [("ความชัน", f"{float(s['pitch']):g}°", ""), ("ชายคายื่น", f"{float(s['overhang']):.2f} ม.", ""),
                  ("ระยะจันทัน (ไม่เกิน)", f"{float(s['rafter_sp']):.2f} ม.", ""),
                  ("ระยะแป (ไม่เกิน)", f"{float(s['purlin_sp']):.2f} ม.", "")]
-        self._fill(["ชิ้นส่วน", "ขนาด", "วัสดุ"], rows)
+        rm = self._step_members("roof", (self._calc or {}).get("members") or [])
+        fails = []
+        out = []
+        for i, row in enumerate(rows):
+            ratio = None
+            if i < len(keys):
+                ws = [m.ratio for m in rm if m.name.startswith(row[0] + " ")]
+                ratio = max(ws) if ws else None
+            fails.append(ratio is not None and ratio > 1.0 + 1e-9)
+            out.append(tuple(row) + ((self._verdict(ratio),) if i < len(keys) else ("",)))
+        self._fill(["ชิ้นส่วน", "ขนาด", "วัสดุ", "ผลคำนวณ (ผ่าน/ไม่ผ่าน)"], out)
+        for r, bad in enumerate(fails):
+            it = self.table.item(r, 3)
+            if it is not None and it.text():
+                it.setForeground(QColor("#B91C1C") if bad else QColor("#6B7280") if it.text().startswith("—")
+                                 else QColor("#15803D"))
+        self._flag_rows(fails)
         self.table.setProperty("marks", [])
         self.note.setText(f"ทรง {B.ROOF_TYPES.get(s.get('roof'), 'ไม่สร้างหลังคา')} · โครงถักวางบนผนัง/แนวเสา "
                           "สมมาตรรอบอกไก่ · ขนาดรายชิ้นแก้ได้ที่แผง «ออกแบบอาคาร» ▸ หลังคา")
@@ -421,10 +545,18 @@ class RCPanel(QWidget):
         for k, v in T["concrete"].items():
             rows.append((f"คอนกรีต{names.get(k, k)}", "", "", f"{v:,.3f} ลบ.ม."))
         rows.append(("คอนกรีตรวม", "", "", f"{sum(T['concrete'].values()):,.3f} ลบ.ม."))
-        self._fill(["รายการ", "ชั้นคุณภาพ", "ความยาว (ม.)", "น้ำหนัก (กก.) / ปริมาตร"], rows)
-        self.table.setProperty("marks", [])
         res = R.check_library(E["lib"])
         bad = [m for m, r in res.items() if not r.ok]
+        fails = [False] * len(rows)
+        for m, r_ in res.items():                   # every mark: the minimum-steel check, pass or not
+            rows.append((f"ตรวจเหล็กเบอร์ {m}", "", "", "✓ ผ่าน" if r_.ok else "✗ ไม่ผ่าน"))
+            fails.append(not r_.ok)
+        self._fill(["รายการ", "ชั้นคุณภาพ", "ความยาว (ม.)", "น้ำหนัก (กก.) / ปริมาตร · ผล"], rows)
+        for r, (bad_, row) in enumerate(zip(fails, rows)):
+            if row[0].startswith("ตรวจเหล็กเบอร์") and not bad_:
+                self.table.item(r, 3).setForeground(QColor("#15803D"))
+        self._flag_rows(fails)
+        self.table.setProperty("marks", [])
         self.note.setText(f"เหล็กเสริมทั้งหลัง {T['kg']:,.1f} กก. (เผื่อเศษ {int(R.WASTE * 100)}%) · "
                           f"ทาบเหล็ก 40d (DB) / 48d (RB) · "
                           + (f"⚠ เบอร์ที่ยังไม่ผ่านการตรวจ: {', '.join(bad)}" if bad else "✓ ทุกเบอร์ผ่านการตรวจ"))
@@ -458,6 +590,7 @@ class RCPanel(QWidget):
         for r, m in enumerate(ms):
             for c in (4, 5):
                 self.table.item(r, c).setForeground(QColor("#15803D") if m.ok else QColor("#B91C1C"))
+        self._flag_rows([not m.ok for m in ms])
         self.table.setProperty("marks", [])
         b_ = self._calc["basis"]
         bad = sum(1 for m in ms if not m.ok)
