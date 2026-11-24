@@ -19,7 +19,7 @@ lib = B.library_of(d)
 # ---- the basis (as stated in the design sheet) ----
 fc, fy, fyr, gc = 240.0, 4000.0, 2400.0, 2400.0
 D, L = 1.4, 1.7
-LL, fin, wall, H = 150.0, 50.0, 180.0, 3.0
+LL, fin, wall, H = C.basis(d)["ll_floor"], 50.0, 180.0, 3.0      # 200 — กฎกระทรวง 2566 ข้อ 11
 rows = []
 
 
@@ -43,16 +43,18 @@ t = float(lib["S2"]["t"])
 q_dead = t * gc + fin
 wu = D * q_dead + L * LL
 s2 = member(lambda m: m.group == "slab" and "4.90×4.90" in m.name)
-add("พื้น S2 (สองทาง 4.90×4.90 ม.)", "น้ำหนักประลัย wu", f"1.4×({t:g}×2400+50) + 1.7×150", wu, num(s2.note, r"wu = ([\d,]+)"),
+add("พื้น S2 (สองทาง 4.90×4.90 ม.)", "น้ำหนักประลัย wu", f"1.4×({t:g}×2400+50) + 1.7×{LL:g}", wu, num(s2.note, r"wu = ([\d,]+)"),
     "กก./ตร.ม.", 0.002)
 Mu = 0.049 * wu * 4.9 ** 2
 add("พื้น S2 (สองทาง 4.90×4.90 ม.)", "Mu− ขอบต่อเนื่อง (ACI 318-63 วิธีที่ 2 กรณี 3, m = 1.0)",
     "C = 0.049 · Mu = C·wu·S²", Mu, num(s2.demand, r"Mu = ([\d,.]+)"), "กก.-ม./ม.")
-As = math.pi * 0.9 ** 2 / 4 / 0.125
-dd = t * 100 - 2.0 - 0.45
-a = As * fyr / (0.85 * fc * 100)
-phiMn = 0.9 * As * fyr * (dd - a / 2) / 100
-add("พื้น S2 (สองทาง 4.90×4.90 ม.)", "กำลังดัด φMn (RB9@0.125, d = 8.55 ซม.)",
+sbar = RC.parse_bar(lib["S2"]["bars"])                 # the bars the design chose (RB9@0.125 or more)
+As = sbar.area / sbar.s
+dd = t * 100 - 2.0 - sbar.d / 20
+fys = fyr if sbar.kind == "RB" else fy
+a = As * fys / (0.85 * fc * 100)
+phiMn = 0.9 * As * fys * (dd - a / 2) / 100
+add("พื้น S2 (สองทาง 4.90×4.90 ม.)", f"กำลังดัด φMn ({lib['S2']['bars']}, d = {dd:.2f} ซม.)",
     "a = As·fy/(0.85fc′b) · φMn = 0.9·As·fy·(d − a/2)", phiMn, num(s2.capacity, r"φMn = ([\d,.]+)"), "กก.-ม./ม.")
 tmin = 2 * (4.9 + 4.9) / 180
 add("พื้น S2 (สองทาง 4.90×4.90 ม.)", "ความหนาขั้นต่ำกันแอ่น", "เส้นรอบรูป / 180", tmin * 100,

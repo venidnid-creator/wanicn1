@@ -65,7 +65,7 @@ def _capacity(bar, t, b_):
     fc = b_["fc"]
     if b_["method"] == "SDM":
         a = As * C.fy_of(bar, b_) / (0.85 * fc * 100)
-        cap = 0.90 * As * C.fy_of(bar, b_) * (d * 100 - a / 2) / 100
+        cap = C.phi(b_, "flex") * As * C.fy_of(bar, b_) * (d * 100 - a / 2) / 100
     else:
         cap = As * C.fs_of(bar, b_) * 0.875 * d * 100 / 100
     return cap, d, As

@@ -42,8 +42,11 @@ DEFAULTS = {
     "fb_timber": 120.0, "e_timber": 100000.0,
     "e_steel": 2.04e6,
     "concrete": 2400.0,              # kg/m³
-    "ll_floor": 150.0,               # residential, kg/m²
-    "ll_roof": 30.0,
+    "ll_floor": 200.0,               # บ้านพักอาศัย ห้องต่าง ๆ — กฎกระทรวง 2566 ข้อ 11 (was 150 in ฉบับที่ 6)
+    "ll_roof": 50.0,                 # หลังคา — กฎกระทรวง 2566 ข้อ 11 (7)(5)
+    #: การระบุมาตรฐานงานก่อสร้างและการควบคุมคุณภาพวัสดุเป็นอย่างดี (กฎกระทรวง 2566 ข้อ 8):
+    #: True → φ 0.90 / 0.85 / 0.70; False → the lower set 0.75 / 0.70 / 0.60
+    "qc": True,
     "wind": 50.0,                    # kg/m² on the roof (uplift / pressure, informative)
     "finish": 50.0,                  # floor finish + ceiling, kg/m²
     "wall_kg_m2": 180.0,             # half-brick wall plastered both sides
@@ -63,15 +66,31 @@ PRESETS = {
     "wsd": ("ข้อบัญญัติ กทม. 2522 หน่วยแรงใช้งาน (WSD) — fc′ 173 · SD30 · fs ≤ 1,500",
             {"method": "WSD", "fc": 173.0, "fy_db": 3000.0, "fy_rb": 2400.0}),
 }
-#: กฎกระทรวง ฉบับที่ 6 (2527) ข้อ 15 — live load by use (kg/m²)
-LIVE_LOADS = [("ที่พักอาศัย โรงเรียนอนุบาล ห้องน้ำ-ห้องส้วม", 150.0),
-              ("ห้องแถว ตึกแถวพักอาศัย อาคารชุด หอพัก โรงแรม", 200.0),
-              ("สำนักงาน ธนาคาร", 250.0),
-              ("อาคารพาณิชย์ โรงเรียน มหาวิทยาลัย โรงพยาบาล / ห้องโถง บันได ทางเดิน (อาคารชุด สำนักงาน)", 300.0),
-              ("ตลาด ห้างสรรพสินค้า หอประชุม ภัตตาคาร ห้องประชุม ที่จอดรถยนต์นั่ง", 400.0),
-              ("คลังสินค้า โรงกีฬา พิพิธภัณฑ์ โรงงาน โรงพิมพ์ / ห้องโถง บันได ทางเดิน (ตลาด ห้าง)", 500.0),
+#: กฎกระทรวงกำหนดการออกแบบโครงสร้างอาคาร … พ.ศ. 2566 ข้อ 11 — the minimum live load by use (kg/m²)
+LIVE_LOADS = [("บ้านพักอาศัย ห้องต่าง ๆ / ระเบียง บันได · ส่วนพักอาศัยของตึกแถว", 200.0),
+              ("โรงแรม อาคารชุด หอพัก — ห้องนอน ห้องนั่งเล่น ห้องน้ำ · ดาดฟ้า · ห้องพักคนไข้พิเศษ", 200.0),
+              ("สำนักงาน ธนาคาร · ห้องเรียน · ห้องทำงาน (อาคารชุด สถานศึกษา)", 250.0),
+              ("ตึกแถว ห้องแถว ส่วนพาณิชย์ / บันได ทางเดิน · ห้องเรียนรวม ห้องประชุมที่นั่งยึดติด · "
+               "ลานจอดรถยนต์นั่ง", 300.0),
+              ("อาคารพาณิชย์ พื้นที่ขายปลีก · ห้องโถง บันได ทางเดิน (สถานศึกษา สถานพยาบาล อาคารชุด) · "
+               "บันไดหนีไฟ · ห้องประชุมที่นั่งไม่ยึดติด", 400.0),
+              ("คลังสินค้า โรงงาน · ห้องโถง บันได ทางเดิน (หอประชุม สำนักงานใหญ่) · พื้นที่ขายส่ง · "
+               "เวที โรงกีฬา · ทางเดินเชื่อมอาคาร", 500.0),
               ("ห้องเก็บหนังสือของห้องสมุด", 600.0),
-              ("ที่จอดรถหรือเก็บรถยนต์บรรทุกเปล่า", 800.0)]
+              ("ลานจอดรถโดยสาร / รถยนต์บรรทุกเปล่า", 800.0)]
+#: also กฎกระทรวง 2566 ข้อ 11: หลังคา 50 · กันสาดคอนกรีต 100 · ดาดฟ้า 200 kg/m²
+LL_CANOPY = 100.0
+
+#: ตัวคูณลดกำลัง φ — กฎกระทรวง 2566 ข้อ 8: (with the construction standard and
+#: the material quality control named, without)
+PHI = {"flex": (0.90, 0.75), "tension": (0.90, 0.75), "spiral": (0.75, 0.625), "tied": (0.70, 0.60),
+       "shear": (0.85, 0.70), "bearing": (0.70, 0.60)}
+
+
+def phi(b_: dict, kind: str) -> float:
+    """φ of ``kind`` by กฎกระทรวง 2566 ข้อ 8 — the lower set when the
+    construction is not specified to a standard with quality control."""
+    return PHI[kind][0 if (b_ or {}).get("qc", True) else 1]
 
 
 def fy_of(bar, b_) -> float:
@@ -349,7 +368,7 @@ def beam_capacity(spec: dict, b_: dict, fc: float) -> dict:
         if b_["method"] == "SDM":
             a = As * fy / (0.85 * fc * bw * 100)    # cm
             Mn = As * fy * (d * 100 - a / 2) / 100  # kg·m
-            out[key] = 0.90 * Mn
+            out[key] = phi(b_, "flex") * Mn
         else:                                       # WSD: fs = 0.5 fy ≤ 1,700 ksc, j ≈ 0.875
             out[key] = As * fs_of(bar, b_) * 0.875 * d * 100 / 100
     st = R.parse_bar(spec.get("stir"))
@@ -357,8 +376,8 @@ def beam_capacity(spec: dict, b_: dict, fc: float) -> dict:
     vs = 0.0
     if st and st.s:
         vs = 2 * st.area * (fy_of(st, b_) if b_["method"] == "SDM" else fs_of(st, b_)) * d * 100 / (st.s * 100)
-    out["V"] = (0.85 if b_["method"] == "SDM" else 1.0) * (vc + vs)
-    out["Vc"] = (0.85 if b_["method"] == "SDM" else 1.0) * vc
+    out["V"] = (phi(b_, "shear") if b_["method"] == "SDM" else 1.0) * (vc + vs)
+    out["Vc"] = (phi(b_, "shear") if b_["method"] == "SDM" else 1.0) * vc
     out["d"] = d
     return out
 
@@ -371,7 +390,7 @@ def column_capacity(spec: dict, b_: dict, fc: float) -> float:
     Ast = bar.n * bar.area if bar and bar.n else 0.0
     fy = fy_of(bar, b_)
     if b_["method"] == "SDM":
-        return 0.80 * 0.70 * (0.85 * fc * (Ag - Ast) + fy * Ast)
+        return 0.80 * phi(b_, "tied") * (0.85 * fc * (Ag - Ast) + fy * Ast)
     return 0.85 * (0.25 * fc * Ag + 0.40 * fy * Ast)
 
 
@@ -448,7 +467,8 @@ def pm_curve(spec: dict, b_: dict, steps: int = 40) -> list:
     beta = 0.85 if fc <= 280 else max(0.65, 0.85 - 0.05 * (fc - 280) / 70)
     Ag, Ast = B_ * H_, 2 * As1
     P0 = 0.85 * fc * (Ag - Ast) + fy * Ast
-    pts = [(0.0, 0.80 * 0.70 * P0)]
+    pc_, pf_ = phi(b_, "tied"), phi(b_, "flex")
+    pts = [(0.0, 0.80 * pc_ * P0)]
     for i in range(1, steps + 1):
         c = H_ * 1.5 * (1 - i / (steps + 1))
         a = min(beta * c, H_)
@@ -462,8 +482,8 @@ def pm_curve(spec: dict, b_: dict, steps: int = 40) -> list:
         Pn = Cc + Fs1 + Fs2
         Mn = Cc * (H_ / 2 - a / 2) + Fs1 * (H_ / 2 - dp) - Fs2 * (d - H_ / 2)
         et = -es2
-        phi = 0.70 if et <= 0.002 else (0.90 if et >= 0.005 else 0.70 + 0.20 * (et - 0.002) / 0.003)
-        q = (phi * Mn / 100.0, min(phi * Pn, 0.80 * 0.70 * P0))
+        ph = pc_ if et <= 0.002 else (pf_ if et >= 0.005 else pc_ + (pf_ - pc_) * (et - 0.002) / 0.003)
+        q = (ph * Mn / 100.0, min(ph * Pn, 0.80 * pc_ * P0))
         if q[1] < 0:                              # into tension: end on the M axis
             m0, p0 = pts[-1]
             f = p0 / (p0 - q[1]) if p0 != q[1] else 0.0
@@ -819,7 +839,7 @@ def analyse(data) -> dict:
             As = bar.area / bar.s                                  # cm²/m
             if b_["method"] == "SDM":
                 aa = As * fy_of(bar, b_) / (0.85 * fc * 100)
-                cap = 0.90 * As * fy_of(bar, b_) * (d * 100 - aa / 2) / 100
+                cap = phi(b_, "flex") * As * fy_of(bar, b_) * (d * 100 - aa / 2) / 100
             else:
                 cap = As * fs_of(bar, b_) * 0.875 * d * 100 / 100
         else:

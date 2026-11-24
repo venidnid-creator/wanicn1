@@ -44,7 +44,7 @@ def _as_need(M, b_cm, d_cm, bar, b_):
         return 0.0
     if b_["method"] == "SDM":
         fc, fy = b_["fc"], C.fy_of(bar, b_)
-        Rn = M * 100 / (0.9 * b_cm * d_cm * d_cm)
+        Rn = M * 100 / (C.phi(b_, "flex") * b_cm * d_cm * d_cm)
         disc = 1 - 2 * Rn / (0.85 * fc)
         if disc <= 0:
             return float("inf")
@@ -99,7 +99,7 @@ def footing_rows(res_all, data, critical=False) -> list:
         nbar = math.ceil(As / bar.area) if bar else 0
         if bar and bar.s:
             nbar = max(nbar, int(round((min(w, l) - 0.15) / bar.s)) + 1)
-        phi = 0.85 if b_["method"] == "SDM" else 1.0
+        phi = C.phi(b_, "shear") if b_["method"] == "SDM" else 1.0
         vf = 0.53 if b_["method"] == "SDM" else 0.29
         V1 = qu * min(w, l) * max(arm - d, 0.0)
         Vc1 = phi * vf * math.sqrt(fc) * min(w, l) * 100 * d * 100

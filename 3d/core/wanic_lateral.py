@@ -21,8 +21,15 @@ Wind:
 The weights W are the dead loads from the gravity analysis (the same
 load path, level by level). Each storey's shear is shared equally by its
 columns (a frame of equal columns), the column moment V·h/2, checked with
-the gravity load on its P-M curve: U = 0.75(1.4D + 1.7L + 1.87E) or
-0.75(1.4D + 1.7L + 1.6W) (วสท.)."""
+the gravity load on its P-M curve by กฎกระทรวงกำหนดการออกแบบโครงสร้าง
+อาคาร พ.ศ. 2566 ข้อ 7: U = 0.75(1.4D + 1.7L) + 1.0E and 0.9D + 1.0E
+(earthquake), U = 0.75(1.4D + 1.7L) + 1.6W and 0.9D + 1.6W (wind) — the
+light axial load with the full lateral moment is the second case.
+
+The provinces under กฎกระทรวงแผ่นดินไหว 2564 (ประกาศ มท. 2567 ผนวก ข,
+43 จังหวัด, บริเวณ 1–3) switch the earthquake on by themselves; the Ss / S1
+of the district (มยผ. 1301/1302-61) are then entered — conservative values
+by area stand in until they are."""
 from __future__ import annotations
 
 import math
@@ -44,6 +51,31 @@ K_OLD = {"rc_omf": 1.0, "rc_imf": 0.8, "rc_smf": 0.67, "steel_omf": 1.0}
 #: basic wind speed V50 (m/s) and the typhoon factor by wind zone (มยผ. 1311-50)
 WIND_ZONES = {"1": (25.0, 1.0), "2": (27.0, 1.0), "3": (29.0, 1.0), "4A": (25.0, 1.2), "4B": (25.0, 1.08)}
 
+#: ประกาศกระทรวงมหาดไทย 2567 ผนวก ข — the provinces of กฎกระทรวงแผ่นดินไหว 2564
+SEISMIC_AREAS = {
+    1: ("กระบี่", "ชุมพร", "ตรัง", "นครพนม", "นครศรีธรรมราช", "บึงกาฬ", "ประจวบคีรีขันธ์", "พิษณุโลก", "เพชรบุรี",
+        "เลย", "สงขลา", "สตูล", "สุราษฎร์ธานี", "หนองคาย"),
+    2: ("กรุงเทพมหานคร", "กำแพงเพชร", "ชัยนาท", "นครปฐม", "นครสวรรค์", "นนทบุรี", "ปทุมธานี", "พระนครศรีอยุธยา",
+        "พังงา", "ภูเก็ต", "ระนอง", "ราชบุรี", "สมุทรปราการ", "สมุทรสงคราม", "สมุทรสาคร", "สุพรรณบุรี", "อุทัยธานี"),
+    3: ("กาญจนบุรี", "เชียงราย", "เชียงใหม่", "ตาก", "น่าน", "พะเยา", "แพร่", "แม่ฮ่องสอน", "ลำปาง", "ลำพูน",
+        "สุโขทัย", "อุตรดิตถ์"),
+}
+#: conservative stand-ins by area until the district's Ss / S1 (มยผ. 1301/1302-61) are entered
+AREA_DEFAULTS = {1: {"Ss": 0.50, "S1": 0.15, "site": "D"}, 2: {"Ss": 0.40, "S1": 0.15, "site": "E"},
+                 3: {"Ss": 1.00, "S1": 0.30, "site": "D"}}
+
+
+def seismic_area(province: str) -> int:
+    """บริเวณ 1/2/3 of กฎกระทรวงแผ่นดินไหว 2564, 0 outside it."""
+    p = str(province or "").replace("จังหวัด", "").replace("จ.", "").strip()
+    if p in ("กรุงเทพฯ", "กทม.", "กทม", "กรุงเทพ"):
+        p = "กรุงเทพมหานคร"
+    for area, names in SEISMIC_AREAS.items():
+        if p in names:
+            return area
+    return 0
+
+
 DEFAULTS = {"eq_on": False, "standard": "new", "Ss": 0.25, "S1": 0.08, "site": "D", "system": "rc_omf", "I": 1.0,
             "zone": "1", "S_old": 1.2, "wind_std": "new", "wind_zone": "1", "terrain": "A", "Iw": 1.0}
 
@@ -63,7 +95,17 @@ def site_factors(site: str, Ss: float, S1: float) -> tuple:
 
 
 def params_of(data) -> dict:
-    return {**DEFAULTS, **((data or {}).get("lateral") or {})}
+    """The lateral parameters; in a province of the seismic law the
+    earthquake is on unless the user turned it off, with the area's
+    stand-in Ss / S1 until the district's are entered."""
+    own = dict((data or {}).get("lateral") or {})
+    area = seismic_area((data or {}).get("province", ""))
+    base = dict(DEFAULTS)
+    if area:
+        base.update(eq_on=True, **AREA_DEFAULTS[area])
+    out = {**base, **own}
+    out["area"] = area
+    return out
 
 
 def level_weights(data) -> list:
@@ -188,7 +230,8 @@ def analyse(data) -> dict:
         cols = [c for c in grav["cards"] if c["floor"] == f]
         if not cols:
             continue
-        acts = (("แผ่นดินไหว", eq, 1.87), ("ลม", wd, 1.6)) if p.get("eq_on") else (("ลม", wd, 1.6),)
+        # กฎกระทรวง 2566 ข้อ 7 (2)(3): 1.0E / 1.6W on 0.75(1.4D + 1.7L) and on 0.9D
+        acts = (("แผ่นดินไหว", eq, 1.0), ("ลม", wd, 1.6)) if p.get("eq_on") else (("ลม", wd, 1.6),)
         for act, res, fac in acts:
             for d_ in ("X", "Y"):
                 Vs = sum(res[d_]["F"][f:])                       # the storey shear under level f+1 and up
@@ -197,11 +240,16 @@ def analyse(data) -> dict:
                 worst = None
                 for c in cols:
                     curve = C.pm_curve(c["spec"], b_)
-                    Pu = 0.75 * c["P"] if b_["method"] == "SDM" else 0.75 * 1.55 * c["P"]
-                    Mu = 0.75 * fac * Mc
-                    r = C.pm_ratio(curve, Mu, Pu)
-                    if worst is None or r > worst[0]:
-                        worst = (r, c, Pu, Mu)
+                    if b_["method"] == "SDM":
+                        P_hi = 0.75 * c["P"]                          # 0.75(1.4D + 1.7L)
+                        P_lo = 0.9 * c["P"] / 1.4                     # 0.9D (the gravity load all dead: ÷ 1.4)
+                    else:
+                        P_hi, P_lo = 0.75 * 1.55 * c["P"], 0.9 * c["P"]
+                    Mu = fac * Mc
+                    for Pu in (P_hi, P_lo):
+                        r = C.pm_ratio(curve, Mu, Pu)
+                        if worst is None or r > worst[0]:
+                            worst = (r, c, Pu, Mu)
                 r, c, Pu, Mu = worst
                 checks.append({"floor": f, "action": act, "dir": d_, "V": Vs, "Vc": Vc, "Mu": Mu, "Pu": Pu,
                                "ratio": r, "col": f"{c['mark']} ({c['x']:.2f}, {c['y']:.2f})", "n": len(cols)})

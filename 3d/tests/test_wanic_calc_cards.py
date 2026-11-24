@@ -42,7 +42,7 @@ def test_footing_rows_check_soil_and_shear():
     r = max(rows, key=lambda r: r["P"])
     assert r["q"] > r["P"] / (r["w"] * r["l"])       # includes the footing and the soil on it
     assert r["Vc2"] > 0 and r["nbar"] >= 2
-    d["library"] = {"F1": {"w": 2.4, "l": 2.4, "t": 0.40}}
+    d["library"] = {"F1": {"w": 2.8, "l": 2.8, "t": 0.45}}      # LL 200 (กฎกระทรวง 2566): a bigger footing
     d["calc"] = {"soil": 10.0}                       # a site of 10 t/m² (the default is 5)
     rows2 = CC.footing_rows(C.analyse(d), d)
     assert max(rows2, key=lambda r: r["P"])["ok"]    # a big enough footing passes

@@ -58,3 +58,22 @@ def test_full_analysis_has_column_checks():
     acts = {c["action"] for c in res["checks"]}
     assert acts == {"แผ่นดินไหว", "ลม"}
     assert all(c["ratio"] >= 0 for c in res["checks"])
+
+
+def test_standards_2566_seismic_provinces_and_phi():
+    """ข5: the 43 provinces of กฎกระทรวงแผ่นดินไหว 2564 (ประกาศ มท. 2567
+    ผนวก ข) switch the earthquake on; φ falls to the lower set without
+    quality control (กฎกระทรวง 2566 ข้อ 8)."""
+    from core import wanic_calc as C
+    from core import wanic_lateral as LT
+    assert LT.seismic_area("เชียงใหม่") == 3 and LT.seismic_area("จังหวัดกรุงเทพมหานคร") == 2
+    assert LT.seismic_area("กระบี่") == 1 and LT.seismic_area("ขอนแก่น") == 0
+    assert sum(len(v) for v in LT.SEISMIC_AREAS.values()) == 43
+    p = LT.params_of({"province": "เชียงราย"})
+    assert p["eq_on"] and p["area"] == 3
+    assert not LT.params_of({"province": "เชียงราย", "lateral": {"eq_on": False}})["eq_on"]
+    assert not LT.params_of({"province": "ขอนแก่น"})["eq_on"]
+    assert C.phi({}, "flex") == 0.90 and C.phi({"qc": False}, "flex") == 0.75
+    assert C.phi({"qc": False}, "tied") == 0.60 and C.phi({}, "shear") == 0.85
+    spec = {"b": 0.25, "h": 0.25, "main": "6-DB16"}
+    assert C.column_capacity(spec, {**C.DEFAULTS, "qc": False}, 240.0) < C.column_capacity(spec, C.DEFAULTS, 240.0)

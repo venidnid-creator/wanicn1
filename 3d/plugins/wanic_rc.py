@@ -756,7 +756,7 @@ class RCPanel(QWidget):
             preset.addItem(th, k)
         form.addRow("ชุดค่ามาตรฐาน", preset)
         use = QComboBox()
-        use.addItem("— เลือกประเภทการใช้อาคาร (กฎกระทรวง ฉบับที่ 6) —", 0.0)
+        use.addItem("— เลือกประเภทการใช้อาคาร (กฎกระทรวง 2566 ข้อ 11) —", 0.0)
         for th, ll in C.LIVE_LOADS:
             use.addItem(f"{th} — {ll:g} กก./ตร.ม.", ll)
         form.addRow("ประเภทการใช้อาคาร", use)
@@ -765,6 +765,11 @@ class RCPanel(QWidget):
         meth.addItem("หน่วยแรงใช้งาน (WSD)", "WSD")
         meth.setCurrentIndex(0 if b_["method"] == "SDM" else 1)
         form.addRow("วิธีออกแบบคอนกรีต", meth)
+        from PySide6.QtWidgets import QCheckBox
+        qc = QCheckBox("ระบุมาตรฐานงานก่อสร้างและควบคุมคุณภาพวัสดุเป็นอย่างดี (φ 0.90 / 0.85 / 0.70)")
+        qc.setToolTip("กฎกระทรวง 2566 ข้อ 8 — ไม่ติ๊ก: ใช้ φ ชุดต่ำ 0.75 / 0.70 / 0.60 (ปลอดภัยกว่า)")
+        qc.setChecked(bool(b_.get("qc", True)))
+        form.addRow("ตัวคูณลดกำลัง", qc)
         spins = {}
         for key, th, lo, hi in (("fc", "fc′ คอนกรีต (กก./ตร.ซม.)", 150, 500),
                                 ("ll_floor", "น้ำหนักบรรทุกจรพื้น (กก./ตร.ม.)", 0, 1000),
@@ -820,6 +825,7 @@ class RCPanel(QWidget):
             return
         calc = dict(d.get("calc") or {})
         calc["method"] = meth.currentData()
+        calc["qc"] = qc.isChecked()
         for k, sp_ in spins.items():
             calc[k] = sp_.value()
         for k, ed in texts.items():

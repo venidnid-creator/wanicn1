@@ -146,7 +146,8 @@ def test_presets_and_bar_grade_follow_the_basis():
     d["calc"] = dict(C.PRESETS["wsd"][1])
     lo = C.analyse(d)
     assert len(hi["members"]) == len(lo["members"])
-    assert {v for _t, v in C.LIVE_LOADS} >= {150.0, 200.0, 250.0, 400.0, 500.0}
+    assert {v for _t, v in C.LIVE_LOADS} >= {200.0, 250.0, 300.0, 400.0, 500.0}       # กฎกระทรวง 2566 ข้อ 11
+    assert C.basis({})["ll_floor"] == 200.0 and C.basis({})["ll_roof"] == 50.0
 
 
 def test_reserve_in_plain_words():
