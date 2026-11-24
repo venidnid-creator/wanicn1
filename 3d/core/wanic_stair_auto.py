@@ -69,7 +69,12 @@ def design(data, where=("center", "front"), w=1.00, typ="U") -> tuple:
     across, along = where
     x0, y0, x1, y1 = footprint(data)
     t = float(s.get("wall_t") or 0.10)
-    stair = {"id": AUTO_ID + "1", "x": 0.0, "y": 0.0, "dir": 1 if along == "front" else 3, "w": float(w),
+    # สองช่วง / ตัว L: the landing against the outside wall, the first step inside
+    # the house (the owner: ชานพักอยู่อีกด้าน — head and foot swapped); a straight
+    # flight still starts at the outside wall and climbs inward
+    inward = 1 if along == "front" else 3
+    up = inward if typ == "straight" else (inward + 2) % 4
+    stair = {"id": AUTO_ID + "1", "x": 0.0, "y": 0.0, "dir": up, "w": float(w),
              "type": typ, "turn": "left", "auto": True}
     # the second flight turns toward the middle of the building
     cx = (x0 + x1) / 2
@@ -88,7 +93,10 @@ def design(data, where=("center", "front"), w=1.00, typ="U") -> tuple:
     # upstairs, where one steps off): the stair stands back from the outside wall
     clear = float(w)
     far = clear if typ == "straight" else 0.0         # a straight flight arrives at the far end
-    stair["y"] = (y0 + t / 2 + clear + D / 2) if along == "front" else (y1 - t / 2 - clear - D / 2)
+    if typ == "straight":
+        stair["y"] = (y0 + t / 2 + clear + D / 2) if along == "front" else (y1 - t / 2 - clear - D / 2)
+    else:                                             # the landing on the wall, the clear floor inside
+        stair["y"] = (y0 + t / 2 + D / 2) if along == "front" else (y1 - t / 2 - D / 2)
     lay = B.stair_layout(stair, s)
     n, R_, g = lay["n"], lay["R"], lay["g"]
     flights = [f["n"] for f in lay["flights"]]

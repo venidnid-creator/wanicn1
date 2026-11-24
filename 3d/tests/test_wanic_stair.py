@@ -52,7 +52,9 @@ def test_plan_model_and_boq():
     for typ in ("straight", "U"):
         d = _house(typ)
         g = B.stair_members(d["floors"][0]["stairs"][0], B.settings_of(d), 0.0)
-        assert len(g) == (1 if typ == "straight" else 3)
+        # flights + landing + คานรับบันไดขั้นแรก (+ คานชานพัก and its 2 posts)
+        assert len(g) == (2 if typ == "straight" else 7)
+        assert any("คานรับบันไดขั้นแรก" in x.name for x in g)
         vols[typ] = sum(ln["net"] for ln in Q.compute(d)["lines"]
                         if ln["group"] == "stair" and ln["unit"] == "ลบ.ม.")
     assert vols["U"] > vols["straight"] > 0          # the landing adds concrete

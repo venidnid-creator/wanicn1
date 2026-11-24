@@ -538,8 +538,19 @@ def compute(data, gate: bool = False) -> dict:
             area += a_ + 2 * (max(xs) - min(xs) + max(ys) - min(ys)) * ts
             bars([("DB12", S.bar_count(max(ys) - min(ys), 0.15) * (max(xs) - min(xs))),
                   ("RB9", S.bar_count(max(xs) - min(xs), 0.20) * (max(ys) - min(ys)))])
+        z_ = e["floor"] * E["H"]
+        for sb in B.stair_beams(e["st"], s, z_):       # คานรับบันได SB1 / SB2
+            Lb = math.dist(sb["p0"][:2], sb["p1"][:2])
+            vol += sb["b"] * sb["h"] * Lb
+            area += (sb["b"] + 2 * sb["h"]) * Lb
+            bars([("DB12", 4 * Lb), ("RB6", S.bar_count(Lb, 0.15) * 2 * (sb["b"] + sb["h"]))])
+        for sp_ in B.stair_posts(e["st"], s, z_):      # เสารับคานชานพัก
+            Hp = sp_["p1"][2] - sp_["p0"][2]
+            vol += sp_["b"] ** 2 * Hp
+            area += 4 * sp_["b"] * Hp
+            bars([("DB12", 4 * Hp), ("RB6", S.bar_count(Hp, 0.15) * 4 * sp_["b"])])
     if vol:
-        concrete(g, "บันได", vol, "พื้นที่หน้าตัดขั้นบันได × กว้าง")
+        concrete(g, "บันได", vol, "พื้นที่หน้าตัดขั้นบันได × กว้าง + ชานพัก + คาน/เสารับบันได")
         formwork(g, "บันได", area, "ท้องบันได + ข้าง 2 ด้าน + ลูกตั้ง")
     outline = B.building_outline(E)
     rail = sum(B.stair_railing(e["st"], s)["length"] for e in E["stairs"]) + sum(

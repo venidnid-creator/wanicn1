@@ -2097,7 +2097,65 @@ def stair_members(stp, s, z) -> list:
                            dict(b=_mm(max(xs) - min(xs)), h=_mm(max(ys) - min(ys))),
                            [(cx, cy, top - t), (cx, cy, top)], ifc="IfcSlab",
                            name=f"ชานพักบันได หนา {_cm(t)} ซม. · ระดับ {top:+.2f}"))
+    for b in stair_beams(stp, s, z):                   # คานรับบันได: under the first step, under the landing
+        out.append(_member("structure", "stair_beam", b["mark"], "rect", dict(b=_mm(b["b"]), h=_mm(b["h"])),
+                           [b["p0"], b["p1"]], anchor="tc", ifc="IfcBeam", name=b["name"]))
+    for c in stair_posts(stp, s, z):                   # เสารับคานชานพัก
+        out.append(_member("structure", "stair_post", "SC", "rect", dict(b=_mm(c["b"]), h=_mm(c["b"])),
+                           [c["p0"], c["p1"]], ifc="IfcColumn", name=c["name"]))
     return [g for g in out if g is not None]
+
+
+#: คานรับบันได / ชานพัก and its posts (the stair sheets' standard: 0.15 × 0.30 m
+#: beams, 0.15 × 0.15 m posts from the floor)
+STAIR_BEAM = (0.15, 0.30)
+STAIR_POST = 0.15
+
+
+def stair_beams(stp, s, z) -> list:
+    """คานรับบันได: one under the first step of the stair (the foot never
+    hangs in the air) and one along the outer edge of every landing —
+    [{"p0", "p1" (x, y, z of the top), "b", "h", "mark", "name"}]."""
+    lay = stair_layout(stp, s)
+    bw, bh = STAIR_BEAM
+    out = []
+    f0 = lay["flights"][0]
+    (x, y), (dx, dy), w = f0["p0"], f0["d"], f0["w"]
+    nx, ny = dy, -dx
+    cx, cy = x + dx * bw / 2, y + dy * bw / 2               # under the first tread, its face at the foot
+    out.append({"p0": (cx - nx * w / 2, cy - ny * w / 2, z), "p1": (cx + nx * w / 2, cy + ny * w / 2, z),
+                "b": bw, "h": bh, "mark": "SB1", "name": f"คานรับบันไดขั้นแรก SB1 {_cm(bw)}×{_cm(bh)} ซม."})
+    for ld in lay["landings"]:
+        pts = ld["pts"]
+        # the landing's edge farthest from the first flight's foot: the outer edge
+        edges = [(pts[i], pts[(i + 1) % 4]) for i in range(4)]
+        a, b = max(edges, key=lambda e: ((e[0][0] + e[1][0]) / 2 - x) * dx + ((e[0][1] + e[1][1]) / 2 - y) * dy)
+        L_ = math.dist(a, b)
+        ux, uy = (b[0] - a[0]) / L_, (b[1] - a[1]) / L_
+        ix, iy = -uy, ux                                   # inward: toward the foot
+        if (x - a[0]) * ix + (y - a[1]) * iy < 0:
+            ix, iy = -ix, -iy
+        top = z + ld["z"]
+        out.append({"p0": (a[0] + ix * bw / 2, a[1] + iy * bw / 2, top),
+                    "p1": (b[0] + ix * bw / 2, b[1] + iy * bw / 2, top), "b": bw, "h": bh, "mark": "SB2",
+                    "name": f"คานรับชานพัก SB2 {_cm(bw)}×{_cm(bh)} ซม. · ระดับ {top:+.2f}"})
+    return out
+
+
+def stair_posts(stp, s, z) -> list:
+    """เสารับคานชานพัก: at both ends of every landing beam, from the floor up
+    to the beam's soffit."""
+    out = []
+    for b in stair_beams(stp, s, z)[1:]:
+        for (px, py, top) in (b["p0"], b["p1"]):
+            ux, uy = b["p1"][0] - b["p0"][0], b["p1"][1] - b["p0"][1]
+            L_ = math.hypot(ux, uy) or 1.0
+            ux, uy = ux / L_, uy / L_
+            k = 1.0 if (px, py) == b["p0"][:2] else -1.0
+            qx, qy = px + k * ux * STAIR_POST / 2, py + k * uy * STAIR_POST / 2     # inside the beam's ends
+            out.append({"p0": (qx, qy, z), "p1": (qx, qy, top - b["h"]), "b": STAIR_POST,
+                        "name": f"เสารับคานชานพัก {_cm(STAIR_POST)}×{_cm(STAIR_POST)} ซม."})
+    return out
 
 
 #: ราวบันได as the standard house plans (กรมโยธาธิการฯ, บ้านครอบครัวไทยเป็นสุข):

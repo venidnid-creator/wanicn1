@@ -97,7 +97,9 @@ def test_the_floor_above_is_opened_and_railed():
     d = _house()
     before = Q.compute(d)
     st, rep = SA.design(d, ("left", "front"))
-    assert rep["ok"] and st["y"] - rep["D"] / 2 >= 1.0 - 1e-6        # 1.00 m clear at the foot
+    x0, y0, x1, y1 = SA.footprint(d)
+    assert rep["ok"] and st["y"] - rep["D"] / 2 - y0 < 0.2          # the landing against the front wall
+    assert st["y"] + rep["D"] / 2 + 1.0 <= y1 + 1e-6                  # 1.00 m clear at the foot, inside
     SA.apply(d, st)
     E = B.elements(d)
     holes = B.holes_by_floor(E)
