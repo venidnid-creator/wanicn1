@@ -121,6 +121,9 @@
 - ยังไม่มีข้อความมาตรฐานกำหนดตำแหน่งของแต่ละตำแหน่ง (มีตัวอย่างบรรณารักษ์ที่เจ้าของส่ง) — เจ้าหน้าที่วางเอง;
   ข้อมูลตัวอย่างภาระงานเจ้าพนักงานพัสดุมาจากตารางวิเคราะห์จริง (ระบุว่าเป็นตัวอย่าง)
 
+- ตัวติดตั้ง 2026.11.24.2 (ทดสอบ ไม่ release): run 45335030604, artifact 14893407725
+  https://github.com/venidnid-creator/wanicn1/actions/runs/45335030604/artifacts/14893407725
+
 ## โครงสร้าง
 - `venitsupply/db.py` ฐานข้อมูล SQLite (`Store`): settings, categories, departments, people, assets, materials, moves, loans, inspections
 - `venitsupply/depreciation.py` ค่าเสื่อมเส้นตรง · `thaidate.py` วันที่ พ.ศ./ปีงบประมาณ
