@@ -93,8 +93,30 @@ def ll_reduction(from_roof: int) -> float:
     return LL_REDUCTION[min(max(from_roof, 0), len(LL_REDUCTION) - 1)]
 
 
+#: ประเภทการใช้อาคาร: (key, ชื่อ, น้ำหนักจรพื้น กก./ตร.ม. ตามข้อ 11, ห้ามลดน้ำหนักจรตามข้อ 14)
+OCCUPANCY = (("house", "บ้านพักอาศัย", 200.0, False),
+             ("condo", "อาคารชุด หอพัก โรงแรม", 200.0, False),
+             ("office", "สำนักงาน ธนาคาร", 250.0, False),
+             ("shophouse", "ตึกแถว ห้องแถว (ส่วนพาณิชย์)", 300.0, False),
+             ("retail", "อาคารพาณิชย์ พื้นที่ขายปลีก", 400.0, False),
+             ("school", "สถานศึกษา (ห้องเรียน)", 250.0, True),
+             ("hospital", "สถานพยาบาล", 400.0, True),
+             ("assembly", "โรงมหรสพ ห้องประชุม หอประชุม อัฒจันทร์", 400.0, True),
+             ("library", "ห้องสมุด หอสมุด พิพิธภัณฑ์ (ห้องเก็บหนังสือ)", 600.0, True),
+             ("warehouse", "คลังสินค้า โรงงาน", 500.0, True),
+             ("parking", "ลานจอดรถยนต์นั่ง", 300.0, True),
+             ("parking_bus", "ลานจอดรถโดยสาร / รถบรรทุกเปล่า", 800.0, True))
+
+
+def no_reduction_use(b_) -> str:
+    """The name of the building's use when ข้อ 14 forbids the reduction, else ""."""
+    use = str((b_ or {}).get("use") or "")
+    return next((th for k, th, _ll, no in OCCUPANCY if k == use and no), "")
+
+
 def reduces_live(b_) -> bool:
-    return bool((b_ or {}).get("ll_reduce")) and float((b_ or {}).get("ll_floor", 0) or 0) <= 500.0
+    return bool((b_ or {}).get("ll_reduce")) and float((b_ or {}).get("ll_floor", 0) or 0) <= 500.0 \
+        and not no_reduction_use(b_)
 
 
 #: also กฎกระทรวง 2566 ข้อ 11: หลังคา 50 · กันสาดคอนกรีต 100 · ดาดฟ้า 200 kg/m²

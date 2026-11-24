@@ -791,9 +791,10 @@ class RCPanel(QWidget):
             preset.addItem(th, k)
         form.addRow("ชุดค่ามาตรฐาน", preset)
         use = QComboBox()
-        use.addItem("— เลือกประเภทการใช้อาคาร (กฎกระทรวง 2566 ข้อ 11) —", 0.0)
-        for th, ll in C.LIVE_LOADS:
-            use.addItem(f"{th} — {ll:g} กก./ตร.ม.", ll)
+        use.addItem("— เลือกประเภทการใช้อาคาร (กฎกระทรวง 2566 ข้อ 11) —", "")
+        for k_, th, ll, no_ in C.OCCUPANCY:
+            use.addItem(f"{th} — {ll:g} กก./ตร.ม." + (" · ห้ามลดน้ำหนักจร (ข้อ 14)" if no_ else ""), k_)
+        use.setCurrentIndex(max(0, use.findData(str(b_.get("use") or ""))))
         form.addRow("ประเภทการใช้อาคาร", use)
         meth = QComboBox()
         meth.addItem("กำลัง (SDM) วสท. 011008", "SDM")
@@ -842,13 +843,23 @@ class RCPanel(QWidget):
             spins["fc"].setValue(v["fc"])
             fy.setValue(v["fy_db"])
 
-        def apply_use(_i=0):
-            ll = use.currentData()
-            if ll:
-                spins["ll_floor"].setValue(ll)
+        def apply_use(_i=0, opening=False):
+            k_ = use.currentData()
+            row = next((r for r in C.OCCUPANCY if r[0] == k_), None)
+            if row and not opening:                       # opening: keep the live load typed in
+                spins["ll_floor"].setValue(row[2])
+            no_ = C.no_reduction_use({"use": k_})
+            llr.setEnabled(not no_)                       # ข้อ 14: the program never reduces these
+            if no_:
+                llr.setChecked(False)
+                llr.setText(f"ไม่ลดน้ำหนักจร — {no_} ห้ามลดตามกฎกระทรวง 2566 ข้อ 14")
+            else:
+                llr.setText("ลดน้ำหนักบรรทุกจรที่ลงเสา ตอม่อ ฐานราก ตามชั้น (กฎกระทรวง 2566 ข้อ 13)")
 
         preset.currentIndexChanged.connect(apply_preset)
         use.currentIndexChanged.connect(apply_use)
+        if C.no_reduction_use(b_):
+            apply_use(opening=True)
         from PySide6.QtWidgets import QLineEdit
         texts = {}
         for key, th in (("project", "โครงการ"), ("owner", "เจ้าของ"), ("place", "สถานที่"),
@@ -867,7 +878,8 @@ class RCPanel(QWidget):
         calc = dict(d.get("calc") or {})
         calc["method"] = meth.currentData()
         calc["qc"] = qc.isChecked()
-        calc["ll_reduce"] = llr.isChecked()
+        calc["ll_reduce"] = llr.isChecked() and llr.isEnabled()
+        calc["use"] = use.currentData() or calc.get("use", "")
         for k, sp_ in spins.items():
             calc[k] = sp_.value()
         for k, ed in texts.items():

@@ -254,3 +254,8 @@ def test_live_load_reduction_by_floor_from_the_roof():
     assert c1[2] < c0[2]
     heavy, _c, _n = pu(ll_reduce=True, ll_floor=600.0)             # ข้อ 14: over 500 kg/m²
     assert heavy > cut
+    # ข้อ 14: a school (and the other uses named) is never reduced, even ticked
+    school, _c, note_s = pu(ll_reduce=True, use="school", ll_floor=200.0)
+    assert school == full and "ข้อ 13" not in note_s
+    assert C.no_reduction_use({"use": "hospital"}) and not C.no_reduction_use({"use": "house"})
+    assert all(ll > 0 for _k, _t, ll, _no in C.OCCUPANCY)
