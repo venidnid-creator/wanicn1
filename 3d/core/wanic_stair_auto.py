@@ -89,6 +89,28 @@ def design(data, where=("center", "front"), w=1.00, typ="U") -> tuple:
     ys = [p[1] for p in lay["rect"]]
     W, D = max(xs) - min(xs), max(ys) - min(ys)
     stair["x"] = (x0 + t / 2 + W / 2) if across == "left" else (x1 - t / 2 - W / 2) if across == "right" else cx
+    # never across a column line: the stair goes beside the column, the
+    # landing's corner against it — no floor beam over the flights, and the
+    # landing beam rests on the column (the owner)
+    lines = sorted({round(c["x"], 3) for c in B.elements(data)["columns"] if c.get("floor", 0) == 0})
+    half = max((float(sp_.get("b", 0.2)) for sp_ in B.library_of(data).values()
+                if sp_.get("kind") == "column"), default=0.2) / 2
+    for _ in range(3):
+        sx0, sx1 = stair["x"] - W / 2, stair["x"] + W / 2
+        hit = [g_ for g_ in lines if sx0 - half + 0.01 < g_ < sx1 + half - 0.01]
+        if not hit:
+            break
+        g_ = min(hit, key=lambda v: abs(v - stair["x"]))
+        right = g_ + half + W / 2                     # beside it, on the right / the left
+        left = g_ - half - W / 2
+        ok_r = right + W / 2 <= x1 - t / 2 + 1e-6
+        ok_l = left - W / 2 >= x0 + t / 2 - 1e-6
+        if ok_r and (not ok_l or abs(right - stair["x"]) <= abs(left - stair["x"])):
+            stair["x"] = right
+        elif ok_l:
+            stair["x"] = left
+        else:
+            break
     # a clear floor as deep as the stair is wide in front of the first step (and,
     # upstairs, where one steps off): the stair stands back from the outside wall
     clear = float(w)

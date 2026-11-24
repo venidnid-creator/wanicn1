@@ -2147,22 +2147,14 @@ def stair_beams(stp, s, z, cols=None) -> list:
         sb = {"p0": (a[0] + ix * bw / 2, a[1] + iy * bw / 2, top),
               "p1": (b[0] + ix * bw / 2, b[1] + iy * bw / 2, top), "b": bw, "h": bh, "mark": "SB2",
               "name": f"คานรับชานพัก SB2 {_cm(bw)}×{_cm(bh)} ซม. · ระดับ {top:+.2f}", "on_cols": False}
-        # the landing against a column line (the outside wall): SB2 runs on that
-        # line from column to column round the landing, carried by them —
-        # a full edge beam as the standard section, no posts
-        near = []
-        for cx, cy in cols or []:
-            u = (cx - a[0]) * ux + (cy - a[1]) * uy
-            off = (cx - a[0]) * ix + (cy - a[1]) * iy
-            if -0.30 <= off <= bw + 0.05:
-                near.append((u, cx, cy))
-        left = [q for q in near if q[0] <= 0.05]
-        right = [q for q in near if q[0] >= L_ - 0.05]
-        if left and right:
-            u0, x0_, y0_ = max(left)
-            u1, x1_, y1_ = min(right)
-            sb.update(p0=(x0_, y0_, top), p1=(x1_, y1_, top), on_cols=True,
-                      name=f"คานรับชานพัก SB2 {_cm(bw)}×{_cm(bh)} ซม. · ระดับ {top:+.2f} (ฝากเสา)")
+        # an end at a column rests on it (no post there); SB2 never runs past
+        # the landing — a beam at +1.50 along the wall would cross the way
+        # people walk (the owner)
+        ends = []
+        for (px, py) in (sb["p0"][:2], sb["p1"][:2]):
+            ends.append(any(math.hypot(cx - px, cy - py) <= 0.35 for cx, cy in cols or []))
+        sb["end_cols"] = tuple(ends)
+        sb["on_cols"] = all(ends)
         out.append(sb)
     return out
 
@@ -2174,7 +2166,9 @@ def stair_posts(stp, s, z, cols=None) -> list:
     for b in stair_beams(stp, s, z, cols)[1:]:
         if b.get("on_cols"):
             continue
-        for (px, py, top) in (b["p0"], b["p1"]):
+        for k_end, (px, py, top) in enumerate((b["p0"], b["p1"])):
+            if (b.get("end_cols") or (False, False))[k_end]:
+                continue                               # this end rests on a column
             ux, uy = b["p1"][0] - b["p0"][0], b["p1"][1] - b["p0"][1]
             L_ = math.hypot(ux, uy) or 1.0
             ux, uy = ux / L_, uy / L_

@@ -154,3 +154,23 @@ def test_one_floor_and_hand_placement_advice():
     assert not SA.check_place(d, far, rep["settings"])[0][0]       # outside the building
     flipped = dict(st, dir=(st["dir"] + 2) % 4)
     assert not all(ok for ok, _t in SA.check_place(d, flipped, rep["settings"]))
+
+
+def test_auto_stair_beside_a_column_never_across_it():
+    """The owner: the stair goes beside the column (the landing's corner on
+    it) — no column line through the stair, the landing beam only as long
+    as the landing, its end at the column without a post."""
+    from core import wanic_building as B
+    from core import wanic_rc as R
+    from core import wanic_stair_auto as SA
+    d = B.default_data()
+    R.apply_grid(d, [4.9, 4.9], [4.9, 4.9], 2)
+    st, rep = SA.design(d, ("center", "front"))
+    s = rep["settings"]
+    xs = [p[0] for p in B.stair_layout(st, s)["rect"]]
+    assert not any(min(xs) < g < max(xs) for g in (0.0, 4.9, 9.8))
+    assert all(ok for ok, _t in SA.check_place(d, st, s))
+    cols = B.stair_cols(B.elements(d), 0)
+    sb2 = B.stair_beams(st, s, 0.0, cols)[1]
+    assert abs(abs(sb2["p1"][0] - sb2["p0"][0]) - (max(xs) - min(xs))) < 0.2     # not past the landing
+    assert any(sb2["end_cols"]) and len(B.stair_posts(st, s, 0.0, cols)) == 1
