@@ -16,7 +16,7 @@
 - StatsBox: «รุ่นที่ใช้อยู่ vX» + «รุ่นล่าสุดที่ให้ดาวน์โหลด vY (วันที่)» + สถานะ (มีรุ่นใหม่/ล่าสุดแล้ว/รุ่นทดสอบ) · ปุ่มสั้น «⬇ ดาวน์โหลดรุ่น vY»
 - ภาษา: `lang.LANGS` ไทย EN ລາວ VI ID 简体 繁體 · `translate(text, code)` (EN → `lang_more.ROWS` 112 คำ × 5 ภาษา, ขาดใช้ EN) ·
   `scale_word()` · ป้ายอายุการใช้งาน/รายงานราชการยังเป็นไทย · tests 58 ผ่าน
-- เผยแพร่ 2027.4.9 ตามคำสั่ง 24 พ.ย. 2569 (release=true)
+- เผยแพร่ 2027.4.9 แล้ว 24 พ.ย. 2569 (commit ba613c9) https://github.com/venidnid-creator/wanicn1/releases/tag/readwanicn-v2027.4.9
 
 ## ReadWanicn2027 2027.4.9 (19 พ.ย. 2569, อนุมัติแล้ว — run 44475939333 artifact 14506477422 ผ่าน, ไม่ release) — StatsBox บอก «รุ่นทดสอบ ใหม่กว่ารุ่นที่เผยแพร่» เมื่อ VERSION > Release ล่าสุด
 
