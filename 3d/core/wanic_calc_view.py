@@ -4,6 +4,8 @@
 the PDF calculation report (the ออกแบบโครงสร้าง คสล. panel uses it)."""
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
@@ -26,6 +28,14 @@ def _zero_points(xs, vals, tol=1e-6):
             x = xs[i - 1] + (xs[i] - xs[i - 1]) * a / (a - b)
             out.append(x)
     return out
+
+
+OFF_SCALE = 1.6                      # a capacity above 1.6 × the diagram goes on the edge
+
+
+def _num(v: float) -> str:
+    """1,912 / 61.5 / 3.5 — small values keep a decimal (a 3.5 กก.-ม. purlin is not «4»)."""
+    return f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.1f}"
 
 
 def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
@@ -136,7 +146,12 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
         elif key == "M" and "M+" in caps:
             lines = [(caps["M+"], CAP_COLOR, Qt.DashLine, f"{caps.get('lab_M', 'φMn')} ล่าง"),
                      (-caps["M-"], CAP_COLOR, Qt.DashLine, f"{caps.get('lab_M', 'φMn')} บน")]
-        big = max([abs(v) for v in vals] + [abs(c) for c, *_r in lines if c] + [1.0])
+        # the scale follows the member's own diagram: a capacity far above
+        # it (a light purlin: M 3.5 against Ma 153) would flatten the curve
+        # into a line — such a capacity is drawn on the edge, marked off-scale
+        own = max([abs(v) for v in vals] + [1e-6])
+        capm = max([abs(c) for c, *_r in lines if c] + [0.0])
+        big = max(own, min(capm, own * OFF_SCALE))
         scale = (h_ / 2 - 10) / big
         p.setPen(QPen(QColor("#9CA3AF"), 1))
         p.drawLine(QPointF(left, mid), QPointF(right, mid))
@@ -158,13 +173,15 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
         for c, col, style, lab in lines:
             if not c:
                 continue
-            yy = mid + sgn * c * scale
+            off = abs(c) > big * 1.0001
+            yy = mid + sgn * (c if not off else math.copysign(big, c)) * scale
             p.setPen(QPen(col, 1.1, style))
             p.drawLine(QPointF(left, yy), QPointF(right, yy))
             if lab:
                 p.setPen(col)
-                p.drawText(QRectF(right - 150, yy + (-13 if sgn * c < 0 else 1), 150, 12),
-                           Qt.AlignRight | Qt.AlignVCenter, f"{lab} = {abs(c):,.0f}")
+                p.drawText(QRectF(right - 230, yy + (-13 if sgn * c < 0 else 1), 230, 12),
+                           Qt.AlignRight | Qt.AlignVCenter,
+                           f"{lab} = {_num(abs(c))}" + (" (เกินขอบภาพ)" if off else ""))
         # extremes with their positions
         for pick in (max, min):
             i = pick(range(len(vals)), key=lambda j: vals[j])
@@ -176,7 +193,7 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
             tag = ("Vmax" if key == "V" else ("M+max" if v > 0 else "M−max"))
             lx_ = min(max(q.x() - 75, left - 40), right - 150)
             p.drawText(QRectF(lx_, q.y() + (-14 if (sgn * v) < 0 else 2), 150, 12), Qt.AlignCenter,
-                       f"{tag} {v:,.0f} @ x = {res.xs[i]:.2f} ม.")
+                       f"{tag} {_num(v)} @ x = {res.xs[i]:.2f} ม.")
         # zero shear (the maximum moment) / contraflexure (moment changes sign)
         p.setPen(QPen(QColor("#6B7280"), 1))
         for zx in _zero_points(res.xs, vals):
