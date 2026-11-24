@@ -2153,6 +2153,30 @@ def stair_beams(stp, s, z, cols=None) -> list:
         ends = []
         for (px, py) in (sb["p0"][:2], sb["p1"][:2]):
             ends.append(any(math.hypot(cx - px, cy - py) <= 0.35 for cx, cy in cols or []))
+        if ends[0] != ends[1] and cols:
+            # one end on a column: the beam runs on along the wall to the
+            # next column on the other side and rests there (the owner) —
+            # one bay, never past it, no post
+            free = sb["p1"] if ends[0] else sb["p0"]
+            fixed = sb["p0"] if ends[0] else sb["p1"]
+            dx_, dy_ = free[0] - fixed[0], free[1] - fixed[1]
+            Lf = math.hypot(dx_, dy_) or 1.0
+            ux_, uy_ = dx_ / Lf, dy_ / Lf
+            ahead = []
+            for cx, cy in cols:
+                u = (cx - fixed[0]) * ux_ + (cy - fixed[1]) * uy_
+                off = abs((cx - fixed[0]) * uy_ - (cy - fixed[1]) * ux_)
+                if u > Lf - 0.05 and off <= 0.35 and u <= 6.0:
+                    ahead.append((u, cx, cy))
+            if ahead:
+                u, cx, cy = min(ahead)
+                end = (fixed[0] + ux_ * u, fixed[1] + uy_ * u, free[2])
+                if ends[0]:
+                    sb["p1"] = end
+                else:
+                    sb["p0"] = end
+                ends = [True, True]
+                sb["name"] = sb["name"] + " (ฝากเสาสองด้าน)"
         sb["end_cols"] = tuple(ends)
         sb["on_cols"] = all(ends)
         out.append(sb)
