@@ -10,7 +10,7 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
-## ReadWanicn2027 2027.4.11 — ตารางคำนวณใช้งานแบบ Excel (24 พ.ย. 2569, อนุมัติ + สั่งเผยแพร่; refresh() คงช่อง/การเลือกไว้ — แก้หัวเรื่องผสานไม่เป็นตัวหนา)
+## ReadWanicn2027 2027.4.11 — ตารางคำนวณใช้งานแบบ Excel (24 พ.ย. 2569, เผยแพร่แล้ว run 45398744533 → https://github.com/venidnid-creator/wanicn1/releases/tag/readwanicn-v2027.4.11; refresh() คงช่อง/การเลือกไว้ — แก้หัวเรื่องผสานไม่เป็นตัวหนา)
 - `SheetEditor.menu_bar`: แฟ้ม แก้ไข แทรก รูปแบบ ข้อมูล สูตร (Ctrl+Z/Y/X/C/V/D/R/A/F/H/B/I/U, Ctrl+Shift+V วางค่า, Alt+= ผลรวม, F9)
 - คลิปบอร์ด: copy เป็น TSV (Excel วางได้), paste จาก Excel/ตัวเอง — สูตรเลื่อนอ้างอิง (`shift_refs`, $ ตรึง), วางเฉพาะค่า
 - undo/redo 100 ขั้น (`_push` snapshot raw/styles/spans), เติมลง/ขวา, เรียง A→Z/Z→A (ช่องว่างไว้ท้าย), ค้นหา/แทนที่, Delete ล้าง,
