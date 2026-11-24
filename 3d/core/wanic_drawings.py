@@ -360,8 +360,10 @@ def axis_name(i: int) -> str:
 
 
 def grids(E):
-    xs = sorted({round(c["x"], 3) for c in E["footings"]})
-    ys = sorted({round(c["y"], 3) for c in E["footings"]})
+    from core import wanic_building as B
+    pts = B.foot_nodes(E)
+    xs = sorted({p[0] for p in pts})
+    ys = sorted({p[1] for p in pts})
     return xs, ys
 
 
@@ -2389,14 +2391,17 @@ def s_foundation(sh, E):
         w, l_ = float(spec.get("w", 1)), float(spec.get("l", spec.get("w", 1)))
         sh.rect(*v(ft["x"] - w / 2, ft["y"] - l_ / 2),
                 *v(ft["x"] + w / 2, ft["y"] + l_ / 2), "struct", 0.4)
-        st_mark = next((s["mark"] for s in E["stumps"] if s["x"] == ft["x"] and s["y"] == ft["y"]), "PC1")
-        col = next((c["mark"] for c in E["columns"] if c["floor"] == 0 and c["x"] == ft["x"] and c["y"] == ft["y"]),
-                   "C1")
-        b = float(lib.get(st_mark, {}).get("b", 0.2))
-        a_, c_ = v(ft["x"] - b / 2, ft["y"] - b / 2), v(ft["x"] + b / 2, ft["y"] + b / 2)
-        sh.rect(*a_, *c_, "column", 0.35)                       # the column crossed (the original)
-        sh.line(a_, c_, "column", 0.2)
-        sh.line((a_[0], c_[1]), (c_[0], a_[1]), "column", 0.2)
+        col = "C1"
+        for (nx, ny) in ft.get("nodes") or [(ft["x"], ft["y"])]:    # a combined footing: both columns
+            st_mark = next((s["mark"] for s in E["stumps"] if abs(s["x"] - nx) < 1e-6 and abs(s["y"] - ny) < 1e-6),
+                           "PC1")
+            col = next((c["mark"] for c in E["columns"] if c["floor"] == 0 and abs(c["x"] - nx) < 1e-6
+                        and abs(c["y"] - ny) < 1e-6), "C1")
+            b = float(lib.get(st_mark, {}).get("b", 0.2))
+            a_, c_ = v(nx - b / 2, ny - b / 2), v(nx + b / 2, ny + b / 2)
+            sh.rect(*a_, *c_, "column", 0.35)                       # the column crossed (the original)
+            sh.line(a_, c_, "column", 0.2)
+            sh.line((a_[0], c_[1]), (c_[0], a_[1]), "column", 0.2)
         for px, py in B.pile_points(spec, ft["x"], ft["y"]):
             sh.circle(v(px, py), v.len(float(spec.get("pile_b", 0.18)) / 2),
                       "struct", 0.18)

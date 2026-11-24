@@ -1133,7 +1133,8 @@ def analyse(data) -> dict:
     for f in E["footings"]:
         k_ = (round(f["x"], 3), round(f["y"], 3))
         spec = lib.get(f["mark"], {})
-        Pu = next((p for kk, p in cols_out if kk == k_), 0.0)
+        on = f.get("nodes") or [k_]                 # ฐานรากร่วม: both columns
+        Pu = sum(p for kk, p in cols_out if kk in on)
         P = Pu / D_                       # back to service: ÷ 1.4 (all dead) — never under the real D + L
         w_, l_, t_ = (float(spec.get(k, 0)) for k in ("w", "l", "t"))
         P += w_ * l_ * t_ * conc
@@ -1160,6 +1161,15 @@ def analyse(data) -> dict:
             out[-1].picture = {"kind": "footing", "P": P, "w": w_, "l": l_, "t": t_, "q": q, "qa": b_["soil"],
                                "self": w_ * l_ * t_ * conc, "mark": f["mark"],
                                "col": float((lib.get("PC1") or {}).get("b", 0.2))}
+    # single footings that overlap: one combined footing is needed (ข12)
+    from core import wanic_combined as CF
+    single = {(round(f["x"], 3), round(f["y"], 3)): (float(lib.get(f["mark"], {}).get("w", 1) or 1),
+                                                     float(lib.get(f["mark"], {}).get("l", 1) or 1))
+              for f in E["footings"] if not f.get("nodes")}
+    for a, b2 in CF.pairs(single)[0]:
+        out.append(Member("footing", f"ฐานรากซ้อนกัน ({a[0]:.2f}, {a[1]:.2f}) กับ ({b2[0]:.2f}, {b2[1]:.2f})",
+                          "ฐานเดี่ยวสองฐานซ้อนกัน / ห่างไม่ถึง 10 ซม.", "ต้องเป็นฐานรากร่วม", 1.5,
+                          "กด «แก้ไขให้ผ่าน» เพื่อออกแบบฐานรากร่วม (CF)"))
     # footings under the free columns that stand on the ground (mark F1)
     grid_feet = {(round(f["x"], 3), round(f["y"], 3)) for f in E["footings"]}
     fspec = lib.get("F1", {})

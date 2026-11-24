@@ -87,7 +87,7 @@ class FixDialog(QDialog):
                     ed.setPalette(pal)
                 self.edits["stair_beam"] = ed
                 form.addRow(f"คานรับชานพัก BS1 (ก×ล เหล็กล่าง/บน ปลอก)  (เดิม {fix.get('beam_now')})", ed)
-        elif fix["target"] == "none":
+        elif fix["target"] in ("none", "combine"):
             pass
         else:
             s = B.settings_of(data)
@@ -152,6 +152,10 @@ def apply(data: dict, fix: dict, values: dict) -> dict:
             s = dict(data.get("settings") or {})
             s["stair_beam"] = values["stair_beam"]
             data["settings"] = s
+    elif fix["target"] == "combine":                  # ฐานรากร่วม (ข12)
+        from core import wanic_autodesign as AU
+        from core import wanic_calc as C
+        AU.design_footings(data, C.analyse(data))
     elif fix["target"] == "none":
         pass
     else:

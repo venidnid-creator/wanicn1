@@ -330,6 +330,9 @@ def advice_by_member(res_all, data) -> dict:
                 if mm_t:
                     tips = tips + [f"{mark} (ขั้น 5 พื้น): เพิ่มความหนาพื้นเป็น {mm_t.group(1)} ซม. กันการแอ่นตัว (ACI 9.5)"]
                 tips = tips or ["เพิ่มเหล็ก/ความหนาพื้น (ขั้น 5)"]
+            elif m.group == "footing" and m.name.startswith("ฐานรากซ้อนกัน"):
+                tips = ["ฐานราก (ขั้น 2): ฐานเดี่ยวสองฐานซ้อนกัน — กด «แก้ไขให้ผ่าน» เพื่อออกแบบเป็นฐานรากร่วม (CF) "
+                        "รับเสา 2 ต้น จุดศูนย์กลางที่แรงลัพธ์"]
             elif m.group == "footing":
                 xy = re.search(r"\(([-\d.]+), ([-\d.]+)\)", m.name)
                 rows = [r for r in feet if xy and abs(r["x"] - float(xy.group(1))) < 0.01
@@ -681,6 +684,10 @@ def member_fix(res_all, data, m) -> dict | None:
             if mm:
                 ch["t"] = max(ch.get("t", 0), int(mm.group(1)) / 100)
         return {"target": "lib", "key": mark, "kind": "slab", "changes": ch, "advice": tips}
+    if m.group == "footing" and m.name.startswith("ฐานรากซ้อนกัน"):
+        return {"target": "combine", "key": "", "kind": "footing", "changes": {"combine": True},
+                "advice": ["ฐานราก (ขั้น 2): ฐานเดี่ยวสองฐานซ้อนกัน — ออกแบบเป็นฐานรากร่วม (CF) รับเสา 2 ต้น "
+                           "จุดศูนย์กลางที่แรงลัพธ์"]}
     if m.group == "footing":
         mark = m.name.split(" ")[0]
         xy = re.search(r"\(([-\d.]+), ([-\d.]+)\)", m.name)

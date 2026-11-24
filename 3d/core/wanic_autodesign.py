@@ -74,6 +74,8 @@ def design_footings(data, res) -> list:
     """Size every spread footing for its load and group them into F1.. ;
     returns the lines that say what changed."""
     from core import wanic_building as B
+    had_cf = bool(data.get("combined_footings"))
+    data["combined_footings"] = []                         # re-decided below from the single sizes
     E = B.elements(data)
     lib = B.library_of(data)
     b_ = res["basis"]
@@ -81,6 +83,8 @@ def design_footings(data, res) -> list:
     loads = dict(res["columns"])
     base = dict(lib.get("F1") or {})
     if int(base.get("piles") or 0):                       # piles: the pile count rule (advice) handles them
+        if had_cf:
+            data["combined_footings"] = []
         return []
     need = {}
     for f in E["footings"]:
@@ -100,8 +104,8 @@ def design_footings(data, res) -> list:
         t = max(t for s, t in need.values() if s <= side + 1e-9 and
                 (i == 1 or s > sizes[i - 2] + 1e-9)) if any(s <= side for s, _ in need.values()) else 0.3
         mark = f"F{i}"
-        new_lib[mark] = dict(base, **(new_lib.get(mark) or {}), kind="footing", w=side, l=side,
-                             t=max(t, float((new_lib.get(mark) or {}).get("t", 0) if mark != "F1" else 0)))
+        new_lib[mark] = {**base, **(new_lib.get(mark) or {}), "kind": "footing", "w": side, "l": side,
+                         "t": max(t, float((new_lib.get(mark) or {}).get("t", 0) if mark != "F1" else 0))}
         marks[side] = mark
     data["library"] = new_lib
     for (x, y), (s, _t) in need.items():
@@ -111,8 +115,48 @@ def design_footings(data, res) -> list:
     for (x, y), (s, _t) in need.items():
         m = marks[next(v for v in sizes if v >= s - 1e-9)]
         counts[m] = counts.get(m, 0) + 1
+    cf_lines = _combine(data, need, sizes, marks, loads, D_, b_, base, counts)
     return [f"{m} (ขั้น 2 ฐานราก): กว้าง {side:.2f} × ยาว {side:.2f} ม. หนา {new_lib[m]['t']:.2f} ม. · {counts.get(m, 0)} ฐาน "
-            f"(ดินรับ {b_['soil']:g} ตัน/ตร.ม.)" for side, m in sorted((s, m) for s, m in marks.items())]
+            f"(ดินรับ {b_['soil']:g} ตัน/ตร.ม.)" for side, m in sorted((s, m) for s, m in marks.items())
+            if counts.get(m)] + cf_lines
+
+
+def _combine(data, need, sizes, marks, loads, D_, b_, base, counts) -> list:
+    """ฐานรากร่วม (ข12): the single footings that would overlap become one
+    footing under both columns (CF1 …, alike ones share a mark)."""
+    from core import wanic_building as B
+    from core import wanic_combined as CF
+    side_of = {k: next(v for v in sizes if v >= s - 1e-9) for k, (s, _t) in need.items()}
+    sq = {(round(x, 3), round(y, 3)): (sd, sd) for (x, y), sd in side_of.items()}
+    found, notes = CF.pairs(sq)
+    lib = B.library_of(data)
+    new_lib = dict(data.get("library") or {})
+    for old in [m for m in new_lib if m.startswith("CF") and m[2:].isdigit()]:
+        new_lib.pop(old)
+    kinds, out = {}, []
+    for a, b2 in found:
+        cs = []
+        for p_ in (a, b2):
+            st = lib.get(B.node_mark(data, lib, p_[0], p_[1], "PC")) or {}
+            cs.append(max(float(st.get("b", 0.2) or 0.2), float(st.get("h", 0.2) or 0.2)))
+        r = CF.design(a, b2, loads.get(a, 0.0), loads.get(b2, 0.0), D_, cs[0], cs[1], b_["soil"],
+                      b_["concrete"], float(b_.get("fc", 240) or 240), float(b_.get("fy_db", 4000) or 4000),
+                      sq[a], sq[b2], max([t_ for k_, (_s, t_) in need.items()
+                                            if (round(k_[0], 3), round(k_[1], 3)) in (a, b2)] + [0.30]))
+        key = (r["w"], r["l"], r["t"], r["bars"], r["bars_y"], r["top"]) if r["along_x"] else \
+            (r["l"], r["w"], r["t"], r["bars_y"], r["bars"], r["top"])
+        mark = kinds.setdefault(key, f"CF{len(kinds) + 1}")
+        new_lib[mark] = dict(base, kind="footing", w=r["w"], l=r["l"], t=r["t"], bars=r["bars"],
+                             bars_y=r["bars_y"], top=r["top"], combined=True, piles=0)
+        data.setdefault("combined_footings", []).append(
+            {"mark": mark, "nodes": [list(a), list(b2)], "cx": r["cx"], "cy": r["cy"]})
+        for p_ in (a, b2):
+            m_ = marks[side_of[next(k for k in side_of if (round(k[0], 3), round(k[1], 3)) == p_)]]
+            counts[m_] = counts.get(m_, 0) - 1
+        out.append(f"{mark} (ขั้น 2 ฐานรากร่วม): เสา ({a[0]:.2f}, {a[1]:.2f}) + ({b2[0]:.2f}, {b2[1]:.2f}) · "
+                   f"{r['w']:.2f} × {r['l']:.2f} × {r['t']:.2f} ม. · " + " · ".join(r["notes"]))
+    data["library"] = new_lib
+    return out + notes
 
 
 # -- columns and stumps: one section, the steel by load ------------------------------------------

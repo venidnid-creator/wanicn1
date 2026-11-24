@@ -2700,6 +2700,121 @@ def footing_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
     sh.text((pox + 11, by + 2.0), f"1:{sc}", 3.2, "center")
 
 
+def combined_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
+    """ฐานรากร่วม (ข12): the section along the two columns at 1:``sc`` —
+    both stumps where they stand, the bottom mesh (and the top bars between
+    the columns when the footing hogs), lean concrete and sand, the sizes
+    through the column centres; then the plan, its sizes and the name box."""
+    lib = E["lib"]
+    sp = lib[mark]
+    ft = next(f for f in E["footings"] if f["mark"] == mark and f.get("nodes"))
+    (ax_, ay_), (bx_, by_) = ft["nodes"]
+    along_x = abs(bx_ - ax_) >= abs(by_ - ay_)
+    Lg = float(sp["w"] if along_x else sp["l"])
+    Bg = float(sp["l"] if along_x else sp["w"])
+    t = float(sp["t"])
+    us = sorted(((ax_ if along_x else ay_) - (ft["x"] if along_x else ft["y"]),
+                 (bx_ if along_x else by_) - (ft["x"] if along_x else ft["y"])))
+    st = next((s_ for s_ in E["stumps"] if (round(s_["x"], 3), round(s_["y"], 3)) == (ax_, ay_)), None)
+    b = float(lib.get(st["mark"] if st else "PC1", {}).get("b", 0.2))
+    gl = float(E.get("GL", 0.0))
+    zt = ft["z1"] - gl
+    lean, sand = float(sp.get("lean", 0.05)), float(sp.get("sand", 0.05))
+    k = 1000.0 / sc
+    oy = ytop - 14 - 0.35 * k
+
+    def P(u, z):
+        return (ox + u * k, oy + z * k)
+    sh.line(P(-Lg / 2 - 0.45, 0.0), P(Lg / 2 + 0.45, 0.0), "cut", 0.4)
+    sh.text((P(-Lg / 2 - 0.45, 0)[0], P(0, 0)[1] + 1.5), "ระดับดินเดิม ±0.00", 2.0, "left", "dim")
+    top = 0.35
+    zb = zt - t
+    for u0 in us:                                       # the two stumps and their bars
+        sh.line(P(u0 - b / 2, zt), P(u0 - b / 2, top), "cut", 0.45)
+        sh.line(P(u0 + b / 2, zt), P(u0 + b / 2, top), "cut", 0.45)
+        sh.line(P(u0 - b / 2 - 0.05, top), P(u0 + b / 2 + 0.05, top + 0.06), "cut", 0.25)
+        for uu in (u0 - b / 2 + 0.035, u0 + b / 2 - 0.035):
+            sh.line(P(uu, top), P(uu, zb + 0.075), "rebar", 0.35)
+            sh.line(P(uu, zb + 0.075), P(uu + (0.25 if uu > u0 else -0.25), zb + 0.075), "rebar", 0.35)
+    sh.rect(*P(-Lg / 2, zb), *P(Lg / 2, zt), "cut", 0.5)
+    _stipple(sh, P(-Lg / 2, zb), P(Lg / 2, zt))
+    sh.rect(*P(-Lg / 2 - 0.05, zb - lean), *P(Lg / 2 + 0.05, zb), "cut", 0.25)
+    _brick_band(sh, P(-Lg / 2 - 0.05, zb - lean), P(Lg / 2 + 0.05, zb), 1.0)
+    sh.rect(*P(-Lg / 2 - 0.05, zb - lean - sand), *P(Lg / 2 + 0.05, zb - lean), "cut", 0.2)
+    cov = 0.075
+    hook = max(0.15, t - 2 * cov)
+    sh.poly([P(-Lg / 2 + cov, zb + cov + hook), P(-Lg / 2 + cov, zb + cov), P(Lg / 2 - cov, zb + cov),
+             P(Lg / 2 - cov, zb + cov + hook)], "rebar", 0.5, closed=False)
+    long_bars = sp.get("bars") if along_x else sp.get("bars_y")
+    cross_bars = sp.get("bars_y") if along_x else sp.get("bars")
+    _n, _nm, _d, s_ = D._bars(cross_bars)
+    s_ = s_ or 0.15
+    m = int((Lg - 2 * cov) / s_)
+    for i in range(m + 1):
+        _dot(sh, P(-Lg / 2 + cov + 0.03 + i * (Lg - 2 * cov - 0.06) / max(m, 1), zb + cov + 0.025), 0.5)
+    if sp.get("top"):
+        sh.poly([P(us[0], zt - cov - hook), P(us[0], zt - cov), P(us[1], zt - cov), P(us[1], zt - cov - hook)],
+                "rebar", 0.5, closed=False)
+    tx = P(Lg / 2 + 0.55, 0)[0]
+    labels = [((us[1] + b / 2, (top + zt) / 2), "ตอม่อ ดูขยายเสา")]
+    if sp.get("top"):
+        labels.append(((us[1], zt - cov), f"เหล็กบน {D._bars(sp['top'])[1]} มม.@{D._bars(sp['top'])[3] or 0.2:.3f}"))
+    labels += [((Lg / 2 - cov, zb + cov + hook * 0.6), "งอขึ้นปลายเหล็กตะแกรง"),
+               ((Lg / 2 - cov - 0.05, zb + cov + 0.02),
+                f"เหล็กล่างตามยาว {D._bars(long_bars)[1]} มม.@{(D._bars(long_bars)[3] or 0.15):.3f}"),
+               ((Lg / 2, zb - lean / 2), f"คอนกรีตหยาบ 1:3:5 หนา {lean:.2f} ม."),
+               ((Lg / 2, zb - lean - sand / 2), f"ทรายหยาบอัดแน่น หนา {sand:.2f} ม.")]
+    last = None
+    for (uu, zz), lab in labels:
+        q = P(uu, zz)
+        ty = q[1] if last is None else min(q[1], last - 5.5)
+        last = ty
+        sh.circle(q, 0.45, "text", 0.2)
+        sh.line(q, (tx - 2, ty), "text", 0.15)
+        sh.line((tx - 2, ty), (tx + len(lab) * 1.25, ty), "text", 0.15)
+        sh.text((tx + 0.5, ty + 0.9), lab, 2.4)
+    xl = P(-Lg / 2 - 0.3, 0)[0]
+    for za, zb_ in ((zt, 0.0), (zb, zt), (zb - lean - sand, zb)):
+        a, b2 = P(0, za)[1], P(0, zb_)[1]
+        sh.line((xl, a), (xl, b2), "dim", 0.15)
+        for yq in (a, b2):
+            sh.line((xl - 0.8, yq - 0.8), (xl + 0.8, yq + 0.8), "dim", 0.3)
+        sh.text((xl - 1.2, (a + b2) / 2 - 0.9), f"{zb_ - za:.2f}", 2.3, "right", "dim")
+    yb = P(0, zb - lean - sand - 0.15)[1] - 4
+    D.dim_chain(sh, lambda x_, y_: (P(x_, 0)[0], yb), [-Lg / 2, us[0], us[1], Lg / 2], 0.0, "x")
+    D.dim_chain(sh, lambda x_, y_: (P(x_, 0)[0], yb - 5), [-Lg / 2, Lg / 2], 0.0, "x")
+    for xq in (ox - 4, ox + 4):
+        sh.circle((xq, yb - 13), 3.2, "text", 0.25)
+        sh.text((xq, yb - 13.9), str(n_sec), 2.4, "center", "text", True)
+    py0 = yb - 38 - Bg * k / 2
+    pox = ox
+    if side:
+        pox = tx + 72 + Lg / 2 * k
+        py0 = P(0, zt)[1] - Bg * k / 2 + 6
+    Q = lambda u_, v_: (pox + u_ * k, py0 + v_ * k)               # noqa: E731
+    sh.rect(*Q(-Lg / 2, -Bg / 2), *Q(Lg / 2, Bg / 2), "cut", 0.5)
+    for u0 in us:
+        sh.rect(*Q(u0 - b / 2, -b / 2), *Q(u0 + b / 2, b / 2), "column", 0.35)
+        _brick_band(sh, Q(u0 - b / 2, -b / 2), Q(u0 + b / 2, b / 2), 0.8)
+    sl = D._bars(long_bars)[3] or 0.15
+    for i in range(int((Bg - 2 * cov) / sl) + 1):
+        v_ = -Bg / 2 + cov + i * sl
+        sh.line(Q(-Lg / 2 + cov, v_), Q(Lg / 2 - cov, v_), "rebar", 0.1, True)
+    for i in range(int((Lg - 2 * cov) / s_) + 1):
+        u_ = -Lg / 2 + cov + i * s_
+        sh.line(Q(u_, -Bg / 2 + cov), Q(u_, Bg / 2 - cov), "rebar", 0.1, True)
+    sh.text((Q(Lg / 2, 0)[0], Q(0, -Bg / 2)[1] - 5),
+            f"ตามยาว {D._bars(long_bars)[1]}@{sl:.3f} · ตามขวาง {D._bars(cross_bars)[1]}@{s_:.3f} ม.", 2.4, "right")
+    D.dim_chain(sh, lambda x_, y_: (Q(x_, 0)[0], Q(0, Bg / 2)[1] + 4), [-Lg / 2, us[0], us[1], Lg / 2], 0.0, "x")
+    D.dim_chain(sh, lambda x_, y_: (Q(-Lg / 2, 0)[0] - 8, Q(0, y_)[1]), [-Bg / 2, Bg / 2], 0.0, "y")
+    by = py0 - Bg * k / 2 - 16
+    sh.rect(pox - 22, by, pox + 22, by + 7, "text", 0.35)
+    sh.line((pox, by), (pox, by + 7), "text", 0.25)
+    sh.text((pox - 11, by + 2.0), mark, 3.4, "center", "text", True)
+    sh.text((pox + 11, by + 2.0), f"1:{sc}", 3.2, "center")
+    sh.text((pox, by - 4), "ฐานรากร่วม (รับเสา 2 ต้น)", 2.4, "center")
+
+
 def s_footings_std(sh, E, marks):
     """แบบขยายฐานราก — two footings a sheet, side by side (the original)."""
     x0, y0, x1, y1 = D.drawing_area()
@@ -2713,7 +2828,7 @@ def s_footings_std(sh, E, marks):
                    and (w + 0.9) * 1000 / s_ + 75 <= (x1 - x0) * 0.62), 50)
         k = 1000.0 / sc
         ox = x0 + 32 + (w / 2 + 0.45) * k
-        footing_detail(sh, E, marks[0], 1, ox, y1 - 2, sc)
+        (combined_detail if sp.get("combined") else footing_detail)(sh, E, marks[0], 1, ox, y1 - 2, sc)
         footing_notes(sh, E, marks, x0 + (x1 - x0) * 0.66, y1 - 30, stacked=True)
         sh.scale = f"1:{sc}"
         return sc
@@ -2722,7 +2837,7 @@ def s_footings_std(sh, E, marks):
                and (2 * big + 2.2) * 1000 / s_ <= (y1 - y0) - 80), 50)
     for i, m in enumerate(marks):
         cx = x0 + cw * (i + 0.5) - 30
-        footing_detail(sh, E, m, i + 1 + 0, cx, y1 - 4, sc)
+        (combined_detail if lib[m].get("combined") else footing_detail)(sh, E, m, i + 1 + 0, cx, y1 - 4, sc)
     sh.scale = f"1:{sc}"
     return sc
 

@@ -79,7 +79,7 @@ def footing_rows(res_all, data, critical=False) -> list:
     for f in E["footings"]:
         k = (round(f["x"], 3), round(f["y"], 3))
         sp = lib.get(f["mark"], {})
-        Pu = loads.get(k, 0.0)
+        Pu = sum(loads.get(n_, 0.0) for n_ in (f.get("nodes") or [k]))
         P = Pu / D_                                   # service: ÷ 1.4, never under D + L
         w, l, t = (float(sp.get(x, 0)) for x in ("w", "l", "t"))
         depth = float(sp.get("depth") or 1.5)
@@ -106,6 +106,21 @@ def footing_rows(res_all, data, critical=False) -> list:
         b0 = 4 * (c + d)
         V2 = qu * max(A - (c + d) ** 2, 0.0)
         Vc2 = phi * 2 * vf * math.sqrt(fc) * b0 * 100 * d * 100
+        if f.get("nodes"):                            # ฐานรากร่วม: the beam along the two columns
+            from core import wanic_combined as CF
+            (ax_, ay_), (bx_, by_) = f["nodes"]
+            along_x = abs(bx_ - ax_) >= abs(by_ - ay_)
+            cs = [float(lib.get(stumps.get(n_), {}).get("b", 0.2)) for n_ in f["nodes"]]
+            ck = CF.check(math.dist((ax_, ay_), (bx_, by_)), math.dist((ax_, ay_), (f["x"], f["y"])),
+                          w if along_x else l, l if along_x else w, t, loads.get((ax_, ay_), 0.0),
+                          loads.get((bx_, by_), 0.0), cs[0], cs[1], fc)
+            c = max(cs)
+            Mu = max(ck["Mpos"], ck["Mneg"])
+            wide = l if along_x else w
+            As = max(_as_need(Mu, wide * 100, d * 100, bar, b_), 0.0018 * wide * 100 * t * 100)
+            nbar = math.ceil(As / bar.area) if bar else 0
+            V1, Vc1, V2, Vc2 = ck["V1"], ck["Vc1"], ck["V2"], ck["Vc2"]
+            k = (ax_, ay_)
         piles = int(sp.get("piles") or 0)
         from core import wanic_pile as PL
         pcap = PL.cap_of(sp, data, b_)

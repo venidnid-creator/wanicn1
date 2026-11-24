@@ -103,6 +103,13 @@ def test_every_failing_row_has_advice_and_a_fix_that_passes_its_mark():
     fix = AD.member_fix(res2, d, ft)
     apply(d, fix, fix["changes"])
     res3 = C.analyse(d)
+    # the bigger footings may now overlap: that row's fix makes them one combined footing (ข12)
+    for m in [m for m in res3["members"] if m.group == "footing" and not m.ok][:1]:
+        assert m.name.startswith("ฐานรากซ้อนกัน")
+        fix = AD.member_fix(res3, d, m)
+        assert fix["target"] == "combine"
+        apply(d, fix, fix["changes"])
+        res3 = C.analyse(d)
     assert all(m.ok for m in res3["members"] if m.group == "footing")
 
 

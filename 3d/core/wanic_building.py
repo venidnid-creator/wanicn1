@@ -542,6 +542,14 @@ def beam_loads(data) -> list:
     return [q for q in ((data or {}).get("beam_loads") or []) if isinstance(q, dict) and "axis" in q]
 
 
+def foot_nodes(E) -> list:
+    """The column points the footings stand under (a combined footing: both)."""
+    out = []
+    for f in E["footings"]:
+        out += f.get("nodes") or [(round(f["x"], 3), round(f["y"], 3))]
+    return out
+
+
 def elements(data) -> dict:
     """Every structural and architectural element of the plan, with its
     mark and position — the one inventory both the 3D build and the
@@ -572,6 +580,23 @@ def elements(data) -> dict:
                               "z1": top})
         E["stumps"].append({"mark": node_mark(data, lib, x, y, "PC"),
                             "x": x, "y": y, "z0": top, "z1": 0.0})
+    # ฐานรากร่วม (ข12): two columns on one footing, centred on their resultant
+    for cf in (data or {}).get("combined_footings") or []:
+        spec = lib.get(cf.get("mark", ""))
+        pts = [tuple(round(float(v), 3) for v in p_) for p_ in cf.get("nodes") or []]
+        if not spec or len(pts) != 2:
+            continue
+        here = [f for f in E["footings"] if (round(f["x"], 3), round(f["y"], 3)) in pts]
+        if len(here) != 2:
+            continue
+        for f in here:
+            E["footings"].remove(f)
+        base = gl - float(spec["depth"])
+        E["footings"].append({"mark": cf["mark"], "x": float(cf["cx"]), "y": float(cf["cy"]),
+                              "z0": base, "z1": base + float(spec["t"]), "nodes": pts})
+        for st in E["stumps"]:
+            if (round(st["x"], 3), round(st["y"], 3)) in pts:
+                st["z0"] = base + float(spec["t"])
     for k in range(n):
         pts = set()
         for j in range(k, n):
@@ -1099,8 +1124,9 @@ class Grid:
     the plan and the drawings, to say where a member is."""
 
     def __init__(self, E):
-        self.xs = sorted({round(c["x"], 3) for c in E["footings"]})
-        self.ys = sorted({round(c["y"], 3) for c in E["footings"]})
+        pts = foot_nodes(E)
+        self.xs = sorted({p[0] for p in pts})
+        self.ys = sorted({p[1] for p in pts})
 
     def _near(self, vals, v, name):
         for i, g in enumerate(vals):
