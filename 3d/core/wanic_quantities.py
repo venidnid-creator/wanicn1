@@ -524,8 +524,9 @@ def compute(data, gate: bool = False) -> dict:
         ts = float(s["stair_t"])
         for fi, f in enumerate(lay["flights"]):
             nr, L, Hs = f["n"], f["L"], f["n"] * lay["R"]
-            fill = dict(d=ts * 1000 if f["z0"] > 1e-6 else 0.0,            # as the 3D model: full at the
-                        tl=0.0 if fi == len(lay["flights"]) - 1 else ts * 1000)   # landing joints
+            tl_ = B.landing_t(lay, ts)
+            fill = dict(d=tl_ * 1000 if f["z0"] > 1e-6 else 0.0,           # as the 3D model: full at the
+                        tl=0.0 if fi == len(lay["flights"]) - 1 else tl_ * 1000)  # landing joints
             sec = P.section_area("stair", dict(L=L * 1000, H=Hs * 1000, n=nr, t=ts * 1000, **fill))
             vol += sec * w
             slope = math.hypot(L, Hs)
@@ -536,7 +537,7 @@ def compute(data, gate: bool = False) -> dict:
             xs = [q[0] for q in ld["pts"]]
             ys = [q[1] for q in ld["pts"]]
             a_ = (max(xs) - min(xs)) * (max(ys) - min(ys))
-            vol += a_ * ts
+            vol += a_ * B.landing_t(lay, ts)
             area += a_ + 2 * (max(xs) - min(xs) + max(ys) - min(ys)) * ts
             bars([("DB12", S.bar_count(max(ys) - min(ys), 0.15) * (max(xs) - min(xs))),
                   ("RB9", S.bar_count(max(xs) - min(xs), 0.20) * (max(ys) - min(ys)))])

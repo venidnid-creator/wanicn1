@@ -2071,11 +2071,20 @@ def band_length(w, h, sill, door, band, wh) -> float:
     return L
 
 
+def landing_t(lay, t) -> float:
+    """ความหนาชานพัก: as thick as the flights' waist measured upright
+    (t·√(1 + (R/g)²)) — both flights' soffits meet the landing's soffit at
+    its inner edge, one line of concrete (the standard section)."""
+    m = lay["R"] / lay["g"] if lay.get("g") else 0.0
+    return round(t * math.sqrt(1 + m * m), 3)
+
+
 def stair_members(stp, s, z, cols=None) -> list:
     """The flights (side profile extruded across the width) and the
     landing slabs of a stair, from :func:`stair_layout`."""
     lay = stair_layout(stp, s)
     t = float(s["stair_t"])
+    tl = landing_t(lay, t)
     out = []
     name = STAIR_TYPES[lay["type"]]
     for i, f in enumerate(lay["flights"]):
@@ -2084,8 +2093,8 @@ def stair_members(stp, s, z, cols=None) -> list:
         w, zz = f["w"], z + f["z0"]
         path = [(x - nx * w / 2, y - ny * w / 2, zz), (x + nx * w / 2, y + ny * w / 2, zz)]
         last = i == len(lay["flights"]) - 1
-        fill = dict(d=_mm(t) if f["z0"] > 1e-6 else 0.0,      # on a landing: full down to its soffit
-                    tl=0.0 if last else _mm(t))                # into a landing: level with its soffit
+        fill = dict(d=_mm(tl) if f["z0"] > 1e-6 else 0.0,     # on a landing: full down to its soffit
+                    tl=0.0 if last else _mm(tl))               # into a landing: level with its soffit
         out.append(_member("structure", "stair", "บันได คสล.", "stair",
                            dict(L=_mm(f["L"]), H=_mm(f["n"] * lay["R"]), n=f["n"], t=_mm(t), **fill), path,
                            anchor="bl", ifc="IfcStair",
@@ -2098,8 +2107,8 @@ def stair_members(stp, s, z, cols=None) -> list:
         top = z + ld["z"]
         out.append(_member("structure", "stair", "ชานพัก", "rect",
                            dict(b=_mm(max(xs) - min(xs)), h=_mm(max(ys) - min(ys))),
-                           [(cx, cy, top - t), (cx, cy, top)], ifc="IfcSlab",
-                           name=f"ชานพักบันได หนา {_cm(t)} ซม. · ระดับ {top:+.2f}"))
+                           [(cx, cy, top - tl), (cx, cy, top)], ifc="IfcSlab",
+                           name=f"ชานพักบันได หนา {_cm(tl)} ซม. · ระดับ {top:+.2f}"))
     for b in stair_beams(stp, s, z, cols):             # คานรับบันได: under the first step, under the landing
         out.append(_member("structure", "stair_beam", b["mark"], "rect", dict(b=_mm(b["b"]), h=_mm(b["h"])),
                            [b["p0"], b["p1"]], anchor="tc", ifc="IfcBeam", name=b["name"]))
@@ -2234,6 +2243,8 @@ def stair_posts(stp, s, z, cols=None) -> list:
 #: guard rails of กฎกระทรวง ฉบับที่ 55), one baluster on every tread.
 RAIL_H = 0.90
 RAIL_INSET = 0.05                     # the balusters 5 cm in from the stair's edge (the owner)
+NEWEL = 0.08                          # เสาหัวราว 8 × 8 cm at the rail's ends and bends
+NEWEL_CAP = 0.06                      # its top above the rail
 RAIL_TEXT = 'ราวบันไดไม้เนื้อแข็ง 2"x4" ทาสี ลูกกรงเหล็กแป๊บดำ ขนาด 1" ทาสี'
 
 
@@ -2300,6 +2311,14 @@ def stair_railing(stp, s, bounds=None) -> dict:
     out["well"] = len(out["rails"])                   # the pieces of the continuous well rail
     _outer_railing(lay, out, bounds)
     out["length"] = sum(math.dist(a, b) for a, b in out["rails"])
+    # เสาหัวราว: a newel at every end and every bend of the rail — the rail
+    # pieces end into it, the joint is clean (the owner: «เข้ารูปแบบมืออาชีพ»)
+    ends = []
+    for a, b in out["rails"]:
+        for q in (a, b):
+            if not any(math.dist(q, e_) < 0.02 for e_ in ends):
+                ends.append(q)
+    out["newels"] = [((q[0], q[1], q[2] - RAIL_H), (q[0], q[1], q[2] + NEWEL_CAP)) for q in ends]
     return out
 
 
@@ -2499,6 +2518,10 @@ def railing_members(stp, s, z, bounds=None) -> list:
         out.append(_member("structure", "stair_rail", "ราวบันได", "rect", dict(b=50.0, h=100.0),
                            [(a[0], a[1], a[2] + z), (b[0], b[1], b[2] + z)], ifc="IfcRailing",
                            name='ราวบันไดไม้เนื้อแข็ง 2"x4"'))
+    for a, b in r.get("newels") or []:
+        out.append(_member("structure", "stair_rail", "เสาหัวราว", "rect", dict(b=_mm(NEWEL), h=_mm(NEWEL)),
+                           [(a[0], a[1], a[2] + z), (b[0], b[1], b[2] + z)], ifc="IfcRailing",
+                           name="เสาหัวราวไม้เนื้อแข็ง 3\"x3\""))
     for a, b in r["posts"]:
         out.append(_member("structure", "stair_rail", "ลูกกรง", "pipe", dict(D=33.4, t=2.3),
                            [(a[0], a[1], a[2] + z), (b[0], b[1], b[2] + z)], ifc="IfcRailing",

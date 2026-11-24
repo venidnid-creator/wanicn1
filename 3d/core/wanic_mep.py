@@ -166,12 +166,28 @@ def members(data, E=None):
         ring = {"color": (0.93, 0.93, 0.92)}
         big = rec["kind"] in ("bed", "living", "other") and (x1 - x0) * (y1 - y0) >= 9.0
         placed = 0
+        # never in the stair opening above (it would hang in the air over the
+        # stair): such a lamp moves to the free part of the room's ceiling
+        holes = B.holes_by_floor(E).get(k + 1, [])
+
+        def in_hole(px, py, m=0.30):
+            return any(hx0 - m <= px <= hx1 + m and hy0 - m <= py <= hy1 + m for hx0, hy0, hx1, hy1 in holes)
         for j in range(rows):
             for i in range(cols):
                 if placed >= n:
                     break
                 cx = x0 + (x1 - x0) * (i + 0.5) / cols
                 cy = y0 + (y1 - y0) * (j + 0.5) / rows
+                if in_hole(cx, cy):
+                    cands = [(x0 + (x1 - x0) * a, y0 + (y1 - y0) * b)
+                             for a in (0.5, 0.2, 0.8) for b in (0.5, 0.2, 0.8)]
+                    free = [q for q in cands if not in_hole(*q)]
+                    if not free:
+                        placed += 1
+                        continue
+                    cx, cy = max(free, key=lambda q: min(
+                        (max(abs(q[0] - (h[0] + h[2]) / 2) - (h[2] - h[0]) / 2,
+                             abs(q[1] - (h[1] + h[3]) / 2) - (h[3] - h[1]) / 2) for h in holes)))
                 if big:
                     # a round surface lamp: white rim, a glowing diffuser
                     bx.frustum(cx, cy, 0.22, 0.22, 0.22, 0.22, zc - 0.05, zc, ring)
