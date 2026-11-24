@@ -130,7 +130,7 @@ def test_schedules_and_systems():
     t = " ".join(sn.texts())
     assert "ถังบำบัด" in t and "Ø4\"S" in t and "Ø2\"W" in t
     m = next(s for s in S.values() if s.group == "M")
-    assert "FCU" in " ".join(m.texts())
+    assert "WALL TYPE" in " ".join(m.texts())             # the standard's M: wall-type units
 
 
 def test_only_the_chosen_families():

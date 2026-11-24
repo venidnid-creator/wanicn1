@@ -125,3 +125,14 @@ def test_ee_lighting_and_socket_plans():
             if "/LP" in t and head.isdigit():
                 runs.add(int(head))
     assert runs and runs <= nos
+
+
+def test_m_fans_and_air_conditioners_as_the_standard():
+    """M: per floor, the recommended fans (CFM from 10 air changes an hour)
+    and the wall-type AC units (BTU), labelled as the standard."""
+    from core import wanic_std_m as MS
+    assert MS.fan_cfm(4.0, 2.6) == 80 and MS.fan_cfm(16.0, 2.6) == 200
+    m = [s for s in D.build_set(house(), INFO) if s.group == "M"]
+    assert m and all(s.title.startswith("ตำแหน่งเครื่องปรับอากาศและพัดลมระบายอากาศ ชั้น") for s in m)
+    t = " ".join(x for s in m for x in s.texts())
+    assert "CEILING FAN" in t and "WALL TYPE" in t

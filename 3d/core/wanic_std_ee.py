@@ -306,12 +306,12 @@ def ee_panel_std(sh, E):
 
 # -- EE-03.. the lighting and the socket plans --------------------------------------------------
 
-def _base(sh, E, k, colw=70.0):
+def _base(sh, E, k, colw=70.0, left=0.0):
     """The floor plan under the electrical layers: grid and sizes, walls and
     doors, the stair (numbered), the fittings, the rooms clear of the stair."""
     x0, y0, x1, y1 = D.drawing_area()
     bx = D.bbox(E, 3.2)
-    box = (x0, y0 + 16, x1 - colw, y1)
+    box = (x0 + left, y0 + 16, x1 - colw, y1)
     fits = (bx[2] - bx[0]) * 1000 / 75 <= box[2] - box[0] and (bx[3] - bx[1]) * 1000 / 75 <= box[3] - box[1] - 14
     v, sc = D.plan_view(sh, E, box=box, pad=3.2, scale=75 if fits else None)
     t = float(E["settings"].get("wall_t") or 0.1)

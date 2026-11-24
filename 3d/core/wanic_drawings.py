@@ -3105,9 +3105,10 @@ def build_set(data, info=None,
         for k in floors:
             add("EE", f"แปลนเต้ารับไฟฟ้า ชั้น {k + 1}", lambda sh, _a, k=k: EES.ee_power_plan(sh, E, k))
     if "M" in groups:
+        from core import wanic_std_m as MS                  # the standard's M-01, M-02
         for k in floors:
-            add("M", f"แปลนระบบปรับอากาศและระบายอากาศชั้น {k + 1}",
-                lambda sh, _a, k=k: m_plan(sh, E, k, None))
+            add("M", f"ตำแหน่งเครื่องปรับอากาศและพัดลมระบายอากาศ ชั้น {k + 1}",
+                lambda sh, _a, k=k: MS.m_plan_std(sh, E, k))
     sheets = [s for s, _f in plan]
     for i, s in enumerate(sheets, 1):
         s.number = i
