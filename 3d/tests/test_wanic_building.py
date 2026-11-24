@@ -543,3 +543,19 @@ def test_no_wall_across_an_open_way():
     assert has(6, 0, 6, 4)                          # corridor | bedroom: a wall (and its door)
     assert not has(0, -2, 4, -2) and not has(0, -2, 0, 0)    # the porch's outside edges
     assert has(0, 0, 4, 0)                          # living | porch: a wall (with its door / windows)
+
+
+def test_view_switches_by_kind_and_floor():
+    """ค6: เปิด-ปิดโครงสร้าง — one switch per kind, per floor where it matters,
+    in build order (foundation → roof)."""
+    from core import wanic_rc as R
+    d = B.default_data()
+    R.apply_grid(d, [4.0, 4.0], [4.0, 3.0], 2)
+    d["settings"]["roof"] = "hip"
+    gs, _c = B.build(d, ("structure", "roof"))
+    E = B.elements(d)
+    labels = [lab for _k, lab, _g in B.view_categories(gs, E["H"], B.floor_lift(E["settings"]), E["n"])]
+    for want in ("ฐานราก", "ตอม่อ", "คานคอดิน", "เสา ชั้น 1", "เสา ชั้น 2", "คานหลังคา", "พื้น ชั้น 1",
+                 "พื้น ชั้น 2", "ผนัง ชั้น 1", "อะเส", "จันทัน", "อกไก่", "แป", "วัสดุมุงหลังคา"):
+        assert want in labels, want
+    assert labels.index("ฐานราก") < labels.index("เสา ชั้น 1") < labels.index("จันทัน") < labels.index("แป")

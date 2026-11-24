@@ -2657,6 +2657,11 @@ class BuildingPanel(QWidget):
         show_all.clicked.connect(lambda _=False: _safe(self, self.show_everything))
         ol.addWidget(show_all)
         vl.addLayout(ol, 3, 0, 1, 3)
+        toggles = QPushButton("☑ เปิด-ปิดโครงสร้างทีละรายการ…")
+        toggles.setToolTip("รายการทุกชนิดในโมเดลแยกตามชั้น (เสาเข็ม ฐานราก ตอม่อ คานคอดิน เสาชั้น 1 … ผนัง "
+                           "อะเส จันทัน อกไก่ แป วัสดุมุง …) ติ๊กเพื่อแสดง/ซ่อน — ตรวจทีละรายการได้ง่าย")
+        toggles.clicked.connect(lambda _=False: _safe(self, self.open_toggles))
+        vl.addWidget(toggles, 4, 0, 1, 3)
         lay.addWidget(vb)
         rm = QPushButton("ลบสิ่งที่สร้างโดย ออกแบบอาคาร")
         rm.clicked.connect(lambda _=False: _safe(self, self.remove_built))
@@ -3864,6 +3869,68 @@ class BuildingPanel(QWidget):
         self.app.viewport.update()
         self.status.setText(f"วัตถุที่ซ่อนกลับมาที่เดิมแล้ว {len(hidden)} ชิ้น · "
                             f"เปิดเลเยอร์ {layers_on} ชั้น")
+
+    def open_toggles(self) -> None:
+        """เปิด-ปิดโครงสร้าง: a switch for every kind of member (floor by floor)."""
+        from PySide6.QtWidgets import QDialog, QHBoxLayout as _H, QListWidget, QListWidgetItem, QVBoxLayout as _V
+        from core.history import HideCommand
+        groups = B.generated(self.app.scene)
+        if not groups:
+            self.status.setText("ยังไม่มีชิ้นส่วนที่สร้างไว้ — กด «สร้าง/อัปเดตโมเดล» ก่อน")
+            return
+        d = self.data()
+        E = B.elements(d)
+        cats = B.view_categories(groups, E["H"], B.floor_lift(E["settings"]), E["n"])
+        dlg = QDialog(self)
+        dlg.setWindowTitle("เปิด-ปิดโครงสร้าง")
+        lay = _V(dlg)
+        head = QLabel("ติ๊กเพื่อแสดง เอาติ๊กออกเพื่อซ่อน — ไม่ได้ลบ แค่การแสดงผล (เลิกทำได้)")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        lst = QListWidget()
+        for key, label, gs in cats:
+            it = QListWidgetItem(f"{label}  ({len(gs)} ชิ้น)")
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            shown = any(not getattr(g, "hidden", False) for g in gs)
+            it.setCheckState(Qt.Checked if shown else Qt.Unchecked)
+            it.setData(Qt.UserRole, key)
+            lst.addItem(it)
+        lay.addWidget(lst, 1)
+        by = {key: gs for key, _l, gs in cats}
+        busy = {"on": False}
+
+        def apply(item):
+            if busy["on"]:
+                return
+            gs = by.get(item.data(Qt.UserRole)) or []
+            hide = item.checkState() != Qt.Checked
+            self.app.viewport.history.execute(HideCommand(gs, hide))
+            self.app.viewport.update()
+        lst.itemChanged.connect(apply)
+
+        def set_all(on):
+            busy["on"] = True
+            try:
+                for i in range(lst.count()):
+                    lst.item(i).setCheckState(Qt.Checked if on else Qt.Unchecked)
+            finally:
+                busy["on"] = False
+            self.app.viewport.history.execute(HideCommand(groups, not on))
+            self.app.viewport.update()
+        row = _H()
+        b1 = QPushButton("แสดงทั้งหมด")
+        b1.clicked.connect(lambda _=False: set_all(True))
+        b2 = QPushButton("ซ่อนทั้งหมด")
+        b2.clicked.connect(lambda _=False: set_all(False))
+        b3 = QPushButton("ปิด")
+        b3.clicked.connect(dlg.accept)
+        for b in (b1, b2, b3):
+            row.addWidget(b)
+        lay.addLayout(row)
+        dlg.resize(420, 620)
+        dlg.show()
+        self._toggle_dialog = dlg
+        self._toggle_list = lst
 
     def set_transparency(self, pct: int) -> None:
         """The model's faces see-through by ``pct`` % (0 = solid)."""

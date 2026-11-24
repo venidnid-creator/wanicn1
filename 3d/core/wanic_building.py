@@ -5259,3 +5259,86 @@ def takeoff_rates(data) -> list[dict]:
         add("งานหลังคา", "4.9", "มุงหลังคา (พื้นที่ตามแนวลาด)", "หลังคา",
             "top_area", "ตร.ม.")
     return R
+
+# ---------------------------------------------------------------------------
+# เปิด-ปิดโครงสร้าง (the owner): every kind of generated member, floor by
+# floor, as a list of switches — to check one thing at a time (and which
+# materials have a price and which have not)
+# ---------------------------------------------------------------------------
+
+#: the kinds in build order (roof → last), Thai names; a floor is added where it matters
+VIEW_KINDS = [
+    ("pile", "เสาเข็ม", False), ("footing", "ฐานราก", False), ("stump", "ตอม่อ", False),
+    ("ground_beam", "คานคอดิน", False), ("column", "เสา", True), ("beam", "คาน", True),
+    ("slab", "พื้น", True), ("stair", "บันได", True), ("stair_beam", "คานรับบันได", True),
+    ("stair_rail", "ราวบันได", True), ("wall", "ผนัง", True), ("plaster", "ฉาบปูน/ผิวผนัง", True),
+    ("opening", "ประตู-หน้าต่าง", True), ("ceiling", "ฝ้าเพดาน", True), ("ceiling_frame", "โครงฝ้า", True),
+    ("trim", "บัวพื้น/บัวฝ้า", True), ("fixture", "สุขภัณฑ์/ของตกแต่ง", True),
+    ("light", "ดวงโคม", True), ("outlet", "เต้ารับ/สวิตช์", True), ("ac", "เครื่องปรับอากาศ", True),
+    ("wallplate", "อะเส", False), ("tiebeam", "ขื่อ", False), ("rbeam", "คานรับดั้ง", False),
+    ("post", "ดั้ง", False), ("strut", "ตุ๊กตา", False), ("brace", "ค้ำยัน", False),
+    ("rafter", "จันทัน", False), ("hip", "ตะเฆ่สัน", False), ("valley", "ตะเฆ่ราง", False),
+    ("ridge", "อกไก่", False), ("purlin", "แป", False), ("fishplate", "เหล็กประกับหางปลา", False),
+    ("headplate", "เพลทหัวเสา", False), ("tiles", "วัสดุมุงหลังคา", False), ("cap", "ครอบสัน/ครอบตะเข้", False),
+    ("skin", "แผ่นหลังคา (ผิว)", False), ("fascia", "เชิงชาย/ปั้นลม", False),
+    ("soffit", "ฝ้าชายคา", False), ("soffit_frame", "โครงฝ้าชายคา", False),
+    ("eave_gutter", "รางน้ำ", False), ("downspout", "ท่อลงน้ำ", False),
+]
+
+
+HANGING = ("light", "ceiling", "ceiling_frame", "ac")
+
+
+def view_key(g, H, lift=0.0) -> tuple:
+    """(kind key, floor or None) of a generated group, for the switches."""
+    wb = (g.ext or {}).get(EXT_KEY) or {}
+    kind = str(wb.get("kind") or "")
+    if kind == "beam" and str(wb.get("mark", "")).startswith("GB"):
+        kind = "ground_beam"
+    if kind in ("door", "window", "opening", "frame", "glass", "leaf"):
+        kind = "opening"
+    if kind in ("skirting", "cornice"):
+        kind = "trim"
+    if kind in ("ac_in", "ac_out", "ac_pipe"):
+        kind = "ac"
+    per = {k: f for k, _t, f in VIEW_KINDS}
+    if not per.get(kind, False):
+        return kind, None
+    try:
+        zs = [v.position.z() for v in g.mesh.vertices]
+    except Exception:                                   # noqa: BLE001 - no mesh: no floor
+        return kind, None
+    if not zs or H <= 0:
+        return kind, None
+    z = (min(zs) if kind != "beam" else max(zs)) - lift
+    if kind == "beam":
+        fl = max(int(round(z / H)) - 1, 0)
+    elif kind == "slab":                               # by its top: the floor it is
+        fl = int(round((max(zs) - lift) / H))
+    elif kind in HANGING:                              # under the ceiling / slab of its own storey
+        fl = int(math.floor((max(zs) - lift - 0.15) / H))
+    else:
+        fl = int(math.floor((z + 0.05) / H))
+    return kind, max(fl, 0)
+
+
+def view_categories(groups, H, lift=0.0, n=0) -> list:
+    """[(key, label, [groups])] — every kind (and floor) present, in the
+    order of VIEW_KINDS; kinds it does not know go last by their mark."""
+    names = {k: t for k, t, _f in VIEW_KINDS}
+    order = {k: i for i, (k, _t, _f) in enumerate(VIEW_KINDS)}
+    by = {}
+    for g in groups:
+        kind, fl = view_key(g, H, lift)
+        by.setdefault((kind, fl), []).append(g)
+    out = []
+    for (kind, fl), gs in by.items():
+        th = names.get(kind) or str(((gs[0].ext or {}).get(EXT_KEY) or {}).get("mark") or kind)
+        if kind == "beam" and fl is not None:
+            label = "คานหลังคา" if n and fl + 1 >= n else f"คานชั้น {fl + 2}"
+        else:
+            label = th + (f" ชั้น {fl + 1}" if fl is not None else "")
+        out.append(((kind, fl), label, gs))
+    out.sort(key=lambda t: (order.get(t[0][0], 999), t[0][1] if t[0][1] is not None else -1, t[1]))
+    return out
+
