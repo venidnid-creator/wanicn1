@@ -627,6 +627,8 @@ class SheetEditor(QWidget):
 
     # -- display
     def refresh(self):
+        cur = (self.grid.currentRow(), self.grid.currentColumn())
+        picked = [(i.row(), i.column()) for i in self.grid.selectedIndexes()]
         self._busy = True
         self.grid.setRowCount(self.book.rows)
         self.grid.setColumnCount(self.book.cols)
@@ -639,6 +641,13 @@ class SheetEditor(QWidget):
         dec = None if self.decimals is None else self.decimals
         for (r, c) in list(self.book.raw):
             self._paint(r, c, dec)
+        if cur[0] >= 0:                            # the cell and the selection stay where they were
+            from PySide6.QtCore import QItemSelectionModel
+            self.grid.setCurrentCell(*cur, QItemSelectionModel.NoUpdate)
+            sm = self.grid.selectionModel()
+            for r, c in picked:
+                if r < self.grid.rowCount() and c < self.grid.columnCount():
+                    sm.select(self.grid.model().index(r, c), QItemSelectionModel.Select)
         self._busy = False
 
     def _paint(self, r, c, dec=None):
