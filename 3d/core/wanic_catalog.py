@@ -220,7 +220,21 @@ SANITARY = {
 DECOR = {
     "GP": ("ฉากกั้นอาบน้ำกระจกนิรภัยใส 10 มม.", 0.90, 0.03, 0.0, 2.00),
     "PL": ("กระถางต้นไม้ประดับ", 0.40, 0.40, 0.0, 0.90),
+    # furniture and appliances (the owner: «ห้องนอน รวมไปถึงเครื่องใช้ไฟฟ้า») —
+    # shown in the plan and the 3D, never billed in the construction BOQ
+    "BED": ("เตียงนอน 5 ฟุต พร้อมหัวเตียง", 1.60, 2.10, 0.0, 1.00),
+    "BED1": ("เตียงเดี่ยว 3.5 ฟุต พร้อมหัวเตียง", 1.10, 2.05, 0.0, 0.95),
+    "NS": ("โต๊ะข้างเตียง + โคมไฟ", 0.45, 0.40, 0.0, 0.55),
+    "WR": ("ตู้เสื้อผ้า บานเปิด", 1.20, 0.60, 0.0, 2.00),
+    "ARM": ("เก้าอี้นวม", 0.75, 0.75, 0.0, 0.80),
+    "TB": ("โต๊ะข้าง", 0.50, 0.50, 0.0, 0.45),
+    "TV": ("ทีวีติดผนัง 43\" + ตู้วางทีวี", 1.20, 0.40, 0.0, 1.30),
+    "DK": ("โต๊ะทำงาน + เก้าอี้", 1.00, 0.55, 0.0, 0.75),
+    "FR": ("ตู้เย็น 2 ประตู", 0.65, 0.65, 0.0, 1.70),
+    "WM": ("เครื่องซักผ้าฝาหน้า", 0.60, 0.60, 0.0, 0.85),
 }
+#: the furniture / appliance codes (DECOR, not billed)
+FURNITURE = ("BED", "BED1", "NS", "WR", "ARM", "TB", "TV", "DK", "FR", "WM")
 
 #: The fittings «ชุดห้องน้ำมาตรฐาน» puts into a bathroom, with where along
 #: the room (fractions of w, d) each goes.
@@ -228,6 +242,35 @@ BATHROOM_SET = [("WC1", 0.25, 0.80), ("SP", 0.08, 0.80), ("TP", 0.45, 0.92),
                 ("LV", 0.75, 0.85), ("MR", 0.75, 0.97), ("SH", 0.80, 0.15),
                 ("SD", 0.95, 0.30), ("TR", 0.30, 0.05), ("FD", 0.70, 0.30)]
 KITCHEN_SET = [("SK1", 0.50, 0.88), ("FD", 0.50, 0.50)]
+
+
+def bedroom_layout(w: float, d: float, wall: float = 0.08) -> list:
+    """ห้องนอน as the owner's plan draws it: the bed's head on the far wall
+    (a 5-ft bed, a 3.5-ft one in a small room) with a bedside table and
+    lamp each side, the wardrobe against a side wall, the TV on the wall
+    facing the bed, an armchair and side table by the window corner (when
+    there is room). [(code, x, y, dir)] from the room's corner."""
+    out = []
+    big = w >= 3.0 and d >= 3.0
+    bed, bw, bd = ("BED", 1.60, 2.10) if big else ("BED1", 1.10, 2.05)
+    if w < bw + 0.6 or d < bd + 0.6:
+        return out
+    bx = w / 2 if w < 3.6 else w / 2 + 0.30                    # a little off the wardrobe
+    out.append((bed, bx, d - wall - bd / 2, 0))
+    for side in (-1, 1):
+        nx = bx + side * (bw / 2 + 0.25)
+        if wall + 0.22 < nx < w - wall - 0.22:
+            out.append(("NS", nx, d - wall - 0.20, 0))
+    if w >= 3.0 and bx - bw / 2 - 0.30 > 0.65:                 # wardrobe on the left wall
+        out.append(("WR", wall + 0.30, d - wall - 0.70, 1))
+    elif d >= bd + 1.4:                                         # or beside the door wall
+        out.append(("WR", w - wall - 0.70, wall + 0.30, 0))
+    if d >= bd + 1.2:
+        out.append(("TV", bx, wall + 0.20, 0))
+    if big and d >= bd + 1.6 and w >= 3.4:
+        out.append(("ARM", wall + 0.50, wall + 0.55, 0))
+        out.append(("TB", wall + 1.10, wall + 0.40, 0))
+    return [(c, round(x, 3), round(y, 3), dr) for c, x, y, dr in out]
 
 
 def bathroom_layout(w: float, d: float, wall: float = 0.08) -> list:

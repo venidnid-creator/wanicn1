@@ -1826,6 +1826,59 @@ def fixture_member(fx, z, room=None):
             bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.045, b + 0.058, z0 - 0.45, z0 + 0.03, towel)
             bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.087, b + 0.100, z0 - 0.38, z0 + 0.03, towel)
             bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.045, b + 0.100, z0 + 0.025, z0 + 0.04, towel)
+    elif t in ("BED", "BED1"):
+        fab = {"color": (0.93, 0.92, 0.88)}
+        cover = {"color": (0.55, 0.62, 0.72)}
+        bx.box(-w / 2, w / 2, b + 0.06, -b, 0.10, 0.30, wood)                 # the base
+        bx.box(-w / 2 + 0.02, w / 2 - 0.02, b + 0.08, -b - 0.02, 0.30, 0.52, fab)   # mattress
+        bx.box(-w / 2 + 0.02, w / 2 - 0.02, b + 0.75, -b - 0.02, 0.52, 0.56, cover)  # the cover
+        bx.box(-w / 2 - 0.03, w / 2 + 0.03, b, b + 0.06, 0.0, height, wood)  # headboard
+        n_ = 2 if t == "BED" else 1
+        for k_ in range(n_):
+            px = -w / 2 + w * (k_ + 0.5) / n_
+            bx.box(px - 0.30, px + 0.30, b + 0.12, b + 0.45, 0.52, 0.64, {"color": (0.98, 0.98, 0.97)})
+    elif t == "NS":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, 0.50, wood)
+        bx.box(-w / 2 + 0.02, w / 2 - 0.02, -b, -b + 0.01, 0.30, 0.46, {"color": COLORS["teak_dark"]})
+        bx.frustum(0.0, 0.0, 0.07, 0.07, 0.07, 0.07, 0.50, 0.53, chrome)     # the lamp
+        bx.frustum(0.0, 0.0, 0.012, 0.012, 0.012, 0.012, 0.53, 0.75, chrome)
+        bx.frustum(0.0, 0.0, 0.14, 0.14, 0.09, 0.09, 0.72, 0.92, {"color": (1.0, 0.95, 0.80)})
+    elif t == "WR":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, height, wood)
+        for k_ in range(3):                                                    # three doors
+            x0_ = -w / 2 + w * k_ / 3 + 0.01
+            bx.box(x0_, x0_ + w / 3 - 0.02, -b, -b + 0.012, 0.08, height - 0.04,
+                   {"color": COLORS["teak_dark"]})
+            bx.box(x0_ + w / 3 - 0.07, x0_ + w / 3 - 0.05, -b + 0.012, -b + 0.04, 0.9, 1.2, chrome)
+    elif t == "ARM":
+        fab = {"color": (0.45, 0.50, 0.58)}
+        bx.box(-w / 2, w / 2, b, -b, 0.10, 0.42, fab)                        # seat
+        bx.box(-w / 2, w / 2, b, b + 0.15, 0.42, height, fab)                # back
+        for sx in (-1, 1):
+            bx.box(sx * w / 2 - (0.12 if sx > 0 else 0), sx * w / 2 + (0.0 if sx > 0 else 0.12),
+                   b, -b, 0.42, 0.62, fab)                                   # arms
+        bx.box(-w / 2 + 0.04, w / 2 - 0.04, b + 0.04, -b - 0.04, 0.0, 0.10, dark)
+    elif t == "TB":
+        bx.frustum(0.0, 0.0, w / 2, d / 2, w / 2, d / 2, height - 0.03, height, wood)
+        bx.frustum(0.0, 0.0, 0.03, 0.03, 0.03, 0.03, 0.0, height - 0.03, dark)
+    elif t == "TV":
+        bx.box(-w / 2, w / 2, b, b + 0.40, 0.0, 0.45, wood)                  # the cabinet
+        bx.box(-0.48, 0.48, b + 0.01, b + 0.05, 0.85, 1.42, dark)            # the screen
+        bx.box(-0.46, 0.46, b + 0.05, b + 0.052, 0.87, 1.40, {"color": (0.12, 0.16, 0.22)})
+    elif t == "DK":
+        bx.box(-w / 2, w / 2, b, -b, 0.72, 0.75, wood)
+        for sx in (-1, 1):
+            bx.box(sx * (w / 2 - 0.03) - 0.02, sx * (w / 2 - 0.03) + 0.02, b, -b, 0.0, 0.72, wood)
+        bx.box(-0.22, 0.22, -b + 0.10, -b + 0.50, 0.42, 0.47, dark)          # the chair
+        bx.box(-0.22, 0.22, -b + 0.46, -b + 0.50, 0.47, 0.90, dark)
+    elif t == "FR":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, height, {"color": (0.88, 0.89, 0.90)})
+        bx.box(-w / 2 + 0.01, w / 2 - 0.01, -b, -b + 0.01, 1.10, height - 0.02, {"color": (0.82, 0.83, 0.85)})
+        bx.box(w / 2 - 0.08, w / 2 - 0.06, -b + 0.01, -b + 0.04, 0.80, 1.40, chrome)
+    elif t == "WM":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, height, {"color": (0.95, 0.95, 0.96)})
+        bx.frustum(0.0, -b + 0.005, 0.18, 0.005, 0.18, 0.005, 0.25, 0.27, dark)  # the door (approx.)
+        bx.box(-0.18, 0.18, -b, -b + 0.01, 0.20, 0.56, {"color": (0.55, 0.65, 0.75)})
     elif t in ("TP", "SD"):
         bx.box(-w / 2, w / 2, b, b + d, z0, z0 + height, chrome)
     elif t == "FD":
@@ -1833,7 +1886,9 @@ def fixture_member(fx, z, room=None):
     else:
         bx.box(-w / 2, w / 2, b, -b, z0, z0 + max(height, 0.01),
                chrome if t.startswith("SK") else white)
-    g = bx.group(name, "structure", "fixture", t, "IfcSanitaryTerminal")
+    from core.wanic_catalog import FURNITURE
+    g = bx.group(name, "structure", "furniture" if t in FURNITURE else "fixture", t,
+                 "IfcFurnishingElement" if t in FURNITURE else "IfcSanitaryTerminal")
     if g is not None:
         g.ext[EXT_KEY]["info"] = [["ชนิด", name], ["รหัส", t],
                                   ["ระดับติดตั้ง", f"{z0:.2f} ม. จากพื้น" if z0 else "วางบนพื้น"]]
@@ -5147,7 +5202,7 @@ KIND_TH = [("footing", "ฐานราก"), ("pile", "เสาเข็ม"),
            ("fascia", "เชิงชาย"),
            ("barge", "ปั้นลม"), ("cap", "ครอบสัน/ครอบข้าง"),
            ("band", "เสาเอ็น-ทับหลัง"), ("plaster", "ผิวฉาบปูน"),
-           ("fixture", "สุขภัณฑ์"), ("ceiling", "ฝ้าเพดาน"),
+           ("fixture", "สุขภัณฑ์"), ("furniture", "เฟอร์นิเจอร์/เครื่องใช้ไฟฟ้า"), ("ceiling", "ฝ้าเพดาน"),
            ("ceiling_frame", "โครงคร่าวฝ้า"), ("skirting", "บัวเชิงผนัง"),
            ("cornice", "บัวฝ้า"), ("ac", "เครื่องปรับอากาศ"), ("light", "ดวงโคม"),
            ("outlet", "สวิตช์/เต้ารับ"), ("panel", "ตู้ไฟ"), ("pipe_supply", "ท่อประปา"),
@@ -5292,6 +5347,7 @@ VIEW_KINDS = [
     ("stair_rail", "ราวบันได", True), ("wall", "ผนัง", True), ("plaster", "ฉาบปูน/ผิวผนัง", True),
     ("opening", "ประตู-หน้าต่าง", True), ("ceiling", "ฝ้าเพดาน", True), ("ceiling_frame", "โครงฝ้า", True),
     ("trim", "บัวพื้น/บัวฝ้า", True), ("fixture", "สุขภัณฑ์/ของตกแต่ง", True),
+    ("furniture", "เฟอร์นิเจอร์/เครื่องใช้ไฟฟ้า", True),
     ("light", "ดวงโคม", True), ("outlet", "เต้ารับ/สวิตช์", True), ("ac", "เครื่องปรับอากาศ", True),
     ("wallplate", "อะเส", False), ("tiebeam", "ขื่อ", False), ("rbeam", "คานรับดั้ง", False),
     ("post", "ดั้ง", False), ("strut", "ตุ๊กตา", False), ("brace", "ค้ำยัน", False),

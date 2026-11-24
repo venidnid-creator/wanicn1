@@ -374,3 +374,25 @@ def test_each_room_its_own_skirting():
     d["settings"]["skirting_type"] = "pvc"
     descs = [ln["desc"] for ln in Q.compute(d)["lines"]]
     assert any("หินแกรนิต" in t for t in descs) and any("พี วี ซี" in t for t in descs)
+
+
+def test_bedroom_set_is_furniture_not_billed():
+    """ค10: ห้องนอนชุดมาตรฐาน — bed, bedside tables, wardrobe, TV … in the
+    model and the plan, never in the construction BOQ."""
+    from core import wanic_building as B
+    from core import wanic_catalog as CAT
+    from core import wanic_quantities as Q
+    items = CAT.bedroom_layout(4.0, 4.5)
+    codes = [c for c, *_r in items]
+    assert "BED" in codes and codes.count("NS") == 2 and "WR" in codes and "TV" in codes
+    assert all(c in CAT.FURNITURE for c in codes)
+    assert CAT.bedroom_layout(3.0, 3.0)[0][0] == "BED1" or CAT.bedroom_layout(3.0, 3.0)[0][0] == "BED"
+    d = B.default_data()
+    d["floors"] = [{"rooms": [dict(id="r1", name="ห้องนอน", x=0, y=0, w=4, d=4.5)], "openings": [], "stairs": [],
+                    "fixtures": [{"id": f"x{i}", "type": c, "x": x, "y": y, "dir": dr}
+                                 for i, (c, x, y, dr) in enumerate(items, 1)]}]
+    descs = " ".join(ln["desc"] for ln in Q.compute(d)["lines"])
+    assert "เตียง" not in descs and "ตู้เสื้อผ้า" not in descs
+    gs, count = B.build(d, ("structure",))
+    assert count.get("furniture", 0) == len(items) or sum(
+        1 for g in gs if (g.ext or {}).get(B.EXT_KEY, {}).get("kind") == "furniture") == len(items)

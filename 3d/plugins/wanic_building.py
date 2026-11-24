@@ -2695,7 +2695,7 @@ class BuildingPanel(QWidget):
         for code, spec in CAT.DECOR.items():
             self.fx_type.addItem(f"{code} — {spec[0]}", code)
         fg.addWidget(self.fx_type, 1)
-        bset = QPushButton("🛁 ชุดห้องน้ำ/ครัวมาตรฐาน")
+        bset = QPushButton("🛁 ชุดห้องน้ำ/ห้องนอน/ครัวมาตรฐาน")
         bset.setToolTip("วางสุขภัณฑ์ชุดมาตรฐานในห้องน้ำ (และซิงค์ในห้องครัว) ทุกห้องของชั้นนี้"
                         "ที่ยังไม่มี — ห้องที่เลือกอยู่จะถูกใส่ก่อน")
         bset.clicked.connect(lambda _=False: _safe(self, self.fill_standard_sets))
@@ -2707,6 +2707,11 @@ class BuildingPanel(QWidget):
                        "ต้นไม้ประดับ — แทนที่ของเดิมในห้องน้ำ")
         bre.clicked.connect(lambda _=False: _safe(self, lambda: self.fill_standard_sets(True)))
         fg.addWidget(bre)
+        bpic = QPushButton("🖼 ภาพ 3 มิติห้องน้ำ/ห้องนอน…")
+        bpic.setToolTip("ภาพมุมสูงแบบตัดหลังคาและฝ้าออก ของทุกห้องน้ำ ห้องนอน ห้องครัวในชั้นนี้ — "
+                        "เห็นตำแหน่งสุขภัณฑ์ เฟอร์นิเจอร์ และเครื่องใช้ไฟฟ้า (บันทึกเป็นภาพได้)")
+        bpic.clicked.connect(lambda _=False: _safe(self, self.room_pictures))
+        fg.addWidget(bpic)
         lay.addWidget(self.fx_row)
         self.tool_box.currentIndexChanged.connect(lambda _i: self._tool_changed())
         self.canvas = PlanCanvas(self)
@@ -3580,7 +3585,10 @@ class BuildingPanel(QWidget):
         for rm in f.get("rooms") or []:
             name = rm.get("name") or ""
             bath = name.startswith("ห้องน้ำ")
-            kit = True if bath else CAT.KITCHEN_SET if name.startswith("ห้องครัว") else None
+            bed = name.startswith("ห้องนอน")
+            kit = True if (bath or bed) else (CAT.KITCHEN_SET + [("FR", 0.12, 0.85)]) \
+                if name.startswith("ห้องครัว") else [("WM", 0.20, 0.85)] \
+                if name.startswith(("ห้องซักล้าง", "ซักล้าง", "ลานซักล้าง")) else None
             if not kit:
                 continue
             x0, y0 = float(rm["x"]), float(rm["y"])
@@ -3592,6 +3600,12 @@ class BuildingPanel(QWidget):
                 if not (relayout and bath):
                     continue
                 fx[:] = [it for it in fx if not inside(it)]
+            if bed:                                   # ห้องนอน: bed, tables, wardrobe, TV, armchair
+                for code, px, py, dir_ in CAT.bedroom_layout(w, dd):
+                    fx.append({"id": self._item_id(d, "x"), "type": code,
+                               "x": B._r(x0 + px), "y": B._r(y0 + py), "dir": dir_})
+                    added += 1
+                continue
             if bath:
                 for code, px, py, dir_ in CAT.bathroom_layout(w, dd):
                     fx.append({"id": self._item_id(d, "x"), "type": code,
@@ -3608,6 +3622,72 @@ class BuildingPanel(QWidget):
         self.status.setText(f"วางสุขภัณฑ์ชุดมาตรฐาน {added} ชิ้น" if added else
                             "ไม่มีห้องน้ำ/ห้องครัวที่ยังว่าง (ตั้งชื่อห้องว่า «ห้องน้ำ» หรือ «ห้องครัว»)")
         return added
+
+    def room_pictures(self, save_dir=None):
+        """ภาพ 3 มิติการจัดวาง: every bathroom / bedroom / kitchen of this
+        floor seen from above at an angle, the roof, the ceilings, the lights
+        and the floors above taken away — the fittings, the furniture and the
+        appliances in place. Shown in a window (and saved to ``save_dir``)."""
+        from PySide6.QtGui import QVector3D
+        from core.history import HideCommand
+        d = self.data()
+        rooms = [rm for rm in d["floors"][self.floor].get("rooms") or []
+                 if str(rm.get("name") or "").startswith(("ห้องน้ำ", "ห้องนอน", "ห้องครัว"))]
+        if not rooms:
+            self.status.setText("ชั้นนี้ไม่มีห้องน้ำ/ห้องนอน/ห้องครัว (ตั้งชื่อห้องก่อน)")
+            return []
+        if not B.generated(self.app.scene):
+            self.build(("structure", "roof"))
+        E = B.elements(d)
+        H, lift = E["H"], B.floor_lift(E["settings"])
+        groups = B.generated(self.app.scene)
+        zcut = (self.floor + 1) * H + lift - 0.30
+        hide = []
+        for g in groups:
+            wb = (g.ext or {}).get(B.EXT_KEY) or {}
+            try:
+                zmin = min(v.position.z() for v in g.mesh.vertices)
+            except ValueError:
+                continue
+            if wb.get("part") == "roof" or wb.get("kind") in ("ceiling", "ceiling_frame", "light") or zmin > zcut:
+                if not getattr(g, "hidden", False):
+                    hide.append(g)
+        vp = self.app.viewport
+        if hide:
+            vp.history.execute(HideCommand(hide, True))
+        cam = vp.camera
+        saved = (cam.eye(), cam.eye() + cam.forward())
+        shots = []
+        try:
+            for rm in rooms:
+                cx, cy = rm["x"] + rm["w"] / 2, rm["y"] + rm["d"] / 2
+                z0 = self.floor * H + lift
+                span = max(rm["w"], rm["d"], 2.8)            # a small bathroom: from higher up
+                eye = QVector3D(cx - span * 0.35, cy - span * 0.70, z0 + span * 1.45 + 1.0)
+                cam.place(eye, QVector3D(cx, cy, z0 + 0.5))
+                vp.repaint()
+                img = vp.grab()
+                shots.append((rm.get("name") or "ห้อง", img))
+                if save_dir:
+                    img.save(f"{save_dir}/{len(shots):02d}_{rm.get('name') or 'room'}.png")
+        finally:
+            cam.place(*saved)
+            if hide:
+                vp.history.execute(HideCommand(hide, False))
+            vp.update()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"ภาพ 3 มิติการจัดวาง — ชั้น {self.floor + 1}")
+        grid = QGridLayout(dlg)
+        for i, (name, img) in enumerate(shots):
+            lab = QLabel()
+            lab.setPixmap(img.scaledToWidth(420, Qt.SmoothTransformation))
+            cap = QLabel(f"<b>{name}</b>")
+            grid.addWidget(cap, (i // 2) * 2, i % 2)
+            grid.addWidget(lab, (i // 2) * 2 + 1, i % 2)
+        dlg.show()
+        self._pictures = dlg
+        self.status.setText(f"ภาพ 3 มิติ {len(shots)} ห้อง (ชั้น {self.floor + 1})")
+        return shots
 
     def place_stair(self, x, y):
         d = self.data()
