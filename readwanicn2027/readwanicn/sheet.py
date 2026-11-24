@@ -12,9 +12,8 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QFontDatabase, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QColorDialog, QComboBox, QDialog, QFileDialog,
-                               QFormLayout, QFrame, QHBoxLayout, QInputDialog, QMenu, QMenuBar, QPushButton,
+from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
                                QLabel, QLineEdit, QMessageBox, QSpinBox, QTableWidget, QTableWidgetItem,
                                QToolButton, QVBoxLayout, QWidget)
 
@@ -113,96 +112,10 @@ FUNCS = {
     "DEGREES": lambda a: math.degrees(_num(a[0])),
     "POWER": lambda a: _num(a[0]) ** _num(a[1]),
     "IF": lambda a: a[1] if a[0] else (a[2] if len(a) > 2 else 0.0),
-    "ROUNDUP": lambda a: _round_away(_num(a[0]), int(_num(a[1])) if len(a) > 1 else 0, up=True),
-    "ROUNDDOWN": lambda a: _round_away(_num(a[0]), int(_num(a[1])) if len(a) > 1 else 0, up=False),
-    "MOD": lambda a: math.fmod(_num(a[0]), _num(a[1])) if _num(a[1]) else _div0(),
-    "PRODUCT": lambda a: math.prod(_nums(a)) if _nums(a) else 0.0,
-    "SUMIF": lambda a: sum(_numeric(v) for k, v in zip(_flat([a[0]]), _flat([a[2] if len(a) > 2 else a[0]]))
-                           if _meets(k, a[1])),
-    "COUNTIF": lambda a: float(sum(1 for k in _flat([a[0]]) if _meets(k, a[1]))),
-    "AVERAGEIF": lambda a: _avg([_numeric(v) for k, v in zip(_flat([a[0]]), _flat([a[2] if len(a) > 2 else a[0]]))
-                                 if _meets(k, a[1]) and _is_num(v)]),
-    "AND": lambda a: all(bool(x) for x in _flat(a)),
-    "OR": lambda a: any(bool(x) for x in _flat(a)),
-    "NOT": lambda a: not a[0],
-    "CONCAT": lambda a: "".join(_fmt(x) for x in _flat(a)),
-    "CONCATENATE": lambda a: "".join(_fmt(x) for x in _flat(a)),
-    "LEN": lambda a: float(len(_fmt(a[0]))),
-    "TODAY": lambda a: _today(),
-    "BAHTTEXT": lambda a: _bahttext(_num(a[0])),
 }
-
-
-def _is_num(v) -> bool:
-    try:
-        _num(v)
-        return not isinstance(v, str) or bool(v.strip())
-    except (FormulaError, ValueError, TypeError):
-        return False
-
-
-def _numeric(v) -> float:
-    try:
-        return float(_num(v))
-    except (FormulaError, ValueError, TypeError):
-        return 0.0
-
-
-def _round_away(x, d, up):
-    f = 10 ** d
-    v = abs(x) * f
-    v = math.ceil(v - 1e-9) if up else math.floor(v + 1e-9)
-    return math.copysign(v / f, x)
-
-
-def _div0():
-    raise FormulaError("#DIV/0!")
-
-
-def _avg(vals):
-    return sum(vals) / len(vals) if vals else _div0()
-
-
-def _meets(value, crit) -> bool:
-    """Excel criteria: 5, ">5", "<>0", "=ก", "ก" (text equal)."""
-    if isinstance(crit, (int, float)) and not isinstance(crit, bool):
-        try:
-            return float(_num(value)) == float(crit)
-        except (FormulaError, ValueError, TypeError):
-            return False
-    c = str(crit)
-    m = re.match(r"^(<=|>=|<>|<|>|=)?(.*)$", c)
-    op, rhs = m.group(1) or "=", m.group(2)
-    try:
-        b = float(rhs.replace(",", ""))
-    except ValueError:
-        b = None
-    if b is not None:                       # a number to compare: text cells never match
-        try:
-            a = float(_num(value))
-        except (FormulaError, ValueError, TypeError):
-            return op == "<>"
-    else:
-        a, b = _fmt(value), rhs
-    return {"=": a == b, "<>": a != b, "<": a < b, ">": a > b, "<=": a <= b, ">=": a >= b}[op]
-
-
-def _today():
-    import datetime as dt
-    d = dt.date.today()
-    return f"{d.day}/{d.month}/{d.year + 543}"
-
-
-def _bahttext(x):
-    from .procure import baht_text
-    return baht_text(x)
 #: Thai names for the functions menu.
 FUNC_TH = {"SUM": "ผลรวม", "AVERAGE": "ค่าเฉลี่ย", "MIN": "ค่าน้อยสุด", "MAX": "ค่ามากสุด",
-           "COUNT": "นับตัวเลข", "COUNTA": "นับช่องที่มีข้อมูล", "ROUND": "ปัดเศษ", "ROUNDUP": "ปัดขึ้น",
-           "ROUNDDOWN": "ปัดลง", "SUMIF": "ผลรวมตามเงื่อนไข", "COUNTIF": "นับตามเงื่อนไข",
-           "AVERAGEIF": "ค่าเฉลี่ยตามเงื่อนไข", "IF": "ถ้า…แล้ว", "PRODUCT": "ผลคูณ", "MOD": "เศษจากการหาร",
-           "ABS": "ค่าสัมบูรณ์", "SQRT": "รากที่สอง", "POWER": "ยกกำลัง", "CONCAT": "ต่อข้อความ",
-           "LEN": "ความยาวข้อความ", "TODAY": "วันที่วันนี้", "BAHTTEXT": "จำนวนเงินเป็นตัวอักษร"}
+           "COUNT": "นับตัวเลข", "ROUND": "ปัดเศษ", "ABS": "ค่าสัมบูรณ์", "SQRT": "รากที่สอง"}
 
 
 class Formula:
@@ -329,24 +242,6 @@ class Formula:
             raise FormulaError("#NUM!")
 
 
-_REF_IN = re.compile(r'(\"[^\"]*\")|(\$?)([A-Za-z]{1,2})(\$?)(\d+)(?![\w(])')
-
-
-def shift_refs(formula: str, dr: int, dc: int) -> str:
-    """=A1+B$2 moved by (dr, dc), as Excel does when a formula is copied: $ keeps a row or column."""
-    if not formula.startswith("="):
-        return formula
-
-    def one(m):
-        if m.group(1):
-            return m.group(1)
-        cd, col, rd, row = m.group(2), m.group(3), m.group(4), int(m.group(5))
-        c = col_index(col) if cd else max(0, col_index(col) + dc)
-        r = row if rd else max(1, row + dr)
-        return f"{cd}{col_name(c)}{rd}{r}"
-    return "=" + _REF_IN.sub(one, formula[1:])
-
-
 def _fmt(v) -> str:
     if isinstance(v, bool):
         return "TRUE" if v else "FALSE"
@@ -398,9 +293,9 @@ class Book:
 
 # -- file in and out ---------------------------------------------------------------------
 
-def save_xlsx(book: Book, path, styles=None, family=saraban.FONT, widths=None, spans=None):
+def save_xlsx(book: Book, path, styles=None, family=saraban.FONT, widths=None):
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Font
     wb = Workbook()
     ws = wb.active
     ws.title = "แผ่นงาน1"
@@ -419,21 +314,11 @@ def save_xlsx(book: Book, path, styles=None, family=saraban.FONT, widths=None, s
             cell.value = text
         st = styles.get((r, c), {})
         cell.font = Font(name=family, size=st.get("size", 16), bold=st.get("bold", False),
-                         italic=st.get("italic", False), underline="single" if st.get("underline") else None,
-                         color=st["fg"].lstrip("#").upper() if st.get("fg") else None)
-        if st.get("bg"):
-            cell.fill = PatternFill("solid", fgColor=st["bg"].lstrip("#").upper())
-        if st.get("fmt") == "comma":
-            cell.number_format = "#,##0.00"
-        elif st.get("fmt") == "percent":
-            cell.number_format = "0.00%"
+                         italic=st.get("italic", False))
         if st.get("align"):
             cell.alignment = Alignment(horizontal=st["align"])
     for c, w in (widths or {}).items():
         ws.column_dimensions[col_name(c)].width = max(4, w / 7)
-    for r, c, h, w in spans or []:
-        if h > 1 or w > 1:
-            ws.merge_cells(start_row=r + 1, start_column=c + 1, end_row=r + h, end_column=c + w)
     wb.save(path)
 
 
@@ -496,12 +381,8 @@ class SheetEditor(QWidget):
         self.decimals: int | None = None
         self.path = None
         self._busy = False
-        self._undo, self._redo = [], []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.menu_bar = QMenuBar()
-        self.menu_bar.setNativeMenuBar(False)
-        lay.addWidget(self.menu_bar)
         lay.addWidget(self._ribbon())
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 2, 6, 2)
@@ -530,15 +411,11 @@ class SheetEditor(QWidget):
         self.grid.currentCellChanged.connect(self._moved)
         self.grid.itemChanged.connect(self._edited)
         self.grid.itemDoubleClicked.connect(self._editing)
-        self.grid.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.grid.customContextMenuRequested.connect(self._context_menu)
-        self.grid.installEventFilter(self)
         lay.addWidget(self.grid, 1)
         self.status = QLabel("")
         self.status.setContentsMargins(8, 2, 8, 2)
         lay.addWidget(self.status)
         self.grid.itemSelectionChanged.connect(self._summary)
-        self._menus()
         self.refresh()
 
     def _tool(self, text, tip, fn, checkable=False):
@@ -600,29 +477,6 @@ class SheetEditor(QWidget):
         row.addWidget(self._tool("⌫ ล้าง", "ล้างข้อมูลในช่องที่เลือก", self.clear_cells))
         row.addStretch(1)
         col.addLayout(row)
-        row = FlowLayout(None, 0, 2, 2)
-        for text, tip, fn in (("↶ เลิกทำ", "เลิกทำ (Ctrl+Z)", self.undo), ("↷ ทำซ้ำ", "ทำซ้ำ (Ctrl+Y)", self.redo),
-                              ("✂ ตัด", "ตัด (Ctrl+X)", self.cut), ("📋 คัดลอก", "คัดลอก (Ctrl+C)", self.copy),
-                              ("📥 วาง", "วาง (Ctrl+V) — วางจาก Excel ได้ สูตรเลื่อนอ้างอิงตามตำแหน่ง", self.paste),
-                              ("📄 วางเฉพาะค่า", "วางเฉพาะค่าที่คำนวณแล้ว (Ctrl+Shift+V)", lambda: self.paste(values=True)),
-                              ("⬇ เติมลง", "คัดลอกช่องบนสุดลงทุกช่องที่เลือก (Ctrl+D)", lambda: self.fill(down=True)),
-                              ("➡ เติมขวา", "คัดลอกช่องซ้ายสุดไปทางขวา (Ctrl+R)", lambda: self.fill(down=False)),
-                              ("A→Z", "เรียงจากน้อยไปมาก ตามคอลัมน์ที่เลือก", lambda: self.sort(True)),
-                              ("Z→A", "เรียงจากมากไปน้อย ตามคอลัมน์ที่เลือก", lambda: self.sort(False)),
-                              ("🔎 ค้นหา/แทนที่", "ค้นหาและแทนที่ (Ctrl+F / Ctrl+H)", self.find_replace)):
-            row.addWidget(self._tool(text, tip, fn))
-        u = self._tool("ข", "ขีดเส้นใต้", lambda on: self._style(underline=on), True)
-        u.setStyleSheet("text-decoration:underline;")
-        row.addWidget(u)
-        for text, tip, fn in (("🎨 สีตัวอักษร", "สีตัวอักษร", lambda: self.pick_color("fg")),
-                              ("🪣 สีพื้น", "สีพื้นช่อง", lambda: self.pick_color("bg")),
-                              (",", "รูปแบบตัวเลขมีจุลภาค 1,234.56", lambda: self._style(fmt="comma")),
-                              ("%", "รูปแบบร้อยละ", lambda: self._style(fmt="percent")),
-                              ("⊞ ผสานเซลล์", "ผสานช่องที่เลือก / ยกเลิกการผสาน", self.merge),
-                              ("↔ พอดีข้อความ", "ปรับความกว้างคอลัมน์ให้พอดีข้อความ", self.autofit)):
-            row.addWidget(self._tool(text, tip, fn))
-        row.addStretch(1)
-        col.addLayout(row)
         return bar
 
     # -- display
@@ -644,16 +498,7 @@ class SheetEditor(QWidget):
     def _paint(self, r, c, dec=None):
         if r >= self.grid.rowCount() or c >= self.grid.columnCount():
             return
-        st0 = self.styles.get((r, c), {})
         text = self.book.display(r, c, dec)
-        if st0.get("fmt"):
-            try:
-                v0 = self.book.value(r, c)
-            except FormulaError:
-                v0 = None
-            if isinstance(v0, float) and not isinstance(v0, bool):
-                d = 2 if dec is None else dec
-                text = f"{v0:,.{d}f}" if st0["fmt"] == "comma" else f"{v0 * 100:,.{d}f}%"
         it = self.grid.item(r, c)
         if it is None:
             it = QTableWidgetItem()
@@ -664,10 +509,7 @@ class SheetEditor(QWidget):
         f.setPointSize(14)
         f.setBold(st.get("bold", False))
         f.setItalic(st.get("italic", False))
-        f.setUnderline(st.get("underline", False))
         it.setFont(f)
-        it.setForeground(QBrush(QColor(st["fg"])) if st.get("fg") else QBrush())
-        it.setBackground(QBrush(QColor(st["bg"])) if st.get("bg") else QBrush())
         try:
             v = self.book.value(r, c)
         except FormulaError:
@@ -697,7 +539,6 @@ class SheetEditor(QWidget):
     def _edited(self, item):
         if self._busy:
             return
-        self._push()
         self.book.set(item.row(), item.column(), item.text())
         self._recalc()
         self.formula.setText(self.book.raw.get((item.row(), item.column()), ""))
@@ -706,7 +547,6 @@ class SheetEditor(QWidget):
         r, c = self.grid.currentRow(), self.grid.currentColumn()
         if r < 0:
             return
-        self._push()
         self.book.set(r, c, self.formula.text())
         self._recalc()
         self.grid.setCurrentCell(min(r + 1, self.book.rows - 1), c)
@@ -733,7 +573,6 @@ class SheetEditor(QWidget):
             [(self.grid.currentRow(), self.grid.currentColumn())]
 
     def _style(self, **kw):
-        self._push()
         for rc in self._cells():
             self.styles.setdefault(rc, {}).update(kw)
             self._busy = True
@@ -773,294 +612,6 @@ class SheetEditor(QWidget):
             self.formula.setText(f"={name}({rng if len(cells) > 1 else ''})")
             self.formula.setFocus()
 
-    # -- Excel-like menus, clipboard, undo
-    def _menus(self):
-        mb = self.menu_bar
-
-        def add(menu, text, fn, key=None):
-            a = QAction(text, self)
-            if key:
-                a.setShortcut(QKeySequence(key))
-                a.setShortcutContext(Qt.WidgetWithChildrenShortcut)
-            a.triggered.connect(lambda _=False: fn())
-            menu.addAction(a)
-            self.addAction(a)
-            return a
-        f = mb.addMenu("แฟ้ม")
-        add(f, "📄 สร้างใหม่", self.new, "Ctrl+N")
-        add(f, "📂 เปิด…", self.open, "Ctrl+O")
-        add(f, "💾 บันทึก", self.save, "Ctrl+S")
-        add(f, "💾 บันทึกเป็น…", lambda: self.save(True), "Ctrl+Shift+S")
-        f.addSeparator()
-        add(f, "🖨 พิมพ์…", self.print_sheet, "Ctrl+P")
-        e = mb.addMenu("แก้ไข")
-        add(e, "↶ เลิกทำ", self.undo, "Ctrl+Z")
-        add(e, "↷ ทำซ้ำ", self.redo, "Ctrl+Y")
-        e.addSeparator()
-        add(e, "✂ ตัด", self.cut, "Ctrl+X")
-        add(e, "📋 คัดลอก", self.copy, "Ctrl+C")
-        add(e, "📥 วาง", self.paste, "Ctrl+V")
-        add(e, "📄 วางเฉพาะค่า", lambda: self.paste(values=True), "Ctrl+Shift+V")
-        add(e, "⬇ เติมลง", lambda: self.fill(down=True), "Ctrl+D")
-        add(e, "➡ เติมขวา", lambda: self.fill(down=False), "Ctrl+R")
-        e.addSeparator()
-        add(e, "⌫ ล้างข้อมูล", self.clear_cells)
-        add(e, "เลือกทั้งหมด", self.grid.selectAll, "Ctrl+A")
-        add(e, "🔎 ค้นหา/แทนที่…", self.find_replace, "Ctrl+F")
-        add(e, "แทนที่…", self.find_replace, "Ctrl+H")
-        i = mb.addMenu("แทรก")
-        add(i, "แถวเหนือแถวนี้", lambda: self.insert(rows=True))
-        add(i, "คอลัมน์ทางซ้าย", lambda: self.insert(rows=False))
-        add(i, "ƒ ฟังก์ชัน…", self.insert_func, "Shift+F3")
-        add(i, "Σ ผลรวมอัตโนมัติ", self.auto_sum, "Alt+=")
-        r = mb.addMenu("รูปแบบ")
-        add(r, "ตัวหนา", lambda: self._toggle("bold"), "Ctrl+B")
-        add(r, "ตัวเอียง", lambda: self._toggle("italic"), "Ctrl+I")
-        add(r, "ขีดเส้นใต้", lambda: self._toggle("underline"), "Ctrl+U")
-        add(r, "🎨 สีตัวอักษร…", lambda: self.pick_color("fg"))
-        add(r, "🪣 สีพื้นช่อง…", lambda: self.pick_color("bg"))
-        r.addSeparator()
-        add(r, "ชิดซ้าย", lambda: self._style(align="left"))
-        add(r, "กึ่งกลาง", lambda: self._style(align="center"))
-        add(r, "ชิดขวา", lambda: self._style(align="right"))
-        r.addSeparator()
-        add(r, "ตัวเลขมีจุลภาค 1,234.56", lambda: self._style(fmt="comma"))
-        add(r, "ร้อยละ %", lambda: self._style(fmt="percent"))
-        add(r, "ตัวเลขทั่วไป", lambda: self._style(fmt=""))
-        add(r, "⊞ ผสานเซลล์ / ยกเลิก", self.merge)
-        add(r, "↔ ความกว้างคอลัมน์พอดีข้อความ", self.autofit)
-        add(r, "ล้างรูปแบบ", self.clear_format)
-        d = mb.addMenu("ข้อมูล")
-        add(d, "A→Z เรียงจากน้อยไปมาก", lambda: self.sort(True))
-        add(d, "Z→A เรียงจากมากไปน้อย", lambda: self.sort(False))
-        g = mb.addMenu("สูตร")
-        add(g, "Σ ผลรวมอัตโนมัติ", self.auto_sum)
-        add(g, "ƒ แทรกฟังก์ชัน…", self.insert_func)
-        add(g, "คำนวณใหม่", self._recalc, "F9")
-
-    def _context_menu(self, pos):
-        m = QMenu(self)
-        for text, fn in (("✂ ตัด", self.cut), ("📋 คัดลอก", self.copy), ("📥 วาง", self.paste),
-                         ("📄 วางเฉพาะค่า", lambda: self.paste(values=True))):
-            m.addAction(text, fn)
-        m.addSeparator()
-        for text, fn in (("แทรกแถว", lambda: self.insert(rows=True)), ("แทรกคอลัมน์", lambda: self.insert(rows=False)),
-                         ("ลบแถว", lambda: self.remove(rows=True)), ("ลบคอลัมน์", lambda: self.remove(rows=False)),
-                         ("⌫ ล้างข้อมูล", self.clear_cells)):
-            m.addAction(text, fn)
-        m.addSeparator()
-        m.addAction("⊞ ผสานเซลล์ / ยกเลิก", self.merge)
-        m.addAction("🪣 สีพื้นช่อง…", lambda: self.pick_color("bg"))
-        m.exec(self.grid.viewport().mapToGlobal(pos))
-
-    def eventFilter(self, obj, e):
-        from PySide6.QtCore import QEvent
-        if obj is self.grid and e.type() == QEvent.KeyPress and self.grid.state() != QAbstractItemView.EditingState:
-            if e.key() in (Qt.Key_Delete, Qt.Key_Backspace) and not e.modifiers():
-                self.clear_cells()
-                return True
-        return super().eventFilter(obj, e)
-
-    def _snapshot(self):
-        return (dict(self.book.raw), {k: dict(v) for k, v in self.styles.items()}, list(getattr(self, "spans", [])),
-                self.book.rows, self.book.cols)
-
-    def _restore(self, snap):
-        raw, styles, spans, rows, cols = snap
-        self.book.raw, self.styles, self.spans = dict(raw), styles, list(spans)
-        self.book.rows, self.book.cols = rows, cols
-        self.refresh()
-
-    def _push(self):
-        self._undo.append(self._snapshot())
-        del self._undo[:-100]
-        self._redo.clear()
-
-    def undo(self):
-        if self._undo:
-            self._redo.append(self._snapshot())
-            self._restore(self._undo.pop())
-
-    def redo(self):
-        if self._redo:
-            self._undo.append(self._snapshot())
-            self._restore(self._redo.pop())
-
-    def _rect(self):
-        cells = self._cells()
-        rs, cs = [r for r, _ in cells], [c for _, c in cells]
-        return min(rs), min(cs), max(rs), max(cs)
-
-    def copy(self, values=False):
-        r0, c0, r1, c1 = self._rect()
-        rows = []
-        for r in range(r0, r1 + 1):
-            rows.append("\t".join((self.book.display(r, c) if values else self.book.raw.get((r, c), ""))
-                                  for c in range(c0, c1 + 1)))
-        text = "\n".join(rows)
-        QApplication.clipboard().setText(text)
-        self._clip = (text, r0, c0)
-        return text
-
-    def cut(self):
-        self.copy()
-        self.clear_cells()
-
-    def paste(self, values=False):
-        """Paste text from here or from Excel (tab-separated); formulas copied here move their
-        references with the cells, as in Excel; «values» keeps only the worked-out values."""
-        text = QApplication.clipboard().text()
-        if not text:
-            return
-        r0, c0 = max(0, self.grid.currentRow()), max(0, self.grid.currentColumn())
-        clip = getattr(self, "_clip", None)
-        ours = bool(clip) and clip[0] == text
-        dr, dc = (r0 - clip[1], c0 - clip[2]) if ours else (0, 0)
-        lines = text.replace("\r\n", "\n").rstrip("\n").split("\n")
-        cells = [ln.split("\t") for ln in lines]
-        vals = {}
-        if values and ours:                              # worked out at the source before anything moves
-            for i, row in enumerate(cells):
-                for j, v in enumerate(row):
-                    if v.strip().startswith("="):
-                        try:
-                            vals[(i, j)] = _fmt(self.book.value(clip[1] + i, clip[2] + j))
-                        except FormulaError:
-                            vals[(i, j)] = ""
-        self._push()
-        self.book.rows = max(self.book.rows, r0 + len(cells))
-        self.book.cols = max(self.book.cols, c0 + max(len(row) for row in cells))
-        for i, row in enumerate(cells):
-            for j, v in enumerate(row):
-                v = v.strip()
-                if v.startswith("="):
-                    v = vals.get((i, j), "") if values else shift_refs(v, dr, dc)
-                self.book.set(r0 + i, c0 + j, v)
-        self.refresh()
-        self.record("ตารางคำนวณ: วาง")
-
-    def fill(self, down=True):
-        r0, c0, r1, c1 = self._rect()
-        self._push()
-        if down:
-            for c in range(c0, c1 + 1):
-                src = self.book.raw.get((r0, c), "")
-                for r in range(r0 + 1, r1 + 1):
-                    self.book.set(r, c, shift_refs(src, r - r0, 0))
-                    if (r0, c) in self.styles:
-                        self.styles[(r, c)] = dict(self.styles[(r0, c)])
-        else:
-            for r in range(r0, r1 + 1):
-                src = self.book.raw.get((r, c0), "")
-                for c in range(c0 + 1, c1 + 1):
-                    self.book.set(r, c, shift_refs(src, 0, c - c0))
-        self.refresh()
-
-    def sort(self, ascending=True):
-        """Sort the rows of the selection (or of the table under its header row) by the current column."""
-        r0, c0, r1, c1 = self._rect()
-        key_c = self.grid.currentColumn() if self.grid.currentColumn() >= 0 else c0
-        if r0 == r1:                                     # one cell: the used block below its first row
-            used = [r for r, _ in self.book.raw]
-            cols = [c for _, c in self.book.raw]
-            r0, r1 = min(used, default=0) + 1, max(used, default=0)
-            c0, c1 = min(cols, default=0), max(cols, default=0)
-        self._push()
-        rows = [{c: self.book.raw.get((r, c)) for c in range(c0, c1 + 1)} for r in range(r0, r1 + 1)]
-
-        def key(row):
-            v = row.get(key_c) or ""
-            try:
-                return (0, float(v.replace(",", "")), "")
-            except ValueError:
-                return (1, 0.0, v)
-        full = [row for row in rows if row.get(key_c)]
-        blank = [row for row in rows if not row.get(key_c)]     # empty rows stay at the end, as in Excel
-        rows = sorted(full, key=key, reverse=not ascending) + blank
-        for i, row in enumerate(rows):
-            for c, v in row.items():
-                self.book.set(r0 + i, c, v)
-        self.refresh()
-
-    def find_replace(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("ค้นหาและแทนที่")
-        form = QFormLayout(dlg)
-        what, by = QLineEdit(), QLineEdit()
-        form.addRow("ค้นหา", what)
-        form.addRow("แทนที่ด้วย", by)
-        note = QLabel("")
-        form.addRow(note)
-        row = QHBoxLayout()
-
-        def find_next():
-            cells = sorted(k for k, v in self.book.raw.items() if what.text() and what.text() in v)
-            if not cells:
-                note.setText("ไม่พบข้อความ")
-                return
-            cur = (self.grid.currentRow(), self.grid.currentColumn())
-            nxt = next((k for k in cells if k > cur), cells[0])
-            self.grid.setCurrentCell(*nxt)
-            note.setText(f"พบ {len(cells)} ช่อง")
-
-        def replace_all():
-            note.setText(f"แทนที่แล้ว {self.replace_all(what.text(), by.text())} ช่อง")
-        for text, fn in (("ค้นหาถัดไป", find_next), ("แทนที่ทั้งหมด", replace_all), ("ปิด", dlg.accept)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            row.addWidget(b)
-        form.addRow(row)
-        dlg.show()
-        self._find_dialog = dlg
-        return dlg
-
-    def replace_all(self, what, by) -> int:
-        if not what:
-            return 0
-        self._push()
-        n = 0
-        for k, v in list(self.book.raw.items()):
-            if what in v:
-                self.book.set(*k, v.replace(what, by))
-                n += 1
-        self.refresh()
-        return n
-
-    def _toggle(self, key):
-        r, c = self._cells()[0]
-        self._style(**{key: not self.styles.get((r, c), {}).get(key, False)})
-
-    def pick_color(self, which, color=None):
-        c = color or QColorDialog.getColor(QColor("#000000" if which == "fg" else "#FFF2CC"), self,
-                                           "สีตัวอักษร" if which == "fg" else "สีพื้นช่อง")
-        if c and c.isValid():
-            self._style(**{which: c.name()})
-
-    def clear_format(self):
-        self._push()
-        for rc in self._cells():
-            self.styles.pop(rc, None)
-        self.refresh()
-
-    def merge(self):
-        r0, c0, r1, c1 = self._rect()
-        self._push()
-        spans = list(getattr(self, "spans", []))
-        if any(s_[0] == r0 and s_[1] == c0 for s_ in spans) or (r0 == r1 and c0 == c1):
-            self.spans = [s_ for s_ in spans if not (s_[0] == r0 and s_[1] == c0)]
-        else:
-            self.spans = spans + [(r0, c0, r1 - r0 + 1, c1 - c0 + 1)]
-            self.styles.setdefault((r0, c0), {}).setdefault("align", "center")
-        self.refresh()
-
-    def autofit(self):
-        r0, c0, r1, c1 = self._rect()
-        fm = self.grid.fontMetrics()
-        for c in range(c0, c1 + 1):
-            texts = [self.book.display(r, c, self.decimals) for (r, cc) in self.book.raw if cc == c]
-            w = max([fm.horizontalAdvance(t) for t in texts] + [60])
-            self.grid.setColumnWidth(c, min(600, int(w * 1.15) + 24))
-
     def _shift(self, at, n, rows):
         def move(d):
             out = {}
@@ -1076,7 +627,6 @@ class SheetEditor(QWidget):
         self.styles = move(self.styles)
 
     def insert(self, rows=True):
-        self._push()
         at = self.grid.currentRow() if rows else self.grid.currentColumn()
         self._shift(max(0, at), 1, rows)
         if rows:
@@ -1089,12 +639,10 @@ class SheetEditor(QWidget):
         at = self.grid.currentRow() if rows else self.grid.currentColumn()
         if at < 0:
             return
-        self._push()
         self._shift(at, -1, rows)
         self.refresh()
 
     def clear_cells(self):
-        self._push()
         for rc in self._cells():
             self.book.raw.pop(rc, None)
         self.refresh()
@@ -1201,7 +749,7 @@ class SheetEditor(QWidget):
             save_csv(self.book, path)
         else:
             widths = {c: self.grid.columnWidth(c) for c in range(self.book.cols)}
-            save_xlsx(self.book, path, self.styles, saraban.FONT, widths, getattr(self, "spans", []))
+            save_xlsx(self.book, path, self.styles, saraban.FONT, widths)
             self.path = path
         self.record("บันทึกตารางคำนวณ")
         return path
