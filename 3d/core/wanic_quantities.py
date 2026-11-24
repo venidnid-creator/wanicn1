@@ -816,10 +816,15 @@ def compute(data, gate: bool = False) -> dict:
         # frame, wall angle and hangers (ครบชุด) in the material price
         ceil: dict = {}
         cper: dict = {}
+        soffit_a = 0.0
         for e in E["slabs"]:
             rm, k = e["room"], e["floor"]
-            ct = B.ceiling_type(s, rm)
+            ct = B.ceiling_on(E, rm, k)
             if ct == "none" or not CAT.finish_of(rm, o["floor_recipe"])["ceiling"]:
+                if k < E["n"] - 1 and B.ceiling_type(s, rm) != "none":   # no board: the slab soffit is finished
+                    x0, y0, x1, y1 = B.room_inner(E, rm, k)
+                    soffit_a = soffit_a + (x1 - x0) * (y1 - y0) - B.hole_area((x0, y0, x1, y1),
+                                                                              holes.get(k + 1) or [])
                 continue
             x0, y0, x1, y1 = B.room_inner(E, rm, k)
             ceil[ct] = ceil.get(ct, 0.0) + (x1 - x0) * (y1 - y0) - B.hole_area((x0, y0, x1, y1),
@@ -834,12 +839,21 @@ def compute(data, gate: bool = False) -> dict:
                      basis=f"พื้นที่ห้องระหว่างผิวผนัง · โครงซอย @{sub:.2f} ม. "
                            f"โครงหลัก/ลวดแขวน @{main:.2f} ม. ฉากริมผนัง {cper[ct]:.1f} ม.",
                      ref=f"หลักเกณฑ์ 4.2 ข้อ 2.1 · สูตรวัสดุ 5.42 · ว480 {lab}")
+        if soffit_a > 0:                              # ฝ้าเฉพาะชั้นบนสุด: below, the slab's soffit
+            pp_, pn_ = rprice(o["plaster_recipe"], prices)
+            bill.add(g, "ฉาบปูนเรียบท้องพื้น ค.ส.ล. (ชั้นที่ไม่มีฝ้า)", soffit_a, "ตร.ม.", mat=pp_,
+                     lab_code="2.3.1.2a", basis="พื้นที่ห้องชั้นล่างที่ไม่มีฝ้า (ฝ้าเฉพาะชั้นบนสุด)",
+                     ref=f"หลักเกณฑ์ 4.2 ข้อ 3.2 · สูตรวัสดุ {o['plaster_recipe']} · ว480 2.3.1.2", note=pn_)
+            if o["paint"]:
+                bill.add(g, "ทาสีน้ำอะครีลิค ท้องพื้น (รองพื้น 1 + จริง 2 เที่ยว)", soffit_a, "ตร.ม.",
+                         mat_key="สีน้ำอะครีลิค ภายใน (ต่อ ตร.ม.)", lab_code="2.8.1a",
+                         basis="เท่าพื้นที่ฉาบท้องพื้น", ref="สูตรวัสดุ 10.2 · ว480 2.8.1")
         # skirting / cornice (ปุ่มบัวผนัง)
         if s.get("skirting"):
             name, lab, _h, _t, rate = B.SKIRTING_TYPES.get(
                 s.get("skirting_type", "ceramic"), B.SKIRTING_TYPES["ceramic"])
             L = sum(B.trim_length(E, e["room"], e["floor"]) for e in E["slabs"]
-                    if B._has_trim(E, e["room"], "skirting"))
+                    if B._has_trim(E, e["room"], "skirting", e["floor"]))
             bill.add(g, name, L, "ม.", mat_key=f"{name} (วัสดุ)", lab=float(rate),
                      lab_code=lab, basis="รอบห้องตามผิวผนัง หักช่องประตู "
                                          "(ห้องที่บุกระเบื้องผนังสูง ≥ 1.20 ม. ไม่มีบัว)",
@@ -848,7 +862,7 @@ def compute(data, gate: bool = False) -> dict:
             name, lab, _h, _t = B.CORNICE
             L = 0.0
             for e in E["slabs"]:
-                if B._has_trim(E, e["room"], "cornice"):
+                if B._has_trim(E, e["room"], "cornice", e["floor"]):
                     x0, y0, x1, y1 = B.room_inner(E, e["room"], e["floor"])
                     L += 2 * ((x1 - x0) + (y1 - y0))
             bill.add(g, name, L, "ม.", mat_key=f"{name} (วัสดุ)", lab_code=lab,

@@ -334,3 +334,21 @@ def test_prices_are_zero_until_the_province_and_missing_lines_are_named():
     assert all(set(ln["missing"]) <= {"ค่าวัสดุ", "ค่าแรง"} for ln in miss)
     db12 = [ln for ln in res["lines"] if ln["mat_key"] == "DB12"]
     assert db12 and not db12[0]["missing"]                      # priced: not orange
+
+
+def test_ceiling_only_on_the_top_floor():
+    """ค3: ฝ้าเพดานเฉพาะชั้นบนสุด — the floors below show the slab soffit
+    (plastered and painted in the BOQ); bathrooms below keep a ceiling."""
+    from core import wanic_building as B
+    from core import wanic_quantities as Q
+    from core import wanic_rc as R
+    d = B.default_data()
+    R.apply_grid(d, [4.0, 4.0], [4.0], 2)
+    d["floors"][0]["rooms"][0]["name"] = "ห้องน้ำ"
+    E = B.elements(d)
+    top = E["n"] - 1
+    for e in E["slabs"]:
+        on = B.ceiling_on(E, e["room"], e["floor"]) != "none"
+        assert on == (e["floor"] == top or B.is_wet(e["room"])), (e["floor"], e["room"].get("name"))
+    names = [ln["desc"] for ln in Q.compute(d)["lines"]]
+    assert any("ท้องพื้น" in n and "ฉาบ" in n for n in names)

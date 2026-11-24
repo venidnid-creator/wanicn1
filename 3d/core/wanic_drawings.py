@@ -1887,7 +1887,7 @@ def section_detail(sh, E, L, cut, box, sheets=None):
             from core import wanic_std_sheets as STD
             STD.elev_opening(sh, P, uc, lo_, el, op_code(el, opening_codes(E)))
         zc = B.ceiling_z(E, kf)
-        if B.ceiling_type(s, rm) != "none":
+        if B.ceiling_on(E, rm, kf) != "none":
             x0r, y0r, x1r, y1r = B.room_inner(E, rm, kf)
             ua, ub = (y0r, y1r) if axis == "x" else (x0r, x1r)
             rect(ua, zc - 0.009, ub, zc, "cut", 0.25)

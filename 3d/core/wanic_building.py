@@ -231,6 +231,34 @@ WET_WORDS = ("ห้องน้ำ", "ห้องส้วม", "ส้วม"
              "wc", "toilet", "bath")
 
 
+#: ทางเดินโล่ง (the owner: no wall across an open way) — spaces open to the
+#: outside on their own edges, and spaces that flow into each other inside
+OPEN_OUT_WORDS = ("ระเบียง", "ที่จอดรถ", "โรงรถ", "ชานบ้าน", "ทางเดินภายนอก", "ลานซักล้าง", "ซักล้าง")
+OPEN_IN_WORDS = ("ทางเดิน", "โถง", "บันได", "ชานพัก")
+FLOW_WORDS = ("นั่งเล่น", "รับแขก", "รับประทานอาหาร", "ทานข้าว")
+
+
+def _named(room, words) -> bool:
+    name = str((room or {}).get("name") or "")
+    return any(w in name for w in words)
+
+
+def open_edge(rooms_on, sides) -> bool:
+    """Whether the edge between ``rooms_on`` gets no wall: the outside edge of
+    a porch / carport / outdoor walkway, or the edge between a corridor or
+    hall and another open space (another corridor, the living / dining
+    room) — a bedroom, bathroom or store next to a corridor keeps its wall
+    (with its door)."""
+    if sides <= 1:
+        return bool(rooms_on) and _named(rooms_on[0], OPEN_OUT_WORDS)
+    if len(rooms_on) < 2:
+        return False
+    a, b = rooms_on[0], rooms_on[1]
+    # a corridor / hall on one side (a living room next to a porch keeps its wall)
+    flow = OPEN_IN_WORDS + OPEN_OUT_WORDS + FLOW_WORDS
+    return (_named(a, OPEN_IN_WORDS) or _named(b, OPEN_IN_WORDS)) and _named(a, flow) and _named(b, flow)
+
+
 def is_wet(room) -> bool:
     name = str((room or {}).get("name") or "").lower()
     return any(w in name for w in WET_WORDS)
@@ -521,6 +549,8 @@ def elements(data) -> dict:
             sides = sum(1 for rm in f["rooms"] if _on_edge(rm, mx, my))
             if sides > 1 and not s.get("inner_walls", True):
                 continue
+            if open_edge([rm for rm in f["rooms"] if _on_edge(rm, mx, my)], sides):
+                continue                              # ทางเดินโล่ง: no wall across the way
             above = beam_at.get((k + 1, p0, p1)) or ROLE_DEFAULT[
                 "RB" if k == n - 1 else "B"]
             L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
@@ -1305,6 +1335,33 @@ def ceiling_type(s, room) -> str:
     return "fc" if is_wet(room) else t
 
 
+def ceiling_on(E, rm, k) -> str:
+    """ฝ้าเพดานเฉพาะชั้นบนสุด (the owner): the ceiling board of room ``rm`` on
+    floor ``k`` — only the top floor has one (under the roof); a floor with
+    another floor above shows the slab's soffit, plastered and painted.
+    Bathrooms below keep theirs (it hides the drain pipes of the floor
+    above). "none" where there is none."""
+    t = ceiling_type(E["settings"], rm)
+    if t == "none" or not (rm.get("finish") or {}).get("ceiling", True):
+        return "none"
+    if k < E["n"] - 1 and not is_wet(rm):
+        return "none"
+    return t
+
+
+def soffit_z(E, rm, k) -> float:
+    """What a lamp is fixed to: the ceiling board, or (no ceiling) the slab's
+    soffit above the room."""
+    if ceiling_on(E, rm, k) != "none":
+        return ceiling_z(E, k)
+    t = 0.10
+    for e in E.get("slabs") or []:
+        if e.get("floor") == k + 1:
+            t = float((E["lib"].get(e.get("mark"), {}) or {}).get("t", t))
+            break
+    return (k + 1) * E["H"] - t
+
+
 def ceiling_z(E, k) -> float:
     """Top of a floor's ceiling board: the underside of the beams above —
     under a lean-to (เพิงหมาแหงน) the top floor's board lies flat on the
@@ -1356,8 +1413,8 @@ def ceiling_members(E, data=None):
             lines = None
     for e in E["slabs"]:
         rm, k = e["room"], e["floor"]
-        ct = ceiling_type(s, rm)
-        if ct == "none" or not (rm.get("finish") or {}).get("ceiling", True):
+        ct = ceiling_on(E, rm, k)
+        if ct == "none":
             continue
         name, lab, frame, sub, main = CEILING_TYPES[ct]
         x0, y0, x1, y1 = room_inner(E, rm, k)
@@ -1476,11 +1533,13 @@ def trim_length(E, rm, k) -> float:
     return max(per, 0.0)
 
 
-def _has_trim(E, rm, what):
+def _has_trim(E, rm, what, k=None):
     from core.wanic_catalog import finish_of
     if what == "skirting":
         fin = finish_of(rm)
         return not (fin["wall_tile"] and fin["tile_h"] >= 1.2)
+    if k is not None:
+        return ceiling_on(E, rm, k) != "none"
     return (rm.get("finish") or {}).get("ceiling", True) and \
         ceiling_type(E["settings"], rm) != "none"
 
@@ -1496,7 +1555,7 @@ def trim_members(E):
         x0, y0, x1, y1 = room_inner(E, rm, k)
         rname = rm.get("name") or "ห้อง"
         for what in ("skirting", "cornice"):
-            if not s.get(what) or not _has_trim(E, rm, what):
+            if not s.get(what) or not _has_trim(E, rm, what, k):
                 continue
             if what == "skirting":
                 name, _lab, h, t, _r = SKIRTING_TYPES.get(s.get("skirting_type", "ceramic"),

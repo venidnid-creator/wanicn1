@@ -211,7 +211,7 @@ def test_stair_flight_volume():
                     "stairs": [{"id": "s1", "x": 1.5, "y": 1.5, "dir": 1}]},
                    {"rooms": _grid2x2(), "openings": [], "stairs": []}]
     groups, count = B.structure_members(d)
-    assert count["stair"] == 1
+    assert count["stair"] == 2                       # the flight + คานรับบันไดขั้นแรก SB1
     st = [g for g in groups if g.name == "บันได คสล."][0]
     s = B.settings_of(d)
     n, L, H = B.stair_geometry({}, s)
@@ -521,3 +521,22 @@ def test_drawing_set_fits_whole_on_a4(tmp_path):
     boxes = re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)", path.read_bytes())
     assert boxes and all(abs(float(w) - 842) < 2 and abs(float(h) - 595) < 2 for w, h in boxes)
     assert abs(a4_factor() * D.PAPER[0] - 297.0) < 1e-9
+
+
+def test_no_wall_across_an_open_way():
+    """ค4: a corridor open to the living room has no wall between them, a
+    porch has no outside wall; a bedroom off the corridor keeps its wall."""
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(id="a", name="ห้องนั่งเล่น", x=0, y=0, w=4, d=4),
+                               dict(id="b", name="โถงทางเดิน", x=4, y=0, w=2, d=4),
+                               dict(id="c", name="ห้องนอน", x=6, y=0, w=3, d=4),
+                               dict(id="e", name="ระเบียง", x=0, y=-2, w=4, d=2)]
+    E = B.elements(d)
+    walls = [(w["p0"], w["p1"]) for w in E["walls"] if w["floor"] == 0]
+
+    def has(x0, y0, x1, y1):
+        return any({tuple(p0), tuple(p1)} == {(x0, y0), (x1, y1)} for p0, p1 in walls)
+    assert not has(4, 0, 4, 4)                      # living | corridor: open
+    assert has(6, 0, 6, 4)                          # corridor | bedroom: a wall (and its door)
+    assert not has(0, -2, 4, -2) and not has(0, -2, 0, 0)    # the porch's outside edges
+    assert has(0, 0, 4, 0)                          # living | porch: a wall (with its door / windows)

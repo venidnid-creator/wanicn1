@@ -154,7 +154,7 @@ def members(data, E=None):
     for rec in plan(data, E):
         rm, k = rec["room"], rec["floor"]
         rname = rm.get("name") or "ห้อง"
-        zc = B.ceiling_z(E, k) - 0.009
+        zc = B.soffit_z(E, rm, k) - 0.009                # the board, or the slab where there is none
         x0, y0, x1, y1 = B.room_inner(E, rm, k)
         # lights: a grid of downlights / panels on the ceiling
         n = rec["lights"]
@@ -1111,7 +1111,7 @@ def install_members(data, E, rooms):
         if rec["kind"] in ("wet", "kitchen"):
             boxes = []
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-            zc = B.ceiling_z(E, k) - 0.009
+            zc = B.soffit_z(E, rm, k) - 0.009
             boxes.append((cx - 0.13, cy - 0.13, zc - 0.03, cx + 0.13, cy + 0.13, zc, "device"))
             if rec["kind"] == "wet":
                 boxes.append((x1 - 0.30, y1 - 0.10, z + H_HEATER, x1 - 0.05, y1,
