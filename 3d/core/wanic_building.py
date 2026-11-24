@@ -129,6 +129,79 @@ def head_plate_kg() -> tuple:
     return plate, bolt
 
 
+#: เหล็กประกับหางปลา (the owner): flat steel plates welded both sides of a
+#: rafter where it meets the wall plate, the hip or the ridge — it touches,
+#: the plates hold it. Length along the rafter, height, thickness (m).
+FISH_PLATE = (0.15, 0.12, 0.006)
+
+
+def fish_joints(lines, s) -> list:
+    """Where the fish plates go: [(x, y, z_mid, (ux, uy), side_half)] —
+    every rafter over the wall plate, and every rafter end on a hip or the
+    ridge (the plates just short of the hip / ridge face)."""
+    out = []
+    bw = _profile_width(s["rafter"])
+    depth = lift_of(s)
+    creases = [(a, b) for a, b in lines.get("hip") or []] + [(a, b) for a, b in lines.get("ridge") or []]
+    for path in lines.get("rafter") or []:
+        a, b = path[0], path[-1]
+        L = math.dist(a[:2], b[:2])
+        if L < 0.2:
+            continue
+        ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+        # over the wall plate
+        for c, d in lines.get("plate") or []:
+            t = _crossing(a, b, c, d)
+            if t is None:
+                continue
+            x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+            out.append((x, y, c[2] + 0.02, (ux, uy), bw / 2))
+        # the end on a hip or the ridge
+        for end, sg in ((a, 1.0), (b, -1.0)):
+            on = any(_point_seg(end[:2], c[:2], d[:2]) < 0.03 for c, d in creases)
+            if on:
+                back = 0.06 + FISH_PLATE[0] / 2
+                x, y = end[0] + ux * sg * back, end[1] + uy * sg * back
+                z = end[2] + (b[2] - a[2]) / L * sg * back - depth / 2       # down the slope, mid-depth
+                out.append((x, y, z, (ux, uy), bw / 2))
+    return out
+
+
+def _point_seg(p, a, b) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-12:
+        return math.dist(p, a)
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+    return math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t)
+
+
+def fish_plates(lines, s):
+    """The fish plates as one group (two plates a joint) and the joint count."""
+    joints = fish_joints(lines, s)
+    if not joints:
+        return None, 0
+    lp, hp, tp = FISH_PLATE
+    steel = _paint("metal")
+    bx = _Boxes((0.0, 0.0), (1.0, 0.0), 0.0)
+    for x, y, z, (ux, uy), half in joints:
+        bx.p0, bx.u, bx.n = (x, y), (ux, uy), (-uy, ux)          # this joint's frame
+        for side in (1.0, -1.0):
+            d0, d1 = sorted((side * half, side * (half + tp)))
+            bx.box(-lp / 2, lp / 2, d0, d1, z - hp / 2, z + hp / 2, steel)
+    g = bx.group(f"เหล็กประกับหางปลา PL {lp * 1000:.0f}×{hp * 1000:.0f}×{tp * 1000:.0f} มม. · {len(joints)} จุด",
+                 "roof", "fishplate", "เหล็กประกับหางปลา", "IfcPlate")
+    if g is not None:
+        g.ext[EXT_KEY]["info"] = [["ชนิด", "เหล็กแผ่นประกับ 2 ข้าง เชื่อมยึดจันทันกับอะเส / ตะเฆ่ / อกไก่"],
+                                  ["จำนวน", f"{len(joints)} จุด × 2 แผ่น"]]
+    return g, len(joints)
+
+
+def fish_plate_kg() -> float:
+    lp, hp, tp = FISH_PLATE
+    return 2 * lp * hp * tp * 7850.0
+
+
 def head_plate(x, y, z):
     """A column-head plate and its four J-bolts at the column (x, y), the
     plate's top at ``z`` (the top of the ring beam)."""
@@ -2767,7 +2840,12 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
     # at the hip apexes, and between them at no more than the set spacing
     # (จันทันพราง).
     _axis, xs, stations = _rafter_stations(rect, s, cols)
+    foot_x = [x0 + dd0] if (h0 and dd0 < half - 1e-9) else []
+    foot_x += [x1 - dd1] if (h1 and dd1 < half - 1e-9) else []
+    bw_r = _profile_width(s["rafter"])
     for x in xs:
+        if any(abs(x - fx) < bw_r for fx in foot_x):
+            continue                       # the small gable's foot beam is on this line
         reach = min(half, (x - x0) if h0 and x - x0 < dd0 - 1e-6 else big,
                     (x1 - x) if h1 and x1 - x < dd1 - 1e-6 else big)
         if reach <= 0.05:
@@ -2791,8 +2869,9 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
     for hipped, ex, sgn, dd in ((h0, x0, 1, dd0), (h1, x1, -1, dd1)):
         if not hipped:                       # jack rafters on a hipped end
             continue
+        stop = _profile_width(s["rafter"]) / 2 if dd < half - 1e-9 else 0.0   # on the foot beam's face
         for y in jacks:
-            reach = min(dd, y - y0, y1 - y)
+            reach = min(dd - stop, y - y0, y1 - y)
             if reach <= 0.05:
                 continue
             out["rafter"].append([P3(ex, y, h(0)),
@@ -2811,7 +2890,8 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
     # the set spacing is the most allowed, a span that does not divide is
     # shared out a little closer (0.32 → 0.31 …). ``step`` comes from the
     # widest roof part so the purlins of slopes that are one plane line up.
-    top = half - 0.04
+    # 4 cm under the ridge, never into the ridge member (its half width + the purlin's)
+    top = half - max(0.04, (_profile_width(s["ridge"]) + _profile_width(s["purlin"])) / 2 + 0.005)
     step = purlin_step if purlin_step else psp
     if not purlin_step:
         n_ = max(int(math.ceil((top - d) / psp - 1e-9)), 1)
@@ -2848,6 +2928,13 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         # its post at the hip apex.
         e0 = rx0 if h0 else x0 + ov
         e1 = rx1 if h1 else x1 - ov
+        # มะนิลา: the small gable's foot beam lies on the apex line — the
+        # truss there stands just inside it, clear of it (under the ridge still)
+        sh_ = _profile_width(s["rafter"]) / 2 + _dim(s.get("post", s["ridge"]), "B") / 2 + 0.005
+        if h0 and dd0 < half - 1e-9:
+            e0 += sh_
+        if h1 and dd1 < half - 1e-9:
+            e1 -= sh_
         if e1 < e0:
             e0 = e1 = (rx0 + rx1) / 2
         px = {round(e0, 4), round(e1, 4)}
@@ -2881,7 +2968,13 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         inner = half - ov                       # wall line to the ridge line
         for xx in sorted(px):
             out["post"].append([P3(xx, yc, zb), P3(xx, yc, max(zr - dr, zb + 0.1))])
-            if on_beam:
+            gable_end = s.get("wall_plate") and ((not h0 and abs(xx - e0) < 1e-4) or
+                                                 (not h1 and abs(xx - e1) < 1e-4))
+            if gable_end:
+                # on the gable wall the wall plate is the tie: the post and
+                # struts stand on it (a second tie would lie in the plate)
+                out["tie"].append([])
+            elif on_beam:
                 out["tie"].append([[P3(xx, y0 + ov + pw, z0), P3(xx, yc - wb, z0)],
                                    [P3(xx, yc + wb, z0), P3(xx, y1 - ov - pw, z0)]])
             else:
@@ -3167,6 +3260,16 @@ def roof_lines(data):
     # A wing's gable end that runs into an earlier (larger) roof is hipped.
     fam, prm = steel_lookup(s["rafter"])
     lift = float(prm.get("H", prm.get("D", prm.get("A", 0.0)))) / 1000.0
+    # จันทันแค่แตะอะเส (the owner): a sloping rafter on the plate bears on its
+    # outer (lower) edge — the frame goes up by half the plate's width ×
+    # the slope, so the rafter touches the plate and never cuts into it
+    # (the rafter's section is square to its slope: its depth measured
+    # plumb is H / cos(pitch))
+    pr_ = math.radians(float(s["pitch"]))
+    lift = lift / math.cos(pr_)
+    if s.get("wall_plate"):
+        lift += _profile_width(s["wallplate"]) / 2 * math.tan(pr_)
+    out["seat"] = lift
     cols = nodes(top)
     # one purlin step for the whole roof, from its widest part
     _rsp, psp_ = roof_spacing(s)
@@ -3445,7 +3548,7 @@ def _profile_width(label) -> float:
     return 0.05
 
 
-def _end_planes(path, creases, offsets=None):
+def _end_planes(path, creases, offsets=None, own=0.0):
     """For each end of the straight member ``path``, the vertical plane it
     is cut by: along the crease line (hip, valley, ridge) it stops on —
     pushed back half that member's width (``offsets``) — or a plumb cut
@@ -3477,6 +3580,14 @@ def _end_planes(path, creases, offsets=None):
                 if abs(nx * dx + ny * dy) / dl < 0.05 or \
                         abs(nx * dy - ny * dx) / dl < 0.05:
                     back = max(back, (offsets[k] if offsets else 0.0) / 2.0)
+                elif offsets:
+                    # a hip meeting it at an angle there (the apex of a hip
+                    # roof): stop where its own edge meets the hip's face —
+                    # it touches, it does not run into it (the owner)
+                    sin_ = abs(nx * dy - ny * dx) / dl
+                    cos_ = abs(nx * dx + ny * dy) / dl
+                    if sin_ > 0.1:
+                        back = max(back, offsets[k] / 2.0 / sin_ + own / 2.0 * cos_ / sin_)
             planes.append(((end[0] - sgn * nx * back, end[1] - sgn * ny * back),
                            (nx, ny)))
             continue
@@ -3510,6 +3621,42 @@ def _end_planes(path, creases, offsets=None):
         back = (offsets[k] if offsets else 0.0) / 2.0
         planes.append(((end[0] - nx * back, end[1] - ny * back), (nx, ny)))
     return planes
+
+
+def _ridge_short(path, hips, hw, rw):
+    """The ridge with each end that hips meet pulled back to where the hips'
+    faces are (they meet the ridge at 45° in plan)."""
+    a, b = path[0], path[-1]
+    L = math.dist(a[:2], b[:2])
+    if L < 1e-6:
+        return path
+    ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+    e = (hw / 2 + rw / 2) * math.sqrt(2)
+    out = [a, b]
+    for i, (end, sg) in enumerate(((a, 1.0), (b, -1.0))):
+        if any(min(math.dist(end[:2], h[0][:2]), math.dist(end[:2], h[-1][:2])) < 0.05 for h in hips):
+            if L - 2 * e > 0.05:
+                out[i] = (end[0] + ux * e * sg, end[1] + uy * e * sg, end[2])
+    return out
+
+
+def _apex_planes(path, lines, planes):
+    """A hip's top end at the apex: cut on the ridge's axis (the two hips of
+    one end meet there face to face), not into the ridge or each other."""
+    out = list(planes)
+    for i, end in enumerate((path[0], path[-1])):
+        for r in lines.get("ridge") or []:
+            for re_ in (r[0], r[-1]):
+                if math.dist(end[:2], re_[:2]) < 0.05:
+                    other = r[-1] if re_ is r[0] else r[0]
+                    dx, dy = other[0] - re_[0], other[1] - re_[1]
+                    dl = math.hypot(dx, dy) or 1.0
+                    nx, ny = -dy / dl, dx / dl            # across the ridge
+                    far = path[-1] if i == 0 else path[0]
+                    if (far[0] - end[0]) * nx + (far[1] - end[1]) * ny > 0:
+                        nx, ny = -nx, -ny                 # pointing away from the hip
+                    out[i] = ((end[0], end[1]), (nx, ny))
+    return out
 
 
 def head_to_rafter(g, path, skins, depth, cap=None):
@@ -3718,6 +3865,11 @@ def roof_members(data) -> tuple[list, dict]:
         paths = lines["valleys"] if kind == "valley" else lines[kind]
         if kind == "hip":
             paths = [hip_in(p_) for p_ in paths]
+        elif kind == "ridge":
+            # the ridge stops short of the hips that meet at its ends: they
+            # touch its end, nothing runs through (the owner)
+            paths = [_ridge_short(p_, lines["hip"], _profile_width(s["hip"]),
+                                  _profile_width(s["ridge"])) for p_ in paths]
         dbl = bool(s.get(f"dbl_{kind}"))
         bw = _profile_width(sizes[kind])
         for path in paths:
@@ -3740,9 +3892,12 @@ def roof_members(data) -> tuple[list, dict]:
                                   ("ความยาว", f"{L:.2f} ม."),
                                   ("น้ำหนัก", f"{L * kgm:.2f} กก. ({kgm:.2f} กก./ม.)"),
                                   ("รายการ BOQ", frame_boq(sizes[kind]))])
-                if kind in ("rafter", "hip", "valley", "ridge"):
+                if kind == "hip":
+                    g = cut_member(g, path, _apex_planes(path, lines, _end_planes(path, creases, no_width)))
+                elif kind in ("rafter", "valley", "ridge"):
                     g = cut_member(g, path, _end_planes(
-                        path, creases, widths if kind == "rafter" else no_width))
+                        path, creases, widths if kind == "rafter" else no_width,
+                        own=bw if kind == "rafter" else 0.0))
                 elif kind == "post" and g is not None:
                     # under the ridge, and under the rafters that meet it there
                     head_to_rafter(g, path, lines["skin"], lift_of(s) / math.cos(
@@ -3804,13 +3959,22 @@ def roof_members(data) -> tuple[list, dict]:
     if s.get("head_plate", True) and (lines.get("plate") or lines.get("tie")):
         for (x, y) in lines.get("heads") or []:
             add(head_plate(x, y, lines["z0"]), "headplate")
+    if s.get("fish_plate", True):
+        gf, _nf = fish_plates(lines, s)
+        add(gf, "fishplate")
     fam, params = steel_lookup(s["purlin"])
     kgm = P.weight_per_m(fam, params)
     for pl in lines["purlin"]:
         L = P.path_length(pl["path"], pl["closed"])
+        if not pl["closed"] and L < 0.15:
+            continue                                  # a stub at a hip apex: nothing to carry
         if not pl["closed"] and len(pl["path"]) == 2:
             pl = dict(pl, path=purlin_facing(pl["path"], lines["skin"],
                                              s.get("purlin_face", "ridge")))
+        # แปแค่แตะจันทัน (the owner): a level purlin on a sloping rafter bears
+        # on its lower edge — up by half its width × the slope
+        up_ = _profile_width(s["purlin"]) / 2 * math.tan(math.radians(float(s["pitch"])))
+        pl = dict(pl, path=[(p_[0], p_[1], p_[2] + up_) for p_ in pl["path"]])
         g = _member("roof", "purlin", "แป", fam, params, pl["path"],
                     anchor="bc", ifc="IfcMember", closed=pl["closed"],
                     key=f"แป {s['purlin']}",
@@ -3820,7 +3984,7 @@ def roof_members(data) -> tuple[list, dict]:
                           ("น้ำหนัก", f"{L * kgm:.2f} กก."),
                           ("รายการ BOQ", frame_boq(s["purlin"]))])
         if not pl["closed"] and len(pl["path"]) == 2:
-            g = cut_member(g, pl["path"], _end_planes(pl["path"], creases))
+            g = cut_member(g, pl["path"], _end_planes(pl["path"], creases, widths))
         add(g, "purlin")
     if s.get("fascia", True):
         fp = dict(b=_mm(s.get("fascia_t", 0.025)), h=_mm(s.get("fascia_h", 0.20)))

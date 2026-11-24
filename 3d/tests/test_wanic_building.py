@@ -9,6 +9,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from core import wanic_building as B
+from core import wanic_profiles as P
 from core import wanic_takeoff as T
 from core.history import CompoundCommand, History, InsertGroupCommand
 from core.scene import Scene
@@ -72,7 +73,9 @@ def test_hip_and_gable_roofs_build():
         lines = B.roof_lines(d)
         groups, count = B.roof_members(d)
         assert count["rafter"] == len(lines["rafter"]) > 0
-        assert count["purlin"] == len(lines["purlin"]) > 0
+        # (stubs under 15 cm at a hip apex carry nothing and are left out)
+        assert count["purlin"] == sum(1 for pl in lines["purlin"]
+                                      if P.path_length(pl["path"], pl["closed"]) >= 0.15) > 0
         assert count.get("skin") == 1
         assert count.get("ridge") == 1
         if kind == "hip":

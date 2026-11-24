@@ -135,7 +135,9 @@ def test_purlins_are_mitred_on_the_hips_and_rafters_stop_at_the_hip():
                     near = [v.position for v in g.mesh.vertices
                             if math.dist((v.position.x(), v.position.y(),
                                           v.position.z()), end) < reach]
-                    assert max(off_line((p.x(), p.y()), a, b) for p in near) < 1e-4
+                    # it stops on the hip's face — never inside the hip (the owner)
+                    hw = B._profile_width(B.settings_of(d)["hip"])
+                    assert min(off_line((p.x(), p.y()), a, b) for p in near) >= hw / 2 - 1e-4
                     checked += 1
     assert checked > 20
 
@@ -196,3 +198,24 @@ def test_the_frame_view_and_the_standard_looks():
     assert gb.material != {"color": panel.FRAME_COLORS["ground_beam"]}
     for key in ("iso", "top", "front", "back", "left", "right"):
         panel.look(key)                     # the test viewport has no camera
+
+
+def test_rafters_just_touch_and_are_held_by_fish_plates():
+    """The owner: a rafter touches the wall plate (bears on its outer edge,
+    nothing cut into it) and fish plates hold it there and at the hip /
+    ridge; the purlins sit on the rafters' top."""
+    import math as m
+    from core import wanic_rc as R
+    d = B.default_data()
+    R.apply_grid(d, [4.0, 4.0], [4.0, 3.0], 1)
+    d["settings"]["roof"] = "hip"
+    s = B.settings_of(d)
+    lines = B.roof_lines(d)
+    p_ = m.radians(float(s["pitch"]))
+    want = B.lift_of(s) / m.cos(p_) + B._profile_width(s["wallplate"]) / 2 * m.tan(p_)
+    assert abs(lines["seat"] - want) < 1e-9
+    joints = B.fish_joints(lines, s)
+    over_plate = [j for j in joints if any(abs(j[2] - (pl[0][2] + 0.02)) < 1e-6 for pl in lines["plate"])]
+    assert over_plate and len(joints) > len(over_plate)        # at the plate and at the hips / ridge
+    groups, count = B.roof_members(d)
+    assert count.get("fishplate") == 1

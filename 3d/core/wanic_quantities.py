@@ -922,6 +922,16 @@ def compute(data, gate: bool = False) -> dict:
                            f"{hp['embed'] + hp['hook'] + hp['stick']:.2f} ม. × 0.888 กก./ม.",
                      ref="ว480 1.10.2 (บาท/ตัน ÷ 1,000)")
             paint_a += heads * 2 * hp["b"] * hp["b"]
+        if s.get("fish_plate", True):
+            nf = len(B.fish_joints(lines, s))
+            if nf:
+                lp_, hp_, tp_ = B.FISH_PLATE
+                bill.add(g, f"เหล็กประกับหางปลา PL {lp_ * 1000:.0f}×{hp_ * 1000:.0f}×{tp_ * 1000:.0f} มม. "
+                            "(ยึดจันทันกับอะเส ตะเฆ่ อกไก่)", nf * B.fish_plate_kg(), "กก.",
+                         mat_key="เหล็กรูปพรรณ (ทั่วไป)", lab_code="1.11.3",
+                         basis=f"{nf} จุด × 2 แผ่น × {B.fish_plate_kg() / 2:.2f} กก.",
+                         ref="ว480 1.11.3 (ตัดประกอบ/เชื่อม)")
+                paint_a += nf * 2 * 2 * lp_ * hp_
         bill.add(g, "ทาสีกันสนิมโครงหลังคาเหล็ก", paint_a, "ตร.ม.",
                  mat_key="สีกันสนิม", lab_code="2.8.3",
                  basis="เส้นรอบรูปหน้าตัด × ความยาวทุกท่อน",
