@@ -10,6 +10,14 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
+## ReadWanicn2027 — ตารางคำนวณใช้งานแบบ Excel (24 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
+- `SheetEditor.menu_bar`: แฟ้ม แก้ไข แทรก รูปแบบ ข้อมูล สูตร (Ctrl+Z/Y/X/C/V/D/R/A/F/H/B/I/U, Ctrl+Shift+V วางค่า, Alt+= ผลรวม, F9)
+- คลิปบอร์ด: copy เป็น TSV (Excel วางได้), paste จาก Excel/ตัวเอง — สูตรเลื่อนอ้างอิง (`shift_refs`, $ ตรึง), วางเฉพาะค่า
+- undo/redo 100 ขั้น (`_push` snapshot raw/styles/spans), เติมลง/ขวา, เรียง A→Z/Z→A (ช่องว่างไว้ท้าย), ค้นหา/แทนที่, Delete ล้าง,
+  คลิกขวาภาษาไทย, ขีดเส้นใต้ สีตัวอักษร สีพื้น รูปแบบ , และ %, ผสานเซลล์, พอดีข้อความ
+- ฟังก์ชันใหม่ ROUNDUP ROUNDDOWN MOD PRODUCT SUMIF COUNTIF AVERAGEIF AND OR NOT CONCAT LEN TODAY BAHTTEXT · save_xlsx: สี/พื้น/รูปแบบตัวเลข/ผสาน
+- tests 60 ผ่าน
+
 ## ReadWanicn2027 — สร้างเอกสาร/งานสารบรรณ ใช้งานแบบ Word (24 พ.ย. 2569, อนุมัติแล้ว → รุ่น 2027.4.10 ไม่ release)
 - `DocEditor.menu_bar`: แฟ้ม แก้ไข มุมมอง แทรก รูปแบบ ตาราง เครื่องมือ (ทางลัดแบบ Word: Ctrl+N/O/S/P/Z/Y/X/C/V/A/F/H/B/I/U/L/E/R/J,
   Ctrl+= ตัวห้อย, Ctrl+Shift+= ตัวยก, Ctrl+Return ขึ้นหน้าใหม่, Ctrl+Shift+V วางเฉพาะข้อความ)
