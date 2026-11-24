@@ -359,6 +359,7 @@ class PlanCanvas(QWidget):
             q = self.to_screen(x, y)
             p.setBrush(SEL if self.selected == B.node_key(x, y) else NAVY)
             p.drawRect(QRectF(q.x() - cw / 2, q.y() - ch / 2, cw, ch))
+        self._paint_extras(p)
         if self._band is not None:
             a, b = self._band
             p.setPen(QPen(QColor("#3B6FB6"), 1, Qt.DashLine))
@@ -371,6 +372,38 @@ class PlanCanvas(QWidget):
                        f"X {self._hover[0]:.2f} · Y {self._hover[1]:.2f} ม. · "
                        f"ชั้น {self.panel.floor + 1}{extra}")
         p.end()
+
+    def _paint_extras(self, p):
+        """The axis being dragged (เลื่อนแนวคาน), the free beams of this floor
+        and the one being drawn."""
+        if self._drag is not None and self._drag[0] == "axis":
+            _k, which, old, new = self._drag
+            p.setPen(QPen(QColor("#DC2626"), 2, Qt.DashLine))
+            if which == "x":
+                sx = self.to_screen(new, 0).x()
+                p.drawLine(QPointF(sx, 0), QPointF(sx, self.height()))
+            else:
+                sy = self.to_screen(0, new).y()
+                p.drawLine(QPointF(0, sy), QPointF(self.width(), sy))
+            p.setPen(QColor("#DC2626"))
+            p.drawText(QPointF(8, self.height() - 8), f"เลื่อนแนว {old:.2f} → {new:.2f} ม. (ปล่อยเมาส์)")
+        d = self.panel.data()
+        s_ = B.settings_of(d)
+        H = float(s_["floor_h"])
+        lift = B.floor_lift(s_)
+        p.setPen(QPen(QColor("#2563EB"), 4))
+        for bm in ((d.get("free") or {}).get("beams") or []):
+            pts = bm.get("pts") or []
+            if len(pts) >= 2 and abs(float(pts[0][2]) - ((self.panel.floor + 1) * H + lift)) < 0.3:
+                for a, b in zip(pts, pts[1:]):
+                    p.drawLine(self.to_screen(a[0], a[1]), self.to_screen(b[0], b[1]))
+        st_ = getattr(self, "_fb_start", None)
+        if st_ is not None:
+            p.setPen(QPen(QColor("#2563EB"), 2, Qt.DashLine))
+            q = self.to_screen(*st_)
+            p.drawEllipse(q, 4, 4)
+            if self._hover and isinstance(self._hover, tuple):
+                p.drawLine(q, self.to_screen(*self._hover))
 
     def _paint_axes(self, p, rooms):
         """Grid lines 1, 2, 3 … / A, B, C … through the column lines, with
@@ -427,6 +460,28 @@ class PlanCanvas(QWidget):
         node = self.panel.node_at(x, y)
         tool = self.panel.tool()
         ctrl = bool(ev.modifiers() & Qt.ControlModifier)
+        if ev.button() == Qt.RightButton and item is None and node is None and rm is None:
+            self._empty_menu((x, y), ev.globalPosition().toPoint())
+            return
+        if ev.button() == Qt.LeftButton:
+            ax_ = self._axis_hit(ev.position())
+            if ax_ is not None:                      # เลื่อนแนวคาน: drag the grid bubble
+                self._drag = ("axis", ax_[0], ax_[1], ax_[1])
+                self.setCursor(Qt.SizeHorCursor if ax_[0] == "x" else Qt.SizeVerCursor)
+                return
+        if ev.button() == Qt.LeftButton and tool == "freebeam":
+            g_ = float(B.settings_of(self.panel.data())["grid"]) or 0.5
+            q = (round(x / (g_ / 2)) * (g_ / 2), round(y / (g_ / 2)) * (g_ / 2))
+            if node is not None:
+                q = (float(node[0]), float(node[1]))
+            if getattr(self, "_fb_start", None) is None:
+                self._fb_start = q
+                self.panel.status.setText("คานอิสระ: คลิกจุดปลายคาน (Esc ยกเลิก)")
+            else:
+                self.panel.add_free_beam(self._fb_start, q)
+                self._fb_start = None
+            self.update()
+            return
         if ev.button() == Qt.RightButton:
             if item is not None:
                 self.selected = item["id"]
@@ -505,6 +560,10 @@ class PlanCanvas(QWidget):
             self.origin = org + (ev.position() - start)
         elif self._band is not None:
             self._band = (self._band[0], ev.position())
+        elif self._drag is not None and self._drag[0] == "axis":
+            g_ = float(B.settings_of(self.panel.data())["grid"]) or 0.5
+            v_ = x if self._drag[1] == "x" else y
+            self._drag = (self._drag[0], self._drag[1], self._drag[2], round(v_ / (g_ / 2)) * (g_ / 2))
         elif self._drag is not None and self._drag[0] == "stair":
             _k, sid, dx, dy = self._drag
             g = float(B.settings_of(self.panel.data())["grid"]) or 0.5
@@ -548,6 +607,14 @@ class PlanCanvas(QWidget):
                           if rm["x"] < hi_x and rm["x"] + rm["w"] > lo_x
                           and rm["y"] < hi_y and rm["y"] + rm["d"] > lo_y}
             self.selected = next(iter(self.multi), None)
+            self.update()
+            return
+        if self._drag is not None and self._drag[0] == "axis":
+            _k, which, old, new = self._drag
+            self._drag = None
+            self.unsetCursor()
+            if abs(new - old) > 1e-6:
+                self.panel.move_axis(which, old, new)
             self.update()
             return
         if self._drag is not None and self._drag[0] == "stair":
@@ -610,6 +677,7 @@ class PlanCanvas(QWidget):
         elif ctrl and key == Qt.Key_A:
             self.multi = {rm["id"] for rm in self.rooms()}
         elif key == Qt.Key_Escape:
+            self._fb_start = None
             self.selected, self.multi = None, set()
             self.panel.set_tool("select")
         elif key in (Qt.Key_Delete, Qt.Key_Backspace) and (sel or self.multi):
@@ -629,6 +697,35 @@ class PlanCanvas(QWidget):
             return
         self.update()
 
+    def _axis_hit(self, pos):
+        """("x" | "y", value) of the grid bubble under ``pos`` (เลื่อนแนวคาน)."""
+        pts = B.nodes(self.rooms())
+        if not pts:
+            return None
+        top, left = 18.0, 24.0
+        for x in sorted({q[0] for q in pts}):
+            if math.hypot(pos.x() - self.to_screen(x, 0).x(), pos.y() - top) <= 10:
+                return ("x", x)
+        for y in sorted({q[1] for q in pts}):
+            if math.hypot(pos.x() - left, pos.y() - self.to_screen(0, y).y()) <= 10:
+                return ("y", y)
+        return None
+
+    def _empty_menu(self, at_world, at):
+        m = QMenu(self)
+        n = len(getattr(self.panel, "_clip", None) or [])
+        a1 = m.addAction(f"วาง {n} ห้องที่ตำแหน่งนี้ (Ctrl+V)", lambda: self._paste(at_world))
+        a2 = m.addAction(f"วาง {n} ห้องที่ตำแหน่งเดิม (เช่น คัดลอกไปอีกชั้น)", lambda: self._paste("same"))
+        for a in (a1, a2):
+            a.setEnabled(n > 0)
+        m.exec(at)
+
+    def _paste(self, where):
+        got = self.panel.paste_rooms(where)
+        if got:
+            self.multi, self.selected = set(got), got[0]
+        self.update()
+
     def _menu(self, rm, at):
         m = QMenu(self)
         ids = self.selected_rooms() or {rm["id"]}
@@ -638,6 +735,9 @@ class PlanCanvas(QWidget):
         m.addAction("ทำสำเนา", lambda: self.panel.duplicate_room(rm["id"]))
         m.addAction(f"คัดลอก {len(ids)} ห้อง (Ctrl+C)",
                     lambda: self.panel.copy_rooms(ids))
+        n_ = len(getattr(self.panel, "_clip", None) or [])
+        if n_:
+            m.addAction(f"วาง {n_} ห้องที่ตำแหน่งเดิม (Ctrl+V)", lambda: self._paste("same"))
         m.addSeparator()
         m.addAction(f"ลบ {len(ids)} ห้อง (Delete)",
                     lambda: self.panel.delete_rooms(ids))
@@ -2532,7 +2632,8 @@ class BuildingPanel(QWidget):
                      ("door", "🚪 ประตู (คลิกที่แนวผนัง)"),
                      ("window", "🪟 หน้าต่าง (คลิกที่แนวผนัง)"),
                      ("stair", "🪜 บันได (คลิกวาง · ลากย้าย · R หมุน)"),
-                     ("fixture", "🚽 สุขภัณฑ์ (คลิกวาง · ลากย้าย · R หมุน)")):
+                     ("fixture", "🚽 สุขภัณฑ์ (คลิกวาง · ลากย้าย · R หมุน)"),
+                     ("freebeam", "➖ คานอิสระ (คลิกจุดเริ่ม · คลิกจุดปลาย)")):
             self.tool_box.addItem(v, k)
         tl.addWidget(self.tool_box, 1)
         lay.addLayout(tl)
@@ -3145,7 +3246,9 @@ class BuildingPanel(QWidget):
             return []
         d = self.data()
         fp = B.footprint(rooms)
-        if at is not None:
+        if at == "same":                              # the same place (another floor)
+            dx, dy = 0.0, 0.0
+        elif at is not None:
             dx, dy = at[0] - fp[0], at[1] - fp[1]
         else:
             dx, dy = fp[2] - fp[0], 0.0
@@ -3161,6 +3264,61 @@ class BuildingPanel(QWidget):
             out.append(nid)
         self._write(d)
         return out
+
+    def move_axis(self, which, old, new):
+        """เลื่อนแนวคาน: the grid line at ``old`` (x or y) goes to ``new`` on
+        every floor — the room edges on it, the doors and windows on it, so
+        the beams and columns on that line move with it."""
+        d = self.data()
+        k = "x" if which == "x" else "y"
+        size = "w" if which == "x" else "d"
+        bad = []
+        for f in d["floors"]:
+            for rm in f.get("rooms") or []:
+                a, b = float(rm[k]), float(rm[k]) + float(rm[size])
+                if abs(a - old) < 1e-6 and b - new < 0.5:
+                    bad.append(rm.get("name") or rm["id"])
+                if abs(b - old) < 1e-6 and new - a < 0.5:
+                    bad.append(rm.get("name") or rm["id"])
+        if bad:
+            self.status.setText(f"เลื่อนแนวไม่ได้ — ห้องจะแคบกว่า 0.50 ม.: {', '.join(bad[:4])}")
+            return False
+        for f in d["floors"]:
+            for rm in f.get("rooms") or []:
+                a, b = float(rm[k]), float(rm[k]) + float(rm[size])
+                if abs(a - old) < 1e-6:
+                    rm[k] = B._r(new)
+                    rm[size] = B._r(b - new)
+                elif abs(b - old) < 1e-6:
+                    rm[size] = B._r(new - a)
+            for op in f.get("openings") or []:
+                if abs(float(op.get(k, 1e9)) - old) < 1e-6:
+                    op[k] = B._r(new)
+        self._write(d)
+        self.status.setText(f"เลื่อนแนว{'ตั้ง' if which == 'x' else 'นอน'} {old:.2f} → {new:.2f} ม. ทุกชั้น "
+                            "(ห้อง ผนัง ประตู-หน้าต่าง เสา และคานในแนวนี้ตามไปด้วย) — Ctrl+Z ย้อนได้")
+        return True
+
+    def add_free_beam(self, a, b):
+        """คานอิสระ on this floor: from ``a`` to ``b`` (plan, m) at the top of
+        the floor (under the slab above), mark B1 — in the model, the plans,
+        the BOQ and the calculation (data["free"])."""
+        if math.dist(a, b) < 0.3:
+            self.status.setText("คานสั้นเกินไป (น้อยกว่า 0.30 ม.)")
+            return False
+        d = self.data()
+        s = B.settings_of(d)
+        H = float(s["floor_h"])
+        z = (self.floor + 1) * H + B.floor_lift(s)
+        free = dict(d.get("free") or {})
+        beams = list(free.get("beams") or [])
+        beams.append({"pts": [[a[0], a[1], z], [b[0], b[1], z]], "mark": "B1", "curved": False, "w": 0.0})
+        free["beams"] = beams
+        d["free"] = free
+        self._write(d)
+        self.status.setText(f"เพิ่มคานอิสระ B1 ยาว {math.dist(a, b):.2f} ม. ที่ชั้น {self.floor + 1} "
+                            "— กด «สร้าง/อัปเดตโมเดล» · แก้เบอร์/น้ำหนักได้ที่ «ชิ้นส่วนเขียนอิสระ…»")
+        return True
 
     def clear_floor(self):
         d = self.data()

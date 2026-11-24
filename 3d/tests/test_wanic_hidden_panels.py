@@ -82,3 +82,40 @@ def test_a_tab_behind_another_waits_and_catches_up():
     finally:
         win._saved_version = win.viewport.scene.version
         win.close()
+
+
+def test_move_axis_paste_same_place_and_free_beam():
+    """ค8: เลื่อนแนวคาน (all floors, rooms and openings on it), วางห้องที่
+    ตำแหน่งเดิม, คานอิสระ from two clicks."""
+    from core import wanic_building as B
+    from core import wanic_rc as R
+    from views.main_window import MainWindow
+    win = MainWindow(defer_extensions=True)
+    _KEEP.append(win)
+    win.show()
+    _settle()
+    win.load_extensions()
+    _settle()
+    bp = win._wanic_building
+    d = bp.data()
+    R.apply_grid(d, [4.0, 4.0], [4.0], 2, [])
+    bp._write(d)
+    assert bp.move_axis("x", 4.0, 4.5)
+    for f in bp.data()["floors"]:
+        xs = sorted({r["x"] for r in f["rooms"]} | {r["x"] + r["w"] for r in f["rooms"]})
+        assert 4.5 in [round(v, 3) for v in xs] and 4.0 not in [round(v, 3) for v in xs]
+    assert not bp.move_axis("x", 4.5, 8.0)                      # a room would be under 0.50 m
+    bp.floor = 0
+    n0 = len(bp.data()["floors"][1]["rooms"])
+    bp.copy_rooms({r["id"] for r in bp.data()["floors"][0]["rooms"][:1]})
+    bp.floor = 1
+    got = bp.paste_rooms("same")
+    f1 = bp.data()["floors"][1]["rooms"]
+    assert len(got) == 1 and len(f1) == n0 + 1
+    src = bp.data()["floors"][0]["rooms"][0]
+    new = next(r for r in f1 if r["id"] == got[0])
+    assert (new["x"], new["y"]) == (src["x"], src["y"])
+    assert bp.add_free_beam((0.0, 2.0), (4.5, 2.0))
+    fb = B.elements(bp.data())["free"]["beams"]
+    assert len(fb) == 1 and abs(fb[0]["pts"][0][2] - (2 * float(B.settings_of(bp.data())["floor_h"])
+                                                      + B.floor_lift(B.settings_of(bp.data())))) < 1e-6
