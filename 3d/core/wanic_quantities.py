@@ -132,14 +132,18 @@ class _Bill:
         self.zero = zero                              # no province yet: every price 0
 
     def add(self, group, desc, net, unit, *, waste=0.0, mat=None,
-            mat_key="", lab_code="", lab=None, basis="", ref="", note=""):
+            mat_key="", lab_code="", lab=None, basis="", ref="", note="", only=None):
         if net is None or net <= 1e-9:
-            return None
+            return None                               # only what the model has (qty > 0)
         qty = S.q2(net * (1 + waste / 100.0))
-        # a line that has a material (a price-list key or a recipe price) and/or
-        # a labour rate must have them priced — else it is «ยังไม่มีราคา» (orange)
-        need_mat = bool(mat_key) or mat is not None
-        need_lab = bool(lab_code) or lab is not None
+        # ทุกรายการต้องมีทั้งราคาวัสดุและค่าแรง (the owner): a line needs both,
+        # except the ones that are one side by nature — a labour item (ค่าแรง…,
+        # ขุดดิน, ทำความสะอาด), or a material whose labour is in another line
+        # (the roof sheets and their caps, props, tie wire); a missing one is
+        # «ยังไม่มีราคา» (orange) until it is priced
+        side = only or one_sided(desc, unit, ref)
+        need_mat = side not in ("lab", "none")
+        need_lab = side not in ("mat", "none")
         mat = 0.0 if mat is None else mat
         if mat_key and not mat:
             mat = float(self.prices.get(mat_key) or 0.0)
@@ -149,6 +153,8 @@ class _Bill:
             mat = lab = 0.0
         missing = ([] if not need_mat or float(mat) > 0 else ["ค่าวัสดุ"]) + \
             ([] if not need_lab or float(lab) > 0 else ["ค่าแรง"])
+        if side in ("lab", "mat") and not note:
+            note = "ค่าแรงอย่างเดียว" if side == "lab" else "ค่าวัสดุอย่างเดียว (ค่าแรงรวมในรายการที่เกี่ยวข้อง)"
         ln = {"group": group, "desc": desc, "net": net, "waste": waste,
               "qty": qty, "unit": unit, "mat": round(float(mat), 2),
               "lab": round(float(lab), 2), "mat_key": mat_key,
@@ -159,6 +165,24 @@ class _Bill:
         ln["total"] = round(ln["mat_total"] + ln["lab_total"], 2)
         self.lines.append(ln)
         return ln
+
+
+LAB_ONLY = ("ค่าแรง", "งานขุดดิน", "งานถมดิน", "ทำความสะอาด", "ตัดกระเบื้อง", "ถางป่า", "วางผังอาคาร")
+MAT_ONLY = ("ไม้ค้ำยัน", "ลวดผูกเหล็ก")
+
+
+def one_sided(desc, unit, ref) -> str | None:
+    """«lab» / «mat» for a line that is one side by nature, else None (both)."""
+    d = str(desc or "")
+    if "ใช้ดินที่ขุด" in d:
+        return "none"                                 # the dug soil back: no material, labour in the dig
+    if d.startswith(LAB_ONLY):
+        return "lab"
+    if d.startswith(MAT_ONLY) or "ค่าแรงรวม" in str(ref or "") or "ค่าแรงอยู่" in str(ref or ""):
+        return "mat"
+    if unit == "แผ่น" and ("กระเบื้อง" in d or d.startswith("ครอบ")):
+        return "mat"                                  # sheets / caps: labour in «ค่าแรงมุง…»
+    return None
 
 
 #: Recipe item names that mean a price-list key under another name.

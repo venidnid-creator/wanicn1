@@ -396,3 +396,20 @@ def test_bedroom_set_is_furniture_not_billed():
     gs, count = B.build(d, ("structure",))
     assert count.get("furniture", 0) == len(items) or sum(
         1 for g in gs if (g.ext or {}).get(B.EXT_KEY, {}).get("kind") == "furniture") == len(items)
+
+
+def test_every_line_needs_both_prices_unless_one_sided():
+    """ง1: ทุกรายการต้องมีทั้งราคาวัสดุและค่าแรง — a line with no labour code
+    is «ยังไม่มีราคา ค่าแรง» until priced; labour-only / material-only lines
+    by nature say so in their note."""
+    from core import wanic_quantities as Q
+    assert Q.one_sided("ค่าแรงมุงกระเบื้อง", "ตร.ม.", "") == "lab"
+    assert Q.one_sided("งานขุดดินฐานราก", "ลบ.ม.", "") == "lab"
+    assert Q.one_sided("ไม้ค้ำยัน — คาน", "ต้น", "") == "mat"
+    assert Q.one_sided("งานถมดินคืน (ใช้ดินที่ขุด)", "ลบ.ม.", "") == "none"
+    assert Q.one_sided("ท่อลงน้ำ PVC", "ม.", "") is None
+    b = Q._Bill(prices={"ท่อ": 100.0}, labour={}, zero=False)
+    ln = b.add("roof", "ท่อลงน้ำ PVC", 3.0, "ม.", mat_key="ท่อ")
+    assert ln["missing"] == ["ค่าแรง"]                       # no labour code: still needs a labour price
+    ln = b.add("roof", "ค่าแรงมุงกระเบื้อง", 3.0, "ตร.ม.", lab=50.0)
+    assert ln["missing"] == [] and ln["note"] == "ค่าแรงอย่างเดียว"
