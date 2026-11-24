@@ -2138,7 +2138,19 @@ def section_marks(sh, v, E, k, sheets=None, ext=2.2):
             a, b = v(xs[0] - ext - 1.2, at), v(xs[-1] + ext, at)
             a_in, b_in = v(xs[0] - 0.4, at), v(xs[-1] + 0.4, at)
             arrow = (0.0, 1.0)
-        sh.line(a_in, b_in, "grid", 0.35, True)
+        # the cutting-plane line runs right up to both marks (the owner: a
+        # professional set — the line reaches the symbol), heavy short ends
+        # at the marks, the thin chain across everything between
+        dx_, dy_ = b[0] - a[0], b[1] - a[1]
+        Ld = math.hypot(dx_, dy_) or 1.0
+        ux_, uy_ = dx_ / Ld, dy_ / Ld
+        r_ = 3.6                                          # the mark's circle
+        a_e = (a[0] + ux_ * r_, a[1] + uy_ * r_)
+        b_e = (b[0] - ux_ * r_, b[1] - uy_ * r_)
+        sh.line(a_e, b_e, "grid", 0.30, True)
+        for q_, sgn in ((a_e, 1.0), (b_e, -1.0)):
+            sh.line(q_, (q_[0] + ux_ * sgn * 4.0, q_[1] + uy_ * sgn * 4.0), "text", 0.6)
+        _ = (a_in, b_in)
         if sheets is not None:
             from core import wanic_std_sheets as STD
             ref = STD.sheet_ref([s_ for s_ in sheets if f"รูปตัด {name}" in s_.title], "")
