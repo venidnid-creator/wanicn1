@@ -201,3 +201,32 @@ def test_the_book_shows_acting_and_capacity(tmp_path):
     n = make_book(res, d, tmp_path / "book.pdf", {"project": "ทดสอบ"})
     assert n > 5 and (tmp_path / "book.pdf").stat().st_size > 10000
     assert B is not None
+
+
+def test_beam_dead_and_live_apart_and_pictures_for_slabs_and_footings():
+    """ข3: every beam carries its dead and live load apart (service) —
+    1.4·R(DL) + 1.7·R(LL) is the factored reaction — and every slab and
+    spread footing has its load-behaviour picture."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QApplication
+    from core import wanic_calc_view as V
+    QApplication.instance() or QApplication([])
+    from tests.test_wanic_fail import _house
+    res = C.analyse(_house())
+    beams = [m for m in res["members"] if m.group == "beam" and m.diagram is not None]
+    assert beams
+    for m in beams:
+        c = m.diagram.cases
+        assert c["DL"].reactions and any(c["LL"].reactions)
+        for a, b, r in zip(c["DL"].reactions, c["LL"].reactions, m.diagram.reactions):
+            assert abs(c["fd"] * a + c["fl"] * b - r) <= 1e-6 * max(1.0, abs(r))
+    kinds = {m.picture["kind"] for m in res["members"] if m.picture}
+    assert {"slab", "footing"} <= kinds
+    img = QImage(900, 480, QImage.Format_ARGB32)
+    for m in [beams[0]] + [m for m in res["members"] if m.picture][:3]:
+        p = QPainter(img)
+        V.draw_any(p, QRectF(0, 0, 900, 480), m.diagram if m.diagram is not None else m.picture, m.name)
+        p.end()

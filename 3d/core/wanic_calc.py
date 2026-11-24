@@ -152,6 +152,14 @@ class Span:
     P: list = field(default_factory=list)   # point loads (a, kg)
     U: list = field(default_factory=list)   # part-length uniform loads (a, b, kg/m)
     cant: str = ""                 # "L" / "R": a cantilever (free at the outer end)
+    #: the same loads unfactored and split: dead (DL) and live (LL), kg/m and
+    #: (a, kg) / (a, b, kg/m) — for the load diagram and the reactions per case
+    wd: float = 0.0
+    wl: float = 0.0
+    Pd: list = field(default_factory=list)
+    Pl: list = field(default_factory=list)
+    Ud: list = field(default_factory=list)
+    Ul: list = field(default_factory=list)
 
 
 @dataclass
@@ -218,6 +226,20 @@ def _stations(sp, n) -> list:
         st[k], st[k + 1] = a, a + 1e-6
         used |= {k, k + 1}
     return st
+
+
+def load_cases(spans: list, fd: float = 1.4, fl: float = 1.7) -> dict:
+    """The beam under its dead load alone and its live load alone
+    (service), for the load diagram and the reactions per case:
+    {"DL": BeamResult, "LL": BeamResult, "fd", "fl"} — {} when the spans
+    carry no split (a hand-made Span)."""
+    if not any(sp.wd or sp.wl or sp.Pd or sp.Pl or sp.Ud or sp.Ul for sp in spans):
+        return {}
+    out = {"fd": fd, "fl": fl}
+    for key, w_, P_, U_ in (("DL", "wd", "Pd", "Ud"), ("LL", "wl", "Pl", "Ul")):
+        out[key] = solve_beam([Span(sp.L, getattr(sp, w_), list(getattr(sp, P_)), list(getattr(sp, U_)), sp.cant)
+                               for sp in spans])
+    return out
 
 
 def solve_beam(spans: list, fixed_ends=(False, False), n=24) -> BeamResult:
@@ -496,6 +518,9 @@ class Member:
     qty: float = 0.0
     qty_unit: str = ""
     qty_factor: float = 1.0
+    #: the load-behaviour picture of a slab / footing (a dict with "kind"),
+    #: drawn by wanic_calc_view.draw_any — the beams and columns use ``diagram``
+    picture: object = None
 
     @property
     def ok(self) -> bool:
@@ -808,6 +833,9 @@ def analyse(data) -> dict:
                               f"wu = {wu:,.0f} กก./ตร.ม. · หนาขั้นต่ำ (กันแอ่น) {tmin * 100:.1f} ซม."
                               + (f" — บางกว่า ต้องหนา ≥ {math.ceil(tmin * 100 - 1e-6):.0f} ซม." if r_t > 1 else ""),
                               qty=wu, qty_unit="กก./ตร.ม. (คน/ของวางเพิ่ม)", qty_factor=L_))
+            out[-1].picture = {"kind": "slab", "a": a, "b": b2, "t": t, "qd": dead, "ql": b_["ll_floor"],
+                               "qu": wu, "fd": D_, "fl": L_, "Mu": Mu, "cap": cap, "one_way": m_ < 0.5,
+                               "disc": disc, "mark": sl["mark"]}
         slab_q[id(rm)] = (D_ * dead + L_ * b_["ll_floor"], dead, b_["ll_floor"])
     # -- beams: collinear runs on the same level, continuous over the columns
     runs: dict = {}
@@ -832,6 +860,7 @@ def analyse(data) -> dict:
         for e in segs:
             L = math.dist(e["p0"], e["p1"])
             w = D_ * bw * h * conc
+            w_dl, w_ll = bw * h * conc, 0.0                   # service DL / LL (kg/m)
             # slabs either side (the floor this beam carries: the floor above its level)
             fl = level
             for rm in rooms_by_level.get(fl, []) if not e.get("roof") else []:
@@ -844,12 +873,16 @@ def analyse(data) -> dict:
                     (ry0 - 1e-6 <= lo and hi <= ry1 + 1e-6)
                 if not (on and along):
                     continue
-                q = slab_q.get(id(rm), (D_ * (0.10 * conc + b_["finish"]) + L_ * b_["ll_floor"], 0, 0))[0]
+                q, qd, ql = slab_q.get(id(rm), (D_ * (0.10 * conc + b_["finish"]) + L_ * b_["ll_floor"],
+                                                0.10 * conc + b_["finish"], b_["ll_floor"]))
                 S_ = min(rm["w"], rm["d"])
                 Lr = max(rm["w"], rm["d"])
                 m_ = S_ / Lr
                 parallel_long = (axis == "x" and rm["w"] >= rm["d"]) or (axis == "y" and rm["d"] > rm["w"])
-                w += q * S_ / 3.0 if not parallel_long else q * S_ / 6.0 * (3 - m_ * m_)
+                coef = S_ / 3.0 if not parallel_long else S_ / 6.0 * (3 - m_ * m_)
+                w += q * coef
+                w_dl += qd * coef
+                w_ll += ql * coef
             # the wall standing on it
             for wl in walls:
                 if wl["floor"] != level:
@@ -857,6 +890,7 @@ def analyse(data) -> dict:
                 if {tuple(map(lambda v: round(v, 3), wl["p0"])), tuple(map(lambda v: round(v, 3), wl["p1"]))} \
                         == {tuple(map(lambda v: round(v, 3), e["p0"])), tuple(map(lambda v: round(v, 3), e["p1"]))}:
                     w += D_ * b_["wall_kg_m2"] * (float(s["floor_h"]) - h)
+                    w_dl += b_["wall_kg_m2"] * (float(s["floor_h"]) - h)
             # the roof on the top ring beams
             if e.get("roof") and roof_q:
                 # an eave-side ring beam takes the roof from its wall half way up
@@ -864,10 +898,12 @@ def analyse(data) -> dict:
                 fl_ = floors[-1]["rooms"] if floors else []
                 half_ = min(max(r["x"] + r["w"] for r in fl_) - min(r["x"] for r in fl_),
                             max(r["y"] + r["d"] for r in fl_) - min(r["y"] for r in fl_)) / 2 if fl_ else 2.0
-                w += (D_ * tile_weight(s) + L_ * b_["ll_roof"]) / math.cos(math.radians(
-                    float(s["pitch"]))) * (half_ / 2 + float(s["overhang"]))
+                trib_ = (half_ / 2 + float(s["overhang"])) / math.cos(math.radians(float(s["pitch"])))
+                w += (D_ * tile_weight(s) + L_ * b_["ll_roof"]) * trib_
+                w_dl += tile_weight(s) * trib_
+                w_ll += b_["ll_roof"] * trib_
             lo_, hi_ = _along(e, axis)
-            sp_ = Span(L, w)
+            sp_ = Span(L, w, wd=w_dl, wl=w_ll)
             if e.get("cant"):
                 free = e["p1"][0] if axis == "x" else e["p1"][1]
                 sp_.cant = "L" if abs(free - lo_) < 1e-6 else "R"
@@ -879,10 +915,12 @@ def analyse(data) -> dict:
                 if "P" in q and b2_ - a_ < 1e-9:
                     if lo_ - 1e-9 <= a_ < hi_ - 1e-9 or (abs(a_ - hi_) < 1e-9 and e is segs[-1]):
                         sp_.P.append((a_ - lo_, fac * float(q["P"])))
+                        (sp_.Pd if fac == D_ else sp_.Pl).append((a_ - lo_, float(q["P"])))
                 elif "w" in q:
                     ca, cb_ = max(a_, lo_), min(b2_, hi_)
                     if cb_ - ca > 1e-6:
                         sp_.U.append((ca - lo_, cb_ - lo_, fac * float(q["w"])))
+                        (sp_.Ud if fac == D_ else sp_.Ul).append((ca - lo_, cb_ - lo_, float(q["w"])))
             spans.append(sp_)
         if not spans:
             continue
@@ -891,6 +929,7 @@ def analyse(data) -> dict:
             if sp_.cant == "L" and j != 0 or sp_.cant == "R" and j != len(spans) - 1:
                 sp_.cant = ""
         res = solve_beam(spans)
+        res.cases = load_cases(spans, D_, L_)
         res.mark, res.spec, res.level, res.axis, res.line = mark, spec, level, axis, c
         res.ground = bool(segs[0].get("ground"))
         res.z = float(segs[0].get("z", 0.0))
@@ -1065,6 +1104,8 @@ def analyse(data) -> dict:
                               f"เข็ม {pt} {piles} × {pc:,.2f} = {cap / 1000:,.2f} ตัน", P / cap if cap else 9.9,
                               f"ต้องใช้เข็มอย่างน้อย {max(1, math.ceil(P / (pc * 1000))) if pc else '-'} ต้น",
                               qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
+            out[-1].picture = {"kind": "pile", "P": P, "n": piles, "pc": pc * 1000, "w": w_, "l": l_, "t": t_,
+                               "self": w_ * l_ * t_ * conc, "mark": f["mark"]}
         else:
             q = P / (w_ * l_) / 1000 if w_ * l_ else 99.0
             out.append(Member("footing", f"{f['mark']} ที่ ({f['x']:.2f}, {f['y']:.2f}) · ฐานแผ่ {w_:.2f}×{l_:.2f} ม.",
@@ -1072,6 +1113,9 @@ def analyse(data) -> dict:
                               f"ต้องใช้ฐานอย่างน้อย {math.sqrt(P / 1000 / b_['soil']):.2f} × "
                               f"{math.sqrt(P / 1000 / b_['soil']):.2f} ม.",
                               qty=P / 1000.0, qty_unit="ตัน ต่อฐาน 1 ฐาน"))
+            out[-1].picture = {"kind": "footing", "P": P, "w": w_, "l": l_, "t": t_, "q": q, "qa": b_["soil"],
+                               "self": w_ * l_ * t_ * conc, "mark": f["mark"],
+                               "col": float((lib.get("PC1") or {}).get("b", 0.2))}
     # footings under the free columns that stand on the ground (mark F1)
     grid_feet = {(round(f["x"], 3), round(f["y"], 3)) for f in E["footings"]}
     fspec = lib.get("F1", {})

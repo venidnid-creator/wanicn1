@@ -610,8 +610,10 @@ class RCPanel(QWidget):
         if self.step == "calc":
             r = self.table.currentRow()
             ms = (self._calc or {}).get("members") or []
-            if 0 <= r < len(ms) and ms[r].diagram is not None:
-                self.diagram.show_result(ms[r].diagram, ms[r].name)
+            pic = (ms[r].diagram if ms[r].diagram is not None else getattr(ms[r], "picture", None)) \
+                if 0 <= r < len(ms) else None
+            if pic is not None:
+                self.diagram.show_result(pic, ms[r].name)
             else:
                 self.diagram.show_result(None)
             if 0 <= r < len(ms):
