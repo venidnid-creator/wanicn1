@@ -163,7 +163,7 @@ def test_panel_places_rooms_builds_and_rebuilds(monkeypatch):
     sid = panel.place_stair(1.5, 1.5)
     panel.rotate_stair(sid)
     assert panel.items("stairs")[0]["dir"] == 2
-    panel.copy_floor()
+    panel.copy_floor(ask=False)
     assert len(panel.data()["floors"]) == 2
     panel.send_rates()
     tk = scene_data(scene)["wanic_takeoff"]
@@ -316,8 +316,9 @@ def test_panel_door_types_fixtures_fascia(monkeypatch):
     assert B.opening_name(op, B.settings_of(panel.data())).startswith("W2 ")
     # The standard bathroom set goes into the bathroom only.
     n = panel.fill_standard_sets()                    # laid out by the room's size
-    assert n == len(__import__("core.wanic_catalog", fromlist=["x"])
-                    .bathroom_layout(2.0, 3.0))
+    CAT_ = __import__("core.wanic_catalog", fromlist=["x"])
+    furn = sum(1 for f in panel.items("fixtures") if f["type"] in CAT_.FURNITURE)   # bedrooms / kitchen
+    assert n - furn == len(CAT_.bathroom_layout(2.0, 3.0))
     assert panel.fill_standard_sets() == 0            # not twice
     panel.set_tool("fixture")
     fid = panel.place_fixture(1.0, 1.0, "SK1")
