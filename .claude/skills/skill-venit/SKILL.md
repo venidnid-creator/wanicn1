@@ -209,6 +209,9 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - 2026-11-24 (ง1–ง2): every BOQ line needs both material and labour prices unless `Q.one_sided` says otherwise; lines
   with no ว480 labour code get an own key `Q.OWN_LAB + name` the owner prices in the labour table. Price checkers:
   BOQ «แสดงเฉพาะรายการที่ยังไม่มีราคา», takeoff «ซ่อนชิ้นที่มีราคาแล้ว».
+- ง3/ง6: the สพฐ. price book (`core/wanic_obec.py`) is a second source ONLY for a สพฐ. job (`data["obec"]`), filling
+  only empty items after พาณิชย์จังหวัด / ว480; it must never reach the province book or another job.
+- WanicnDesign (the owner's other design program) lives on branch `claude/awesome-pasteur-y5g1in` in `design/WanicnDesign`.
 
 ## 7. Future development (agreed or proposed — confirm with the owner before starting)
 

@@ -155,7 +155,10 @@ def save_book(province: str, prices: dict, month: str = "",
             "source": source or f"สำนักงานพาณิชย์จังหวัด{province}",
             "updated": datetime.date.today().isoformat(),
             "prices": {k: float(v) for k, v in prices.items()
-                       if _num(v) is not None and float(v) > 0}}
+                       if _num(v) is not None and float(v) > 0
+                       # สพฐ. prices belong to the สพฐ. job only, never to the
+                       # province's book every other job reads (ง6)
+                       and (src or {}).get(k) != "สพฐ."}}
     book["src"] = {k: (src or {}).get(k, "พาณิชย์") for k in book["prices"]}
     book["item"] = {k: v for k, v in (item or {}).items() if k in book["prices"]}
     with open(_path(province), "w", encoding="utf-8") as fh:

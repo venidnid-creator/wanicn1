@@ -101,16 +101,22 @@ def sane_price(key: str, value: float) -> float:
 
 def prices_of(data) -> dict:
     p = S.empty_prices()
+    obec = bool((data or {}).get("obec"))
+    src = (data or {}).get("price_src") or {}
     p.update({k: sane_price(k, v) for k, v in ((data or {}).get("prices") or {})
-              .items() if _isnum(v)})
+              .items() if _isnum(v)
+              # a สพฐ. price counts only in a สพฐ. job (ง6)
+              and (obec or src.get(k) != "สพฐ.")})
     return p
 
 
 def labour_of(data) -> dict:
     """ว480 rates, with the user's overrides (code → baht)."""
     out = {k: float(v[2]) for k, v in S.LABOUR.items()}
+    obec = bool((data or {}).get("obec"))
+    lsrc = (data or {}).get("labour_src") or {}
     for k, v in ((data or {}).get("labour") or {}).items():
-        if _isnum(v):
+        if _isnum(v) and (obec or k not in lsrc):
             out[S.ALIASES.get(k, k)] = float(v)
     return out
 
@@ -1100,6 +1106,16 @@ def compute(data, gate: bool = False) -> dict:
                 ln["note"] = (ln["note"] + " · " if ln["note"] else "") + note
                 if not prices.get(k):
                     unpriced.add(k)
+        lsrc = (data or {}).get("labour_src") or {}
+        if (data or {}).get("obec"):
+            for ln in bill.lines:
+                it = lsrc.get(ln["lab_code"])
+                if it and ln["lab"]:
+                    ln["note"] = (ln["note"] + " · " if ln["note"] else "") + \
+                        f"ไม่มีในบัญชี ว480 — ใช้ค่าแรง สพฐ. ({it})"
+            notes.append("งานของ สพฐ.: ค่าแรงใช้บัญชี ว480 กรมบัญชีกลางก่อน ราคาวัสดุใช้"
+                         f"พาณิชย์จังหวัด{province}ก่อน — ที่ไม่มีจึงใช้บัญชี สพฐ. "
+                         "(หมายเหตุบอกรหัสในบัญชี แก้ไขได้)")
         if unpriced:
             notes.append(f"ไม่พบราคาที่จังหวัด{province}ประกาศ {len(unpriced)} "
                          "รายการ — ให้สืบราคาตามท้องตลาด ณ จังหวัดนี้ แล้วกรอกใน"
@@ -1173,6 +1189,9 @@ def market_note(province: str, src, price: float, where: str = "",
     it came from, or that the province does not announce one."""
     if src == "พาณิชย์" and price:
         return f"ราคาพาณิชย์จ.{province}: {item}" if item else ""
+    if src == "สพฐ." and price:
+        return (f"ไม่พบราคาที่จังหวัด{province}ประกาศ — ใช้ราคาวัสดุ สพฐ."
+                + (f" ({item})" if item else ""))
     if src == "ตัวอย่าง" and price:
         return "ราคาตัวอย่าง — ไม่ใช่ราคาที่จังหวัดประกาศ"
     if not price:

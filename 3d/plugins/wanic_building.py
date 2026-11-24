@@ -1304,7 +1304,117 @@ class BoqDialog(QDialog):
             b.setToolTip(tip)
             b.clicked.connect(lambda _=False, f=fn: _safe(self, f))
             g.addWidget(b, 1 + col // 4, [0, 2, 4, 6][col % 4], 1, 2 if col % 4 < 3 else 1)
+        # ง3/ง6: บัญชี สพฐ. — the second source, for a สพฐ. job ONLY
+        self.obec_btn = QPushButton("🏫 ใช้ราคาวัสดุและบัญชีค่าแรง สพฐ.เท่านั้น")
+        self.obec_btn.setCheckable(True)
+        self.obec_btn.setChecked(bool(d.get("obec")))
+        self.obec_btn.setToolTip(
+            "เฉพาะงานของ สพฐ. เท่านั้น ห้ามใช้กับหน่วยงานอื่น — ค่าแรงใช้บัญชี ว480 "
+            "กรมบัญชีกลางก่อน ราคาวัสดุใช้พาณิชย์จังหวัดก่อน ที่ไม่มีจึงเติมจากบัญชี สพฐ.")
+        self.obec_btn.setStyleSheet("QPushButton:checked{background:#1D4ED8;color:white;"
+                                    "font-weight:bold}")
+        self.obec_btn.clicked.connect(lambda on: _safe(self, self.obec_toggle, on))
+        attach = QPushButton("📎 แนบบัญชี สพฐ. (PDF/CSV)…")
+        attach.setToolTip("แนบหนังสือบัญชีราคาค่าวัสดุและค่าแรงงาน สพฐ. — โปรแกรมจำไว้"
+                          "จนกว่าจะแนบฉบับใหม่หรือลบ")
+        attach.clicked.connect(lambda _=False: _safe(self, self.obec_attach))
+        drop = QPushButton("🗑 ลบบัญชี สพฐ.")
+        drop.clicked.connect(lambda _=False: _safe(self, self.obec_delete))
+        self.obec_label = QLabel()
+        self.obec_label.setWordWrap(True)
+        g.addWidget(self.obec_btn, 3, 0, 1, 2)
+        g.addWidget(attach, 3, 2, 1, 2)
+        g.addWidget(drop, 3, 4)
+        g.addWidget(self.obec_label, 3, 5, 1, 2)
+        self._obec_text()
         lay.addWidget(box)
+
+    # ---- บัญชี สพฐ. (ง3/ง6) ------------------------------------------------
+    def _obec_text(self):
+        from core import wanic_obec as O
+        st = O.load_store()
+        on = bool(self.panel.data().get("obec"))
+        if not st:
+            t = "<span style='color:#6B7280'>ยังไม่ได้แนบบัญชี สพฐ.</span>"
+        else:
+            t = (f"บัญชีที่แนบ: <b>{st['name']}</b> ({len(st['items'])} รายการ)")
+        if on:
+            t += "<br><span style='color:#1D4ED8'><b>งานนี้เป็นงานของ สพฐ.</b></span>"
+        self.obec_label.setText(t)
+        self.obec_btn.setChecked(on)
+
+    def obec_toggle(self, on):
+        from PySide6.QtWidgets import QMessageBox
+        from core import wanic_obec as O
+        d = self.panel.data()
+        if on:
+            if not O.load_store():
+                self.obec_attach()
+                if not O.load_store():
+                    self.obec_btn.setChecked(False)
+                    return
+            ok = QMessageBox.question(
+                self, O.NAME,
+                "บัญชีราคาค่าวัสดุและค่าแรงงาน สพฐ. ใช้ได้เฉพาะงานของ สำนักงานคณะกรรมการ"
+                "การศึกษาขั้นพื้นฐาน (สพฐ.) เท่านั้น ห้ามใช้กับหน่วยงานอื่นเด็ดขาด\n\n"
+                "งานนี้เป็นงานของ สพฐ. ใช่หรือไม่?\n\n"
+                "(ค่าแรงใช้บัญชี ว480 กรมบัญชีกลางก่อน ราคาวัสดุใช้พาณิชย์จังหวัดก่อน "
+                "เฉพาะรายการที่ไม่มีจึงเติมจากบัญชี สพฐ. พร้อมหมายเหตุ)")
+            if ok != QMessageBox.Yes:
+                self.obec_btn.setChecked(False)
+                return
+            d["obec"] = True
+            self.panel._write(d)
+            self.recompute()
+            msg = "งานของ สพฐ.: เติมราคาจากบัญชี สพฐ. เฉพาะรายการที่ไม่มีราคาแล้ว"
+        else:
+            n = O.strip(d)
+            d["obec"] = False
+            self.panel._write(d)
+            self.recompute()
+            msg = f"ไม่ใช่งานของ สพฐ.: เอาราคาจากบัญชี สพฐ. ออก {n} รายการ"
+        self._fill_prices()
+        self._obec_text()
+        self.panel.status.setText(msg)
+
+    def obec_attach(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from core import wanic_obec as O
+        path, _f = QFileDialog.getOpenFileName(
+            self, "แนบ" + O.NAME, "", "บัญชีราคา (*.pdf *.csv *.txt)")
+        if not path:
+            return
+        items = O.read_file(path)
+        if not items:
+            QMessageBox.warning(self, O.NAME, "ไม่พบรายการ (รหัส รายการ หน่วย ค่าวัสดุ "
+                                "ค่าแรง) ในไฟล์นี้")
+            return
+        O.save_store(items, os.path.basename(path))
+        d = self.panel.data()
+        if d.get("obec"):
+            O.strip(d)                              # the new book replaces the old
+            self.panel._write(d)
+            self.recompute()
+            self._fill_prices()
+        self._obec_text()
+        self.panel.status.setText(f"แนบบัญชี สพฐ. แล้ว {len(items)} รายการ — "
+                                  "โปรแกรมจำไว้จนกว่าจะแนบใหม่หรือลบ")
+
+    def obec_delete(self):
+        from PySide6.QtWidgets import QMessageBox
+        from core import wanic_obec as O
+        if not O.load_store():
+            return
+        if QMessageBox.question(self, O.NAME, "ลบบัญชี สพฐ. ที่แนบไว้?") != QMessageBox.Yes:
+            return
+        O.clear_store()
+        d = self.panel.data()
+        O.strip(d)
+        d["obec"] = False
+        self.panel._write(d)
+        self.recompute()
+        self._fill_prices()
+        self._obec_text()
 
     def _need_keys(self):
         from core import wanic_std2569 as S
@@ -1703,6 +1813,8 @@ class BoqDialog(QDialog):
                 where = "ราคาส่วนกลาง (กรุงเทพฯ)"
             elif where == "กรอกเอง":
                 where = "ท้องตลาด"
+            elif where == "สพฐ.":
+                where = "บัญชี สพฐ. (งานของ สพฐ.)"
             a, b, c = QTI(k), QTI(self._units.get(k, "")), QTI(where)
             for it in (a, b, c):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
@@ -1725,12 +1837,15 @@ class BoqDialog(QDialog):
             k_ = ln.get("lab_code") or ""
             if k_.startswith(Q.OWN_LAB) and k_ not in own:
                 own[k_] = ln.get("unit", "")
-                labour.setdefault(k_, float((d.get("labour") or {}).get(k_, 0.0) or 0.0))
+                labour.setdefault(k_, 0.0)
         codes += list(own)
         self.labour.setRowCount(len(codes))
         for r, c in enumerate(codes):
             if c in own:
                 desc, unit, cond = c[len(Q.OWN_LAB):], own[c], "ไม่มีในบัญชี ว480 — กรอกค่าแรงเอง"
+                obec_it = (d.get("labour_src") or {}).get(c) if d.get("obec") else ""
+                if obec_it and labour.get(c):
+                    cond = f"ไม่มีในบัญชี ว480 — ใช้ค่าแรง สพฐ. {obec_it}"
             else:
                 desc, unit, _rate, cond = S.LABOUR[c]
             cells = [c, f"{desc} ({cond})", unit]
@@ -1993,8 +2108,18 @@ class BoqDialog(QDialog):
 
     def recompute(self):
         from PySide6.QtWidgets import QTreeWidgetItem
+        from core import wanic_obec as O
         from core import wanic_quantities as Q
-        self.result = Q.priced(self.panel.data())
+        d = self.panel.data()
+        self.result = Q.priced(d)
+        if d.get("obec") and d.get("province"):
+            st = O.load_store()
+            got = O.fill(d, self.result, st.get("items") or [])
+            if got["mat"] or got["lab"]:            # only the empty items
+                self.panel._write(d)
+                self.result = Q.priced(d)
+                if hasattr(self, "labour"):
+                    self._fill_prices()
         self.tree.clear()
         bold = QFont(self.font())
         bold.setBold(True)
@@ -2087,6 +2212,13 @@ class BoqDialog(QDialog):
             it = self.prices.item(r, 4)
             if it is not None and it.text().strip():
                 notes[self.prices.item(r, 0).text()] = it.text().strip()
+        # a สพฐ. labour typed over is the user's own now
+        lsrc = dict(d.get("labour_src") or {})
+        for c in list(lsrc):
+            if abs(float(labour.get(c, 0) or 0) -
+                   float((d.get("labour") or {}).get(c, 0) or 0)) > 1e-9:
+                lsrc.pop(c)
+        d["labour_src"] = lsrc
         d["prices"], d["labour"], d["price_src"] = prices, labour, src
         d["price_note"] = notes
         d["price_month"] = self.month.text().strip()
