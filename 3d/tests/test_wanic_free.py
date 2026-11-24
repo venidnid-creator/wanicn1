@@ -115,3 +115,29 @@ def test_lines_drawn_on_the_model_keep_their_place():
     if getattr(g, "xform", None) is not None:
         zs = [g.xform.map(v.position).z() for v in g.mesh.vertices]
     assert abs(max(zs) - (4.0 + lift)) < 0.05                      # its top back where it was drawn
+
+
+def test_free_beam_on_a_main_beam_loads_it():
+    """The owner: a free beam resting on a main beam (not on a column)
+    hands its reaction to that main beam as a point load — every free
+    beam's weight reaches the main frame and its check."""
+    from core import wanic_building as B
+    from core import wanic_calc as C
+    from core import wanic_rc as R
+    d = B.default_data()
+    R.apply_grid(d, [4.0, 4.0], [4.0, 4.0], 2)
+    H = float(B.settings_of(d)["floor_h"])
+
+    def main_beam(res):
+        return next(m for m in res["members"] if m.group == "beam" and m.diagram is not None
+                    and getattr(m.diagram, "level", None) == 1 and getattr(m.diagram, "axis", "") == "x"
+                    and abs(getattr(m.diagram, "line", -1) - 0.0) < 1e-6)
+    before = main_beam(C.analyse(d))
+    # a free beam from the middle of beam y = 0 to the middle of beam y = 4 (x = 2, between columns)
+    d["free"] = {"beams": [{"pts": [[2.0, 0.0, H], [2.0, 4.0, H]], "mark": "B1", "curved": False, "w": 500.0}],
+                 "columns": [], "walls": []}
+    res = C.analyse(d)
+    after = main_beam(res)
+    assert any(abs(a - 2.0) < 1e-6 for sp in after.diagram.spans for a, _P in sp.P)
+    assert after.diagram.Mmax > before.diagram.Mmax                 # the main beam carries it
+    assert any("อิสระ" in m.name for m in res["members"])           # and the free beam is checked

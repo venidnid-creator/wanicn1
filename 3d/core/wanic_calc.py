@@ -867,7 +867,31 @@ def analyse(data) -> dict:
     rooms_by_level = {i: (f.get("rooms") or []) for i, f in enumerate(floors)}
     walls = E["walls"]
     beams_out = {}
-    user_loads = B.beam_loads(data)
+    user_loads = list(B.beam_loads(data))
+    # คานอิสระวางบนคานหลัก (the owner): an end of a free beam that rests on a
+    # main beam (not on a column) hands its reaction to that main beam as a
+    # point load — in its diagrams, its check and the columns under it
+    try:
+        from core import wanic_free as FR
+        if FR.free_of(data)["beams"]:
+            Hh = float(s["floor_h"])
+            for (px, py, pz), R_ in FR.free_reactions(data, b_):
+                lvl_ = int(round(pz / Hh))
+                for e in E["beams"]:
+                    if e["level"] != lvl_:
+                        continue
+                    (x0, y0), (x1, y1) = e["p0"], e["p1"]
+                    horiz = abs(y1 - y0) < 1e-6
+                    if horiz and abs(py - y0) < 0.05 and min(x0, x1) - 0.05 < px < max(x0, x1) + 0.05:
+                        user_loads.append({"level": lvl_, "axis": "x", "line": y0, "a": px, "b": px,
+                                           "P": R_ / D_, "type": "D", "free": True})
+                        break
+                    if not horiz and abs(px - x0) < 0.05 and min(y0, y1) - 0.05 < py < max(y0, y1) + 0.05:
+                        user_loads.append({"level": lvl_, "axis": "y", "line": x0, "a": py, "b": py,
+                                           "P": R_ / D_, "type": "D", "free": True})
+                        break
+    except Exception:                                # noqa: BLE001 - the main frame still calculates
+        pass
     col_load: dict = {}
     col_mom: dict = {}
     col_lv: dict = {}

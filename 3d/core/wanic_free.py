@@ -224,7 +224,19 @@ def members(data) -> list:
 
 # ---- the calculation ------------------------------------------------------------------------
 
-def analyse_free(data, b_, out, col_load, col_lv) -> list:
+def free_reactions(data, b_) -> list:
+    """The factored reactions of the free beams at the supports that are
+    not a column — an end on a main beam (คานอิสระวางบนคานหลัก):
+    [((x, y, z), R kg, DL share)] — the calculation puts them on the main
+    beam under each as a point load."""
+    from core import wanic_calc as C
+    got = []
+    analyse_free(data, b_, [], {}, {}, reacts=got)
+    _ = C
+    return got
+
+
+def analyse_free(data, b_, out, col_load, col_lv, reacts=None) -> list:
     """Free beams and columns into the calculation: each beam continuous
     over its supports, the load per horizontal metre (its own weight ÷ cos
     on a slope, the extra load, a free wall standing on it), the reactions
@@ -280,6 +292,8 @@ def analyse_free(data, b_, out, col_load, col_lv) -> list:
             p = pts[idx]
             k_ = next(((x, y) for x, y in cols if math.hypot(p[0] - x, p[1] - y) <= TOL), None)
             if k_ is None:
+                if reacts is not None:               # an end on a main beam: its load goes there
+                    reacts.append(((p[0], p[1], p[2]), R_))
                 continue
             free_load[k_] = free_load.get(k_, 0.0) + R_
             col_load[k_] = col_load.get(k_, 0.0) + R_

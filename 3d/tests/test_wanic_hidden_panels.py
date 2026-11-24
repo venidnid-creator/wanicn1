@@ -117,5 +117,4 @@ def test_move_axis_paste_same_place_and_free_beam():
     assert (new["x"], new["y"]) == (src["x"], src["y"])
     assert bp.add_free_beam((0.0, 2.0), (4.5, 2.0))
     fb = B.elements(bp.data())["free"]["beams"]
-    assert len(fb) == 1 and abs(fb[0]["pts"][0][2] - (2 * float(B.settings_of(bp.data())["floor_h"])
-                                                      + B.floor_lift(B.settings_of(bp.data())))) < 1e-6
+    assert len(fb) == 1 and abs(fb[0]["pts"][0][2] - 2 * float(B.settings_of(bp.data())["floor_h"])) < 1e-6

@@ -390,11 +390,10 @@ class PlanCanvas(QWidget):
         d = self.panel.data()
         s_ = B.settings_of(d)
         H = float(s_["floor_h"])
-        lift = B.floor_lift(s_)
         p.setPen(QPen(QColor("#2563EB"), 4))
         for bm in ((d.get("free") or {}).get("beams") or []):
             pts = bm.get("pts") or []
-            if len(pts) >= 2 and abs(float(pts[0][2]) - ((self.panel.floor + 1) * H + lift)) < 0.3:
+            if len(pts) >= 2 and abs(float(pts[0][2]) - (self.panel.floor + 1) * H) < 0.3:
                 for a, b in zip(pts, pts[1:]):
                     p.drawLine(self.to_screen(a[0], a[1]), self.to_screen(b[0], b[1]))
         st_ = getattr(self, "_fb_start", None)
@@ -3309,7 +3308,7 @@ class BuildingPanel(QWidget):
         d = self.data()
         s = B.settings_of(d)
         H = float(s["floor_h"])
-        z = (self.floor + 1) * H + B.floor_lift(s)
+        z = (self.floor + 1) * H                     # the building's own levels (±0.00 = ground floor)
         free = dict(d.get("free") or {})
         beams = list(free.get("beams") or [])
         beams.append({"pts": [[a[0], a[1], z], [b[0], b[1], z]], "mark": "B1", "curved": False, "w": 0.0})

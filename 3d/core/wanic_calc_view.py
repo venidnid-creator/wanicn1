@@ -86,7 +86,8 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
         return left + W * x / L if L else left
     # ---- load diagram: the uniform loads, the point loads, the supports, the reactions
     cases = getattr(res, "cases", None) or {}
-    by = top + 46 + (30 if cases else 0)
+    has_p = any(getattr(sp, "P", None) for sp in res.spans)
+    by = top + 46 + (30 if cases else 0) + (14 if cases and has_p else 0)
     x = 0.0
     sup = [0.0]                    # the span ends
     for sp in res.spans:
@@ -134,8 +135,11 @@ def draw_diagrams(p: QPainter, rect: QRectF, res, title: str = "") -> None:
         for a_, P in getattr(sp, "P", []) or []:
             px = X(sup[i] + a_)
             p.setPen(QPen(QColor("#DC2626"), 1.6))
-            p.drawLine(QPointF(px, by - 24), QPointF(px, by - 2))
-            p.drawText(QRectF(px + 3, by - 44, 120, 12), Qt.AlignLeft, f"P = {P:,.0f} กก.")
+            top_ = by - (70 if cases else 24)            # over the DL / LL bands when they show
+            p.drawLine(QPointF(px, top_), QPointF(px, by - 2))
+            p.drawLine(QPointF(px, by - 2), QPointF(px - 3, by - 8))
+            p.drawLine(QPointF(px, by - 2), QPointF(px + 3, by - 8))
+            p.drawText(QRectF(px + 4, top_ - 2, 160, 12), Qt.AlignLeft, f"P = {P:,.0f} กก.")
             p.setPen(QPen(QColor("#2563EB"), 1))
     p.setPen(QPen(QColor("#374151"), 1.2))
     p.setBrush(QColor("#9CA3AF"))
