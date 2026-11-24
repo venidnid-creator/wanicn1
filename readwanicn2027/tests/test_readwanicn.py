@@ -317,9 +317,10 @@ def test_login_box_download_latest_button():
     import readwanicn.ui as U
     old, U.VERSION = U.VERSION, "2027.4.8"                         # a test build ahead of the release
     box.show_info(update.ReleaseInfo(latest="2027.4.5"))
-    assert box.download.text() == "⬇ ดาวน์โหลดรุ่น v2027.4.5" and "รุ่นทดสอบ" in box.body.text()
+    assert box.download.isHidden() and "รุ่นทดสอบ" in box.body.text()
     assert "รุ่นที่ใช้อยู่" in box.body.text() and "v2027.4.8" in box.body.text()
     U.VERSION = old
     box.show_info(update.ReleaseInfo(latest="2099.1.0", newer=True, installer_url="https://example.invalid/s.exe"))
     assert box.download_url() == "https://example.invalid/s.exe" and "v2099.1.0" in box.download.text()
+    assert not box.download.isHidden()
     assert "มีรุ่นใหม่" in box.body.text()

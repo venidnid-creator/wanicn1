@@ -193,6 +193,7 @@ class StatsBox(QFrame):
         self.download.setStyleSheet("QPushButton { background:#1D4ED8; color:white; border:none; border-radius:6px;"
                                     " padding:6px 10px; font-weight:bold; } QPushButton:hover { background:#2563EB; }")
         self.download.clicked.connect(self.open_download)
+        self.download.hide()                       # shown only when a newer version is published
         lay.addWidget(self.download)
         self._info = None
         self.link = QLabel("<a href='#' style='color:#5AA9FF'>↻ อัปเดตตัวเลข</a>")
@@ -261,6 +262,7 @@ class StatsBox(QFrame):
                 state = "<span style='color:#4ADE80'>✓ ใช้รุ่นล่าสุดอยู่แล้ว</span>"
             lines.append(state)
             self.download.setText(f"⬇ ดาวน์โหลดรุ่น v{info.latest}")
+            self.download.setVisible(bool(info.newer))  # only when there is something newer to get
         lines.append(f"ดาวน์โหลดสะสม <b>{info.downloads:,}</b> ครั้ง")
         if info.latest:
             lines.append(f"รุ่นล่าสุด v{info.latest}: {info.latest_downloads:,} ครั้ง")
