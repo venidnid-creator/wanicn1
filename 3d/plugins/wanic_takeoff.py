@@ -215,6 +215,10 @@ class TakeoffPanel(QWidget):
                                  "(เขียว มีราคา · แดง ยังไม่มีราคา · ส้ม วัดไม่ได้)")
         self.checker.toggled.connect(self._toggle_paint)
         lay.addWidget(self.checker)
+        # ตัวตรวจราคาซ่อนรายการที่มีราคาแล้ว (the owner): only what still needs a price shows
+        self.hide_priced = QCheckBox("ซ่อนชิ้นที่มีราคาแล้ว — เหลือเฉพาะชิ้นที่ยังไม่มีราคา (ในโมเดลและตาราง)")
+        self.hide_priced.toggled.connect(lambda on: _safe(self, lambda: self._toggle_hide_priced(on)))
+        lay.addWidget(self.hide_priced)
 
         self.table = QTableWidget(0, len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
@@ -662,6 +666,8 @@ class TakeoffPanel(QWidget):
                     list(T.SECTIONS.items()), ln.get("section", "work")))
             if 0 <= sel < len(lines):
                 self.table.setCurrentCell(sel, 0)
+            if getattr(self, "hide_priced", None) is not None and self.hide_priced.isChecked():
+                self._filter_priced_rows(True)
             res = self._result
             if self.ff_auto.isChecked() and res["method"] == "gov":
                 self.factor_f.setValue(res["factor_f"])
@@ -696,6 +702,42 @@ class TakeoffPanel(QWidget):
             self.refresh()
         self.app.viewport.update()
 
+    def _toggle_hide_priced(self, on: bool) -> None:
+        """Priced objects hidden (undoable) and their rows out of the table —
+        what is left is what still needs a price; off: all back."""
+        from core.history import HideCommand
+        if self._result is None:
+            self.refresh()
+        status = (self._result or {}).get("status") or {}
+        priced = [it["group"] for it in self._items
+                  if it.get("group") is not None and status.get(it["key"]) == "ok"]
+        if on:
+            self._hidden_priced = [g for g in priced if not getattr(g, "hidden", False)]
+            if self._hidden_priced:
+                self.app.viewport.history.execute(HideCommand(self._hidden_priced, True))
+            if not self.checker.isChecked():
+                self.checker.setChecked(True)        # the rest painted red / orange
+        else:
+            back = getattr(self, "_hidden_priced", None) or []
+            if back:
+                self.app.viewport.history.execute(HideCommand(back, False))
+            self._hidden_priced = []
+        self._filter_priced_rows(on)
+        self.app.viewport.update()
+
+    def _filter_priced_rows(self, on: bool) -> None:
+        """The table: rows already priced hidden while «ซ่อนชิ้นที่มีราคาแล้ว»."""
+        def val(r, c):
+            it = self.table.item(r, c)
+            try:
+                return float((it.text() if it else "0").replace(",", "") or 0)
+            except ValueError:
+                return 0.0
+        for r in range(self.table.rowCount()):
+            # priced: a material or a labour rate entered (and something to count)
+            hide = on and (val(r, C_MAT) > 0 or val(r, C_LAB) > 0)
+            self.table.setRowHidden(r, hide)
+
     def paint(self, vp, painter) -> None:
         if not self._paint_on or self._result is None:
             return
@@ -704,7 +746,10 @@ class TakeoffPanel(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         status = self._result["status"]
         budget = MAX_PAINT_FACES
+        hide_ok = getattr(self, "hide_priced", None) is not None and self.hide_priced.isChecked()
         for it in self._items:
+            if hide_ok and status.get(it["key"]) == "ok":
+                continue                              # priced: not painted (and hidden)
             color = STATUS_COLORS.get(status.get(it["key"], "no_rate"))
             fill = QColor(color)
             fill.setAlpha(90)

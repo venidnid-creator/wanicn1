@@ -147,6 +147,10 @@ class _Bill:
         mat = 0.0 if mat is None else mat
         if mat_key and not mat:
             mat = float(self.prices.get(mat_key) or 0.0)
+        if not lab_code and lab is None and need_lab:
+            # a line with no ว480 code still has its labour price: typed in the
+            # «ค่าแรง» table under «ค่าแรง: <the line>» (the owner — both prices)
+            lab_code = OWN_LAB + (mat_key or desc)
         if lab is None:
             lab = float(self.labour.get(lab_code, 0.0)) if lab_code else 0.0
         if self.zero:
@@ -167,6 +171,7 @@ class _Bill:
         return ln
 
 
+OWN_LAB = "ค่าแรง: "                  # the key of a labour price with no ว480 code
 LAB_ONLY = ("ค่าแรง", "งานขุดดิน", "งานถมดิน", "ทำความสะอาด", "ตัดกระเบื้อง", "ถางป่า", "วางผังอาคาร")
 MAT_ONLY = ("ไม้ค้ำยัน", "ลวดผูกเหล็ก")
 

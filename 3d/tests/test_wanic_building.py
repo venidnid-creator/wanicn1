@@ -271,6 +271,16 @@ def test_panel_select_copy_marks_library_and_standard_boq(monkeypatch):
     # The standard BOQ: dialog fills, sending replaces its own lines only.
     dlg = BoqDialog(panel)
     assert dlg.tree.topLevelItemCount() >= 5
+    # ง2 ตัวตรวจราคา: «เฉพาะที่ยังไม่มีราคา» hides the priced lines, off — all back
+    def shown():
+        return sum(1 for i in range(dlg.tree.topLevelItemCount())
+                   for j in range(dlg.tree.topLevelItem(i).childCount())
+                   if not dlg.tree.topLevelItem(i).child(j).isHidden())
+    n_all = shown()
+    dlg.only_missing.setChecked(True)
+    assert shown() <= n_all
+    dlg.only_missing.setChecked(False)
+    assert shown() == n_all
     dlg.sample_prices()
     assert dlg.result["totals"]["total"] == 0          # every price 0 until the province is chosen
     d_ = panel.data()

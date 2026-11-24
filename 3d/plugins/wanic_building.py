@@ -1147,6 +1147,20 @@ class BoqDialog(QDialog):
             "ค่าวัสดุ/หน่วย", "ค่าวัสดุ", "ค่าแรง/หน่วย", "ค่าแรง", "รวม (บาท)",
             "ที่มา / หมายเหตุ"]
 
+    def _filter_missing(self):
+        """«แสดงเฉพาะรายการที่ยังไม่มีราคา»: priced lines (and groups left
+        empty) hidden; off — everything shows."""
+        on = getattr(self, "only_missing", None) is not None and self.only_missing.isChecked()
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            left = 0
+            for j in range(top.childCount()):
+                ch = top.child(j)
+                missing = ch.background(1).color() == ORANGE_BG
+                ch.setHidden(on and not missing)
+                left += 0 if ch.isHidden() else 1
+            top.setHidden(on and left == 0)
+
     def private_est(self):
         """ประมาณราคางานเอกชน: the same quantities in eight categories,
         the contractor's waste, overhead and profit, VAT."""
@@ -1568,6 +1582,11 @@ class BoqDialog(QDialog):
         for i, px in enumerate(widths):
             self.tree.setColumnWidth(i, px)
         self.tree.itemDoubleClicked.connect(lambda it, _c: _safe(self, lambda: self.goto_price(it)))
+        # ตัวตรวจราคา: the lines already priced hidden — only what is left to price
+        from PySide6.QtWidgets import QCheckBox as _QCB
+        self.only_missing = _QCB("แสดงเฉพาะรายการที่ยังไม่มีราคา (ซ่อนรายการที่มีราคาแล้ว)")
+        self.only_missing.toggled.connect(lambda _on: self._filter_missing())
+        v.addWidget(self.only_missing)
         v.addWidget(self.tree, 1)
         self.total = QLabel()
         self.total.setWordWrap(True)
@@ -1700,9 +1719,20 @@ class BoqDialog(QDialog):
                     self.prices.item(r, col).setForeground(ORANGE_INK)
         labour = Q.labour_of(d)
         codes = list(S.LABOUR)
+        # the lines with no ว480 code: their own labour rows (typed in here)
+        own = {}
+        for ln in (getattr(self, "result", None) or {}).get("lines") or []:
+            k_ = ln.get("lab_code") or ""
+            if k_.startswith(Q.OWN_LAB) and k_ not in own:
+                own[k_] = ln.get("unit", "")
+                labour.setdefault(k_, float((d.get("labour") or {}).get(k_, 0.0) or 0.0))
+        codes += list(own)
         self.labour.setRowCount(len(codes))
         for r, c in enumerate(codes):
-            desc, unit, _rate, cond = S.LABOUR[c]
+            if c in own:
+                desc, unit, cond = c[len(Q.OWN_LAB):], own[c], "ไม่มีในบัญชี ว480 — กรอกค่าแรงเอง"
+            else:
+                desc, unit, _rate, cond = S.LABOUR[c]
             cells = [c, f"{desc} ({cond})", unit]
             for col, text in enumerate(cells):
                 it = QTI(text)
@@ -2007,6 +2037,7 @@ class BoqDialog(QDialog):
                     it.setData(2, Qt.UserRole, "lab" if ln["missing"] == ["ค่าแรง"] else "mat")
                 top.addChild(it)
             top.setExpanded(True)
+        self._filter_missing()
         t = self.result["totals"]
         notes = " · ".join(self.result["notes"])
         if hasattr(self, "cover"):
@@ -2042,7 +2073,8 @@ class BoqDialog(QDialog):
                 v = float(self.labour.item(r, 3).text().replace(",", ""))
             except (ValueError, AttributeError):
                 continue
-            if abs(v - float(S.LABOUR[c][2])) > 1e-9:
+            base = float(S.LABOUR[c][2]) if c in S.LABOUR else 0.0
+            if abs(v - base) > 1e-9:
                 labour[c] = v
         d = self.panel.data()
         src = dict(d.get("price_src") or {})

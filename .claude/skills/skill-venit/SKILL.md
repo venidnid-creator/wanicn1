@@ -206,6 +206,10 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   button with a right-click menu, BOQ / drawings / print-outs as button menus, road/takeoff/profiles start hidden.
   Screenshots must apply the theme (`views.theme.apply_theme(app)`), or every icon draws in the pale dark-theme ink.
 
+- 2026-11-24 (ง1–ง2): every BOQ line needs both material and labour prices unless `Q.one_sided` says otherwise; lines
+  with no ว480 labour code get an own key `Q.OWN_LAB + name` the owner prices in the labour table. Price checkers:
+  BOQ «แสดงเฉพาะรายการที่ยังไม่มีราคา», takeoff «ซ่อนชิ้นที่มีราคาแล้ว».
+
 ## 7. Future development (agreed or proposed — confirm with the owner before starting)
 
 1. Fix whatever the owner finds in the 2026.11.12.1 / 2026.11.11.1 tests; then release on order.

@@ -143,13 +143,14 @@ def test_purlins_at_the_tile_gauge_in_one_piece():
     m = B.merge_segments([[(0, 0, 0), (1, 0, 0)], [(1, 0, 0), (2.5, 0, 0)],
                           [(3, 1, 0), (4, 1, 0)]])
     assert sorted(round(math.dist(a, b), 3) for a, b in m) == [1.0, 2.5]
-    # the top course sits close under the ridge
+    # the top course sits close under the ridge (since ค5 it stops at the
+    # ridge member's side face, so up to ~one member width away)
     ov = B.settings_of(d)["overhang"]
     half = (6 + 2 * ov) / 2
     tan = math.tan(math.radians(B.settings_of(d)["pitch"]))
     ridge_z = lines["ridge"][0][0][2]
     top = max(p[2] for s_ in segs for p in s_)
-    assert ridge_z - top < 0.04 * tan + 1e-6 and half > 0
+    assert 0 < ridge_z - top < 0.08 * tan + 1e-6 and half > 0
 
 
 def test_tie_beam_under_every_king_post_and_wall_plates():
