@@ -194,8 +194,8 @@ def slab_rows(res_all, data, critical=False) -> list:
     out = []
     for sl in E["slabs"]:
         sp = lib.get(sl["mark"], {})
-        if sl.get("ground") or sp.get("ground"):
-            continue
+        if sl.get("ground") or sp.get("ground") or B.is_precast(sp):
+            continue                                  # พื้นสำเร็จรูป: checked by the supplier's table
         rm = sl["room"]
         t = float(sp.get("t", 0.10))
         S, Lg = sorted((float(rm["w"]), float(rm["d"])))

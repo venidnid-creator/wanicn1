@@ -381,7 +381,11 @@ LIB_FIELDS = {
     "beam": [("b", "กว้าง (ม.)"), ("h", "ลึก (ม.)"), ("top", "เหล็กบน"),
              ("bot", "เหล็กล่าง"), ("stir", "เหล็กปลอก")],
     "slab": [("t", "หนา (ม.)"), ("bars", "เหล็กเสริม 2 ทาง"),
-             ("ground", "พื้นวางบนดิน (1/0)")],
+             ("ground", "พื้นวางบนดิน (1/0)"),
+             ("precast", "พื้นสำเร็จรูป (1/0)"), ("pc_weight", "น้ำหนักแผ่น + topping (กก./ตร.ม.)"),
+             ("pc_allow", "รับน้ำหนักเพิ่มได้ตามตารางผู้ผลิต (กก./ตร.ม.)"),
+             ("pc_span", "ช่วงพาดสูงสุดของแผ่นตามตารางผู้ผลิต (ม.)"),
+             ("pc_dir", "ทิศวางแผ่น auto / x / y"), ("topping", "คอนกรีตทับหน้า topping (ม.)")],
 }
 DEFAULT_LIB = {
     "F1": {"kind": "footing", "w": 1.0, "l": 1.0, "t": 0.3, "depth": 1.5,
@@ -540,6 +544,23 @@ def beam_loads(data) -> list:
     beam line's y or x), "a", "b" (along the axis, m — a = b is a point
     load), "P" (kg) or "w" (kg/m), "type" ("D" คงที่ / "L" จร), "note"}]."""
     return [q for q in ((data or {}).get("beam_loads") or []) if isinstance(q, dict) and "axis" in q]
+
+
+def is_precast(spec) -> bool:
+    """A slab mark of precast planks (พื้นสำเร็จรูป) — never one on the ground."""
+    try:
+        return bool(int(float((spec or {}).get("precast") or 0))) and not int(float((spec or {}).get("ground") or 0))
+    except (TypeError, ValueError):
+        return False
+
+
+def precast_dir(spec, rm) -> str:
+    """The way the planks span in the room: "x" (resting on the beams along y) or "y";
+    "auto" = the short side."""
+    d = str((spec or {}).get("pc_dir") or "auto").lower()
+    if d in ("x", "y"):
+        return d
+    return "x" if float(rm["w"]) <= float(rm["d"]) else "y"
 
 
 def foot_nodes(E) -> list:

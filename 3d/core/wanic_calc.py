@@ -859,9 +859,31 @@ def analyse(data) -> dict:
     level_rooms = {}
     for sl in E["slabs"]:
         level_rooms.setdefault(sl.get("floor", 0), []).append(sl["room"])
+    pc_dir = {}                                       # พื้นสำเร็จรูป: id(room) → the span direction
     for sl in E["slabs"]:
         spc = lib.get(sl["mark"], {})
         rm = sl["room"]
+        if B.is_precast(spc):
+            # precast planks (ข12): one way between two beams, checked against the supplier's
+            # table — the safe superimposed load at the span and the longest span [ผู้ผลิต]
+            d_ = B.precast_dir(spc, rm)
+            span = float(rm["w"] if d_ == "x" else rm["d"])
+            dead = float(spc.get("pc_weight") or 240.0) + b_["finish"]
+            need = b_["finish"] + b_["ll_floor"]
+            allow, mx = float(spc.get("pc_allow") or 0), float(spc.get("pc_span") or 0)
+            r = max(need / allow, span / mx) if allow and mx else 9.9
+            top = float(spc.get("topping") or 0.05)
+            out.append(Member("slab", f"{sl['mark']} {rm.get('name', '')} พื้นสำเร็จรูป ช่วง {span:.2f} ม. (แนว {d_.upper()})",
+                              f"น้ำหนักเพิ่ม {need:,.0f} กก./ตร.ม. · ช่วง {span:.2f} ม.",
+                              (f"ผู้ผลิตรับรอง {allow:,.0f} กก./ตร.ม. · ช่วงสูงสุด {mx:.2f} ม." if allow and mx
+                               else "ยังไม่ได้กรอกค่ารับน้ำหนัก/ช่วงพาดจากตารางผู้ผลิต"), r,
+                              f"แผ่นวางทางเดียวบนคาน 2 ด้าน · น้ำหนักแผ่น+topping {dead - b_['finish']:,.0f} กก./ตร.ม. · "
+                              f"topping หนา {top * 100:.0f} ซม. เหล็กเสริมผิวบน {spc.get('bars', 'RB6@0.20')} สองทาง "
+                              "(ประกาศ มท. 2567 ข้อ 29)",
+                              qty=need, qty_unit="กก./ตร.ม. (น้ำหนักวางเพิ่ม)"))
+            pc_dir[id(rm)] = d_
+            slab_q[id(rm)] = (D_ * dead + L_ * b_["ll_floor"], dead, b_["ll_floor"])
+            continue
         t = float(spc.get("t", 0.10))
         a, b2 = sorted((float(rm["w"]), float(rm["d"])))
         dead = t * conc + b_["finish"]
@@ -966,6 +988,10 @@ def analyse(data) -> dict:
                 m_ = S_ / Lr
                 parallel_long = (axis == "x" and rm["w"] >= rm["d"]) or (axis == "y" and rm["d"] > rm["w"])
                 coef = S_ / 3.0 if not parallel_long else S_ / 6.0 * (3 - m_ * m_)
+                if id(rm) in pc_dir:                  # planks: half the span onto each supporting beam
+                    d_ = pc_dir[id(rm)]
+                    coef = (rm["w"] / 2.0 if axis == "y" else 0.0) if d_ == "x" else \
+                        (rm["d"] / 2.0 if axis == "x" else 0.0)
                 w += q * coef
                 w_dl += qd * coef
                 w_ll += ql * coef

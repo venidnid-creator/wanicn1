@@ -513,10 +513,25 @@ def compute(data, gate: bool = False) -> dict:
     for ground, title in ((True, "พื้นวางบนดิน"), (False, "พื้นชั้นบน")):
         vol = soffit = sand_s = 0.0
         basis = {}
+        planks: dict = {}                             # พื้นสำเร็จรูป: mark → area
         for e in E["slabs"]:
             sl = lib[e["mark"]]
             on_ground = bool(int(sl.get("ground") or 0)) and e["floor"] == 0
             if on_ground != ground:
+                continue
+            if not ground and B.is_precast(sl):
+                rm = e["room"]
+                bw = float(lib[ROLE_beam(e["floor"], n)]["b"])
+                area = max(float(rm["w"]) - bw, 0) * max(float(rm["d"]) - bw, 0)
+                area = max(area - B.hole_area((rm["x"], rm["y"], rm["x"] + rm["w"], rm["y"] + rm["d"]),
+                                              holes.get(e["floor"]) or []), 0.0)
+                planks[e["mark"]] = planks.get(e["mark"], 0.0) + area
+                vol += area * float(sl.get("topping") or 0.05)      # the cast-in-place topping only
+                basis[e["mark"]] = basis.get(e["mark"], 0.0) + area
+                sp = S.parse_bar(sl.get("bars", ""))
+                if sp and sp[2]:
+                    w_, d_ = float(rm["w"]), float(rm["d"])
+                    bars([(sp[1], S.bar_count(d_, sp[2]) * w_ + S.bar_count(w_, sp[2]) * d_)])
                 continue
             rm = e["room"]
             bw = float(lib[ROLE_beam(e["floor"], n)]["b"])
@@ -537,8 +552,15 @@ def compute(data, gate: bool = False) -> dict:
                        S.bar_count(w_, sp[2]) * d_)])
         if not vol:
             continue
+        for m_, a_ in planks.items():
+            nm = f"แผ่นพื้นคอนกรีตสำเร็จรูป ({m_}) วางบนคาน"
+            bill.add(g, nm, a_, "ตร.ม.", mat_key=f"แผ่นพื้นสำเร็จรูป {m_} (ราคาผู้ผลิต รวมขนส่ง)",
+                     basis="พื้นที่สุทธิระหว่างคาน (หักช่องเปิด)",
+                     ref="ราคาผู้ผลิต · ค่าแรงวางแผ่นตามท้องตลาด")
         txt = "; ".join(f"{m}: พื้นที่สุทธิ {a:.2f} ตร.ม. × หนา "
-                        f"{lib[m]['t']:g}" for m, a in basis.items())
+                        f"{(float(lib[m].get('topping') or 0.05) if B.is_precast(lib[m]) else float(lib[m]['t'])):g}"
+                        + (" (topping บนพื้นสำเร็จรูป)" if B.is_precast(lib[m]) else "")
+                        for m, a in basis.items())
         if sand_s:
             bill.add(g, "ทรายรองพื้น (บดอัดด้วยแรงคน)", sand_s, "ลบ.ม.",
                      waste=S.BEDDING_WASTE["ทราย"], mat_key="ทรายหยาบ",

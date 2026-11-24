@@ -339,6 +339,9 @@ def takeoff(E) -> dict:
         sp = lib.get(s_["mark"], {})
         rm = s_["room"]
         a, b_, t = float(rm["w"]), float(rm["d"]), float(sp.get("t", 0) or 0)
+        from core import wanic_building as B_
+        if B_.is_precast(sp):
+            t = float(sp.get("topping") or 0.05)         # only the topping is cast here
         mark_rec(s_["mark"])["n"] += 1
         mark_rec(s_["mark"])["concrete"] += a * b_ * t
         conc["slab"] = conc.get("slab", 0.0) + a * b_ * t
