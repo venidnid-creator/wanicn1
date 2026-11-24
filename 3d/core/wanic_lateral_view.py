@@ -127,6 +127,19 @@ def check_rows(res):
              f"{c['Pu'] / 1000:,.2f}", f"{c['Mu'] / 1000:,.3f}", f"{c['ratio']:.2f}") for c in res["checks"]]
 
 
+DRIFT_HEAD = ["แนว", "ชั้น", "δe (มม.)", "Δ = Cd·δe/I (มม.)", "Δa (มม.)", "θ", "θ สูงสุด", "ผล", "หมายเหตุ"]
+
+
+def drift_rows(res):
+    out = []
+    for d_, rows in sorted((res.get("drift") or {}).items()):
+        for x in rows:
+            out.append((d_, str(x["storey"]), f"{x['de'] * 1000:.2f}", f"{x['D'] * 1000:.1f}",
+                        f"{x['limit'] * 1000:.0f}", f"{x['theta']:.4f}", f"{x['theta_max']:.3f}",
+                        "ผ่าน" if x["ok"] else "ไม่ผ่าน", x["note"]))
+    return out
+
+
 def summary(res) -> list:
     W = sum(w for _j, _h, w in res["levels"])
     bad = sum(1 for c in res["checks"] if c["ratio"] > 1)
@@ -136,8 +149,20 @@ def summary(res) -> list:
                                                        if res["eq"]["X"]["V"] else ""),
             "ลม: " + res["wind"]["X"]["text"] + f" · V(X) = {res['wind']['X']['V'] / 1000:,.2f} ตัน · "
             f"V(Y) = {res['wind']['Y']['V'] / 1000:,.2f} ตัน",
-            "ตรวจเสา: แรงเฉือนชั้นแบ่งให้เสาเท่ากัน M = V·h/2 · U = 0.75(1.4D + 1.7L + 1.87E) / 0.75(1.4D + 1.7L + 1.6W) "
-            "บนเส้นโค้ง P-M — " + ("✓ ผ่านทุกชั้น" if not bad else f"✗ ไม่ผ่าน {bad} รายการ (เพิ่มขนาด/เหล็กเสาในขั้น 6)")]
+            ("ตรวจเสา: วิเคราะห์โครงข้อแข็งทุกแนวกริด (เสายึดแน่นที่ฐาน คานต่อแข็งกับเสา พื้นแข็งเกร็งรวมทุกแนว "
+             "หน้าตัดแตกร้าว เสา 0.70Ig คาน 0.35Ig) โมเมนต์และแรงเฉือนของเสาแต่ละต้นจากโครง"
+             if res.get("method") == "frame" else "ตรวจเสา: แรงเฉือนชั้นแบ่งให้เสาเท่ากัน M = V·h/2") +
+            " · U = 0.75(1.4D + 1.7L) + 1.0E / 0.75(1.4D + 1.7L) + 1.6W และ 0.9D บนเส้นโค้ง P-M — " +
+            ("✓ ผ่านทุกชั้น" if not bad else f"✗ ไม่ผ่าน {bad} รายการ (เพิ่มขนาด/เหล็กเสาในขั้น 6)")] + _drift_line(res)
+
+
+def _drift_line(res) -> list:
+    rows = [x for v in (res.get("drift") or {}).values() for x in v]
+    if not rows:
+        return []
+    bad = sum(1 for x in rows if not x["ok"])
+    return ["การเคลื่อนตัวระหว่างชั้น (มยผ. 1301/1302-61): Δ = Cd·δe/I ≤ Δa, θ = Px·Δ·I/(Vx·hs·Cd) — " +
+            ("✓ ผ่านทุกชั้น" if not bad else f"✗ ไม่ผ่าน {bad} ชั้น (เพิ่มขนาดเสา/คาน)")]
 
 
 class LateralDialog(QDialog):
@@ -244,6 +269,8 @@ class LateralDialog(QDialog):
         self.t_ck = self._table(CHECK_HEAD)
         self.tabs.addTab(self.t_lv, "แรงแต่ละระดับ")
         self.tabs.addTab(self.t_ck, "ตรวจเสา (P-M)")
+        self.t_dr = self._table(DRIFT_HEAD)
+        self.tabs.addTab(self.t_dr, "การเคลื่อนตัวระหว่างชั้น (drift)")
         right.addWidget(self.tabs, 2)
         lay.addLayout(right, 1)
         self.res = None
@@ -278,13 +305,15 @@ class LateralDialog(QDialog):
             w.setEnabled(p["wind_std"] == "new")
         self.res = L.analyse({**self.data, "lateral": p})
         self.view.set(self.res, self.dir.currentData())
-        for t, rows, rc in ((self.t_lv, level_rows(self.res), None), (self.t_ck, check_rows(self.res), 8)):
+        for t, rows, rc in ((self.t_lv, level_rows(self.res), None), (self.t_ck, check_rows(self.res), 8),
+                            (self.t_dr, drift_rows(self.res), 7)):
             t.setRowCount(len(rows))
             for r, row in enumerate(rows):
                 for c, v in enumerate(row):
                     it = QTableWidgetItem(v)
                     if c == rc:
-                        it.setForeground(OK if float(v) <= 1 else BAD)
+                        good = (v == "ผ่าน") if t is self.t_dr else float(v) <= 1
+                        it.setForeground(OK if good else BAD)
                     t.setItem(r, c, it)
         self.info.setText("\n\n".join(summary(self.res)))
 
@@ -328,3 +357,12 @@ def lateral_pages(bk, res):
     for k in range(0, len(rows), 30):
         bk.page("แรงด้านข้าง — ตรวจเสารับแรงด้านข้าง (P-M)", "Lateral")
         bk.table(10, 34, [16, 30, 16, 40, 22, 70, 30, 34, 34], [tuple(CHECK_HEAD)] + rows[k:k + 30], 7.0)
+    dr = drift_rows(res)
+    if dr:
+        bk.page("แรงด้านข้าง — การเคลื่อนตัวระหว่างชั้น (มยผ. 1301/1302-61)", "Lateral")
+        rows = [r[:7] + ((r[7], GREEN if r[7] == "ผ่าน" else RED), r[8]) for r in dr]
+        bk.table(10, 34, [16, 16, 30, 44, 30, 30, 30, 24, 120], [tuple(DRIFT_HEAD)] + rows, 7.0)
+        bk.text(12, 40 + 7.0 * (len(rows) + 2), 380, 6,
+                "โครงข้อแข็งทุกแนวกริด วิธีสติฟเนส (เสายึดแน่นที่ฐาน พื้นแข็งเกร็ง หน้าตัดแตกร้าว 0.70Ig เสา 0.35Ig คาน "
+                "ตาม ACI 318) · Δa = 0.020hs (I = 1.0) / 0.015hs (I = 1.25) / 0.010hs (I = 1.5) · θ > 0.10 ต้องคิด P-Δ",
+                5.0)

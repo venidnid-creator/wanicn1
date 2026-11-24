@@ -226,6 +226,27 @@ def analyse(data) -> dict:
     H = float(B.settings_of(data or {})["floor_h"])
     checks = []
     nfl = len(lv)
+    # ข12: the frames of each direction share the force by their stiffness
+    # (rigid floor), not every column an equal share
+    from core import wanic_frame as FR
+    acts_all = (("แผ่นดินไหว", eq, 1.0), ("ลม", wd, 1.6)) if p.get("eq_on") else (("ลม", wd, 1.6),)
+    fr = {}
+    for act, res_, _fac in acts_all:
+        for d_ in ("X", "Y"):
+            try:
+                fr[(act, d_)] = FR.frames(data, d_, res_[d_]["F"], float(b_.get("fc", 240) or 240))
+            except Exception:                     # noqa: BLE001 -- singular / no numpy: equal shares
+                fr[(act, d_)] = None
+    drift = {}
+    if p.get("eq_on") and p.get("standard") == "new":
+        Cd = FR.CD.get(p["system"], 2.5)
+        for d_ in ("X", "Y"):
+            f_ = fr.get(("แผ่นดินไหว", d_))
+            if f_:
+                F = eq[d_]["F"]
+                V = [sum(F[k:]) for k in range(len(F))]
+                P_above = [sum(w for _j, _h, w in lv[k:]) for k in range(len(lv))]
+                drift[d_] = FR.drifts(f_["delta"], H, Cd, float(p["I"]), V, P_above)
     for f in range(nfl):
         cols = [c for c in grav["cards"] if c["floor"] == f]
         if not cols:
@@ -235,10 +256,15 @@ def analyse(data) -> dict:
         for act, res, fac in acts:
             for d_ in ("X", "Y"):
                 Vs = sum(res[d_]["F"][f:])                       # the storey shear under level f+1 and up
-                Vc = Vs / len(cols)
-                Mc = Vc * H / 2
+                f_ = fr.get((act, d_))
                 worst = None
                 for c in cols:
+                    got = (f_ or {}).get("cols", {}).get((round(c["x"], 3), round(c["y"], 3), f))
+                    if got:
+                        Mc, Vc = got                                  # this column's share in its frame
+                    else:
+                        Vc = Vs / len(cols)
+                        Mc = Vc * H / 2
                     curve = C.pm_curve(c["spec"], b_)
                     if b_["method"] == "SDM":
                         P_hi = 0.75 * c["P"]                          # 0.75(1.4D + 1.7L)
@@ -249,8 +275,11 @@ def analyse(data) -> dict:
                     for Pu in (P_hi, P_lo):
                         r = C.pm_ratio(curve, Mu, Pu)
                         if worst is None or r > worst[0]:
-                            worst = (r, c, Pu, Mu)
-                r, c, Pu, Mu = worst
+                            worst = (r, c, Pu, Mu, Vc)
+                r, c, Pu, Mu, Vc = worst
                 checks.append({"floor": f, "action": act, "dir": d_, "V": Vs, "Vc": Vc, "Mu": Mu, "Pu": Pu,
                                "ratio": r, "col": f"{c['mark']} ({c['x']:.2f}, {c['y']:.2f})", "n": len(cols)})
-    return {"params": p, "levels": lv, "eq": eq, "wind": wd, "checks": checks, "size": (Lx, Ly), "H": H}
+    method = "frame" if any(fr.values()) else "equal"
+    return {"params": p, "levels": lv, "eq": eq, "wind": wd, "checks": checks, "size": (Lx, Ly), "H": H,
+            "drift": drift, "method": method,
+            "frame_lines": {d_: (fr.get(("ลม", d_)) or {}).get("lines", 0) for d_ in ("X", "Y")}}
