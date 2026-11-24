@@ -85,8 +85,13 @@ jobs:
       - name: Thai OCR for «ถอดแบบตาม BOQ» (Tesseract, Apache-2.0) beside the program
         shell: pwsh
         run: |
-          choco install tesseract -y --no-progress
           $src = "C:\Program Files\Tesseract-OCR"
+          foreach ($try in 1..4) {                  # the package feed is sometimes down for a moment (503)
+            choco install tesseract -y --no-progress
+            if (Test-Path "$src\tesseract.exe") { break }
+            Start-Sleep -Seconds (20 * $try)
+          }
+          if (-not (Test-Path "$src\tesseract.exe")) { Write-Error "Tesseract did not install"; exit 1 }
           $dst = "dist\ReadWanicn2027\tesseract"
           Copy-Item $src $dst -Recurse
           Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/tha.traineddata" -OutFile "$dst\tessdata\tha.traineddata"
