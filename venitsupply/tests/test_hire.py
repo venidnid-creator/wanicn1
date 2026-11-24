@@ -20,11 +20,11 @@ def _store():
 
 def test_structure_crud():
     s = Store()
-    assert s.seed_structure() == 6
+    assert s.seed_structure() == 7
     tops = s.divisions()
-    assert [d["name"] for d in tops][:2] == ["สำนักปลัด", "กองคลัง"] and len(tops) == 6
+    assert [d["name"] for d in tops][:2] == ["สำนักปลัด", "กองคลัง"] and len(tops) == 7
     edu = next(d for d in tops if d["name"].startswith("กองการศึกษา"))
-    subs = [d["name"] for d in s.divisions(edu["id"])]
+    subs = [d["name"] for d in s.divisions(all_levels=True) if edu["id"] in [u["id"] for u in s.chain(d["id"])]]
     assert "ศูนย์พัฒนาเด็กเล็กตำบลไม้ขาว" in subs
     new = s.save_division(dict(kind="กอง", name="กองยุทธศาสตร์และงบประมาณ"))
     unit = s.save_division(dict(kind="ฝ่าย", name="ฝ่ายแผนงาน", parent_id=new))
@@ -36,7 +36,7 @@ def test_structure_crud():
     s.delete_position(pos)
     s.delete_division(unit)
     s.delete_division(new)
-    assert len(s.divisions()) == 6
+    assert len(s.divisions()) == 7
     assert H.classify("ผู้ช่วยเจ้าพนักงานธุรการ") == ("ทั่วไป", "พนักงานจ้างตามภารกิจ")
     assert H.classify("นักวิชาการพัสดุ") == ("วิชาการ", "ข้าราชการ/พนักงานส่วนท้องถิ่น")
     with pytest.raises(ValueError):
@@ -139,7 +139,7 @@ def test_hire_documents():
             HR.division_summary(s, 2570)]
     html = [d.html() for d in docs]
     assert "0.58" in html[0]                                       # 2 × 24,000 / 82,800 → 0.29 + 0.29
-    assert "ว 727" in html[1] and "10. การรับประกัน" in html[1]
+    assert "ว 727" in html[1] and "10. การกำหนดระยะเวลารับประกัน" in html[1]
     assert "แบบ บก.06" in html[2] and "500,000.00" in html[2]
     assert "ข้อ 22" in html[3] and "ผู้อำนวยการกองคลัง" in html[3]
     assert "ข้อ 8 การบังคับค่าเสียหาย" in html[4] and "วันละ 400.00 บาท" in html[4] and "12 งวด" in html[4] and "11 เดือน 16 วัน" in html[4]
@@ -162,16 +162,104 @@ def test_hire_page_builds(tmp_path):
     h.fy.setValue(2570)
     for tab in (h.summ, h.org, h.jobs, h.cons):
         h.tabs.setCurrentWidget(tab)
-    assert h.summ.t.rowCount() == 7                       # 6 กอง + รวม
+    assert h.summ.t.rowCount() == 8                       # 7 ส่วนราชการ + รวม
+    for tab in (h.std, h.ana):
+        h.tabs.setCurrentWidget(tab)
+    assert h.ana.t.rowCount() > 100
     h.tabs.setCurrentWidget(h.cons)
     h.cons.t.selectRow(0)
     assert h.cons.months.rowCount() == 12
     h.tabs.setCurrentWidget(h.jobs)
-    h.jobs.t.selectRow(1)
-    assert "1.21" in h.jobs.result.text()
+    h.jobs.t.selectRow(next(r for r in range(h.jobs.t.rowCount()) if h.jobs.t.item(r, 0).text() == "กองคลัง"))
+    assert "1.1" in h.jobs.result.text()
     w.go(w.pages.index(w.procs))
     w.procs.fy.setValue(2570)
     w.procs.div.setCurrentIndex(w.procs.div.findText("กองคลัง"))
     assert w.procs.t.rowCount() >= 1
     w.close()
     qa.processEvents()
+
+
+def test_manpower_structure_from_plan():
+    """แผนอัตรากำลัง 3 ปี (2570–2572) อบต.ไม้ขาว: กรอบ 211 (ไม่รวมปลัด/รองปลัด) ว่าง 34 ตามบัญชีจัดคนลงสู่ตำแหน่ง."""
+    s = Store()
+    n = s.seed_manpower()
+    assert n["frame"] == 211 and n["vacant"] == 34
+    got = {d["name"]: s.unit_analysis(d["id"]) for d in s.divisions()}
+    assert {k: v["frame"] for k, v in got.items()} == {
+        "สำนักปลัด": 66, "กองคลัง": 24, "กองช่าง": 34, "กองสาธารณสุขและสิ่งแวดล้อม": 39,
+        "กองการศึกษา ศาสนา และวัฒนธรรม": 36, "กองสวัสดิการสังคม": 10, "หน่วยตรวจสอบภายใน": 2}
+    assert {k: v["vacant"] for k, v in got.items()} == {
+        "สำนักปลัด": 5, "กองคลัง": 5, "กองช่าง": 7, "กองสาธารณสุขและสิ่งแวดล้อม": 8,
+        "กองการศึกษา ศาสนา และวัฒนธรรม": 7, "กองสวัสดิการสังคม": 1, "หน่วยตรวจสอบภายใน": 1}
+    units = {d["name"]: d["id"] for d in s.divisions(all_levels=True)}
+    steps = [r[0] for r in s.route(units["งานทะเบียนทรัพย์สินและพัสดุ"])]
+    assert steps == ["ผู้เสนอ", "ความเห็นหัวหน้าฝ่ายการเงินและบัญชี", "ความเห็นเจ้าหน้าที่",
+                     "ความเห็นผู้อำนวยการกองคลัง/หัวหน้าเจ้าหน้าที่", "ความเห็นปลัด", "คำสั่ง"]
+    steps = [r[0] for r in s.route(units["งานป้องกันและบรรเทาสาธารณภัย"])]
+    assert steps[1:3] == ["ความเห็นหัวหน้าฝ่ายป้องกันและบรรเทาสาธารณภัย", "ความเห็นหัวหน้าสำนักปลัด"]
+    with pytest.raises(ValueError):
+        s.save_position(dict(division_id=units["งานบัญชี"], title="x", count=1, occupied=2))
+
+
+def test_standard_paste_and_workload_need():
+    from venitsupply import manpower as M
+    items = M.parse_standard("หน้าที่และความรับผิดชอบหลัก\nปฏิบัติงาน…\n๑. ด้านการปฏิบัติการ\n๑.๑ งานหนึ่ง\nต่อบรรทัด\n"
+                             "1.2 งานสอง\n๒. ด้านการวางแผน\n๒.๑ วางแผน\n๓. ด้านการประสานงาน\n๓.๑ ประสาน\n"
+                             "๔. ด้านการบริการ\nให้คำแนะนำ\nคุณสมบัติเฉพาะสำหรับตำแหน่ง\nไม่เอา")
+    assert items == [("ด้านการปฏิบัติการ", "งานหนึ่ง ต่อบรรทัด"), ("ด้านการปฏิบัติการ", "งานสอง"),
+                     ("ด้านการวางแผน", "วางแผน"), ("ด้านการประสานงาน", "ประสาน"), ("ด้านการบริการ", "ให้คำแนะนำ")]
+    assert M.parse_standard(M.SAMPLE_STANDARD[1])[7][0] == "ด้านการปฏิบัติการ" and len(M.parse_standard(
+        M.SAMPLE_STANDARD[1])) == 14
+    assert M.base_title("นักวิชาการพัสดุ (ปก./ชก.)") == "นักวิชาการพัสดุ" and M.need_people(2.49) == 2
+    assert M.need_people(2.5) == 3 and M.need_people(0.2) == 1 and M.need_people(0) == 0
+    s = Store()
+    s.seed_manpower()
+    units = {d["name"]: d["id"] for d in s.divisions(all_levels=True)}
+    pos = next(p for p in s.positions(units["งานทะเบียนทรัพย์สินและพัสดุ"]) if p["title"] == "เจ้าพนักงานพัสดุ")
+    assert s.import_standard("เจ้าพนักงานพัสดุ (ปง./ชง.)", "๑. ด้านการปฏิบัติการ\n๑.๑ จัดซื้อจัดจ้าง\n๑.๒ ทะเบียนพัสดุ\n"
+                             "๒. ด้านการวางแผน\n๒.๑ แผนจัดซื้อ") == 3
+    rows = s.load_rows_from_standard(pos["id"])
+    assert [r["task"] for r in rows] == ["จัดซื้อจัดจ้าง", "ทะเบียนพัสดุ", "แผนจัดซื้อ"]     # ค่าว่าง: เจ้าหน้าที่เติมเอง
+    assert s.position_analysis(pos["id"])["need"] is None
+    rows[0].update(minutes=90, volume=1500)      # 1.63
+    rows[1].update(minutes=60, volume=1200)      # 0.87
+    s.set_pos_load(pos["id"], rows[:2])
+    a = s.position_analysis(pos["id"])
+    assert a["fte"] == 2.5 and a["need"] == 3 and a["occupied"] == 2 and a["short"] == 1 and a["vacant"] == 0
+    assert s.unit_analysis(units["กองคลัง"])["short"] == 1
+    jid = s.job_from_position(pos["id"], units["กองคลัง"])
+    assert s.job(jid)["title"] == "ปฏิบัติงานด้านทะเบียนทรัพย์สินและพัสดุ"
+    assert [t["volume"] for t in s.tasks(jid)] == [300, 240] and s.workload(jid)["fte"] == 0.5   # เฉพาะส่วนที่เกิน 0.5 คน
+    assert [t["side"] for t in s.tasks(jid)] == ["ด้านการปฏิบัติการ"] * 2
+    did = s.duties("เจ้าพนักงานพัสดุ")[0]["id"]
+    s.save_duty(dict(text="จัดซื้อจัดจ้างผ่าน e-GP"), did)                      # แก้ในมาตรฐาน → ภาระงาน/งานจ้างตาม
+    assert s.pos_load(pos["id"])[0]["task"] == "จัดซื้อจัดจ้างผ่าน e-GP" == s.tasks(jid)[0]["task"]
+    s.delete_duty(did)
+    assert len(s.pos_load(pos["id"])) == 1
+
+
+def test_word_excel_and_memos(tmp_path):
+    import zipfile
+    from venitsupply import demo, hire_reports as HR, reports as R
+    s = demo.fill(Store())
+    c = s.contracts(2570)[0]
+    memo = HR.hire_approval_memo(s, c["id"]).html()
+    assert "บันทึกข้อความ" in memo and "1. เรื่องเดิม" in memo and "ว 877" in memo and "4.2 เห็นควรมอบหมายให้" in memo
+    assert "ความเห็นปลัด" in memo and "แผนงานแผนงาน" not in memo
+    assert "รายงานผลการดำเนินการจัดทำร่างขอบเขตของงาน" in HR.tor_report_memo(s, c["id"]).html()
+    assert "แบบ บก.06" in HR.price_report_memo(s, c["id"]).html()
+    rep = HR.manpower_report(s)
+    assert "211" in rep.html()
+    pid = s.q("SELECT id FROM positions WHERE title='เจ้าพนักงานพัสดุ'")[0]["id"]
+    for r, name in ((HR.hire_approval_memo(s, c["id"]), "m"), (rep, "a"), (HR.position_workload_sheet(s, pid), "w"),
+                    (HR.tor(s, c["job_id"], contract=c), "t"), (HR.contract_doc(s, c["id"]), "c")):
+        R.to_docx(r, tmp_path / f"{name}.docx")
+        R.to_xlsx(r, tmp_path / f"{name}.xlsx")
+        with zipfile.ZipFile(tmp_path / f"{name}.docx") as z:
+            xml = z.read("word/document.xml").decode("utf-8")
+            assert "TH SarabunPSK" in xml and "<w:tbl>" in xml or name in ("m", "t", "c")
+    with zipfile.ZipFile(tmp_path / "w.xlsx") as z:
+        x = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert "<f>C5*D5</f>" in x and "ROUND(E5/82800,2)" in x and "SUM(F" in x
+    assert "เอกสารหมายเลข 5" in HR.position_history_sheet(s, pid).html()

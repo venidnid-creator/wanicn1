@@ -53,11 +53,14 @@ class Report:
     def html(self) -> str:
         st = self.s.settings()
         org = _e(st.get("org_name") or "(ยังไม่ได้ตั้งชื่อหน่วยงาน — ไปที่ «ตั้งค่า»)")
-        h = [f"<html><body style=\"font-family:{FONT}; font-size:14pt;\">",
-             f"<p align=center style='font-size:18pt'><b>{_e(self.title)}</b><br>{org}"]
-        if self.subtitle:
-            h.append(f"<br>{_e(self.subtitle)}")
-        h.append("</p>")
+        h = [f"<html><body style=\"font-family:{FONT}; font-size:14pt;\">"]
+        if getattr(self, "head_html", None) is not None:
+            h.append(self.head_html)
+        else:
+            h.append(f"<p align=center style='font-size:18pt'><b>{_e(self.title)}</b><br>{org}")
+            if self.subtitle:
+                h.append(f"<br>{_e(self.subtitle)}")
+            h.append("</p>")
         if self.before:
             h.append(self.before)
         if self.header:
@@ -76,7 +79,8 @@ class Report:
             h.append("</table>")
         if getattr(self, "after", ""):
             h.append(self.after)
-        h.append(self._signatures(st))
+        if self.signers:
+            h.append(self._signatures(st))
         h.append(f"<p style='font-size:10pt; color:#55657A'>พิมพ์เมื่อ {TD.thai(TD.today())} · "
                  f"{PRODUCT_TH} ({PRODUCT_EN}) · ผู้พัฒนา {DEVELOPER} {QUALIFICATION} · "
                  "ตรวจสอบความถูกต้องกับระเบียบกระทรวงการคลังว่าด้วยการจัดซื้อจัดจ้างและ"
@@ -296,8 +300,20 @@ def to_pdf(report: Report, path) -> None:
 
 
 def to_xlsx(report: Report, path) -> None:
+    """Spreadsheet: a report may supply its own sheets with formulas (``report.sheets``)."""
     from . import xlsx
-    xlsx.write(path, [(report.title, report.table())], header_rows=3)
+    sheets = getattr(report, "sheets", None)
+    if sheets:
+        xlsx.write(path, sheets, header_rows=getattr(report, "sheet_header_rows", 3),
+                   widths=getattr(report, "sheet_widths", None))
+    else:
+        xlsx.write(path, [(report.title, report.table())], header_rows=3)
+
+
+def to_docx(report: Report, path) -> None:
+    """Editable Word document (TH SarabunPSK) with the same content as the PDF."""
+    from . import docx
+    docx.write(path, report.html(), landscape=report.landscape)
 
 
 # ======================================================= budget & procurement

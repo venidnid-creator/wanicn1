@@ -3,6 +3,8 @@
 """หน้าต่างหลักของ «พัสดุเวนิช» (VENIT SUPPLY)."""
 from __future__ import annotations
 
+import re
+
 import os
 import sys
 from pathlib import Path
@@ -81,14 +83,14 @@ def buttons(*specs):
 
 
 def save_report(parent, rep: R.Report, kind="pdf"):
-    ext = "pdf" if kind == "pdf" else "xlsx"
-    name = rep.title.replace(" ", "_") + "." + ext
-    filt = "PDF (*.pdf)" if kind == "pdf" else "ตารางคำนวณ (*.xlsx)"
+    ext = {"pdf": "pdf", "docx": "docx"}.get(kind, "xlsx")
+    name = re.sub(r'[\\/:*?"<>|]', "", rep.title).replace(" ", "_")[:80] + "." + ext
+    filt = {"pdf": "PDF (*.pdf)", "docx": "Word (*.docx)"}.get(kind, "Excel (*.xlsx)")
     path, _ = QFileDialog.getSaveFileName(parent, T("บันทึก"), str(default_db().parent / name), filt)
     if not path:
         return None
     try:
-        (R.to_pdf if kind == "pdf" else R.to_xlsx)(rep, path)
+        {"pdf": R.to_pdf, "docx": R.to_docx}.get(kind, R.to_xlsx)(rep, path)
     except Exception as exc:  # noqa: BLE001
         error(parent, exc)
         return None
@@ -644,7 +646,7 @@ class ReportPage(QWidget):
         fyrow.addWidget(self.fy)
         side.addLayout(fyrow)
         side.addWidget(self.list, 1)
-        brow, _ = buttons(("พิมพ์ PDF", self.pdf, True), ("ส่งออกตาราง", self.xlsx))
+        brow, _ = buttons(("พิมพ์ PDF", self.pdf, True), ("Word", self.docx), ("Excel", self.xlsx))
         side.addLayout(brow)
         top.addLayout(side)
         self.view = QTextBrowser()
@@ -678,6 +680,10 @@ class ReportPage(QWidget):
     def xlsx(self):
         if self.current:
             save_report(self, self.current, "xlsx")
+
+    def docx(self):
+        if self.current:
+            save_report(self, self.current, "docx")
 
 
 class SettingsPage(QWidget):

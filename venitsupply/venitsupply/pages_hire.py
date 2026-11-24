@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QGroupBox, QHBoxLayout, QLabel, QMenu,
                                QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget)
 
 from . import PRODUCT_TH
 from . import hire as H
@@ -17,6 +17,7 @@ from . import hire_reports as HR
 from . import thaidate as TD
 from .i18n import T
 from .pages_budget import RED, GREEN, _buttons, _page, fy_spin, m
+from .pages_manpower import AnalysisTab, OrgTab, PickDutiesDialog, StandardsTab
 from .widgets import (MUTED, FormDialog, error, fill, fit_to_screen, need_selection, px, selected_id, table)
 
 
@@ -43,8 +44,8 @@ class HirePage(QWidget):
         super().__init__()
         self.win = win
         w, lay = _page("จ้างเหมาบริการบุคคลธรรมดา (แยกตามกอง)",
-                       "ปริมาณงาน → ค่างาน → ขอจ้าง/TOR/บก.06 → สัญญา (แบบฉบับที่ 3) → ตรวจรับ/เบิกจ่ายรายเดือน "
-                       "ภายในงบของกอง · ไม่มีค่าปรับ/หลักประกัน (ว 727)")
+                       "อัตรากำลัง (กรอบ/ครอง/ว่าง) → ภาระงานตามมาตรฐานกำหนดตำแหน่ง → ขาดกี่คน → ค่างาน → "
+                       "ขออนุมัติ/TOR/ราคากลาง → สัญญา → ตรวจรับรายเดือน ภายในงบของกอง")
         QVBoxLayout(self).addWidget(w)
         top = QHBoxLayout()
         top.addWidget(QLabel(T("ปีงบประมาณ")))
@@ -58,8 +59,10 @@ class HirePage(QWidget):
         lay.addLayout(top)
         self.tabs = QTabWidget()
         self.org, self.jobs, self.cons, self.summ = OrgTab(self), JobTab(self), ContractTab(self), SummaryTab(self)
-        for t, name in ((self.summ, "สรุปตามกอง"), (self.org, "โครงสร้างหน่วยงาน"), (self.jobs, "งานที่จะจ้าง · ค่างาน"),
-                        (self.cons, "สัญญาจ้าง · ตรวจรับรายเดือน")):
+        self.std, self.ana = StandardsTab(self), AnalysisTab(self)
+        for t, name in ((self.summ, "สรุปตามกอง"), (self.org, "โครงสร้าง · อัตรากำลัง"),
+                        (self.std, "มาตรฐานกำหนดตำแหน่ง"), (self.ana, "วิเคราะห์อัตรากำลัง"),
+                        (self.jobs, "งานที่จะจ้าง · ค่างาน"), (self.cons, "สัญญาจ้าง · เอกสาร · ตรวจรับ")):
             self.tabs.addTab(t, T(name))
         lay.addWidget(self.tabs, 1)
         self.fy.valueChanged.connect(self.refresh)
@@ -96,201 +99,6 @@ class HirePage(QWidget):
 
     def changed(self):
         self.win.refresh()
-
-
-# =========================================================== structure
-class OrgTab(QWidget):
-    def __init__(self, page: HirePage):
-        super().__init__()
-        self.p = page
-        lay = QVBoxLayout(self)
-        sp = QSplitter(Qt.Horizontal)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels([T("กอง / หน่วยงานย่อย"), T("ประเภท"), T("ผู้อำนวยการ/หัวหน้า"),
-                                   T("เจ้าหน้าที่ผู้ขอจ้าง")])
-        self.tree.itemSelectionChanged.connect(self.show_positions)
-        self.tree.itemDoubleClicked.connect(lambda *_: self.edit_div())
-        sp.addWidget(self.tree)
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
-        self.pos_title = QLabel(T("ตำแหน่ง"))
-        self.pos_title.setObjectName("section")
-        rl.addWidget(self.pos_title)
-        self.pos = table(["ตำแหน่ง", "สาย", "ประเภท", "จำนวน", "หมายเหตุ"], stretch=0)
-        self.pos.doubleClicked.connect(lambda *_: self.edit_pos())
-        rl.addWidget(self.pos, 1)
-        self.budget = QLabel()
-        self.budget.setWordWrap(True)
-        rl.addWidget(self.budget)
-        row, _ = _buttons(("เพิ่มตำแหน่ง", self.add_pos), ("แก้ไขตำแหน่ง", self.edit_pos), ("ลบตำแหน่ง", self.del_pos))
-        rl.addLayout(row)
-        sp.addWidget(right)
-        sp.setSizes([px(620), px(560)])
-        lay.addWidget(sp, 1)
-        row, _ = _buttons(("เพิ่มกอง", self.add_top, True), ("เพิ่มหน่วยงานย่อย", self.add_sub),
-                          ("แก้ไข", self.edit_div), ("ลบ", self.del_div), (None, None),
-                          ("กำหนดกองให้รายการงบประมาณ", self.assign),
-                          ("โหลดโครงสร้าง อบต.ไม้ขาว", self.seed))
-        lay.addLayout(row)
-
-    def refresh(self):
-        s = self.p.store
-        cur = self.cur()
-        self.tree.clear()
-
-        def add(parent, d):
-            it = QTreeWidgetItem([d["name"], d["kind"] or "", d["head_pos"] or d["head_name"] or "",
-                                  d["officer_pos"] or d["officer_name"] or ""])
-            it.setData(0, Qt.UserRole, d["id"])
-            (parent.addChild(it) if parent else self.tree.addTopLevelItem(it))
-            for c in s.divisions(d["id"]):
-                add(it, c)
-            if d["id"] == cur:
-                self.tree.setCurrentItem(it)
-        for d in s.divisions():
-            add(None, d)
-        self.tree.expandAll()
-        for i in range(4):
-            self.tree.resizeColumnToContents(i)
-        self.show_positions()
-
-    def cur(self):
-        it = self.tree.currentItem()
-        return it.data(0, Qt.UserRole) if it else None
-
-    def show_positions(self):
-        s = self.p.store
-        did = self.cur()
-        rows = s.positions(did) if did else []
-        fill(self.pos, [[r["title"], r["line"], r["kind"], int(r["count"] or 0), r["note"]] for r in rows],
-             ids=[r["id"] for r in rows])
-        if not did:
-            self.pos_title.setText(T("ตำแหน่ง — เลือกกองทางซ้าย"))
-            self.budget.setText("")
-            return
-        d = s.division(did)
-        self.pos_title.setText(T("ตำแหน่ง") + f" · {d['name']} · " + T("รวม") +
-                               f" {sum(int(r['count'] or 0) for r in rows)} " + T("อัตรา"))
-        top = s.top_division(did)
-        fy = self.p.fy.value()
-        b, hb = s.division_budget(fy, top["id"]), s.division_budget(fy, top["id"], hire_only=True)
-        self.budget.setText(f"{T('งบประมาณของ')}{top['name']} {T('ปี')} {fy}: {b['items']} {T('รายการ')} "
-                            f"{m(b['budget'])} {T('บาท')} · {H.HIRE_ITEM} {m(hb['budget'])} "
-                            f"({T('คงเหลือ')} <b>{m(hb['available'])}</b>)")
-
-    # ---- divisions
-    def _div_dialog(self, values, parent_ok=True):
-        s = self.p.store
-        parents = [(None, "— (เป็นกอง)")] + [(d["id"], d["name"]) for d in s.divisions(all_levels=True)
-                                              if d["id"] != values.get("id")]
-        f = [("kind", "ประเภท", "edit-combo", H.UNIT_KINDS), ("name", "ชื่อ", "text"),
-             ("parent_id", "สังกัด", "combo", parents),
-             ("aliases", "ชื่อย่อในคำชี้แจง (คั่นด้วย ,)", "text"),
-             ("head_name", "ผู้อำนวยการ/หัวหน้า (ชื่อ)", "text"), ("head_pos", "ตำแหน่ง", "text"),
-             ("officer_name", "เจ้าหน้าที่ผู้ขอจ้าง (ชื่อ)", "text"), ("officer_pos", "ตำแหน่ง ", "text"),
-             ("note", "หมายเหตุ", "multi")]
-        dlg = FormDialog(self, T("กอง / หน่วยงานย่อย"), f, values,
-                         hints=dict(aliases="เช่น กองการศึกษาฯ, กองการศึกษา", head_pos="ผู้อำนวยการกอง…"))
-        return dlg.values() if dlg.exec() else None
-
-    def add_top(self):
-        v = self._div_dialog(dict(kind="กอง", parent_id=None))
-        if v and _do(self, self.p.store.save_division, v):
-            self.p.changed()
-
-    def add_sub(self):
-        did = self.cur()
-        if not did:
-            return need_selection(self)
-        v = self._div_dialog(dict(kind="หน่วยงานย่อย", parent_id=did))
-        if v and _do(self, self.p.store.save_division, v):
-            self.p.changed()
-
-    def edit_div(self):
-        did = self.cur()
-        if not did:
-            return need_selection(self)
-        v = self._div_dialog(dict(self.p.store.division(did)))
-        if v and _do(self, self.p.store.save_division, v, did):
-            self.p.changed()
-
-    def del_div(self):
-        did = self.cur()
-        if not did:
-            return need_selection(self)
-        if QMessageBox.question(self, PRODUCT_TH, T("ลบกอง/หน่วยงานนี้? (รายการงบและงานที่ผูกไว้จะไม่ระบุกอง)")) \
-                == QMessageBox.Yes:
-            if _do(self, self.p.store.delete_division, did) is not False:
-                self.p.changed()
-
-    def seed(self):
-        s = self.p.store
-        replace = False
-        if s.divisions():
-            if QMessageBox.question(self, PRODUCT_TH, T("มีโครงสร้างอยู่แล้ว — แทนที่ด้วยโครงสร้าง อบต.ไม้ขาว ทั้งหมด?")) \
-                    != QMessageBox.Yes:
-                return
-            replace = True
-            for d in s.divisions(all_levels=True)[::-1]:
-                s.run("UPDATE budget_items SET division_id=NULL WHERE division_id=?", (d["id"],))
-                s.run("UPDATE hire_jobs SET division_id=NULL WHERE division_id=?", (d["id"],))
-            if s.q("SELECT 1 FROM hire_contracts WHERE status='ทำสัญญาแล้ว'"):
-                return error(self, ValueError("มีสัญญาที่ยังมีผลอยู่ — แก้ไขโครงสร้างทีละกองแทน"))
-            s.run("DELETE FROM positions")
-            s.run("DELETE FROM divisions")
-        n = _do(self, s.seed_structure, replace=replace)
-        if n:
-            fy = self.p.fy.value()
-            k = s.assign_divisions(fy)
-            s.set_setting(f"hire_assigned_{fy}", "1")
-            QMessageBox.information(self, PRODUCT_TH, T(f"สร้าง {n} กอง และกำหนดกองให้รายการงบปี {fy} {k} รายการ "
-                                                        "(จากคำชี้แจง) — ตรวจสอบและแก้ไขได้"))
-            self.p.changed()
-
-    def assign(self):
-        if AssignDialog(self, self.p.store, self.p.fy.value()).exec():
-            self.p.changed()
-
-    # ---- positions
-    def _pos_dialog(self, values):
-        s = self.p.store
-        divs = [(d["id"], d["name"]) for d in s.divisions(all_levels=True)]
-        f = [("division_id", "กอง/หน่วยงาน", "combo", divs), ("title", "ตำแหน่ง", "text"),
-             ("line", "สาย", "combo", [("", "(อัตโนมัติจากชื่อตำแหน่ง)")] + [(x, x) for x in H.LINES]),
-             ("kind", "ประเภทบุคลากร", "edit-combo", [""] + H.KINDS), ("count", "จำนวน (อัตรา)", "int"),
-             ("note", "หมายเหตุ", "text")]
-        dlg = FormDialog(self, T("ตำแหน่ง"), f, values)
-        if not dlg.exec():
-            return None
-        v = dlg.values()
-        line, kind = H.classify(v["title"])
-        v["line"] = v["line"] or line
-        v["kind"] = v["kind"] or kind
-        return v
-
-    def add_pos(self):
-        did = self.cur()
-        if not did:
-            return need_selection(self)
-        v = self._pos_dialog(dict(division_id=did, count=1))
-        if v and _do(self, self.p.store.save_position, v):
-            self.show_positions()
-
-    def edit_pos(self):
-        pid = selected_id(self.pos)
-        if not pid:
-            return need_selection(self)
-        row = self.p.store.one("SELECT * FROM positions WHERE id=?", (pid,))
-        v = self._pos_dialog(dict(row))
-        if v and _do(self, self.p.store.save_position, v, pid) is not None:
-            self.show_positions()
-
-    def del_pos(self):
-        pid = selected_id(self.pos)
-        if pid and QMessageBox.question(self, PRODUCT_TH, T("ลบตำแหน่งนี้?")) == QMessageBox.Yes:
-            self.p.store.delete_position(pid)
-            self.show_positions()
 
 
 class AssignDialog(QDialog):
@@ -363,7 +171,7 @@ class AssignDialog(QDialog):
 
 # ================================================================ jobs
 class JobTab(QWidget):
-    TASK_HEAD = ["ลักษณะงานที่ปฏิบัติ", "นาที/ราย", "ราย/ปี", "นาที/ปี", "คน"]
+    TASK_HEAD = ["ลักษณะงานที่ปฏิบัติ (จากมาตรฐานกำหนดตำแหน่ง)", "นาที/ราย", "ราย/ปี", "นาที/ปี", "คน"]
 
     def __init__(self, page: HirePage):
         super().__init__()
@@ -390,7 +198,7 @@ class JobTab(QWidget):
         self.result.setWordWrap(True)
         self.result.setTextFormat(Qt.RichText)
         gl.addWidget(self.result)
-        row, _ = _buttons(("เพิ่มแถว", self.add_row), ("ลบแถว", self.del_row), (None, None),
+        row, _ = _buttons(("เพิ่มจากมาตรฐานกำหนดตำแหน่ง…", self.add_row), ("ลบแถว", self.del_row), (None, None),
                           ("บันทึกปริมาณงาน", self.save_tasks, True))
         gl.addLayout(row)
         sp.addWidget(g)
@@ -427,17 +235,23 @@ class JobTab(QWidget):
         jid = self.jid()
         self.tasks.setRowCount(0)
         for t in (self.p.store.tasks(jid) if jid else []):
-            self._append(t["task"], t["minutes"], t["volume"])
+            self._append(t["task"], t["minutes"], t["volume"], t["side"] or "", t["duty_id"])
         self._loading = False
+        self.tasks.resizeRowsToContents()
         self._recalc()
 
-    def _append(self, task="", minutes=0, volume=0):
+    def _append(self, task="", minutes=0, volume=0, side="", duty_id=None):
         r = self.tasks.rowCount()
         self.tasks.insertRow(r)
         for c, v in enumerate((task, f"{minutes:g}", f"{volume:g}", "", "")):
             it = QTableWidgetItem(str(v))
             if c:
                 it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            else:
+                it.setData(Qt.UserRole, dict(side=side, duty_id=duty_id))
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                if side:
+                    it.setToolTip(side)
             if c >= 3:
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 it.setForeground(QColor(MUTED))
@@ -451,8 +265,10 @@ class JobTab(QWidget):
                     return float((self.tasks.item(r, c).text() or "0").replace(",", ""))
                 except (ValueError, AttributeError):
                     return 0.0
-            task = (self.tasks.item(r, 0).text() if self.tasks.item(r, 0) else "").strip()
-            out.append((task, num(1), num(2)))
+            it = self.tasks.item(r, 0)
+            meta = (it.data(Qt.UserRole) if it else None) or {}
+            out.append(dict(task=(it.text() if it else "").strip(), minutes=num(1), volume=num(2),
+                            side=meta.get("side", ""), duty_id=meta.get("duty_id")))
         return out
 
     def _recalc(self, *_):
@@ -461,7 +277,8 @@ class JobTab(QWidget):
         self._loading = True
         per = float(self.p.store.setting("work_minutes_year") or H.WORK_MINUTES_YEAR)
         total = fte = 0.0
-        for r, (task, mi, vol) in enumerate(self._rows()):
+        for r, x in enumerate(self._rows()):
+            mi, vol = x["minutes"], x["volume"]
             share = round(mi * vol / per, 2)
             total += mi * vol
             fte += share
@@ -483,13 +300,24 @@ class JobTab(QWidget):
             f"({T('วันละ')} {m(v['daily'])}){notes}")
 
     def add_row(self):
-        if not self.jid():
+        jid = self.jid()
+        if not jid:
             return need_selection(self)
-        self._loading = True
-        self._append()
-        self._loading = False
-        self.tasks.setCurrentCell(self.tasks.rowCount() - 1, 0)
-        self.tasks.editItem(self.tasks.item(self.tasks.rowCount() - 1, 0))
+        j = self.p.store.job(jid)
+        title = j["title"]
+        if j["position_id"]:
+            pos = self.p.store.position(j["position_id"])
+            title = pos["title"] if pos else title
+        dlg = PickDutiesDialog(self, self.p.store, title)
+        if dlg.exec():
+            have = {x["duty_id"] for x in self._rows() if x["duty_id"]}
+            self._loading = True
+            for d in dlg.chosen():
+                if d["duty_id"] not in have:
+                    self._append(d["task"], 0, 0, d["side"], d["duty_id"])
+            self._loading = False
+            self.tasks.resizeRowsToContents()
+            self._recalc()
 
     def del_row(self):
         r = self.tasks.currentRow()
@@ -501,7 +329,7 @@ class JobTab(QWidget):
         jid = self.jid()
         if not jid:
             return need_selection(self)
-        self.p.store.set_tasks(jid, [x for x in self._rows() if x[0]])
+        self.p.store.set_tasks(jid, [x for x in self._rows() if x["task"]])
         self.refresh()
 
     def _dialog(self, values):
@@ -680,8 +508,12 @@ class ContractDialog(FormDialog):
              ("address", "ที่อยู่", "text"), ("start", "วันเริ่มสัญญา", "date"), ("end", "วันสิ้นสุดสัญญา", "date"),
              ("monthly", "ค่าจ้างต่อเดือน", "money"), ("bank", "ธนาคาร", "text"), ("bank_branch", "สาขา", "text"),
              ("account_name", "ชื่อบัญชี", "text"), ("account_no", "เลขที่บัญชี", "text"),
-             ("inspector", "ผู้ตรวจรับพัสดุ", "text"), ("contract_no", "เลขที่สัญญา (ว่าง = อัตโนมัติ)", "text"),
-             ("note", "หมายเหตุ", "text")]
+             ("inspector", "ผู้ตรวจรับพัสดุ (ชื่อ)", "text"), ("inspector_pos", "ตำแหน่งผู้ตรวจรับ", "text"),
+             ("tor_by", "ผู้จัดทำ TOR/ราคากลาง (ชื่อ)", "text"), ("tor_by_pos", "ตำแหน่งผู้จัดทำ TOR", "text"),
+             ("doc1_no", "1. ที่ บันทึกขออนุมัติจ้าง", "text"), ("doc1_date", "วันที่บันทึกขออนุมัติ", "date"),
+             ("doc2_no", "2. ที่ บันทึกรายงานผล TOR", "text"), ("doc2_date", "วันที่รายงานผล TOR", "date"),
+             ("doc3_no", "4. ที่ บันทึกรายงานผลราคากลาง", "text"), ("doc3_date", "วันที่รายงานผลราคากลาง", "date"),
+             ("contract_no", "เลขที่สัญญา (ว่าง = อัตโนมัติ)", "text"), ("note", "หมายเหตุ", "text")]
         super().__init__(parent, T("สัญญาจ้างเหมาบริการบุคคลธรรมดา"), f, values)
         self.total = QLabel()
         self.total.setTextFormat(Qt.RichText)
@@ -746,7 +578,8 @@ class ContractTab(QWidget):
         sp.setSizes([px(330), px(330)])
         lay.addWidget(sp, 1)
         row, _ = _buttons(("สัญญาใหม่", self.new, True), ("แก้ไข", self.edit), ("ลงนามสัญญา", self.sign),
-                          ("ยกเลิกสัญญา", self.cancel), (None, None), ("พิมพ์เอกสาร", self.print_menu))
+                          ("ยกเลิกสัญญา", self.cancel), (None, None), ("ตั้งค่าเอกสาร…", self.doc_settings),
+                          ("เอกสารตามขั้นตอน (Word/Excel/PDF)", self.print_menu))
         lay.addLayout(row)
 
     def refresh(self):
@@ -859,19 +692,62 @@ class ContractTab(QWidget):
         self.p.win.preview(HR.monthly_inspection(self.p.store, cid, mth))
 
     def print_menu(self):
+        """เอกสารเรียงตามขั้นตอนการทำงานจริง — ทุกฉบับดู พิมพ์ PDF หรือส่งออก Word/Excel ได้."""
         s, win, cid = self.p.store, self.p.win, self.cid()
         items = []
         if cid:
             c = s.contract(cid)
-            items += [("รายงานขอจ้าง", lambda: win.preview(HR.hire_request(s, cid)))]
-            if c["job_id"]:
-                items += [("ขอบเขตของงาน (TOR)", lambda: win.preview(HR.tor(s, c["job_id"], contract=c))),
-                          ("ราคากลาง แบบ บก.06", lambda: win.preview(HR.bk06(s, c["job_id"], c))),
-                          ("บัญชีแสดงการคำนวณปริมาณงาน", lambda: win.preview(HR.workload_sheet(s, c["job_id"])))]
-            items += [("สัญญาจ้างงานบริการ (แบบฉบับที่ 3)", lambda: win.preview(HR.contract_doc(s, cid))), (None, None)]
+            jid = c["job_id"]
+            items.append(("1. บันทึกขออนุมัติจ้าง (มอบหมายผู้จัดทำ TOR/ราคากลาง และผู้ตรวจรับ)",
+                          lambda: win.preview(HR.hire_approval_memo(s, cid))))
+            if jid:
+                items.append(("   แนบ: บัญชีแสดงการคำนวณปริมาณงาน", lambda: win.preview(HR.workload_sheet(s, jid))))
+            items.append(("2. บันทึกรายงานผลการจัดทำร่างขอบเขตของงาน (TOR)",
+                          lambda: win.preview(HR.tor_report_memo(s, cid))))
+            if jid:
+                items.append(("3. ร่างรายละเอียดขอบเขตของงาน (TOR)",
+                              lambda: win.preview(HR.tor(s, jid, contract=s.contract(cid)))))
+            items.append(("4. บันทึกรายงานผลการกำหนดราคากลาง", lambda: win.preview(HR.price_report_memo(s, cid))))
+            if jid:
+                items.append(("5. ตารางราคากลาง แบบ บก.06", lambda: win.preview(HR.bk06(s, jid, s.contract(cid)))))
+            items += [("6. รายงานขอจ้าง (ระเบียบฯ ข้อ 22)", lambda: win.preview(HR.hire_request(s, cid))),
+                      ("7. สัญญาจ้างงานบริการ (แบบฉบับที่ 3 พ.ศ. 2569)", lambda: win.preview(HR.contract_doc(s, cid))),
+                      ("8. ใบตรวจรับ/ขอเบิกงวดที่เลือก", self.print_month), (None, None)]
         fy, did = self.p.fy.value(), self.p.did()
         items.append(("ทะเบียนคุมสัญญาจ้างเหมาบุคคล", lambda: win.preview(HR.hire_register(s, fy, did))))
         _menu_at(self, items)
+
+    def doc_settings(self):
+        if DocSettingsDialog(self, self.p.store).exec():
+            self.refresh()
+
+
+class DocSettingsDialog(FormDialog):
+    """ผู้ลงนามตามสายการบังคับบัญชา เลขที่หนังสือ และข้อระเบียบ/ข้อกฎหมายในบันทึกข้อความ."""
+
+    KEYS = [("org_phone", "โทรศัพท์ (ส่วนราชการ)", "text"), ("doc_prefix", "ที่ (เช่น ภก 71602)", "text"),
+            ("officer", "เจ้าหน้าที่พัสดุ (ชื่อ)", "text"), ("officer_pos", "ตำแหน่งเจ้าหน้าที่พัสดุ", "text"),
+            ("head_officer", "หัวหน้าเจ้าหน้าที่ (ชื่อ)", "text"),
+            ("head_officer_pos", "ตำแหน่งหัวหน้าเจ้าหน้าที่ (เช่น ผู้อำนวยการกองคลัง)", "text"),
+            ("palad", "ปลัด (ชื่อ)", "text"), ("palad_pos", "ตำแหน่งปลัด", "text"),
+            ("head", "ผู้มีอำนาจ/นายก (ชื่อ)", "text"), ("head_pos", "ตำแหน่ง (เช่น นายกองค์การบริหารส่วนตำบล…)", "text"),
+            ("hire_legal", "ข้อระเบียบ/ข้อกฎหมาย (บรรทัดละข้อ ว่าง = ค่าเริ่มต้น)", "multi")]
+
+    def __init__(self, parent, store):
+        self.s = store
+        vals = dict(store.settings())
+        if not (vals.get("hire_legal") or "").strip():
+            vals["hire_legal"] = "\n".join(HR.LEGAL_DEFAULT)
+        super().__init__(parent, T("ตั้งค่าเอกสาร (บันทึกข้อความ)"), self.KEYS, vals)
+        self.w["hire_legal"][1].setFixedHeight(px(220))
+
+    def accept(self):
+        v = self.values()
+        if v["hire_legal"].strip() == "\n".join(HR.LEGAL_DEFAULT).strip():
+            v["hire_legal"] = ""
+        for k, _, _ in self.KEYS:
+            self.s.set_setting(k, v[k])
+        super().accept()
 
 
 # ============================================================= summary

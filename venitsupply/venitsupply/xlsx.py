@@ -18,6 +18,8 @@ def _col(i: int) -> str:
 def _cell(ref, v, style):
     if v is None or v == "":
         return f'<c r="{ref}" s="{style}"/>'
+    if isinstance(v, str) and v.startswith("="):
+        return f'<c r="{ref}" s="{2 if style == 0 else style}"><f>{escape(v[1:])}</f></c>'
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         st = 2 if style == 0 and isinstance(v, float) else style
         return f'<c r="{ref}" s="{st}"><v>{v}</v></c>'
@@ -25,8 +27,9 @@ def _cell(ref, v, style):
             f'{escape(str(v))}</t></is></c>')
 
 
-def write(path, sheets: list[tuple[str, list[list]]], header_rows: int = 1) -> None:
-    """*sheets*: [(name, rows)]; the first *header_rows* rows of each are bold."""
+def write(path, sheets: list[tuple[str, list[list]]], header_rows: int = 1, widths=None) -> None:
+    """*sheets*: [(name, rows)]; the first *header_rows* rows of each are bold; a text starting with «=» is
+    written as a formula; *widths*: column widths (characters) for every sheet."""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml",
                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -67,4 +70,9 @@ def write(path, sheets: list[tuple[str, list[list]]], header_rows: int = 1) -> N
                 body.append(f'<row r="{r + 1}">{cells}</row>')
             z.writestr(f"xl/worksheets/sheet{i + 1}.xml",
                        '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                       f'<sheetData>{"".join(body)}</sheetData></worksheet>')
+                       '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>'
+                       + ("<cols>" + "".join(f'<col min="{c + 1}" max="{c + 1}" width="{w}" customWidth="1"/>'
+                                             for c, w in enumerate(widths)) + "</cols>" if widths else "")
+                       + f'<sheetData>{"".join(body)}</sheetData>'
+                       '<pageMargins left="0.5" right="0.4" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>'
+                       '<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>')

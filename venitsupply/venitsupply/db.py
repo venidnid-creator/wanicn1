@@ -14,6 +14,7 @@ from . import depreciation as DEP
 from .budget import BudgetMixin
 from .procurement import ProcurementMixin
 from .hire import HireMixin
+from .manpower import ManpowerMixin
 from . import thaidate as TD
 
 SCHEMA_VERSION = 2
@@ -55,7 +56,8 @@ DEFAULT_SETTINGS = {
     "lang": "th",
     "specific_limit": "500000", "wht_rate": "1", "wht_min": "10000",
     "fine_rate": "0.2", "fine_rate_hire": "0.1",
-    "work_minutes_year": "82800", "min_wage_day": "400", "hire_rates": "",
+    "work_minutes_year": "82800", "min_wage_day": "400", "hire_rates": "", "palad": "", "palad_pos": "ปลัดองค์การบริหารส่วนตำบล",
+    "doc_prefix": "", "org_phone": "", "hire_legal": "",
 }
 
 SQL = """
@@ -98,7 +100,7 @@ CREATE TABLE IF NOT EXISTS inspections(
 """
 
 
-class Store(BudgetMixin, ProcurementMixin, HireMixin):
+class Store(BudgetMixin, ProcurementMixin, HireMixin, ManpowerMixin):
     """All data of one agency in one file."""
 
     def __init__(self, path: str | Path = ":memory:"):
@@ -110,6 +112,7 @@ class Store(BudgetMixin, ProcurementMixin, HireMixin):
         self._budget_init()
         self._proc_init()
         self._hire_init()
+        self._manpower_init()
         if self.setting("schema") is None:
             self._seed()
         for k, v in DEFAULT_SETTINGS.items():     # settings added by newer versions

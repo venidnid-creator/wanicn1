@@ -136,22 +136,40 @@ def budget(s: Store):
     hire_demo(s)
 
 
+DEMO_SUPPLY = [   # ตัวอย่างจากตารางวิเคราะห์ปริมาณงาน (กองคลัง) ที่เจ้าของส่งมา — เจ้าหน้าที่แทนด้วยมาตรฐานกำหนดตำแหน่งจริง
+    ("ด้านการปฏิบัติการ", "จัดทำการจัดซื้อจัดจ้างในระบบ e-GP (e-bidding / e-market / เฉพาะเจาะจง)", 90, 680),
+    ("ด้านการปฏิบัติการ", "ตรวจบันทึกและจัดทำคำสั่งการจัดซื้อจัดจ้าง", 40, 680),
+    ("ด้านการปฏิบัติการ", "ลงบัญชีและทะเบียนพัสดุ", 150, 260),
+    ("ด้านการปฏิบัติการ", "รายงานสรุปผลการดำเนินการจัดซื้อจัดจ้าง (แบบ สขร.1)", 150, 260),
+    ("ด้านการปฏิบัติการ", "เก็บรวบรวมและรักษาเอกสารงานด้านพัสดุ", 160, 450),
+    ("ด้านการปฏิบัติการ", "ลงทะเบียนและคืนหลักประกันสัญญา", 60, 260),
+    ("ด้านการวางแผน", "จัดทำแผนการจัดซื้อจัดจ้างประจำปี", 120, 2),
+    ("ด้านการประสานงาน", "ประสานผู้ขาย/ผู้รับจ้างและหน่วยงานผู้ขอซื้อขอจ้าง", 15, 400),
+]
+
+
 def hire_demo(s: Store):
-    """จ้างเหมาบริการบุคคลธรรมดาแยกตามกอง (ชื่อผู้รับจ้างสมมติ)."""
+    """อัตรากำลังจริง อบต.ไม้ขาว (แผนอัตรากำลัง 2570–2572, ไม่มีชื่อบุคคล) + ภาระงานตัวอย่าง + สัญญาจ้างสมมติ."""
+    from .manpower import SAMPLE_STANDARD
     if not s.q("SELECT 1 FROM divisions"):
         s.seed_structure()
     s.assign_divisions(2570)
-    tops = {d["name"]: d["id"] for d in s.divisions()}
-    fin, pal = tops["กองคลัง"], tops["สำนักปลัด"]
-    s.save_division(dict(officer_pos="เจ้าพนักงานพัสดุ", head_pos="ผู้อำนวยการกองคลัง"), fin)
-    j1 = s.save_job(dict(division_id=fin, title="ผู้ช่วยงานพัสดุ", line="ทั่วไป", qualification="ปวส./อนุปริญญา",
-                         difficulty=5, work_place="กองคลัง องค์การบริหารส่วนตำบลไม้ขาว"))
-    s.set_tasks(j1, [("จัดทำรายงานขอซื้อขอจ้างและเอกสารประกอบ", 20, 1200),
-                     ("ตรวจสอบเอกสารตรวจรับพัสดุ", 20, 1200),
-                     ("จัดทำเอกสารขอเบิกจ่ายเงิน", 20, 1200),
-                     ("ลงทะเบียนคุมทรัพย์สินและบัญชีวัสดุ", 20, 1400)])
-    j2 = s.save_job(dict(division_id=pal, title="ผู้ช่วยงานวิเคราะห์นโยบายและแผน", line="วิชาการ",
-                         qualification="ปริญญาตรี", difficulty=0))
+    s.import_standard(*SAMPLE_STANDARD, source="ตัวอย่าง ก.ท. 26 พ.ย. 2558")
+    units = {d["name"]: d["id"] for d in s.divisions(all_levels=True)}
+    fin = units["กองคลัง"]
+    s.save_division(dict(officer_pos="เจ้าพนักงานพัสดุ"), units["งานทะเบียนทรัพย์สินและพัสดุ"])
+    pos = next(p for p in s.positions(units["งานทะเบียนทรัพย์สินและพัสดุ"]) if p["title"] == "เจ้าพนักงานพัสดุ")
+    rows = []
+    for side, task, mi, vol in DEMO_SUPPLY:
+        did = s.save_duty(dict(title=pos["title"], side=side, text=task, source="ตัวอย่าง (ข้อมูลสมมติ)"))
+        rows.append(dict(duty_id=did, side=side, task=task, minutes=mi, volume=vol,
+                         y1=round(vol * 0.8), y2=round(vol * 0.9), y3=vol))
+    s.set_pos_load(pos["id"], rows)
+    j1 = s.job_from_position(pos["id"], fin)
+    s.save_job(dict(difficulty=5, work_place="กองคลัง องค์การบริหารส่วนตำบลไม้ขาว"), j1)
+    pal = units["สำนักปลัด"]
+    j2 = s.save_job(dict(division_id=units["งานวิเคราะห์นโยบายและแผน"], title="ปฏิบัติงานด้านวิเคราะห์นโยบายและแผน",
+                         line="วิชาการ", qualification="ปริญญาตรี", difficulty=0))
     s.set_tasks(j2, [("รวบรวมข้อมูลจัดทำแผนพัฒนาท้องถิ่น", 120, 200),
                      ("ติดตามและรายงานผลการดำเนินงานตามแผน", 60, 480),
                      ("จัดทำร่างข้อบัญญัติและเอกสารประกอบ", 240, 60)])
@@ -160,7 +178,11 @@ def hire_demo(s: Store):
                                person="นางสาวตัวอย่าง ทดลองจ้าง", address="(ข้อมูลสมมติ)", bank="ธนาคารกรุงไทย",
                                bank_branch="ถลาง", account_no="000-0-00000-0", start="2026-10-01",
                                end="2027-09-30", monthly=s.job_value(s.job(j1))["monthly"],
-                               inspector="นายตรวจรับ ตัวอย่าง"))
+                               inspector="นายตรวจรับ ตัวอย่าง", inspector_pos="นักวิชาการพัสดุ",
+                               tor_by="นางสาวผู้จัดทำ ตัวอย่าง", tor_by_pos="ผู้ช่วยเจ้าพนักงานพัสดุ",
+                               doc1_no="1001", doc1_date="2026-09-01", doc2_no="1010", doc2_date="2026-09-05",
+                               doc3_no="1015", doc3_date="2026-09-08"))
     s.sign_contract(cid, "2026-10-01")
     s.inspect_month(cid, "2026-10", date="2026-10-31")
     s.pay_month(cid, "2026-10", "2026-11-02", "ฎ.31/2570")
+    return pal

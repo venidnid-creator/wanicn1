@@ -65,56 +65,6 @@ CREATE TABLE IF NOT EXISTS hire_months(
   payment_id INTEGER, note TEXT DEFAULT '', UNIQUE(contract_id, month));
 """
 
-# โครงสร้างตัวอย่าง อบต.ไม้ขาว (จากเว็บไซต์ อบต. — ไม่เก็บชื่อบุคคล)
-MAIKHAO = [
-    ("สำนักปลัด", "สำนักปลัด,สำนักลัด", [
-        ("ฝ่าย", "ฝ่ายอำนวยการ"), ("ฝ่าย", "ฝ่ายปกครอง"), ("ฝ่าย", "ฝ่ายป้องกันและบรรเทาสาธารณภัย"),
-        ("หน่วยงานย่อย", "หน่วยตรวจสอบภายใน")], [
-        ("หัวหน้าสำนักปลัด (นักบริหารงานทั่วไป)", 1), ("นักทรัพยากรบุคคล", 2), ("นักวิเคราะห์นโยบายและแผน", 2),
-        ("นักจัดการงานทั่วไป", 1), ("นักประชาสัมพันธ์", 1), ("นักป้องกันและบรรเทาสาธารณภัย", 1),
-        ("นักจัดการงานเทศกิจ", 1), ("นักวิชาการคอมพิวเตอร์", 1), ("นักพัฒนาการท่องเที่ยว", 1),
-        ("นักวิชาการตรวจสอบภายใน", 1), ("เจ้าพนักงานธุรการ", 2), ("เจ้าพนักงานป้องกันและบรรเทาสาธารณภัย", 1),
-        ("ผู้ช่วยเจ้าพนักงานธุรการ", 5), ("ผู้ช่วยนักทรัพยากรบุคคล", 2), ("ผู้ช่วยนักวิเคราะห์นโยบายและแผน", 1),
-        ("ผู้ช่วยนิติกร", 1), ("ผู้ช่วยนักประชาสัมพันธ์", 1), ("ผู้ช่วยนักป้องกันและบรรเทาสาธารณภัย", 1),
-        ("ผู้ช่วยนักจัดการงานเทศกิจ", 1), ("ผู้ช่วยนักพัฒนาการท่องเที่ยว", 1),
-        ("ผู้ช่วยนักวิชาการตรวจสอบภายใน", 1), ("พนักงานดับเพลิง", 10), ("พนักงานเทศกิจ", 3),
-        ("พนักงานขับรถยนต์", 4), ("พนักงานขับเครื่องจักรขนาดเบา", 3), ("คนงาน", 10)]),
-    ("กองคลัง", "กองคลัง", [
-        ("ฝ่าย", "ฝ่ายการเงินและบัญชี"), ("ฝ่าย", "ฝ่ายพัฒนารายได้"), ("หน่วยงานย่อย", "งานพัสดุและทรัพย์สิน")], [
-        ("ผู้อำนวยการกองคลัง", 1), ("นักวิชาการจัดเก็บรายได้", 1), ("นักวิชาการเงินและบัญชี", 1),
-        ("นักวิชาการพัสดุ", 1), ("เจ้าพนักงานจัดเก็บรายได้", 2), ("เจ้าพนักงานการเงินและบัญชี", 2),
-        ("เจ้าพนักงานพัสดุ", 2), ("เจ้าพนักงานธุรการ", 1), ("ผู้ช่วยนักวิชาการเงินและบัญชี", 1),
-        ("ผู้ช่วยเจ้าพนักงานจัดเก็บรายได้", 3), ("ผู้ช่วยเจ้าพนักงานการเงินและบัญชี", 1),
-        ("ผู้ช่วยเจ้าพนักงานพัสดุ", 1), ("ผู้ช่วยเจ้าพนักงานธุรการ", 1), ("พนักงานขับรถยนต์", 1), ("คนงาน", 2)]),
-    ("กองช่าง", "กองช่าง", [
-        ("ฝ่าย", "ฝ่ายแบบแผนและก่อสร้าง"), ("ฝ่าย", "ฝ่ายควบคุมอาคาร"), ("หน่วยงานย่อย", "งานกิจการประปา")], [
-        ("ผู้อำนวยการกองช่าง", 1), ("นักจัดการงานทั่วไป", 1), ("นายช่างโยธา", 2), ("นายช่างเขียนแบบ", 2),
-        ("นายช่างไฟฟ้า", 1), ("เจ้าพนักงานประปา", 1), ("เจ้าพนักงานธุรการ", 1), ("ผู้ช่วยนายช่างโยธา", 4),
-        ("ผู้ช่วยนายช่างไฟฟ้า", 2), ("ผู้ช่วยนายช่างเขียนแบบ", 1), ("ผู้ช่วยเจ้าพนักงานประปา", 2),
-        ("ผู้ช่วยเจ้าพนักงานธุรการ", 3), ("พนักงานจดมาตรวัดน้ำ", 2), ("คนงานประปา", 2),
-        ("พนักงานขับเครื่องจักรขนาดเบา", 2), ("พนักงานขับเครื่องจักรขนาดกลาง", 2), ("พนักงานขับรถยนต์", 1),
-        ("คนงาน", 1)]),
-    ("กองสาธารณสุขและสิ่งแวดล้อม", "กองสาธารณสุข,กองสาธารณสุขฯ,กองสาธารณสุขและสิ่งแวดล้อม", [
-        ("ฝ่าย", "ฝ่ายบริหารงานสาธารณสุข"), ("หน่วยงานย่อย", "งานรักษาความสะอาด"),
-        ("หน่วยงานย่อย", "งานการแพทย์ฉุกเฉิน")], [
-        ("ผู้อำนวยการกองสาธารณสุขและสิ่งแวดล้อม", 1), ("นักวิชาการสาธารณสุข", 1), ("นักวิชาการสุขาภิบาล", 1),
-        ("เจ้าพนักงานสาธารณสุข", 2), ("เจ้าพนักงานธุรการ", 1), ("ผู้ช่วยนักวิชาการสาธารณสุข", 1),
-        ("ผู้ช่วยเจ้าพนักงานธุรการ", 2), ("พนักงานกู้ชีพ", 3), ("พนักงานขับรถยนต์", 7),
-        ("พนักงานขับเครื่องจักรขนาดกลาง", 1), ("คนงานประจำรถบรรทุกขยะ", 12), ("คนงาน", 6)]),
-    ("กองการศึกษา ศาสนา และวัฒนธรรม", "กองการศึกษา,กองการศึกษาฯ,กองการศึกษา ศาสนา และวัฒนธรรม", [
-        ("ฝ่าย", "ฝ่ายบริหารการศึกษา"), ("หน่วยงานย่อย", "ศูนย์พัฒนาเด็กเล็กตำบลไม้ขาว"),
-        ("หน่วยงานย่อย", "ศูนย์พัฒนาเด็กเล็กบ้านท่าฉัตรไชย"), ("หน่วยงานย่อย", "โรงเรียนผู้สูงอายุตำบลไม้ขาว")], [
-        ("ผู้อำนวยการกองการศึกษา ศาสนา และวัฒนธรรม", 1), ("นักวิชาการศึกษา", 2), ("เจ้าพนักงานธุรการ", 1),
-        ("ครู", 5), ("ผู้ช่วยนักวิชาการศึกษา", 2), ("ผู้ช่วยครูผู้ดูแลเด็ก", 4), ("ผู้ดูแลเด็ก (ทักษะ)", 4),
-        ("ผู้ช่วยเจ้าพนักงานธุรการ", 2), ("พนักงานขับรถยนต์", 2), ("นักการภารโรง", 1), ("คนงาน", 3)]),
-    ("กองสวัสดิการสังคม", "กองสวัสดิการสังคม,กองสวัสดิการ", [
-        ("ฝ่าย", "ฝ่ายส่งเสริมสวัสดิการสังคม")], [
-        ("ผู้อำนวยการกองสวัสดิการสังคม", 1), ("นักพัฒนาชุมชน", 1), ("นักสังคมสงเคราะห์", 1),
-        ("เจ้าพนักงานธุรการ", 1), ("ผู้ช่วยนักพัฒนาชุมชน", 2), ("ผู้ช่วยนักสังคมสงเคราะห์", 1),
-        ("ผู้ช่วยเจ้าพนักงานธุรการ", 1), ("พนักงานขับรถยนต์", 1)]),
-]
-
-
 def classify(title: str) -> tuple[str, str]:
     """(สาย, ประเภท) of a position title — a first guess the officer can change."""
     t = title.replace(" ", "")
@@ -151,8 +101,11 @@ class HireMixin:
 
     def _hire_init(self):
         self.con.executescript(SQL)
-        for table, col, decl in (("budget_items", "division_id", "INTEGER"),
-                                 ("procurements", "division_id", "INTEGER")):
+        extra = [("hire_contracts", c, "TEXT DEFAULT ''") for c in
+                 ("inspector_pos", "tor_by", "tor_by_pos", "doc1_no", "doc1_date", "doc2_no", "doc2_date", "doc3_no",
+                  "doc3_date")]
+        for table, col, decl in [("budget_items", "division_id", "INTEGER"),
+                                 ("procurements", "division_id", "INTEGER")] + extra:
             cols = [r[1] for r in self.con.execute(f"PRAGMA table_info({table})")]
             if col not in cols:
                 self.con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
@@ -196,6 +149,8 @@ class HireMixin:
             raise ValueError("ลบหน่วยงานย่อยก่อน")
         if self.one("SELECT 1 FROM hire_contracts WHERE division_id=? AND status<>'ยกเลิก'", (did,)):
             raise ValueError("มีสัญญาจ้างของหน่วยงานนี้อยู่ ลบไม่ได้")
+        for p in self.q("SELECT id FROM positions WHERE division_id=?", (did,)):
+            self.con.execute("DELETE FROM pos_load WHERE position_id=?", (p["id"],))
         self.con.execute("DELETE FROM positions WHERE division_id=?", (did,))
         self.con.execute("UPDATE budget_items SET division_id=NULL WHERE division_id=?", (did,))
         self.con.execute("UPDATE procurements SET division_id=NULL WHERE division_id=?", (did,))
@@ -205,36 +160,42 @@ class HireMixin:
     def positions(self, division_id=None):
         if division_id is None:
             return self.q("SELECT p.*, d.name AS division FROM positions p JOIN divisions d ON d.id=p.division_id "
-                          "ORDER BY d.seq, p.id")
-        return self.q("SELECT * FROM positions WHERE division_id=? ORDER BY id", (division_id,))
+                          "ORDER BY d.seq, p.seq, p.id")
+        return self.q("SELECT * FROM positions WHERE division_id=? ORDER BY is_head DESC, seq, id", (division_id,))
+
+    def position(self, pid):
+        return self.one("SELECT p.*, d.name AS division FROM positions p JOIN divisions d ON d.id=p.division_id "
+                        "WHERE p.id=?", (pid,))
+
+    POS_FIELDS = ("division_id", "title", "line", "kind", "count", "note", "level", "occupied", "seq", "is_head",
+                  "position_no")
 
     def save_position(self, data: dict, pid=None) -> int:
-        f = ("division_id", "title", "line", "kind", "count", "note")
-        d = {k: data[k] for k in f if k in data}
+        d = {k: data[k] for k in self.POS_FIELDS if k in data}
         if "title" in d and not str(d["title"]).strip():
             raise ValueError("กรอกชื่อตำแหน่ง")
+        if "count" in d and "occupied" in d and d["occupied"] is not None and int(d["occupied"]) > int(d["count"]):
+            raise ValueError("จำนวนคนครองตำแหน่งต้องไม่เกินกรอบอัตรากำลัง")
         if pid:
             self.run(f"UPDATE positions SET {','.join(f'{k}=?' for k in d)} WHERE id=?", (*d.values(), pid))
             return pid
+        if "occupied" not in d or d["occupied"] is None:
+            d["occupied"] = d.get("count", 1)
+        if "seq" not in d and d.get("division_id"):
+            d["seq"] = (self.one("SELECT IFNULL(MAX(seq),0) AS s FROM positions WHERE division_id=?",
+                                 (d["division_id"],))["s"] or 0) + 1
         return self.run(f"INSERT INTO positions({','.join(d)}) VALUES({','.join('?' * len(d))})", tuple(d.values()))
 
     def delete_position(self, pid):
+        self.con.execute("DELETE FROM pos_load WHERE position_id=?", (pid,))
+        self.con.execute("UPDATE hire_jobs SET position_id=NULL WHERE position_id=?", (pid,))
         self.run("DELETE FROM positions WHERE id=?", (pid,))
 
-    def seed_structure(self, template=MAIKHAO, replace=False) -> int:
-        """โครงสร้างตัวอย่าง (อบต.ไม้ขาว): 6 กอง หน่วยงานย่อย และตำแหน่ง — แก้/ลบได้ทั้งหมด."""
-        if self.q("SELECT 1 FROM divisions") and not replace:
-            raise ValueError("มีโครงสร้างหน่วยงานอยู่แล้ว")
-        n = 0
-        for name, aliases, subs, posts in template:
-            did = self.save_division(dict(kind="กอง", name=name, aliases=aliases))
-            n += 1
-            for kind, sub in subs:
-                self.save_division(dict(kind=kind, name=sub, parent_id=did))
-            for title, count in posts:
-                line, kind = classify(title)
-                self.save_position(dict(division_id=did, title=title, line=line, kind=kind, count=count))
-        return n
+    def seed_structure(self, template=None, replace=False) -> int:
+        """โครงสร้าง อบต.ไม้ขาว ตามแผนอัตรากำลัง 3 ปี (2570–2572): กอง › ฝ่าย › งาน › ตำแหน่ง — แก้/ลบได้ทั้งหมด.
+        Returns the number of กอง (top-level units)."""
+        self.seed_manpower(template, replace=replace)
+        return len(self.divisions())
 
     # ------------------------------------------- budget items ↔ กอง
     def _division_for_text(self, text: str):
@@ -361,12 +322,16 @@ class HireMixin:
         return self.q(sql + " ORDER BY d.seq, j.id")
 
     def set_tasks(self, jid, tasks):
-        """tasks: [(task, minutes, volume)] — the workload sheet of a job."""
+        """tasks: [(task, minutes, volume)] or dicts(task, minutes, volume, side, duty_id) — the workload sheet."""
         self.con.execute("DELETE FROM hire_tasks WHERE job_id=?", (jid,))
-        for i, (task, minutes, volume) in enumerate(tasks, 1):
-            if str(task).strip():
-                self.con.execute("INSERT INTO hire_tasks(job_id,seq,task,minutes,volume) VALUES(?,?,?,?,?)",
-                                 (jid, i, str(task).strip(), float(minutes or 0), float(volume or 0)))
+        for i, t in enumerate(tasks, 1):
+            if not isinstance(t, dict):
+                t = dict(task=t[0], minutes=t[1], volume=t[2])
+            if str(t["task"]).strip():
+                self.con.execute("INSERT INTO hire_tasks(job_id,seq,task,minutes,volume,side,duty_id) "
+                                 "VALUES(?,?,?,?,?,?,?)", (jid, i, str(t["task"]).strip(), float(t.get("minutes") or 0),
+                                                           float(t.get("volume") or 0), t.get("side", ""),
+                                                           t.get("duty_id")))
         self.con.commit()
 
     def tasks(self, jid):
@@ -380,7 +345,8 @@ class HireMixin:
         for t in self.tasks(jid):
             mins = (t["minutes"] or 0) * (t["volume"] or 0)
             share = round(mins / per_year, 2)
-            rows.append(dict(task=t["task"], minutes=t["minutes"], volume=t["volume"], total=mins, share=share))
+            rows.append(dict(task=t["task"], minutes=t["minutes"], volume=t["volume"], total=mins, share=share,
+                             side=t["side"] or ""))
             total_min += mins
             fte += share
         return dict(rows=rows, total=total_min, fte=round(fte, 2), per_year=per_year)
@@ -388,7 +354,8 @@ class HireMixin:
     # ------------------------------------------------------- contracts
     C_FIELDS = ("job_id", "division_id", "budget_item_id", "contract_no", "sign_date", "person", "id_card",
                 "address", "bank", "bank_branch", "account_name", "account_no", "start", "end", "monthly",
-                "inspector", "note")
+                "inspector", "note", "inspector_pos", "tor_by", "tor_by_pos", "doc1_no", "doc1_date", "doc2_no",
+                "doc2_date", "doc3_no", "doc3_date")
 
     def plan_months(self, start, end, monthly) -> list[dict]:
         start, end = TD.parse(start), TD.parse(end)
