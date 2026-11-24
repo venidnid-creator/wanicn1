@@ -64,3 +64,27 @@ def test_every_step_says_pass_or_fail_and_filters_the_failing():
         assert not any(rc.table.isRowHidden(r) for r in range(rc.table.rowCount()))
     finally:
         FV.auto_enabled = FV_auto
+
+
+def test_an_empty_model_lists_no_materials():
+    """ข6: ค่าเริ่มต้นไม่มีรายการวัสดุ — before anything is built every step
+    is empty (no default marks F1, C1 … with a count of 0), nothing is
+    calculated."""
+    from views.main_window import MainWindow
+    win = MainWindow(defer_extensions=True)
+    _KEEP.append(win)
+    win.show()
+    _settle()
+    win.load_extensions()
+    _settle()
+    rc = win._wanic_rc
+    dk = rc
+    while dk is not None and not isinstance(dk, QDockWidget):
+        dk = dk.parentWidget()
+    dk.show()
+    _settle()
+    for row in range(1, 9):
+        rc.steps.setCurrentRow(row)
+        _settle()
+        assert rc.table.rowCount() == 0, rc.steps.item(row).text()
+        assert "ยังไม่มี" in rc.note.text()

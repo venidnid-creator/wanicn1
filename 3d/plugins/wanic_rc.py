@@ -362,7 +362,9 @@ class RCPanel(QWidget):
         ms = (self._calc or {}).get("members") or []
         lib_bad = []
         try:
-            lib_bad = [m for m, r in R.check_library(self.elements()["lib"]).items() if not r.ok]
+            E_ = self.elements()
+            used = self._used_marks(E_)
+            lib_bad = [m for m, r in R.check_library(E_["lib"]).items() if not r.ok and m in used]
         except Exception:                            # noqa: BLE001 - the marks only
             pass
         for i, (key, label) in enumerate(STEPS):
@@ -424,6 +426,9 @@ class RCPanel(QWidget):
         finally:
             self._loading = False
         self._apply_filter()
+        if self.step != "grid" and self.table.rowCount() == 0:     # nothing built: nothing to fix
+            self.advice_btn.setVisible(False)
+            self.only_bad.setVisible(False)
         self._mark_steps()
         self._show_checks()
 
@@ -459,19 +464,39 @@ class RCPanel(QWidget):
                           + (f"\n⚠ ช่วงเสาเกิน 4.00 ม. {len(long_)} ช่วง — ตรวจขนาดคานให้รับได้" if long_ else ""))
         self.table.setProperty("marks", [])
 
+    @staticmethod
+    def _used_marks(E) -> set:
+        return {e["mark"] for g in ("footings", "stumps", "columns", "beams", "slabs") for e in E.get(g) or []}
+
+    def _has_model(self, E) -> bool:
+        """Any structural member built in the model (the menus show only what is there)."""
+        return any(E.get(g) for g in ("footings", "stumps", "columns", "beams", "slabs"))
+
+    def _empty(self, what: str):
+        """ค่าเริ่มต้นไม่มีรายการวัสดุ: nothing is listed or calculated until the model has it."""
+        self._fill(["รายการ"], [])
+        self.table.setProperty("marks", [])
+        self.note.setText(f"ยังไม่มี{what}ในโมเดล — รายการและการคำนวณมาจากโมเดลที่สร้างเท่านั้น "
+                          "(ขั้น 1: สร้างกริด/ผังห้อง แล้วกด «✅ สร้าง/อัปเดตโมเดล»)")
+
     def _members(self, E):
         lib = E["lib"]
-        marks = self._marks(E)
+        count = {}
+        for group in ("footings", "stumps", "columns", "beams", "slabs"):
+            for e in E[group]:
+                count[e["mark"]] = count.get(e["mark"], 0) + 1
+        # only the marks the model uses — a default library entry (count 0) is not a material
+        marks = [m for m in self._marks(E) if count.get(m, 0) > 0]
+        if not marks:
+            self._empty({"footing": "ฐานราก", "stump": "ตอม่อ", "ground": "คานคอดิน", "slab": "พื้น",
+                         "upper": "เสา/คาน"}.get(self.step, "ชิ้นส่วน"))
+            return
         kinds = sorted({lib[m]["kind"] for m in marks}) or ["footing"]
         fields = []
         for k in kinds:
             for key, th in B.LIB_FIELDS[k]:
                 if key not in [f[0] for f in fields]:
                     fields.append((key, th))
-        count = {}
-        for group in ("footings", "stumps", "columns", "beams", "slabs"):
-            for e in E[group]:
-                count[e["mark"]] = count.get(e["mark"], 0) + 1
         worst = {}                                   # the worst ratio of every mark in this step
         for mem in self._step_members(self.step, (self._calc or {}).get("members") or []):
             mk = mem.name.split(" ", 1)[0]
@@ -506,6 +531,9 @@ class RCPanel(QWidget):
 
     def _roof(self, E):
         s = E["settings"]
+        if s.get("roof") not in B.ROOF_TYPES or not (E.get("columns") or E.get("walls")):
+            self._empty("หลังคา")
+            return
         for k, b in self.roof_btns.items():
             b.setChecked(s.get("roof") == k)
         keys = [("ridge", "อกไก่"), ("hip", "ตะเฆ่สัน"), ("rafter", "จันทัน"), ("purlin", "แป"),
@@ -537,6 +565,9 @@ class RCPanel(QWidget):
                           "สมมาตรรอบอกไก่ · ขนาดรายชิ้นแก้ได้ที่แผง «ออกแบบอาคาร» ▸ หลังคา")
 
     def _rebar(self, E):
+        if not self._has_model(E):
+            self._empty("โครงสร้าง คสล.")
+            return
         T = R.takeoff(E)
         rows = [(k, v["grade"], f"{v['m']:,.1f}", f"{v['kg']:,.2f}") for k, v in T["bars"].items()]
         rows.append(("รวมเหล็กเสริม", "", "", f"{T['kg']:,.2f}"))
@@ -545,7 +576,8 @@ class RCPanel(QWidget):
         for k, v in T["concrete"].items():
             rows.append((f"คอนกรีต{names.get(k, k)}", "", "", f"{v:,.3f} ลบ.ม."))
         rows.append(("คอนกรีตรวม", "", "", f"{sum(T['concrete'].values()):,.3f} ลบ.ม."))
-        res = R.check_library(E["lib"])
+        used = self._used_marks(E)
+        res = {m: r for m, r in R.check_library(E["lib"]).items() if m in used}
         bad = [m for m, r in res.items() if not r.ok]
         fails = [False] * len(rows)
         for m, r_ in res.items():                   # every mark: the minimum-steel check, pass or not
@@ -573,6 +605,9 @@ class RCPanel(QWidget):
         names = {"roof": "หลังคา", "slab": "พื้น", "beam": "คาน", "column": "เสา", "footing": "ฐานราก/เข็ม",
                  "stair": "บันได"}
         ms = self._calc["members"]
+        if not ms:
+            self._empty("ชิ้นส่วนโครงสร้าง")
+            return
         from core import wanic_advice as AD
         try:
             tips = AD.advice_by_member(self._calc, self.data())
