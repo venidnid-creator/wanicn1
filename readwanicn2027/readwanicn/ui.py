@@ -249,21 +249,18 @@ class StatsBox(QFrame):
     def show_info(self, info, cached=False):
         self._info = info
         ahead = bool(info.latest) and update._key(VERSION) > update._key(info.latest)
-        if info.latest:
-            if ahead:                    # a test build newer than any published one
-                self.download.setText(f"⬇ ดาวน์โหลดรุ่นที่เผยแพร่ v{info.latest} (เก่ากว่ารุ่นที่ใช้อยู่)")
-            else:
-                self.download.setText(f"⬇ ดาวน์โหลดรุ่นล่าสุด v{info.latest}"
-                                      + (" (ใหม่กว่ารุ่นที่ใช้อยู่)" if info.newer else ""))
-        lines = []
+        lines = [f"รุ่นที่ใช้อยู่: <b style='color:#5AA9FF'>v{VERSION}</b>"]
         if info.latest:
             day = f" ({info.published_th})" if getattr(info, "published_th", "") else ""
-            lines.append(f"<span style='color:#E7A93B'>ปรับปรุงล่าสุด v{info.latest}{day}</span>")
-            state = ("✓ รุ่นทดสอบ ใหม่กว่ารุ่นที่เผยแพร่" if update._key(VERSION) > update._key(info.latest)
-                     else "✓ เป็นรุ่นล่าสุดแล้ว" if not info.newer else "⬇ มีรุ่นใหม่ให้ดาวน์โหลด")
-            lines.append(f"<span style='color:#5AA9FF'>รุ่นที่ใช้อยู่: v{VERSION} {state}</span>")
-        else:
-            lines.append(f"รุ่นที่ใช้อยู่: v{VERSION}")
+            lines.append(f"รุ่นล่าสุดที่ให้ดาวน์โหลด: <b style='color:#E7A93B'>v{info.latest}</b>{day}")
+            if info.newer:
+                state = "<span style='color:#FBBF24'>⬇ มีรุ่นใหม่ — กดปุ่มด้านล่างเพื่อดาวน์โหลด</span>"
+            elif ahead:
+                state = "<span style='color:#8FA8C2'>✓ รุ่นที่ใช้อยู่ใหม่กว่า (รุ่นทดสอบ)</span>"
+            else:
+                state = "<span style='color:#4ADE80'>✓ ใช้รุ่นล่าสุดอยู่แล้ว</span>"
+            lines.append(state)
+            self.download.setText(f"⬇ ดาวน์โหลดรุ่น v{info.latest}")
         lines.append(f"ดาวน์โหลดสะสม <b>{info.downloads:,}</b> ครั้ง")
         if info.latest:
             lines.append(f"รุ่นล่าสุด v{info.latest}: {info.latest_downloads:,} ครั้ง")
@@ -874,8 +871,9 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, n=name: self.apply_theme(n))
             self.theme_pills[name] = b
             lay.addWidget(b)
+        from . import lang
         self.lang_pills = {}
-        for code, label in (("th", "ไทย"), ("en", "EN")):
+        for code, label in lang.LANGS:
             b = QPushButton(label)
             b.setObjectName("pill")
             b.setProperty("_th_text", label)             # never translated
@@ -1525,14 +1523,14 @@ class MainWindow(QMainWindow):
             self.shape_btn.setText(f"{icon}\n{name.split(' (')[0]} ▾" if key in self.shape_names else "⬚\nรูปทรง ▾")
         self.canvas.set_tool(key)
         from . import lang
-        if getattr(self, "lang_pills", None) and lang.current() == "en":
+        if getattr(self, "lang_pills", None) and lang.current() != "th":
             lang.apply(self.shape_btn) if hasattr(self, "shape_btn") else None
         self.status.showMessage(lang.tr(TOOLS[key]))
         self.canvas.setFocus()
 
     def _show_scale(self):
         from . import lang
-        word = "Scale in use" if lang.current() == "en" else "สเกลที่ใช้"
+        word = lang.scale_word()
         self.scale_label.setText(f"{word}: <b>{self.scale.label}</b>")
         self.scale_label.setProperty("_th_text", None)
 

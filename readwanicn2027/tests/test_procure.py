@@ -482,3 +482,19 @@ def test_factor_f_kept_as_in_the_boq(tmp_path):
     p.mid_price, p.offer = 140_000.0, 135_000.0                # a rounded ราคากลาง typed in
     res = P.compute_651(p)
     assert res.factor == 1.3432 and all(r.factor == 1.3432 for r in res.rows if not r.item.header)
+
+
+def test_w78_steel_only_with_a_weight():
+    """ภาคผนวก 2 lists steel whose weight is known; reinforced-concrete pipes are a material,
+    and a steel-named line without a weight goes to ภาคผนวก 1."""
+    L = lambda n, u, q, c: P.Item(n, u, q, cost=c, code="", level=1)  # noqa: E731
+    items = [L("งานท่อกลมคอนกรีตเสริมเหล็ก (R.C.PIPE CULVERTS) ขนาด 0.40 ม.", "ม.", 24, 48000),
+             L("เหล็กข้ออ้อย DB 12 มม. (SD40)", "กก.", 1000, 26000),
+             L("ราวเหล็กกันตก", "ม.", 20, 30000)]
+    p = P.Project(items=items, factor=1.3, mid_price=135_200, offer=130_000, days=120)
+    w = P.compute_78(p)
+    mats = [i.name for i, _a, _d in w.materials]
+    steel = [i.name for i, _t, _d in w.steel]
+    assert any("ท่อกลม" in n for n in mats) and not any("ท่อกลม" in n for n in steel)
+    assert steel == ["เหล็กข้ออ้อย DB 12 มม. (SD40)"] and all(t is not None for _i, t, _d in w.steel)
+    assert "ราวเหล็กกันตก" in mats and [i.name for i in w.missing_weight] == ["ราวเหล็กกันตก"]

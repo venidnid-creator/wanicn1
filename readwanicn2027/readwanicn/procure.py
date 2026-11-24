@@ -1075,7 +1075,10 @@ def compute_124(p: Project) -> Plan124:
 STEEL_WORDS = ("เหล็ก", "ลวดผูก", "wiremesh", "wiremash", "สแตนเลส", "stainless", "plate", "โบลท์", "โบล์ท",
                "bolt", "สลักเกลียว", "rb", "db", "sr24", "sd40", "sd30", "wf", "ท่อเหล็ก", "kg/m")
 NOT_STEEL_WORDS = ("ทาสี", "ค่าแรง", "สีกันสนิม", "สีน้ำมัน", "เคลือบสังกะสีด้านหน้า", "ติดสติ๊กเกอร์", "ตาข่าย",
-                   "ป้ายชื่อ", "ประตู", "หน้าต่าง", "ข้อต่อ")
+                   "ป้ายชื่อ", "ประตู", "หน้าต่าง", "ข้อต่อ",
+                   # reinforced concrete is a material (ภาคผนวก 1), not steel
+                   "คอนกรีตเสริมเหล็ก", "คสล", "ค.ส.ล", "rcpipe", "r.c.pipe", "ท่อคอนกรีต", "ท่อกลม",
+                   "ท่อเหลี่ยม", "ท่อลอด", "เสาเข็ม", "ตะแกรงเหล็กกันสวะ")
 MESH_RE = re.compile(r"(?:Ø|ø|ศก\.?|dia\.?)\s*(\d+(?:\.\d+)?)\s*(?:มม|mm)\.?\s*@\s*(\d+(?:\.\d+)?)\s*(ม|m|ซม|cm)",
                      re.I)
 REBAR_RE = re.compile(r"\b(?:RB|DB)\s*\.?\s*(\d{1,2})\b", re.I)
@@ -1147,7 +1150,7 @@ class Plan78:
     steel_dom_t: float
     steel_pct: float
     steel_value: float
-    missing_weight: list           # steel lines with no weight
+    missing_weight: list           # steel-named lines with no weight: listed as materials (ภาคผนวก 1)
     exempt: str                    # why no plan is needed, or ""
 
     @property
@@ -1166,13 +1169,12 @@ def compute_78(p: Project) -> Plan78:
         it = r.item
         if it.header or it.special:
             continue
-        if it.is_steel:
-            k = kg_per_unit(it)
-            t = it.qty * k / 1000.0 if k is not None else None
-            if t is None:
+        k = kg_per_unit(it) if it.is_steel else None
+        if it.is_steel and k is not None:
+            steel.append((it, it.qty * k / 1000.0, it.domestic, r.reduced))
+        else:                                   # ภาคผนวก 2 is steel whose weight is known; the rest are materials
+            if it.is_steel:
                 missing.append(it)
-            steel.append((it, t, it.domestic, r.reduced))
-        else:
             mats.append((it, r.reduced, it.domestic))
     mt = sum(a for _i, a, _d in mats)
     md = sum(a * d / 100.0 for _i, a, d in mats)

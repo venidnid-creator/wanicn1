@@ -95,43 +95,69 @@ EN = {
 _lang = None
 
 
+#: the languages of the program's screens: code → the pill's label
+LANGS = (("th", "ไทย"), ("en", "EN"), ("lo", "ລາວ"), ("vi", "VI"), ("id", "ID"), ("zh", "简体"), ("zh_tw", "繁體"))
+CODES = tuple(c for c, _l in LANGS)
+
+
 def current() -> str:
     global _lang
     if _lang is None:
-        _lang = QSettings("WANICNSURVEY", "ReadWanicn2027").value("lang", "") or \
-            os.environ.get("WANIC_LANG", "th")
-        _lang = "en" if str(_lang).lower().startswith("en") else "th"
+        _lang = str(QSettings("WANICNSURVEY", "ReadWanicn2027").value("lang", "") or
+                    os.environ.get("WANIC_LANG", "th")).lower().replace("-", "_")
+        if _lang not in CODES:
+            _lang = "en" if _lang.startswith("en") else "zh_tw" if _lang in ("zh_hant", "tw") else \
+                "zh" if _lang.startswith("zh") else "th"
     return _lang
 
 
 def set_current(code: str) -> None:
     global _lang
-    _lang = "en" if code == "en" else "th"
+    _lang = code if code in CODES else "th"
     QSettings("WANICNSURVEY", "ReadWanicn2027").setValue("lang", _lang)
 
 
-def english(text: str) -> str:
-    """The English of a Thai text (line by line for «icon\\nword»), or the text itself."""
-    if not text:
+def translate(text: str, code: str) -> str:
+    """The text in a language (line by line for «icon\nword»); English where a word is missing."""
+    if not text or code == "th":
         return text
-    if text in EN:
-        return EN[text]
-    if "\n" in text:
-        return "\n".join(EN.get(part, part) for part in text.split("\n"))
-    return text
+    if "\n" in text and text not in EN:
+        return "\n".join(translate(part, code) for part in text.split("\n"))
+    en = EN.get(text)
+    if en is None:
+        return text
+    if code == "en":
+        return en
+    from .lang_more import TABLES
+    return TABLES.get(code, {}).get(en, en)
+
+
+def english(text: str) -> str:
+    """The English of a Thai text (line by line for «icon\nword»), or the text itself."""
+    return translate(text, "en")
 
 
 def tr(text: str) -> str:
-    """The English for a Thai text when the language is English."""
-    return english(text) if current() == "en" else text
+    """The text in the current language."""
+    return translate(text, current())
+
+
+def scale_word() -> str:
+    code = current()
+    if code == "th":
+        return "สเกลที่ใช้"
+    if code == "en":
+        return "Scale in use"
+    from .lang_more import SCALE_WORD
+    return SCALE_WORD.get(code, "Scale in use")
 
 
 def _swap(w, prop, get, put):
     orig, cur = w.property(prop), get()
-    if orig is None or (cur != orig and cur != english(orig)):
+    if orig is None or (cur != orig and cur not in {translate(orig, c) for c in CODES}):
         orig = cur                             # the program changed the text since: that is the Thai now
         w.setProperty(prop, orig)
-    put(tr(orig) if current() == "en" else orig)
+    put(tr(orig))
 
 
 def apply(root: QWidget) -> None:

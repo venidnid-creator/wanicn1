@@ -217,7 +217,7 @@ def test_theme_pills_and_language(tmp_path):
     from readwanicn.ui import MainWindow
     QApplication.instance() or QApplication([])
     w = MainWindow("Wanicn")
-    assert list(w.theme_pills) == list(themes.THEMES) and set(w.lang_pills) == {"th", "en"}
+    assert list(w.theme_pills) == list(themes.THEMES) and list(w.lang_pills) == ["th", "en", "lo", "vi", "id", "zh", "zh_tw"]
     w.theme_pills["เขียวสำรวจ"].click()
     assert w.theme_pills["เขียวสำรวจ"].property("on") and not w.theme_pills["บลูพริ้นท์"].property("on")
     open_btn = w.tool_rows.findChildren(type(w.snap_btn))[0]
@@ -228,6 +228,11 @@ def test_theme_pills_and_language(tmp_path):
         assert w.theme_pills["มืด"].text() == "Dark" and w.lang_pills["th"].text() == "ไทย"
         w.set_tool("circle")
         assert "Circle" in w.shape_btn.text()
+        for code, word in (("lo", "ເປີດໄຟລ໌"), ("vi", "Mở"), ("id", "Buka"), ("zh", "打开"), ("zh_tw", "開啟")):
+            w.set_lang(code)                       # each language, and from one to the next
+            assert open_btn.text().endswith(word) and w.lang_pills[code].property("on")
+            assert w.lang_pills["th"].text() == "ไทย" and lang.current() == code
+        assert "比例" in w.scale_label.text()
     finally:
         w.set_lang("th")
     assert open_btn.text().endswith("เปิดไฟล์") and w.tabs.tabText(0) == "เอกสาร PDF"
@@ -312,7 +317,9 @@ def test_login_box_download_latest_button():
     import readwanicn.ui as U
     old, U.VERSION = U.VERSION, "2027.4.8"                         # a test build ahead of the release
     box.show_info(update.ReleaseInfo(latest="2027.4.5"))
-    assert "เก่ากว่ารุ่นที่ใช้อยู่" in box.download.text() and "รุ่นทดสอบ" in box.body.text()
+    assert box.download.text() == "⬇ ดาวน์โหลดรุ่น v2027.4.5" and "รุ่นทดสอบ" in box.body.text()
+    assert "รุ่นที่ใช้อยู่" in box.body.text() and "v2027.4.8" in box.body.text()
     U.VERSION = old
     box.show_info(update.ReleaseInfo(latest="2099.1.0", newer=True, installer_url="https://example.invalid/s.exe"))
-    assert box.download_url() == "https://example.invalid/s.exe" and "ใหม่กว่า" in box.download.text()
+    assert box.download_url() == "https://example.invalid/s.exe" and "v2099.1.0" in box.download.text()
+    assert "มีรุ่นใหม่" in box.body.text()

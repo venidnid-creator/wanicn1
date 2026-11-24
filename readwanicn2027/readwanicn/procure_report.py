@@ -920,8 +920,8 @@ def report_78(p: P.Project) -> list:
                  Q(100 - w.steel_pct if w.steel_t else 0.0, 2, bold=True)])
     b.blocks.append(Table(head, body, [6, 46, 7, 9, 10, 11, 11], 10))
     if w.missing_weight:
-        b.p(f"รายการที่ยังไม่ทราบน้ำหนัก {len(w.missing_weight)} รายการ — กรอก «กก./หน่วย» ในโปรแกรมก่อนออกรายงานฉบับจริง",
-            size=11, bold=True)
+        b.p(f"รายการชื่อเหล็กที่คำนวณน้ำหนักไม่ได้ {len(w.missing_weight)} รายการ จัดไว้ในภาคผนวก 1 (วัสดุ) — "
+            "ถ้าเป็นเหล็กจริง กรอก «กก./หน่วย» ในโปรแกรม แล้วรายการจะย้ายมาภาคผนวก 2", size=11, bold=True)
     b.p(f"เกณฑ์: เหล็กที่ผลิตภายในประเทศไม่น้อยกว่าร้อยละ {P.STEEL_MIN:.0f} ของปริมาณเหล็กทั้งหมดตามสัญญา — "
         + ("ผ่าน" if w.steel_ok else "ไม่ผ่าน"), size=11)
     _sign(b, "คู่สัญญาฝ่ายผู้รับจ้าง", p.signer or p.contractor)

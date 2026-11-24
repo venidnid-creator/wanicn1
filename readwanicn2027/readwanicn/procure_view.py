@@ -770,7 +770,8 @@ class ProcureDialog(QDialog):
                  f"<b>{w.mat_pct:.2f} %</b> (≥ 60) {ok(w.mat_ok)} · ภาคผนวก 2 เหล็ก {w.steel_t:,.4f} ตัน "
                  f"ในประเทศ <b>{w.steel_pct:.2f} %</b> (≥ 90) {ok(w.steel_ok)}")
             if w.missing_weight:
-                s += f" · <b style='color:#c00000'>เหล็ก {len(w.missing_weight)} รายการยังไม่ทราบน้ำหนัก</b>"
+                s += (f" · <b style='color:#c00000'>ชื่อเหล็ก {len(w.missing_weight)} รายการคำนวณน้ำหนักไม่ได้ — จัดเป็นวัสดุ"
+                      " (กรอก กก./หน่วย ถ้าเป็นเหล็ก)</b>")
             if w.exempt:
                 s += f"<br>{w.exempt}"
             self.info78.setText(s)
