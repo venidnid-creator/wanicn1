@@ -209,3 +209,43 @@ def test_printing_paints_pages_and_tables(app, tmp_path):
     sh.book.set(1, 1, "=2*3")
     html = sh.to_html()
     assert "จุด" in html and ">6<" in html
+
+
+def test_document_editor_works_like_word(tmp_path):
+    """Menus like Word, cut/copy/paste (from Word with its formatting, or the words only),
+    find and replace, strike/highlight/superscript, line spacing, page breaks and tables —
+    and they all reach the .docx."""
+    from docx import Document
+    from PySide6.QtGui import QColor, QTextCursor
+    from PySide6.QtWidgets import QApplication
+
+    from readwanicn import docedit
+    app = QApplication.instance() or QApplication([])
+    ed = docedit.DocEditor(lambda n: os.path.join(os.path.dirname(__file__), "..", "assets", n))
+    menus = [a.text() for a in ed.menu_bar.actions()]
+    assert menus == ["แฟ้ม", "แก้ไข", "มุมมอง", "แทรก", "รูปแบบ", "ตาราง", "เครื่องมือ"]
+    ed.page.setPlainText("เรียน ผู้อำนวยการ\nขอส่งรายงานผลการดำเนินงาน")
+    assert ed.replace_all("ผู้อำนวยการ", "นายอำเภอ") == 1
+    app.clipboard().setText("คัดลอกจากที่อื่น")
+    c = ed.page.textCursor()
+    c.movePosition(QTextCursor.End)
+    ed.page.setTextCursor(c)
+    ed.page.paste_plain()
+    c = ed.page.document().find("ขอส่ง")
+    ed.page.setTextCursor(c)
+    ed._merge(strike=True)
+    ed.highlight(QColor("#FFF200"))
+    ed.line_spacing(150)
+    ed.page_break()
+    ed.insert_table()
+    ed._table("row")
+    out = tmp_path / "หนังสือ.docx"
+    docedit.to_docx(ed.page.document(), out)
+    d = Document(out)
+    text = "\n".join(p.text for p in d.paragraphs)
+    assert "นายอำเภอ" in text and "คัดลอกจากที่อื่น" in text and "ผู้อำนวยการ" not in text
+    runs = [r for p in d.paragraphs for r in p.runs if "ขอส่ง" in r.text]
+    assert runs and runs[0].font.strike and "w:shd" in runs[0]._element.xml
+    assert any(p.paragraph_format.line_spacing == 1.5 for p in d.paragraphs)
+    assert any(p.paragraph_format.page_break_before for p in d.paragraphs)
+    assert len(d.tables) == 1 and len(d.tables[0].rows) == 4

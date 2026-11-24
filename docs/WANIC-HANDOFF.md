@@ -10,6 +10,14 @@
 - ก่อน push: `git fetch origin claude/zen-feynman-ptcfng && git rebase origin/claude/zen-feynman-ptcfng`
 - ห้ามเผยแพร่ GitHub Release เอง ยกเว้นผู้ใช้สั่ง (ReadWanicn: workflow_dispatch `release=true`)
 
+## ReadWanicn2027 — สร้างเอกสาร/งานสารบรรณ ใช้งานแบบ Word (24 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
+- `DocEditor.menu_bar`: แฟ้ม แก้ไข มุมมอง แทรก รูปแบบ ตาราง เครื่องมือ (ทางลัดแบบ Word: Ctrl+N/O/S/P/Z/Y/X/C/V/A/F/H/B/I/U/L/E/R/J,
+  Ctrl+= ตัวห้อย, Ctrl+Shift+= ตัวยก, Ctrl+Return ขึ้นหน้าใหม่, Ctrl+Shift+V วางเฉพาะข้อความ)
+- ribbon เพิ่ม ตัด/คัดลอก/วาง/วางเฉพาะข้อความ/ค้นหา-แทนที่, ขีดฆ่า, ตัวยก/ห้อย, ไฮไลต์, รายการตัวเลข, ระยะบรรทัด
+- `Page.contextMenuEvent` เมนูคลิกขวาภาษาไทย · `paste_plain` · find/replace (`replace_all`) · ตาราง แทรก/ลบแถว-คอลัมน์ ผสานเซลล์ ·
+  วันที่ สัญลักษณ์ นับคำ เลขไทย↔อารบิก
+- to_docx เพิ่ม ขีดฆ่า ตัวยก/ห้อย ไฮไลต์ (w:shd) ระยะบรรทัด ขึ้นหน้าใหม่ · tests 59 ผ่าน
+
 ## ReadWanicn2027 — ว78 · หน้าอัปเดต · 5 ภาษา (24 พ.ย. 2569, รออนุมัติภาพ — [skip ci])
 - ว78: ภาคผนวก 2 เฉพาะเหล็กที่คำนวณน้ำหนักได้; ชื่อเหล็กที่ไม่ทราบน้ำหนัก → ภาคผนวก 1 (`missing_weight` แจ้งเตือน);
   NOT_STEEL_WORDS เพิ่ม คอนกรีตเสริมเหล็ก/คสล/R.C.PIPE/ท่อกลม/ท่อเหลี่ยม/ท่อลอด/เสาเข็ม (ท่อ คสล. เป็นวัสดุ)

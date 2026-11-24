@@ -12,10 +12,13 @@ import io
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QMarginsF, QSizeF, Qt, QUrl
-from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QPageLayout, QPageSize, QPdfWriter,
-                           QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextFrameFormat,
+from PySide6.QtGui import (QAction, QColor, QFont, QFontDatabase, QImage, QKeySequence, QPageLayout, QPageSize,
+                           QPdfWriter,
+                           QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextFormat,
+                           QTextFrameFormat,
                            QTextImageFormat, QTextListFormat, QTextTableFormat)
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QFormLayout,
+from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFontComboBox, QFormLayout,
+                               QInputDialog, QMenu, QMenuBar,
                                QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSpinBox, QSplitter, QTextEdit, QToolButton,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -80,6 +83,10 @@ def _apply_block(par, block, Pt, Cm, WD_ALIGN):
         pf.first_line_indent = Cm(bf.textIndent() / PX_PER_CM)
     if bf.leftMargin():
         pf.left_indent = Cm(bf.leftMargin() / PX_PER_CM)
+    if int(bf.lineHeightType()) == 1 and bf.lineHeight() and bf.lineHeight() != 100:   # proportional
+        pf.line_spacing = bf.lineHeight() / 100.0
+    if bf.pageBreakPolicy() & QTextFormat.PageBreak_AlwaysBefore:
+        pf.page_break_before = True
 
 
 def _fill_paragraph(qdoc, par, block, family, Pt, Cm, WD_ALIGN):
@@ -106,12 +113,30 @@ def _fill_paragraph(qdoc, par, block, family, Pt, Cm, WD_ALIGN):
                     run.bold = f.bold() or None
                     run.italic = f.italic() or None
                     run.underline = f.underline() or None
+                    run.font.strike = f.strikeOut() or None
+                    va = fmt.verticalAlignment()
+                    if va == QTextCharFormat.AlignSuperScript:
+                        run.font.superscript = True
+                    elif va == QTextCharFormat.AlignSubScript:
+                        run.font.subscript = True
+                    bg = fmt.background()
+                    if bg.style() != Qt.NoBrush and bg.color().isValid() and bg.color() != QColor("white"):
+                        _shade(run, bg.color())
                     c = fmt.foreground().color()
                     if fmt.foreground().style() != Qt.NoBrush and c.isValid() and c != QColor("black"):
                         from docx.shared import RGBColor
                         run.font.color.rgb = RGBColor(c.red(), c.green(), c.blue())
                     _cs_font(run, run.font.name)
         it += 1
+
+
+def _shade(run, color):
+    """A highlight of any colour (Word's own highlight has only 16)."""
+    from docx.oxml.ns import qn
+    rpr = run._element.get_or_add_rPr()
+    shd = rpr.makeelement(qn("w:shd"), {qn("w:val"): "clear", qn("w:color"): "auto",
+                                        qn("w:fill"): color.name()[1:].upper()})
+    rpr.append(shd)
 
 
 def _cs_font(run, family):
@@ -294,6 +319,35 @@ class Page(QTextEdit):
         self.family = family
         self.reset()
 
+    def contextMenuEvent(self, e):
+        """The right-click menu in Thai, as in Word."""
+        m = QMenu(self)
+        has = self.textCursor().hasSelection()
+        for text, key, fn, on in (("✂ ตัด", QKeySequence.Cut, self.cut, has),
+                                  ("📋 คัดลอก", QKeySequence.Copy, self.copy, has),
+                                  ("📥 วาง", QKeySequence.Paste, self.paste, self.canPaste()),
+                                  ("📄 วางเฉพาะข้อความ", "Ctrl+Shift+V", self.paste_plain, self.canPaste())):
+            a = m.addAction(text, fn)
+            a.setShortcut(QKeySequence(key))
+            a.setEnabled(on)
+        m.addSeparator()
+        m.addAction("↶ เลิกทำ", self.undo).setEnabled(self.document().isUndoAvailable())
+        m.addAction("↷ ทำซ้ำ", self.redo).setEnabled(self.document().isRedoAvailable())
+        m.addSeparator()
+        m.addAction("เลือกทั้งหมด", self.selectAll)
+        m.exec(e.globalPos())
+
+    def paste_plain(self):
+        """Paste the words only, in the page's own font (no colours or sizes from elsewhere)."""
+        from PySide6.QtWidgets import QApplication
+        self.textCursor().insertText(QApplication.clipboard().text())
+
+    def keyPressEvent(self, e):
+        if e.modifiers() == (Qt.ControlModifier | Qt.ShiftModifier) and e.key() == Qt.Key_V:
+            self.paste_plain()
+            return
+        super().keyPressEvent(e)
+
     def reset(self):
         doc = self.document()
         f = QFont(self.family)
@@ -320,6 +374,9 @@ class DocEditor(QWidget):
         self.garuda_path = asset("garuda.png")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        self.menu_bar = QMenuBar()
+        self.menu_bar.setNativeMenuBar(False)
+        lay.addWidget(self.menu_bar)
         lay.addWidget(self._ribbon())
         split = QSplitter()
         split.addWidget(self._forms())
@@ -332,6 +389,7 @@ class DocEditor(QWidget):
         split.addWidget(scroll)
         split.setSizes([330, 900])
         lay.addWidget(split, 1)
+        self._menus()
         self._load_garuda()
 
     # -- ribbon
@@ -358,7 +416,14 @@ class DocEditor(QWidget):
                               ("📑 บันทึกเป็น PDF", "บันทึกเป็น PDF ขนาด A4 ตามระยะขอบหนังสือราชการ", self.save_pdf),
                               ("🖨 พิมพ์", "พิมพ์ไปที่เครื่องพิมพ์ (Ctrl+P) ดูตัวอย่างก่อนพิมพ์ได้", self.print_doc),
                               ("↶ เลิกทำ", "เลิกทำ (Ctrl+Z)", lambda: self.page.undo()),
-                              ("↷ ทำซ้ำ", "ทำซ้ำ (Ctrl+Y)", lambda: self.page.redo())):
+                              ("↷ ทำซ้ำ", "ทำซ้ำ (Ctrl+Y)", lambda: self.page.redo()),
+                              ("✂ ตัด", "ตัด (Ctrl+X)", lambda: self.page.cut()),
+                              ("📋 คัดลอก", "คัดลอก (Ctrl+C)", lambda: self.page.copy()),
+                              ("📥 วาง", "วาง (Ctrl+V) — วางจาก Word ได้ทั้งรูปแบบ ตาราง และรูปภาพ",
+                               lambda: self.page.paste()),
+                              ("📄 วางเฉพาะข้อความ", "วางเฉพาะตัวหนังสือ ใช้แบบอักษรของเอกสาร (Ctrl+Shift+V)",
+                               lambda: self.page.paste_plain()),
+                              ("🔎 ค้นหา/แทนที่", "ค้นหาและแทนที่ข้อความ (Ctrl+F / Ctrl+H)", self.find_replace)):
             row1.addWidget(self._tool(text, tip, fn))
         row1.addStretch(1)
         col.addLayout(row1)
@@ -382,12 +447,24 @@ class DocEditor(QWidget):
         self.underline.setStyleSheet("text-decoration:underline;")
         for b in (self.bold, self.italic, self.underline):
             row2.addWidget(b)
+        self.strike = self._tool("ข̶", "ขีดฆ่า", lambda on: self._merge(strike=on), True)
+        row2.addWidget(self.strike)
+        row2.addWidget(self._tool("x²", "ตัวยก", lambda: self._vertical(QTextCharFormat.AlignSuperScript)))
+        row2.addWidget(self._tool("x₂", "ตัวห้อย", lambda: self._vertical(QTextCharFormat.AlignSubScript)))
         row2.addWidget(self._tool("🎨", "สีตัวอักษร", self.color))
+        row2.addWidget(self._tool("🖍", "สีเน้นข้อความ (ไฮไลต์)", self.highlight))
         for text, tip, al in (("⯇", "ชิดซ้าย", Qt.AlignLeft), ("☰", "กึ่งกลาง", Qt.AlignHCenter),
                               ("⯈", "ชิดขวา", Qt.AlignRight), ("▤", "เต็มบรรทัด (กระจาย)", Qt.AlignJustify)):
             row2.addWidget(self._tool(text, tip, lambda _=False, a=al: self.page.setAlignment(a)))
         row2.addWidget(self._tool("⇥ ย่อหน้า", "เยื้องบรรทัดแรก 2.5 ซม. ตามระเบียบ", self.indent))
         row2.addWidget(self._tool("• รายการ", "รายการแบบสัญลักษณ์", self.bullets))
+        row2.addWidget(self._tool("1. ลำดับ", "รายการแบบตัวเลข", self.numbers))
+        self.spacing = QComboBox()
+        for label, v in (("ระยะบรรทัด 1.0", 100), ("1.15", 115), ("1.5", 150), ("2.0", 200)):
+            self.spacing.addItem(label, v)
+        self.spacing.setToolTip("ระยะห่างระหว่างบรรทัด")
+        self.spacing.activated.connect(lambda i: self.line_spacing(self.spacing.itemData(i)))
+        row2.addWidget(self.spacing)
         row2.addWidget(self._tool("🖼 รูป", "แทรกรูปภาพ", self.insert_image))
         row2.addWidget(self._tool("▦ ตาราง", "แทรกตาราง", self.insert_table))
         row2.addWidget(self._tool("๑๒๓ เลขไทย", "เปลี่ยนตัวเลขในส่วนที่เลือก (หรือทั้งเอกสาร) เป็นเลขไทย",
@@ -541,8 +618,252 @@ class DocEditor(QWidget):
             self.save_pdf(out.text())
 
     # -- formatting
-    def _merge(self, family=None, size=None, bold=None, italic=None, underline=None, color=None):
+    # -- the Word-like menus
+    def _menus(self):
+        mb = self.menu_bar
+
+        def add(menu, text, fn, key=None, tip=""):
+            a = QAction(text, self)
+            if key:
+                a.setShortcut(QKeySequence(key))
+                a.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            a.triggered.connect(lambda _=False: fn())
+            if tip:
+                a.setStatusTip(tip)
+            menu.addAction(a)
+            self.addAction(a)
+            return a
+        f = mb.addMenu("แฟ้ม")
+        add(f, "📄 สร้างใหม่", self.new, "Ctrl+N")
+        add(f, "📂 เปิด…", self.open, "Ctrl+O")
+        add(f, "💾 บันทึก", self.save, "Ctrl+S")
+        add(f, "💾 บันทึกเป็น…", lambda: self.save(as_new=True), "Ctrl+Shift+S")
+        add(f, "📑 บันทึกเป็น PDF…", self.save_pdf)
+        f.addSeparator()
+        add(f, "🖨 พิมพ์…", self.print_doc, "Ctrl+P")
+        e = mb.addMenu("แก้ไข")
+        add(e, "↶ เลิกทำ", lambda: self.page.undo(), "Ctrl+Z")
+        add(e, "↷ ทำซ้ำ", lambda: self.page.redo(), "Ctrl+Y")
+        e.addSeparator()
+        add(e, "✂ ตัด", lambda: self.page.cut(), "Ctrl+X")
+        add(e, "📋 คัดลอก", lambda: self.page.copy(), "Ctrl+C")
+        add(e, "📥 วาง", lambda: self.page.paste(), "Ctrl+V")
+        add(e, "📄 วางเฉพาะข้อความ", lambda: self.page.paste_plain())
+        e.addSeparator()
+        add(e, "เลือกทั้งหมด", lambda: self.page.selectAll(), "Ctrl+A")
+        add(e, "🔎 ค้นหา/แทนที่…", self.find_replace, "Ctrl+F")
+        add(e, "แทนที่…", self.find_replace, "Ctrl+H")
+        v = mb.addMenu("มุมมอง")
+        add(v, "ขยาย", lambda: self.page.zoomIn(1), "Ctrl+Alt+=")
+        add(v, "ย่อ", lambda: self.page.zoomOut(1), "Ctrl+Alt+-")
+        i = mb.addMenu("แทรก")
+        add(i, "🖼 รูปภาพ…", self.insert_image)
+        add(i, "▦ ตาราง…", self.insert_table)
+        add(i, "📅 วันที่วันนี้", self.insert_date)
+        add(i, "Ω สัญลักษณ์…", self.insert_symbol)
+        add(i, "⤓ ขึ้นหน้าใหม่", self.page_break, "Ctrl+Return")
+        add(i, "ตราครุฑ/ตราหน่วยงาน…", self.choose_garuda)
+        r = mb.addMenu("รูปแบบ")
+        add(r, "ตัวหนา", lambda: self._merge(bold=not self.bold.isChecked()), "Ctrl+B")
+        add(r, "ตัวเอียง", lambda: self._merge(italic=not self.italic.isChecked()), "Ctrl+I")
+        add(r, "ขีดเส้นใต้", lambda: self._merge(underline=not self.underline.isChecked()), "Ctrl+U")
+        add(r, "ขีดฆ่า", lambda: self._merge(strike=not self.page.currentCharFormat().fontStrikeOut()))
+        add(r, "ตัวยก", lambda: self._vertical(QTextCharFormat.AlignSuperScript), "Ctrl+Shift+=")
+        add(r, "ตัวห้อย", lambda: self._vertical(QTextCharFormat.AlignSubScript), "Ctrl+=")
+        r.addSeparator()
+        add(r, "🎨 สีตัวอักษร…", self.color)
+        add(r, "🖍 สีเน้นข้อความ…", self.highlight)
+        add(r, "ล้างรูปแบบ", self.clear_format, "Ctrl+Space")
+        r.addSeparator()
+        add(r, "ชิดซ้าย", lambda: self.page.setAlignment(Qt.AlignLeft), "Ctrl+L")
+        add(r, "กึ่งกลาง", lambda: self.page.setAlignment(Qt.AlignHCenter), "Ctrl+E")
+        add(r, "ชิดขวา", lambda: self.page.setAlignment(Qt.AlignRight), "Ctrl+R")
+        add(r, "กระจายเต็มบรรทัด", lambda: self.page.setAlignment(Qt.AlignJustify), "Ctrl+J")
+        sp = r.addMenu("ระยะบรรทัด")
+        for label, val in (("1.0", 100), ("1.15", 115), ("1.5", 150), ("2.0", 200)):
+            add(sp, label, lambda v=val: self.line_spacing(v))
+        add(r, "⇥ ย่อหน้า 2.5 ซม.", self.indent)
+        add(r, "• รายการสัญลักษณ์", self.bullets)
+        add(r, "1. รายการตัวเลข", self.numbers)
+        t = mb.addMenu("ตาราง")
+        add(t, "▦ แทรกตาราง…", self.insert_table)
+        add(t, "แทรกแถวด้านล่าง", lambda: self._table("row"))
+        add(t, "แทรกคอลัมน์ด้านขวา", lambda: self._table("col"))
+        add(t, "ลบแถว", lambda: self._table("delrow"))
+        add(t, "ลบคอลัมน์", lambda: self._table("delcol"))
+        add(t, "ผสานเซลล์ที่เลือก", lambda: self._table("merge"))
+        k = mb.addMenu("เครื่องมือ")
+        add(k, "๑๒๓ เปลี่ยนเป็นเลขไทย", self.to_thai_digits)
+        add(k, "123 เปลี่ยนเป็นเลขอารบิก", self.to_arabic_digits)
+        add(k, "นับคำและตัวอักษร", self.count_words)
+
+    def find_replace(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("ค้นหาและแทนที่")
+        form = QFormLayout(dlg)
+        what, by = QLineEdit(), QLineEdit()
+        cur = self.page.textCursor()
+        if cur.hasSelection():
+            what.setText(cur.selectedText())
+        form.addRow("ค้นหา", what)
+        form.addRow("แทนที่ด้วย", by)
+        note = QLabel("")
+        form.addRow(note)
+        row = QHBoxLayout()
+
+        def find_next():
+            if not self.page.find(what.text()):
+                c = self.page.textCursor()
+                c.movePosition(QTextCursor.Start)
+                self.page.setTextCursor(c)
+                note.setText("ค้นถึงท้ายเอกสารแล้ว — เริ่มจากต้นใหม่" if self.page.find(what.text()) else "ไม่พบข้อความ")
+            else:
+                note.setText("")
+
+        def replace_one():
+            c = self.page.textCursor()
+            if c.hasSelection() and c.selectedText() == what.text():
+                c.insertText(by.text())
+            find_next()
+
+        def replace_all():
+            n = self.replace_all(what.text(), by.text())
+            note.setText(f"แทนที่แล้ว {n} แห่ง")
+        for text, fn in (("ค้นหาถัดไป", find_next), ("แทนที่", replace_one), ("แทนที่ทั้งหมด", replace_all),
+                         ("ปิด", dlg.accept)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        form.addRow(row)
+        dlg.show()
+        self._find_dialog = dlg
+        return dlg
+
+    def replace_all(self, what: str, by: str) -> int:
+        if not what:
+            return 0
+        doc = self.page.document()
+        c = QTextCursor(doc)
+        c.beginEditBlock()
+        n = 0
+        found = doc.find(what, 0)
+        while not found.isNull():
+            found.insertText(by)
+            n += 1
+            found = doc.find(what, found.position())
+        c.endEditBlock()
+        return n
+
+    def highlight(self, color=None):
+        c = color or QColorDialog.getColor(QColor("#FFF200"), self, "สีเน้นข้อความ")
+        if c and c.isValid():
+            fmt = QTextCharFormat()
+            fmt.setBackground(c)
+            self._apply(fmt)
+
+    def _vertical(self, al):
         fmt = QTextCharFormat()
+        cur = self.page.currentCharFormat().verticalAlignment()
+        fmt.setVerticalAlignment(QTextCharFormat.AlignNormal if cur == al else al)
+        self._apply(fmt)
+
+    def clear_format(self):
+        cur = self.page.textCursor()
+        fmt = QTextCharFormat()
+        f = QFont(self.family)
+        f.setPointSizeF(saraban.SIZE_PT)
+        fmt.setFont(f)
+        cur.setCharFormat(fmt)
+        self.page.setCurrentCharFormat(fmt)
+
+    def _apply(self, fmt):
+        cur = self.page.textCursor()
+        if not cur.hasSelection():
+            cur.select(QTextCursor.WordUnderCursor)
+        cur.mergeCharFormat(fmt)
+        self.page.mergeCurrentCharFormat(fmt)
+        self.page.setFocus()
+
+    def line_spacing(self, percent):
+        cur = self.page.textCursor()
+        bf = QTextBlockFormat()
+        bf.setLineHeight(float(percent), 1)       # 1 = QTextBlockFormat.ProportionalHeight
+        cur.mergeBlockFormat(bf)
+
+    def numbers(self):
+        self.page.textCursor().createList(QTextListFormat.ListDecimal)
+
+    def page_break(self):
+        cur = self.page.textCursor()
+        cur.clearSelection()                       # never replace the selected words with the break
+        cur.insertBlock()
+        bf = cur.blockFormat()
+        bf.setPageBreakPolicy(QTextFormat.PageBreak_AlwaysBefore)
+        cur.setBlockFormat(bf)
+        self.page.setTextCursor(cur)
+
+    def insert_date(self):
+        import datetime as dt
+        d = dt.date.today()
+        months = ("มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม",
+                  "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม")
+        text = f"{d.day} {months[d.month - 1]} {d.year + 543}"
+        self.page.textCursor().insertText(saraban.thai_digits(text) if self.thai_num.isChecked() else text)
+
+    def insert_symbol(self):
+        syms = ["๏", "๚", "๛", "ฯ", "ๆ", "•", "–", "—", "…", "©", "®", "™", "°", "±", "×", "÷", "≤", "≥", "√",
+                "∑", "Ø", "²", "³", "½", "¼", "¾", "→", "←", "↑", "↓", "✓", "✗", "☐", "☑", "★", "※", "§", "¶", "฿"]
+        s, ok = QInputDialog.getItem(self, "แทรกสัญลักษณ์", "สัญลักษณ์", syms, 0, False)
+        if ok and s:
+            self.page.textCursor().insertText(s)
+
+    def _table(self, what):
+        cur = self.page.textCursor()
+        t = cur.currentTable()
+        if t is None:
+            QMessageBox.information(self, "ตาราง", "วางเคอร์เซอร์ในตารางก่อน")
+            return
+        cell = t.cellAt(cur)
+        r, c = cell.row(), cell.column()
+        if what == "row":
+            t.insertRows(r + 1, 1)
+        elif what == "col":
+            t.insertColumns(c + 1, 1)
+        elif what == "delrow":
+            t.removeRows(r, 1)
+        elif what == "delcol":
+            t.removeColumns(c, 1)
+        elif what == "merge":
+            t.mergeCells(cur)
+
+    def to_arabic_digits(self):
+        cur = self.page.textCursor()
+        if not cur.hasSelection():
+            cur.select(QTextCursor.Document)
+        table = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+        doc = self.page.document()
+        start, end = cur.selectionStart(), cur.selectionEnd()
+        c = QTextCursor(doc)
+        c.beginEditBlock()
+        for pos in range(start, end):
+            c.setPosition(pos)
+            c.setPosition(pos + 1, QTextCursor.KeepAnchor)
+            ch = c.selectedText()
+            if ch in "๐๑๒๓๔๕๖๗๘๙":
+                c.insertText(ch.translate(table), c.charFormat())
+        c.endEditBlock()
+
+    def count_words(self):
+        text = self.page.toPlainText()
+        chars = len(text.replace("\n", ""))
+        words = len(text.split())
+        QMessageBox.information(self, "นับคำ", f"ตัวอักษร {chars:,} ตัว · คำ (นับตามช่องว่าง) {words:,} คำ · "
+                                f"ย่อหน้า {self.page.document().blockCount():,} ย่อหน้า")
+
+    def _merge(self, family=None, size=None, bold=None, italic=None, underline=None, color=None, strike=None):
+        fmt = QTextCharFormat()
+        if strike is not None:
+            fmt.setFontStrikeOut(strike)
         if family:
             fmt.setFontFamilies([family])
         if size:
@@ -610,7 +931,10 @@ class DocEditor(QWidget):
         fmt.setCellPadding(4)
         fmt.setCellSpacing(0)
         fmt.setBorder(1)
-        self.page.textCursor().insertTable(3, 3, fmt)
+        cur = self.page.textCursor()
+        cur.clearSelection()
+        t = cur.insertTable(3, 3, fmt)
+        self.page.setTextCursor(t.cellAt(0, 0).firstCursorPosition())   # typing goes into the table
 
     def to_thai_digits(self):
         cur = self.page.textCursor()
