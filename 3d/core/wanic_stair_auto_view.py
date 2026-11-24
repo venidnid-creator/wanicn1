@@ -15,12 +15,45 @@ from core import wanic_stair_auto as SA
 
 
 class _Preview(QWidget):
-    """The ground floor's rooms and the stair, front at the bottom."""
+    """The ground floor's rooms and the stair, front at the bottom — drag
+    the stair to move it (snapped to 5 cm); ``moved(x, y)`` is called."""
 
     def __init__(self):
         super().__init__()
         self.setMinimumSize(360, 300)
         self.data, self.stair, self.s = None, None, None
+        self.moved = None
+        self._drag = None
+        self.setCursor(Qt.OpenHandCursor)
+        self.setToolTip("ลากบันไดเพื่อเลื่อนตำแหน่ง")
+
+    def _frame(self):
+        x0, y0, x1, y1 = SA.footprint(self.data)
+        m = 28.0
+        k = min((self.width() - 2 * m) / max(x1 - x0, 0.1), (self.height() - 2 * m) / max(y1 - y0, 0.1))
+        return x0, y0, m, k
+
+    def _model(self, pt):
+        x0, y0, m, k = self._frame()
+        return x0 + (pt.x() - m) / k, y0 + (self.height() - m - pt.y()) / k
+
+    def mousePressEvent(self, e):                     # noqa: N802 - Qt override
+        if self.stair and self.data:
+            x, y = self._model(e.position())
+            self._drag = (x - float(self.stair["x"]), y - float(self.stair["y"]))
+            self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseMoveEvent(self, e):                      # noqa: N802 - Qt override
+        if self._drag is None or not self.moved:
+            return
+        x, y = self._model(e.position())
+        nx = round((x - self._drag[0]) / 0.05) * 0.05
+        ny = round((y - self._drag[1]) / 0.05) * 0.05
+        self.moved(nx, ny)
+
+    def mouseReleaseEvent(self, _e):                  # noqa: N802 - Qt override
+        self._drag = None
+        self.setCursor(Qt.OpenHandCursor)
 
     def show_it(self, data, stair, s):
         self.data, self.stair, self.s = data, stair, s
@@ -35,8 +68,7 @@ class _Preview(QWidget):
         x0, y0, x1, y1 = SA.footprint(self.data)
         if x1 <= x0:
             return
-        m = 28.0
-        k = min((self.width() - 2 * m) / (x1 - x0), (self.height() - 2 * m) / (y1 - y0))
+        x0, y0, m, k = self._frame()
 
         def T(x, y):
             return QPointF(m + (x - x0) * k, self.height() - m - (y - y0) * k)
@@ -62,6 +94,14 @@ class _Preview(QWidget):
         w = [T(*q) for q in pl["walk"]]
         p.drawPolyline(QPolygonF(w))
         p.drawText(w[0] + QPointF(-14, 14), "ขึ้น")
+        for b in B.stair_beams(self.stair, self.s, 0.0):  # the stair beams, dashed
+            p.setPen(QPen(QColor("#2563EB"), 2.0, Qt.DashLine))
+            p.drawLine(T(*b["p0"][:2]), T(*b["p1"][:2]))
+        p.setPen(QPen(QColor("#2563EB"), 1))
+        p.setBrush(QColor("#2563EB"))
+        for c in B.stair_posts(self.stair, self.s, 0.0):
+            q = T(*c["p0"][:2])
+            p.drawRect(QRectF(q.x() - 3, q.y() - 3, 6, 6))
 
 
 class StairAutoDialog(QDialog):
@@ -121,17 +161,40 @@ class StairAutoDialog(QDialog):
         self.report.setMinimumWidth(380)
         left.addWidget(self.report, 1)
         row.addLayout(left, 1)
+        right = QVBoxLayout()
         self.preview = _Preview()
-        row.addWidget(self.preview, 1)
+        self.preview.moved = self.move_to
+        right.addWidget(self.preview, 1)
+        tools = QHBoxLayout()
+        for text, tip, fn in (("⟲ หมุน 90°", "หมุนบันไดรอบจุดกลาง", self.rotate),
+                              ("↕ กลับหัว-ท้าย", "สลับขั้นแรกกับชานพัก", self.flip),
+                              ("⇄ เลี้ยวซ้าย/ขวา", "ช่วงที่ 2 ไปอีกฟาก", self.swap_turn),
+                              ("↺ ตำแหน่งแนะนำ", "กลับไปตำแหน่งที่โปรแกรมออกแบบ", self.reset_place)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            tools.addWidget(b)
+        right.addLayout(tools)
+        self.advice = QLabel()
+        self.advice.setWordWrap(True)
+        right.addWidget(self.advice)
+        row.addLayout(right, 1)
         lay.addLayout(row, 1)
         btns = QHBoxLayout()
         btns.addStretch(1)
-        self.ok = QPushButton("🪜 สร้างบันได (ทุกชั้น)")
+        self.only_floor = False
+        floor = int(getattr(parent, "floor", 0) or 0)
+        self.floor = min(floor, max(len(data.get("floors") or []) - 2, 0))
+        self.one = QPushButton(f"🪜 สร้างเฉพาะชั้นนี้ (ชั้น {self.floor + 1}→{self.floor + 2})")
+        self.one.setToolTip("สร้างบันไดเฉพาะจากชั้นที่เปิดอยู่ขึ้นไปชั้นถัดไป")
+        self.one.clicked.connect(self._accept_one)
+        self.ok = QPushButton("🪜 สร้างทุกชั้น (ตำแหน่งเดียวกัน)")
         self.ok.setStyleSheet("font-weight:700")
         self.ok.setDefault(True)
         self.ok.clicked.connect(self.accept)
         no = QPushButton("ไม่ต้องการตอนนี้")
         no.clicked.connect(self.reject)
+        btns.addWidget(self.one)
         btns.addWidget(self.ok)
         btns.addWidget(no)
         lay.addLayout(btns)
@@ -143,6 +206,42 @@ class StairAutoDialog(QDialog):
     def where(self):
         return self.places[max(self.group.checkedId(), 0)]
 
+    def _accept_one(self):
+        self.only_floor = True
+        self.accept()
+
+    # -- moved / turned by hand: the design stays, the place changes
+    def move_to(self, x, y):
+        self.stair["x"], self.stair["y"] = x, y
+        self._redraw()
+
+    def rotate(self):
+        self.stair["dir"] = (int(self.stair.get("dir", 1)) + 1) % 4
+        self._redraw()
+
+    def flip(self):
+        self.stair["dir"] = (int(self.stair.get("dir", 1)) + 2) % 4
+        self._redraw()
+
+    def swap_turn(self):
+        self.stair["turn"] = "right" if self.stair.get("turn", "left") == "left" else "left"
+        self._redraw()
+
+    def reset_place(self):
+        self.update_view()
+
+    def _redraw(self):
+        s = self.rep["settings"]
+        checks = SA.check_place(self.data, self.stair, s)
+        good = all(ok for ok, _t in checks)
+        self.advice.setText("<br>".join(("✓ " if ok else "✗ ") + t for ok, t in checks))
+        self.advice.setStyleSheet(f"color:{'#065F46' if good else '#991B1B'};padding:6px;"
+                                  f"background:{'#ECFDF5' if good else '#FEF2F2'};border-radius:6px")
+        inside = checks[0][0]
+        self.ok.setEnabled(self.rep["fits"] and inside)
+        self.one.setEnabled(self.rep["fits"] and inside)
+        self.preview.show_it(self.data, self.stair, s)
+
     def update_view(self):
         self.stair, rep = SA.design(self.data, self.where(), self.width_box.currentData(), self.type_box.currentData())
         self.rep = rep
@@ -150,5 +249,4 @@ class StairAutoDialog(QDialog):
         self.report.setText("<br>".join(rep["lines"]))
         self.report.setStyleSheet(f"color:{color};padding:6px;background:{'#ECFDF5' if rep['ok'] else '#FEF2F2'};"
                                   "border-radius:6px")
-        self.ok.setEnabled(rep["fits"])
-        self.preview.show_it(self.data, self.stair, rep["settings"])
+        self._redraw()

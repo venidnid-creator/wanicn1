@@ -158,6 +158,53 @@ def apply(data, stair) -> int:
     return n
 
 
+def apply_one(data, stair, floor: int) -> int:
+    """The stair on one floor only (from ``floor`` up to the next) — «สร้าง
+    เฉพาะชั้นนี้»; the automatic stair already on that floor is replaced."""
+    floors = data.get("floors") or []
+    if not (0 <= floor < len(floors) - 1):
+        return 0
+    s = dict(data.get("settings") or {})
+    rs = settings_for(data, stair.get("type", "U"))
+    s["riser_max"], s["going"] = round(rs["riser_max"], 6), rs["going"]
+    data["settings"] = s
+    f = floors[floor]
+    keep = [x for x in f.get("stairs") or [] if not str(x.get("id", "")).startswith(AUTO_ID)]
+    f["stairs"] = keep + [dict(copy.deepcopy(stair), id=f"{AUTO_ID}{floor + 1}")]
+    return 1
+
+
+def check_place(data, stair, s) -> list:
+    """คำแนะนำการวาง: [(ok, text)] for a stair moved or turned by hand — inside
+    the building, a clear floor of one stair width in front of the first
+    step, the landing against an outside wall, no column inside it."""
+    x0, y0, x1, y1 = footprint(data)
+    lay = B.stair_layout(stair, s)
+    xs = [p[0] for p in lay["rect"]]
+    ys = [p[1] for p in lay["rect"]]
+    tol = 0.02
+    out = []
+    inside = min(xs) >= x0 - tol and max(xs) <= x1 + tol and min(ys) >= y0 - tol and max(ys) <= y1 + tol
+    out.append((inside, "อยู่ในอาคาร" if inside else "บันไดยื่นออกนอกอาคาร — เลื่อนเข้ามาในผัง"))
+    f0 = lay["flights"][0]
+    (fx, fy), (dx, dy) = f0["p0"], f0["d"]
+    w = lay["w"]
+    cx, cy = fx - dx * w, fy - dy * w                     # one width in front of the first step
+    clear = x0 - tol <= cx <= x1 + tol and y0 - tol <= cy <= y1 + tol
+    out.append((clear, f"มีพื้นว่างหน้าขั้นแรก {w:.2f} ม." if clear
+                else f"หน้าขั้นแรกต้องมีพื้นว่างอย่างน้อย {w:.2f} ม. — เลื่อน หรือ «กลับหัว-ท้าย»"))
+    if lay["landings"]:
+        lx = [p[0] for ld in lay["landings"] for p in ld["pts"]]
+        ly = [p[1] for ld in lay["landings"] for p in ld["pts"]]
+        on_wall = (min(lx) <= x0 + 0.3 or max(lx) >= x1 - 0.3 or min(ly) <= y0 + 0.3 or max(ly) >= y1 - 0.3)
+        out.append((on_wall, "ชานพักชิดผนังนอก (มาตรฐาน — มีหน้าต่างให้แสง)" if on_wall
+                    else "แนะนำ: ให้ชานพักชิดผนังด้านนอกอาคาร"))
+    cols = [(c["x"], c["y"]) for c in B.elements(data)["columns"] if c.get("floor", 0) == 0]
+    hit = [c for c in cols if min(xs) + 0.05 < c[0] < max(xs) - 0.05 and min(ys) + 0.05 < c[1] < max(ys) - 0.05]
+    out.append((not hit, "ไม่มีเสาในช่องบันได" if not hit else f"มีเสา {len(hit)} ต้นอยู่ในช่องบันได — เลื่อนบันไดหลบเสา"))
+    return out
+
+
 def needs_stairs(data) -> bool:
     """Two storeys or more and no stair on the ground floor yet."""
     floors = data.get("floors") or []

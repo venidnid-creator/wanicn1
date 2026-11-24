@@ -137,3 +137,20 @@ def test_four_storeys_ask_for_a_fire_escape_stair_and_the_rules_say_so():
     rules = " ".join(D.storey_rules(E))
     assert "บันไดหนีไฟ" in rules and "ฉบับที่ 39" in rules
     assert "บันไดหนีไฟ" not in " ".join(D.storey_rules(B.elements(_house(2))))
+
+
+def test_one_floor_and_hand_placement_advice():
+    """ค1: «สร้างเฉพาะชั้นนี้» puts the stair on one floor only; a stair
+    moved by hand is checked (inside, clear floor at the foot, the landing
+    on an outside wall, no column inside)."""
+    from core import wanic_stair_auto as SA
+    d = _house(3)                                                # three storeys
+    st, rep = SA.design(d, ("center", "front"))
+    assert SA.apply_one(d, st, 1) == 1
+    assert [bool(f.get("stairs")) for f in d["floors"]] == [False, True, False]
+    good = SA.check_place(d, st, rep["settings"])
+    assert all(ok for ok, _t in good), good
+    far = dict(st, x=st["x"] + 100.0)
+    assert not SA.check_place(d, far, rep["settings"])[0][0]       # outside the building
+    flipped = dict(st, dir=(st["dir"] + 2) % 4)
+    assert not all(ok for ok, _t in SA.check_place(d, flipped, rep["settings"]))
