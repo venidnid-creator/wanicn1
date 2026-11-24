@@ -522,9 +522,11 @@ def compute(data, gate: bool = False) -> dict:
         lay = B.stair_layout(e["st"], s)
         w = lay["w"]
         ts = float(s["stair_t"])
-        for f in lay["flights"]:
+        for fi, f in enumerate(lay["flights"]):
             nr, L, Hs = f["n"], f["L"], f["n"] * lay["R"]
-            sec = P.section_area("stair", dict(L=L * 1000, H=Hs * 1000, n=nr, t=ts * 1000))
+            fill = dict(d=ts * 1000 if f["z0"] > 1e-6 else 0.0,            # as the 3D model: full at the
+                        tl=0.0 if fi == len(lay["flights"]) - 1 else ts * 1000)   # landing joints
+            sec = P.section_area("stair", dict(L=L * 1000, H=Hs * 1000, n=nr, t=ts * 1000, **fill))
             vol += sec * w
             slope = math.hypot(L, Hs)
             area += slope * w + 2 * sec + nr * (Hs / nr) * w

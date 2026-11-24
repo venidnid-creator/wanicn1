@@ -163,13 +163,27 @@ def _stair(p):
     """A straight concrete flight seen from the side: ``n`` risers over a
     run ``L`` and a rise ``H``, with a waist ``t`` under the steps."""
     L, H, n, t = p["L"], p["H"], max(int(round(p["n"])), 2), p["t"]
+    # ``d``: the flight starts on a landing — its soffit runs on down to the
+    # landing's soffit (``d`` below the foot), the concrete full under the
+    # first steps; ``tl``: it ends at a landing of that thickness — the soffit
+    # turns level into the landing's soffit (no notch at either joint)
+    d, tl = float(p.get("d", 0.0) or 0.0), float(p.get("tl", 0.0) or 0.0)
     r, g = H / n, L / n
     pts = [(0.0, 0.0)]
     for i in range(n):
         pts += [(i * g, (i + 1) * r), ((i + 1) * g, (i + 1) * r)]
     m = H / L
     tv = t * math.sqrt(1 + m * m)
-    pts += [(L, H - tv), (tv / m, 0.0)]
+    xt = (H - tl + tv) / m                          # where the soffit meets the landing's soffit
+    if tl > 0 and xt < L - 1e-9:
+        pts += [(L, H - tl), (xt, H - tl)]
+    else:
+        pts += [(L, H - tv)]
+    if d > 0:
+        xb = max((tv - d) / m, 0.0)
+        pts += [(xb, -d), (0.0, -d)]
+    else:
+        pts += [(tv / m, 0.0)]
     # Drop repeated points (the first riser starts at x = 0).
     out = []
     for q in pts:
@@ -424,11 +438,19 @@ def validate(family: str, params: dict):
     return None
 
 
+#: optional parameters (mm) beside a family's listed ones — the stair's
+#: landing joints: ``d`` the drop at a foot on a landing, ``tl`` a landing at the top
+OPTIONAL = {"stair": ("d", "tl")}
+
+
 def profile_outline(family: str, params: dict):
     """``(outer, holes)`` in metres, outer CCW and holes CW, (u, v)."""
     fam = FAMILIES[family]
     p = {k: float(params[k]) / (1.0 if k in UNITLESS else 1000.0)
          for k, _ in fam["params"]}
+    for k in OPTIONAL.get(family, ()):              # optional lengths (mm) a family may read
+        if k in params:
+            p[k] = float(params[k]) / 1000.0
     outer, holes = fam["fn"](p)
     return _ccw(list(outer)), [_cw(list(h)) for h in holes]
 

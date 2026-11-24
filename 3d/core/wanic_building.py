@@ -2083,8 +2083,11 @@ def stair_members(stp, s, z) -> list:
         nx, ny = dy, -dx
         w, zz = f["w"], z + f["z0"]
         path = [(x - nx * w / 2, y - ny * w / 2, zz), (x + nx * w / 2, y + ny * w / 2, zz)]
+        last = i == len(lay["flights"]) - 1
+        fill = dict(d=_mm(t) if f["z0"] > 1e-6 else 0.0,      # on a landing: full down to its soffit
+                    tl=0.0 if last else _mm(t))                # into a landing: level with its soffit
         out.append(_member("structure", "stair", "บันได คสล.", "stair",
-                           dict(L=_mm(f["L"]), H=_mm(f["n"] * lay["R"]), n=f["n"], t=_mm(t)), path,
+                           dict(L=_mm(f["L"]), H=_mm(f["n"] * lay["R"]), n=f["n"], t=_mm(t), **fill), path,
                            anchor="bl", ifc="IfcStair",
                            name=f"{name} · ช่วงที่ {i + 1} ({f['n']} ลูกตั้ง)" if len(lay["flights"]) > 1
                            else "บันได คสล."))
