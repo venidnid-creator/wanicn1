@@ -352,3 +352,25 @@ def test_ceiling_only_on_the_top_floor():
         assert on == (e["floor"] == top or B.is_wet(e["room"])), (e["floor"], e["room"].get("name"))
     names = [ln["desc"] for ln in Q.compute(d)["lines"]]
     assert any("ท้องพื้น" in n and "ฉาบ" in n for n in names)
+
+
+def test_each_room_its_own_skirting():
+    """ค7: บัวเชิงผนังหลายแบบ — a type dragged onto a room is that room's (the
+    3D trim and the BOQ by type); «none» takes it off; the others keep the
+    house's when it is on."""
+    from core import wanic_building as B
+    from core import wanic_quantities as Q
+    from core import wanic_rc as R
+    d = B.default_data()
+    R.apply_grid(d, [4.0, 4.0, 4.0], [4.0], 1)
+    rooms = d["floors"][0]["rooms"]
+    rooms[0]["skirting"] = "granite"
+    rooms[1]["skirting"] = "none"
+    s = B.settings_of(d)
+    assert B.room_skirting(s, rooms[0]) == "granite" and B.room_skirting(s, rooms[1]) is None
+    descs = [ln["desc"] for ln in Q.compute(d)["lines"]]
+    assert any("หินแกรนิต" in t for t in descs)
+    d["settings"]["skirting"] = True
+    d["settings"]["skirting_type"] = "pvc"
+    descs = [ln["desc"] for ln in Q.compute(d)["lines"]]
+    assert any("หินแกรนิต" in t for t in descs) and any("พี วี ซี" in t for t in descs)

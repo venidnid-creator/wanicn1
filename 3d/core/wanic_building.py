@@ -1399,6 +1399,23 @@ SKIRTING_TYPES = {
     "cement": ("บัวเชิงผนังผิวซีเมนต์ขัดมันเรียบ สูง 4\"", "2.4.17", 0.10, 0.010, 41),
 }
 CORNICE = ("บัวฝ้า/ไม้มอบฝ้า สำเร็จรูป (ไม้เทียม) 2\"", "2.2.5b", 0.05, 0.02)
+#: บัวแต่ละแบบ: the colour in the plan and the 3D model
+SKIRTING_COLORS = {"ceramic": (0.82, 0.80, 0.76), "pvc": (0.95, 0.95, 0.93), "wood": (0.62, 0.45, 0.30),
+                   "granite": (0.35, 0.35, 0.38), "cement": (0.70, 0.70, 0.68)}
+
+
+def room_skirting(s, rm):
+    """บัวเชิงผนังของห้อง: the type dragged onto the room, else the house's
+    (when it is turned on); None = none. «none» on a room = none there."""
+    own = (rm or {}).get("skirting")
+    if own == "none":
+        return None
+    if own in SKIRTING_TYPES:
+        return own
+    if s.get("skirting"):
+        t = s.get("skirting_type", "ceramic")
+        return t if t in SKIRTING_TYPES else "ceramic"
+    return None
 
 
 def ceiling_type(s, room) -> str:
@@ -1628,13 +1645,14 @@ def trim_members(E):
         x0, y0, x1, y1 = room_inner(E, rm, k)
         rname = rm.get("name") or "ห้อง"
         for what in ("skirting", "cornice"):
-            if not s.get(what) or not _has_trim(E, rm, what, k):
+            sk = room_skirting(s, rm) if what == "skirting" else None
+            on = sk is not None if what == "skirting" else s.get(what)
+            if not on or not _has_trim(E, rm, what, k):
                 continue
             if what == "skirting":
-                name, _lab, h, t, _r = SKIRTING_TYPES.get(s.get("skirting_type", "ceramic"),
-                                                          SKIRTING_TYPES["ceramic"])
+                name, _lab, h, t, _r = SKIRTING_TYPES[sk]
                 z0 = k * H - (drop if is_wet(rm) else 0.0)
-                color = {"color": (0.82, 0.80, 0.76)}
+                color = {"color": SKIRTING_COLORS.get(sk, (0.82, 0.80, 0.76))}
             else:
                 name, _lab, h, t = CORNICE
                 z0 = ceiling_z(E, k) - 0.009 - h

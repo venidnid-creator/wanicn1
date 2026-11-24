@@ -849,11 +849,14 @@ def compute(data, gate: bool = False) -> dict:
                          mat_key="สีน้ำอะครีลิค ภายใน (ต่อ ตร.ม.)", lab_code="2.8.1a",
                          basis="เท่าพื้นที่ฉาบท้องพื้น", ref="สูตรวัสดุ 10.2 · ว480 2.8.1")
         # skirting / cornice (ปุ่มบัวผนัง)
-        if s.get("skirting"):
-            name, lab, _h, _t, rate = B.SKIRTING_TYPES.get(
-                s.get("skirting_type", "ceramic"), B.SKIRTING_TYPES["ceramic"])
-            L = sum(B.trim_length(E, e["room"], e["floor"]) for e in E["slabs"]
-                    if B._has_trim(E, e["room"], "skirting", e["floor"]))
+        # บัวเชิงผนัง by type (each room its own — dragged onto it — or the house's)
+        sk_len: dict = {}
+        for e in E["slabs"]:
+            sk = B.room_skirting(s, e["room"])
+            if sk and B._has_trim(E, e["room"], "skirting", e["floor"]):
+                sk_len[sk] = sk_len.get(sk, 0.0) + B.trim_length(E, e["room"], e["floor"])
+        for sk, L in sk_len.items():
+            name, lab, _h, _t, rate = B.SKIRTING_TYPES[sk]
             bill.add(g, name, L, "ม.", mat_key=f"{name} (วัสดุ)", lab=float(rate),
                      lab_code=lab, basis="รอบห้องตามผิวผนัง หักช่องประตู "
                                          "(ห้องที่บุกระเบื้องผนังสูง ≥ 1.20 ม. ไม่มีบัว)",

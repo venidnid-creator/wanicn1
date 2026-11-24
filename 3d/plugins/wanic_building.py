@@ -66,6 +66,31 @@ def axis_name(i: int) -> str:
     return out
 
 
+class _SkirtChip(QLabel):
+    """A skirting type to drag onto a room of the plan."""
+
+    def __init__(self, key, text):
+        super().__init__(text)
+        self.key = key
+        c = B.SKIRTING_COLORS.get(key, (1.0, 1.0, 1.0))
+        col = QColor.fromRgbF(*c)
+        fg = "#111827" if col.lightness() > 120 else "#FFFFFF"
+        self.setStyleSheet(f"background:{col.name()};color:{fg};border:1px solid #9CA3AF;"
+                           "border-radius:5px;padding:3px 7px;")
+        self.setToolTip("ลากไปวางบนห้องในผัง (ห้องที่เลือกไว้หลายห้อง: วางบนห้องใดห้องหนึ่ง)")
+        self.setCursor(Qt.OpenHandCursor)
+
+    def mousePressEvent(self, ev):               # noqa: N802 - Qt override
+        from PySide6.QtCore import QMimeData
+        from PySide6.QtGui import QDrag
+        drag = QDrag(self)
+        md = QMimeData()
+        md.setData(PlanCanvas.SKIRT_MIME, self.key.encode())
+        drag.setMimeData(md)
+        drag.setPixmap(self.grab())
+        drag.exec(Qt.CopyAction)
+
+
 class PlanCanvas(QWidget):
     """The plan of one floor, in metres (x right, y up)."""
 
@@ -83,6 +108,7 @@ class PlanCanvas(QWidget):
         self._band = None                       # rubber band (start, now)
         self._pan = None
         self._hover = None
+        self.setAcceptDrops(True)                # บัวเชิงผนัง dragged onto a room
 
     # ---- coordinates ------------------------------------------------------
     def _paint_symbol(self, p, op, seg, rooms, st, w, color):
@@ -138,6 +164,33 @@ class PlanCanvas(QWidget):
 
     def rooms(self):
         return self.panel.rooms()
+
+    SKIRT_MIME = "application/x-wanic-skirting"
+
+    def dragEnterEvent(self, ev):                # noqa: N802 - Qt override
+        if ev.mimeData().hasFormat(self.SKIRT_MIME):
+            ev.acceptProposedAction()
+
+    def dragMoveEvent(self, ev):                 # noqa: N802 - Qt override
+        if ev.mimeData().hasFormat(self.SKIRT_MIME):
+            x, y = self.to_world(ev.position())
+            rm = self.room_at(x, y)
+            self._hover = rm["id"] if rm else None
+            self.update()
+            ev.acceptProposedAction()
+
+    def dropEvent(self, ev):                     # noqa: N802 - Qt override
+        if not ev.mimeData().hasFormat(self.SKIRT_MIME):
+            return
+        key = bytes(ev.mimeData().data(self.SKIRT_MIME)).decode()
+        x, y = self.to_world(ev.position())
+        rm = self.room_at(x, y)
+        if rm is None:
+            self.panel.status.setText("วางบัวบนห้องในผัง — ปล่อยเมาส์ในห้องที่ต้องการ")
+            return
+        ids = self.selected_rooms() if self.is_selected(rm["id"]) else {rm["id"]}
+        self.panel.set_room_skirting(ids or {rm["id"]}, key)
+        ev.acceptProposedAction()
 
     def room_at(self, x, y):
         for rm in reversed(self.rooms()):
@@ -227,6 +280,12 @@ class PlanCanvas(QWidget):
             p.setPen(QPen(SEL if sel else ROOM_EDGE, 2.5 if sel else 1.5))
             p.setBrush(QColor(232, 119, 46, 40) if sel else ROOM)
             p.drawRect(r)
+            sk = B.room_skirting(B.settings_of(self.panel.data()), rm)
+            if sk:                                   # บัว: a coloured line inside the walls
+                c_ = B.SKIRTING_COLORS.get(sk, (0.8, 0.8, 0.8))
+                p.setPen(QPen(QColor.fromRgbF(*c_).darker(130), 3))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(r.adjusted(4, 4, -4, -4))
             p.setPen(NAVY)
             mark = B.slab_mark(lib, rm, self.panel.floor,
                                B.floor_lift(B.settings_of(self.panel.data())) >= 0.30)
@@ -2757,6 +2816,13 @@ class BuildingPanel(QWidget):
         sf.addRow("บัวผนัง", trim)
         combo("skirting_type", "ชนิดบัวเชิงผนัง",
               [(k, v[0]) for k, v in B.SKIRTING_TYPES.items()])
+        # บัวหลายแบบ: drag a chip onto a room in the plan (each room its own)
+        from views.tray import FlowLayout
+        chips = QWidget()
+        cl = FlowLayout(chips, spacing=3)
+        for key_, spec_ in list(B.SKIRTING_TYPES.items()) + [("none", ("ไม่มีบัว",))]:
+            cl.addWidget(_SkirtChip(key_, spec_[0].replace("บัวเชิงผนัง", "").split(" สูง")[0].strip() or spec_[0]))
+        sf.addRow("ลากไปวางในห้อง", chips)
         check("mep", "งานระบบตามห้อง: ไฟฟ้า ปรับอากาศ สุขาภิบาล ภายนอก (หมวด 1, 11–15)",
               "แอร์ในห้องนอน/ห้องนั่งเล่น (800/900 BTU ต่อ ตร.ม.) ติดใต้ฝ้า 15 ซม. · "
               "ดวงโคม 1 ชุด/9 ตร.ม. · เต้ารับ สวิตช์ ตู้ไฟ หลักดิน (วสท.) · ท่อประปา "
@@ -3262,6 +3328,18 @@ class BuildingPanel(QWidget):
             self.op_sill.setEnabled(t == "window")
             # a window opens outward, a door inward — as most are built
             self.op_swing.setCurrentIndex(self.op_swing.findData("out" if t == "window" else "in"))
+
+    def set_room_skirting(self, ids, key):
+        """บัวเชิงผนังของห้อง (dragged onto the plan): ``key`` a type, or «none»."""
+        d = self.data()
+        n = 0
+        for rm in d["floors"][self.floor]["rooms"]:
+            if rm["id"] in ids:
+                rm["skirting"] = key
+                n += 1
+        self._write(d)
+        name = "ไม่มีบัว" if key == "none" else B.SKIRTING_TYPES[key][0]
+        self.status.setText(f"{name} → {n} ห้อง — กด «สร้าง/อัปเดตโมเดล» เพื่อแสดงใน 3D (คิดใน BOQ แยกตามชนิด)")
 
     def _toggle_trim(self, key, on):
         if self._loading:
