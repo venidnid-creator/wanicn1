@@ -1056,7 +1056,8 @@ class RoadPanel(QWidget):
             return None
         fit = R.fit_centreline(self.shots, self._codes())
         dlg = CentreFitDialog(self, fit)
-        if ask and dlg.exec() != QDialog.Accepted:
+        # offline (tests, screenshots): no modal wait — applied as if «ใช้»
+        if ask and not os.environ.get("WANIC_OFFLINE") and dlg.exec() != QDialog.Accepted:
             return None
         self._before_fit = list(self.shots)
         self.shots = R.apply_fit(self.shots, fit)
