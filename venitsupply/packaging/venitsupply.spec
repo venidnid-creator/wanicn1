@@ -13,7 +13,7 @@ a = Analysis(
     pathex=[str(ROOT)],
     datas=[
         (str(ROOT / "venitsupply" / "data" / "*.csv"), "venitsupply/data"),
-        (str(ROOT / "venitsupply" / "data" / "*.json"), "venitsupply/data"),
+        (str(ROOT / "venitsupply" / "data" / "*.json"), "venitsupply/data"),  # มาตรฐานกำหนดตำแหน่ง + พนักงานจ้าง
         (str(ROOT / "venitsupply" / "data" / "README.md"), "venitsupply/data"),
         (str(ROOT / "assets" / "*"), "assets"),
     ],

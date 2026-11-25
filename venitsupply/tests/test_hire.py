@@ -314,10 +314,12 @@ def test_merge_structure_and_bundled_standards():
     out = s.ensure_manpower()
     tops = {d["name"]: d for d in s.divisions()}
     assert len(tops) == 7 and tops["กองคลัง"]["id"] == own and "คลัง" in tops["กองคลัง"]["aliases"]
-    assert out["standards"] == 1019 and s.ensure_manpower() == dict(units=0, positions=0, standards=0)   # ครั้งเดียว
+    assert out["standards"] == 1019 + 25                                        # + พนักงานจ้าง 8 ตำแหน่ง and s.ensure_manpower() == dict(units=0, positions=0, standards=0)   # ครั้งเดียว
     assert any(p["title"] == "ผู้อำนวยการกอง" for p in s.positions(own))                               # ของเดิมอยู่ครบ
     assert s.unit_analysis(own)["frame"] == 25                                                           # 24 + 1 ของเดิม
     assert s.standard_for("ผู้ช่วยเจ้าพนักงานพัสดุ") == "เจ้าพนักงานพัสดุ"
+    assert [r["duty"]["text"] for r in s.duty_rows("พนักงานขับรถยนต์")][0] == "ขับรถยนต์"
+    assert len(s.duty_rows("ผู้ดูแลเด็ก (ทักษะ)")) == 3 and s.duty_rows("พนักงานดับเพลิง (ภารกิจ)")
     assert not s.q("SELECT 1 FROM duties WHERE title LIKE 'นักบริหารงาน%'")       # ไม่ใช้สายบริหาร/อำนวยการ
     head = next(p for p in s.positions(own) if p["is_head"])
     a = s.position_analysis(head["id"])

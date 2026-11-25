@@ -526,18 +526,20 @@ class ManpowerMixin:
         ใส่ให้ตำแหน่งที่ยังไม่มีมาตรฐาน; ไม่แตะตำแหน่งที่เจ้าหน้าที่แก้ไว้แล้ว."""
         import json
         from pathlib import Path
-        p = Path(__file__).resolve().parent / "data" / "standards_maikhao.json"
-        if not p.exists():
-            return 0
+        entries = []
+        for name in ("standards_maikhao.json", "standards_employees.json"):   # ข้าราชการ/พนักงาน + พนักงานจ้าง
+            p = Path(__file__).resolve().parent / "data" / name
+            if p.exists():
+                entries += json.loads(p.read_text(encoding="utf-8"))
         n = 0
-        for e in json.loads(p.read_text(encoding="utf-8")):
+        for e in entries:
             title = base_title(e["title"])
             if not force and self.q("SELECT 1 FROM duties WHERE title=?", (title,)):
                 continue
             items = [(x["side"], x["text"]) for x in e["duties"]]
             if items:
-                n += self.import_standard(title, items, source=f"มาตรฐานกำหนดตำแหน่ง {e.get('code', '')} "
-                                                              "(เว็บไซต์ อบต.ไม้ขาว)")
+                n += self.import_standard(title, items, source=e.get("source") or
+                                          f"มาตรฐานกำหนดตำแหน่ง {e.get('code', '')} (เว็บไซต์ อบต.ไม้ขาว)")
         return n
 
     def merge_manpower(self, template=None) -> dict:
@@ -601,13 +603,13 @@ class ManpowerMixin:
         if self.setting("manpower_template") != "MAIKHAO_2570":
             out.update(self.merge_manpower())
             self.set_setting("manpower_template", "MAIKHAO_2570")
-        if self.setting("standards_loaded") != "2":
+        if self.setting("standards_loaded") not in ("3",):
             if self.setting("standards_loaded") == "1":       # รุ่น 2026.11.25.1 ใส่สายบริหาร/อำนวยการไว้ — ลบออก
                 for r in self.q("SELECT id FROM duties WHERE parent_id IS NULL AND (source LIKE 'มาตรฐานกำหนดตำแหน่ง 1%' "
                                 "OR source LIKE 'มาตรฐานกำหนดตำแหน่ง 2%')"):
                     self.delete_duty(r["id"])
             out["standards"] = self.load_bundled_standards()
-            self.set_setting("standards_loaded", "2")
+            self.set_setting("standards_loaded", "3")
         return out
 
     # ----------------------------------------------------- workload
