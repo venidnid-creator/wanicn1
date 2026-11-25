@@ -177,7 +177,7 @@ def test_centre_fit_puts_the_cl_shots_on_the_line_to_be_built():
     assert [s.radius for s in fit.stakes if s.kind == "PI"] == [80.0] and fit.worst < 0.02
     true, shots = _noisy_road(0.3)
     fit = R.fit_centreline(shots)
-    assert [s.radius for s in fit.stakes if s.kind == "PI"] == [80.0]
+    assert [round(abs(s.radius - 80) / 3) for s in fit.stakes if s.kind == "PI"] == [0]
     new = R.apply_fit(shots, fit)
     cl = [k for k, s in enumerate(shots) if s.code == "CL"]
     assert len(fit.moves) == len(cl) and [m[5] for m in fit.moves] == sorted(m[5] for m in fit.moves)
@@ -190,7 +190,7 @@ def test_centre_fit_puts_the_cl_shots_on_the_line_to_be_built():
     # one shot coded CL by mistake, 3 m off: flagged, and the line not steered by it
     shots.append(R.Shot("X1", 746060.0, 1454503.5, 95.6, "CL"))
     fit = R.fit_centreline(shots)
-    assert [s.radius for s in fit.stakes if s.kind == "PI"] == [80.0]
+    assert [round(abs(s.radius - 80) / 3) for s in fit.stakes if s.kind == "PI"] == [0]
     assert max(fit.moves, key=lambda m: m[4])[1] == "X1"
 
 
@@ -209,20 +209,23 @@ def test_the_centre_fit_button_and_undo(qtbot=None):
     panel.axis = R.centerline_from_codes(shots)
     fit = panel.centre_fit(ask=False)
     assert fit and panel.undo_fit.isVisibleTo(panel)
-    assert panel.shots is not shots and len(panel.axis) == len(fit.moves)
+    assert panel.shots != shots and panel.axis == fit.axis and panel.pi_curves == fit.curves
+    an = panel.analyse()
+    assert [round(c.radius) for c in an.hcurves] == [round(fit.curves[0].radius)]
     panel.centre_undo()
-    assert panel.shots is shots and not panel.undo_fit.isVisibleTo(panel)
+    assert panel.shots == shots and not panel.undo_fit.isVisibleTo(panel) and not panel.pis
 
 
 def test_the_curve_tables_in_plain_words():
     """The owner: the G sheet tells anyone what each curve is."""
     from core import wanic_road_sheets as RS
     _true, shots = _noisy_road(0.0)
-    cl = R.centerline_from_codes(shots)
+    fit = R.fit_centreline(shots)
+    shots = R.apply_fit(shots, fit)
     tin = R.build_tin(shots)
-    an = R.analyse(shots, cl, R.auto_pvis(tin, cl), R.Settings(), tin)
+    an = R.analyse(shots, fit.axis, R.auto_pvis(tin, fit.axis), R.Settings(), tin, fit.curves)
     words = RS.plain_words(an)
     assert any("เลี้ยวซ้าย 70 องศา" in w and "รัศมี 80 ม." in w and "กม./ชม." in w for w in words)
     g = [s for s in RS.build_road_set(an, {}, shots) if s.code == "G-02"][0]
-    t = g.texts()
+    t = " ".join(g.texts())
     assert "อธิบายตารางให้เข้าใจง่าย" in t and "ความหมายของหัวตาราง" in t

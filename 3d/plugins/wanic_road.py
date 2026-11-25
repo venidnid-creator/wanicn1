@@ -1060,8 +1060,8 @@ class RoadPanel(QWidget):
             return None
         self._before_fit = list(self.shots)
         self.shots = R.apply_fit(self.shots, fit)
-        self.axis = R.centerline_from_codes(self.shots, self._codes())
-        self.pis, self.pi_curves = [], []
+        # the fitted line itself: its PIs and radii, as a line through PI stakes
+        self.axis, self.pis, self.pi_curves = fit.axis, fit.stakes, fit.curves
         self.analysis = None
         self.undo_fit.setVisible(True)
         self.save()
@@ -1075,6 +1075,7 @@ class RoadPanel(QWidget):
             return
         self.shots, self._before_fit = self._before_fit, None
         self.axis = R.centerline_from_codes(self.shots, self._codes())
+        self.pis, self.pi_curves = [], []
         self.analysis = None
         self.undo_fit.setVisible(False)
         self.save()
