@@ -2662,14 +2662,16 @@ def footing_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
     sh.rect(*Q(-w / 2, -l_ / 2), *Q(w / 2, l_ / 2), "cut", 0.5)
     sh.rect(*Q(-b / 2, -b / 2), *Q(b / 2, b / 2), "column", 0.35)
     _brick_band(sh, Q(-b / 2, -b / 2), Q(b / 2, b / 2), 0.8)
-    mm = int((w - 2 * cov) / s_)                         # the mesh, dashed (under the concrete)
-    for i in range(mm + 1):
-        t_ = -w / 2 + cov + i * (w - 2 * cov) / max(mm, 1)
+    # the mesh, dashed (under the concrete): as many bars as the calc book, the BOQ and the cutting list
+    nx, ny = R.mesh_count(w, s_, cov), R.mesh_count(l_, s_, cov)
+    for i in range(nx):
+        t_ = -w / 2 + cov + i * (w - 2 * cov) / max(nx - 1, 1)
         sh.line(Q(t_, -l_ / 2 + cov), Q(t_, l_ / 2 - cov), "rebar", 0.1, True)
-        tl = -l_ / 2 + cov + i * (l_ - 2 * cov) / max(mm, 1)
+    for i in range(ny):
+        tl = -l_ / 2 + cov + i * (l_ - 2 * cov) / max(ny - 1, 1)
         sh.line(Q(-w / 2 + cov, tl), Q(w / 2 - cov, tl), "rebar", 0.1, True)
-    sh.text((Q(w / 2, 0)[0], Q(0, -l_ / 2)[1] - 5), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]}@{R.spacing(s_)} ม. 2 ทาง",
-            2.4, "right")
+    sh.text((Q(w / 2, 0)[0], Q(0, -l_ / 2)[1] - 5),
+            f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]}@{R.spacing(s_)} ม. 2 ทาง ({nx}×{ny} เส้น)", 2.4, "right")
     sh.rect(*Q(-w / 2 + cov, -l_ / 2 + cov), *Q(w / 2 - cov, l_ / 2 - cov), "rebar", 0.3)     # the ring bar
     import math as _m
     for p_ in pts:                                        # the piles: a hexagon with its circle (the original)

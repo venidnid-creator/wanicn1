@@ -227,6 +227,8 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - Owner rules (25 พ.ย. 69): drawings (PDF/DXF) show exactly what the calc book checked (`R.spacing`, `R.end_stirrups`,
   full bars as specified, footing bars as drawn); a changed model is calculated again, every item (`B.struct_stamp`,
   `B.recalc_all`, the orange banner, exports recalculate first).
+  One change updates all: bar counts come from `R.stirrup_count` / `R.mesh_count` in the calc book, the drawings,
+  the BOQ and the cutting list alike — never a local formula.
 - The start screen's «มีเวอร์ชันใหม่» window (`launcher/update_dialog.py`) downloads the installer (owner, 25 พ.ย. 69). Characters outside cp874 on sheets: map them in
   `D._DXF_SUB` (√ Δ ≥ as AutoCAD `\U+XXXX`).
 - WanicnDesign (the owner's other design program) lives on branch `claude/awesome-pasteur-y5g1in` in `design/WanicnDesign`.

@@ -99,7 +99,7 @@ def footing_rows(res_all, data, critical=False) -> list:
         need = math.ceil(As / bar.area) if bar else 0
         # the bars the drawing shows (the spacing in the settings): the calc book reports
         # those and fails the footing when they are fewer than needed — never more than drawn
-        nbar = (int(round((min(w, l) - 0.15) / bar.s)) + 1) if bar and bar.s else need
+        nbar = R.mesh_count(min(w, l), bar.s) if bar and bar.s else need
         phi = C.phi(b_, "shear") if b_["method"] == "SDM" else 1.0
         vf = 0.53 if b_["method"] == "SDM" else 0.29
         V1 = qu * min(w, l) * max(arm - d, 0.0)
@@ -120,7 +120,7 @@ def footing_rows(res_all, data, critical=False) -> list:
             wide = l if along_x else w
             As = max(_as_need(Mu, wide * 100, d * 100, bar, b_), 0.0018 * wide * 100 * t * 100)
             need = math.ceil(As / bar.area) if bar else 0
-            nbar = (int(round((wide - 0.15) / bar.s)) + 1) if bar and bar.s else need
+            nbar = R.mesh_count(wide, bar.s) if bar and bar.s else need
             V1, Vc1, V2, Vc2 = ck["V1"], ck["Vc1"], ck["V2"], ck["Vc2"]
             k = (ax_, ay_)
         piles = int(sp.get("piles") or 0)

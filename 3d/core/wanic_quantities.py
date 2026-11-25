@@ -354,7 +354,8 @@ def compute(data, gate: bool = False) -> dict:
         sp = S.parse_bar(f.get("bars", ""))
         if sp and sp[2]:
             _n, size, spc = sp
-            nx, ny = S.bar_count(l, spc), S.bar_count(w, spc)
+            from core import wanic_rc as RC_                # the calc book's and the drawings' count
+            nx, ny = RC_.mesh_count(l, spc), RC_.mesh_count(w, spc)
             bars([(size, (nx * w + ny * l) * cnt)])
         if int(f.get("piles") or 0) > 0:
             pile_n[mark] = pile_n.get(mark, 0) + int(f["piles"]) * cnt
@@ -464,7 +465,8 @@ def compute(data, gate: bool = False) -> dict:
                 bars([(sp[1], sp[0] * L)])
             tp = S.parse_bar(bm.get("stir", ""))
             if tp and tp[2]:
-                bars([(tp[1], S.bar_count(clear, tp[2]) * 2 * (b + h))])
+                from core import wanic_rc as RC_            # the calc book's count: closer over 2h at the ends
+                bars([(tp[1], RC_.stirrup_count(clear, bm) * 2 * (b + h))])
         if not vol:
             continue
         txt = "; ".join(f"{m}: {lib[m]['b']:g}×{lib[m]['h']:g}× ยาวสุทธิ "
@@ -502,7 +504,9 @@ def compute(data, gate: bool = False) -> dict:
                     bars([(sp[1], sp[0] * L)])
             tp = S.parse_bar(spec.get("stir" if key == "beams" else "tie", "") or "")
             if tp and tp[2]:
-                bars([(tp[1], S.bar_count(L, tp[2]) * 2 * (b + h))])
+                from core import wanic_rc as RC_
+                n_ = RC_.stirrup_count(L, spec) if key == "beams" else S.bar_count(L, tp[2])
+                bars([(tp[1], n_ * 2 * (b + h))])
         if vol:
             concrete(g_, title, vol, "; ".join(txt) + " (ยาวตามแนวจริง)")
             formwork(g_, title, area, "ท้อง + ข้าง 2 ด้าน" if key == "beams" else "รอบเสา")

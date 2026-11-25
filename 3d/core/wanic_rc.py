@@ -86,6 +86,28 @@ def end_stirrups(spec) -> tuple:
     return 2 * h, min(e, s)
 
 
+def stirrup_count(L: float, spec) -> int:
+    """Stirrups of a beam span of clear length ``L`` (m): closer over 2h at
+    each end (:func:`end_stirrups`), the spacing of the settings between —
+    one count for the calc book, the drawings, the BOQ and the cutting list."""
+    st = parse_bar(spec.get("stir"))
+    s = st.s if st and st.s else 0.15
+    zone, e = end_stirrups(spec)
+    zone = min(zone, L / 3)
+    mid = max(L - 2 * zone, 0.0)
+    return 2 * int(math.ceil(zone / e - 1e-9)) + int(math.ceil(mid / s - 1e-9)) + 1
+
+
+def mesh_count(width: float, s: float, cover: float | None = None) -> int:
+    """Bars of a footing mesh at spacing ``s`` across ``width`` inside the
+    cover — one count for the calc book, the drawings, the BOQ and the
+    cutting list."""
+    if not s or s <= 0:
+        return 0
+    cv = COVER["footing"] if cover is None else cover
+    return int(math.floor(max(width - 2 * cv, 0.0) / s + 1e-9)) + 1
+
+
 def parse_bar(text) -> Bar | None:
     """``"4-DB12"`` → Bar(DB, 12, n=4); ``"RB9@0.20"`` → Bar(RB, 9, s=0.20);
     ``None`` for text that is not a bar."""

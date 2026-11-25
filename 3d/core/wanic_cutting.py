@@ -101,7 +101,7 @@ def items(E) -> list:
                                          ("ตะแกรงล่าง แนว Y", sp.get("bars_y") or sp.get("bars"), l_, w)):
             bar = R.parse_bar(txt)
             if bar and bar.s:
-                n = int(math.floor(max(across - 2 * cv, 0) / bar.s)) + 1
+                n = R.mesh_count(across, bar.s, cv)          # as the calc book and the drawings
                 add("ฐานราก", f["mark"], label, bar, "งอขึ้น 2 ปลาย", span - 2 * cv + 2 * up, n)
         top = R.parse_bar(sp.get("top"))
         if top and top.s:
@@ -161,7 +161,8 @@ def items(E) -> list:
                     add("คาน", mark, "เหล็กล่าง (รายช่วง)", bot, "งอ 90° 2 ปลาย", L + 0.2 - 2 * cv + 2 * _hook(bot),
                         bot.n)
                 if stir and stir.s:
-                    add("คาน", mark, "เหล็กปลอก", stir, "ปลอกปิด ขอ 135°", _tie(stir, b, h, cv), int(L / stir.s) + 1)
+                    add("คาน", mark, "เหล็กปลอก", stir, "ปลอกปิด ขอ 135°", _tie(stir, b, h, cv),
+                        R.stirrup_count(L, sp))             # closer over 2h at the ends, as drawn
     # slabs: the mesh both ways, hooked
     cv = R.COVER["slab"]
     for s_ in E["slabs"]:

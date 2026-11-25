@@ -78,3 +78,40 @@ def test_the_drawings_show_what_the_calc_book_checked():
     zone, es = R.end_stirrups(lib["B1"])
     assert f"@{R.spacing(es)}" in t and f"2h = {zone:.2f}" in t
     assert not re.search(r"@0\.12(?!5)|@0\.17(?!5)|@0\.062", t)          # never rounded
+
+
+def test_one_change_updates_the_calc_the_drawings_the_boq_and_the_cutting_list():
+    """The owner (25 พ.ย. 69): «แก้ไข 1 จุด อัปเดตทั้งหมด» — one stirrup spacing or
+    footing mesh in the settings, and the calc book, the drawings, the BOQ and
+    the cutting list all count the same bars."""
+    from core import wanic_calc as C
+    from core import wanic_calc_cards as CC
+    from core import wanic_cutting as CU
+    from core import wanic_rc as R
+    d = R.apply_grid(B.default_data(), [4.0, 4.0], [4.0], 1)
+    lib = {k: dict(v) for k, v in B.elements(d)["lib"].items()}
+    lib["F1"].update(w=1.4, l=1.4, bars="DB12@0.125")
+    lib["GB1"].update(h=0.5, stir="RB6@0.20")
+    d["library"] = lib
+    E = B.elements(d)
+    cut = CU.items(E)
+    # footings: the calc book's bars = the cutting list's = the drawing's
+    n = R.mesh_count(1.4, 0.125)
+    assert all(r["nbar"] == n for r in CC.footing_rows(C.analyse(d), d) if r["mark"] == "F1")
+    nf = sum(1 for f in E["footings"] if f["mark"] == "F1")
+    assert {it.count // nf for it in cut if it.mark == "F1" and "ตะแกรง" in it.bar} == {n}     # per footing
+    t = " ".join(x for s in D.build_set(d, {"project": "x"}, ("S",)) for x in s.texts())
+    assert f"({n}×{n} เส้น)" in t
+    # beam stirrups: the closer ends counted alike by the cutting list and the BOQ
+    gb = [e for e in E["beams"] if e["mark"] == "GB1"]
+    spans = sorted({round(abs(e["p1"][0] - e["p0"][0]) + abs(e["p1"][1] - e["p0"][1]), 3) for e in gb})
+    want = sum(R.stirrup_count(L, lib["GB1"]) for L in spans)
+    got = [it for it in cut if it.mark == "GB1" and it.bar == "เหล็กปลอก"]
+    assert got and sum(it.count for it in got) >= want > sum(int(L / 0.20) + 1 for L in spans)
+    # one change: closer stirrups → more stirrups in the cutting list and more RB6 in the BOQ
+    from core import wanic_quantities as Q
+    kg = lambda dd: sum(ln["qty"] for ln in Q.priced(dd)["lines"] if "RB6" in str(ln.get("mat_key") or ""))  # noqa: E731
+    before_cut, before_kg = sum(it.count for it in got), kg(d)
+    d["library"]["GB1"]["stir"] = "RB6@0.15"
+    got2 = [it for it in CU.items(B.elements(d)) if it.mark == "GB1" and it.bar == "เหล็กปลอก"]
+    assert sum(it.count for it in got2) > before_cut and kg(d) > before_kg
