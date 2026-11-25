@@ -1293,6 +1293,17 @@ def analyse(data) -> dict:
         stairs = []
     for dz in stairs:
         out.extend(dz["members"])
+    # การทนไฟ (ข12): กฎกระทรวง 2566 ข้อ 22–24, ประกาศ มท. 2567 ตาราง 17 — the least sizes
+    try:
+        from core import wanic_fire as FI
+        for grp, mark, f_, _what, need, have, txt in FI.checks(data, R.COVER["column"]):
+            if grp == "cover":
+                continue                              # a note in the book (the cover is the detailing's)
+            out.append(Member(grp, f"{mark} ทนไฟ ชั้น {f_ + 1}",
+                              f"{'หนา' if grp == 'slab' else 'ด้านแคบ'} {have / 10:.0f} ซม.",
+                              f"ต้อง ≥ {need / 10:.0f} ซม. (ตาราง 17)", need / have if have else 9.9, txt))
+    except Exception:                                # noqa: BLE001 - never stops the rest
+        pass
     for m in out:
         if m.diagram is not None and m.qty:
             try:

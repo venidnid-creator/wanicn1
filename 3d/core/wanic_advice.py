@@ -320,6 +320,8 @@ def advice_by_member(res_all, data) -> dict:
                 tips = column_advice(m, data, b_)
             elif m.group == "roof":
                 tips = roof_advice(m, b_)
+            elif " ทนไฟ ชั้น " in m.name:
+                tips = [f"{m.name.split(' ')[0]}: {m.note} — กด «แก้ไขให้ผ่าน»"]
             elif m.group == "slab" and "พื้นสำเร็จรูป" in m.name:
                 mark = m.name.split(" ")[0]
                 tips = [f"{mark} (ขั้น 5 พื้น — พื้นสำเร็จรูป): กรอกค่ารับน้ำหนักเพิ่มและช่วงพาดสูงสุดจากตารางผู้ผลิต "
@@ -667,6 +669,15 @@ def member_fix(res_all, data, m) -> dict | None:
         tips = beam_advice(m, b_) if m.group == "beam" else column_advice(m, data, b_)
         ch = fixes[0][1] if fixes else {}
         return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}  # balanced in mark_fixes
+    if " ทนไฟ ชั้น " in m.name:                    # ตาราง 17: the least size for the rating
+        mark = m.name.split(" ")[0]
+        mm = re.search(r"ต้อง ≥ (\d+) ซม", m.capacity or "")
+        need = int(mm.group(1)) / 100 if mm else 0.0
+        sp = lib.get(mark, {})
+        ch = {"t": need} if m.group == "slab" else \
+            {k: max(float(sp.get(k, 0.2) or 0.2), need) for k in ("b", "h")}
+        return {"target": "lib", "key": mark, "kind": m.group, "changes": balanced_changes(sp, ch),
+                "advice": [f"{mark}: {m.note}"]}
     if m.group == "slab" and "พื้นสำเร็จรูป" in m.name:
         mark = m.name.split(" ")[0]
         return {"target": "lib", "key": mark, "kind": "slab", "changes": {},

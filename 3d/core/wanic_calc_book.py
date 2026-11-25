@@ -673,6 +673,28 @@ def column_pages(bk: Book, res_all, b_, fc):
                                               + ("ผ่าน" if ok else "ไม่ผ่าน")], ok, 5.0)
 
 
+def fire_page(bk, data):
+    """การทนไฟของโครงสร้างหลัก (กฎกระทรวง 2566 ข้อ 21–24, ประกาศ มท. 2567 ตาราง 17–18)."""
+    from core import wanic_calc as C_
+    from core import wanic_fire as FI
+    req = FI.requirements(data)
+    bk.page("การทนไฟของโครงสร้างหลัก (กฎกระทรวง 2566 ข้อ 21–24)", "Fire")
+    use = next((th for k, th, _l, _n in C_.OCCUPANCY if k == req["use"]), "ยังไม่ได้เลือกประเภทการใช้อาคาร")
+    lines = [f"ประเภทการใช้อาคาร: {use} · {req['storeys']} ชั้น · สูง {req['height']:.2f} ม. · "
+             f"พื้นที่รวม {req['area']:,.0f} ตร.ม."]
+    lines += (["ต้องมีอัตราการทนไฟ: " + " · ".join(req["reasons"])] if req["applies"] else [])
+    for f_, h in sorted(req["hours"].items(), reverse=True):
+        t_, c_ = FI.MIN_THICKNESS[h]
+        lines.append(f"ชั้น {f_ + 1}: ทนไฟ {h} ชม. — พื้นหนา ≥ {t_ / 10:.1f} ซม. · เสาด้านแคบ ≥ {c_ / 10:.0f} ซม. · "
+                     f"ระยะหุ้มเสา ≥ {FI.COVER_COLUMN[h]} มม.")
+    lines += req["notes"]
+    lines += [(f"✗ {x[1]} ชั้น {x[2] + 1}: " if x[1] else "หมายเหตุ ") + x[6] for x in FI.checks(data)]
+    y = 36
+    for ln in lines:
+        bk.text(12, y, 380, 6.5, ln, 5.6)
+        y += 7.5
+
+
 def list_page(bk: Book, title: str, tag: str, members):
     bk.page(title, tag)
     rows = [("ชิ้นส่วน", "แรงที่กระทำ", "แรงที่รับได้", "อัตราส่วน", "อธิบายง่าย")]
@@ -1039,6 +1061,7 @@ def _write(res_all, data, path, info, critical, starts) -> dict:
         from core.wanic_lateral_view import lateral_pages
         chapter("lateral")
         lateral_pages(bk, LT.analyse(data))
+    fire_page(bk, data)
     ms = res_all["members"]
     chapter("summary")
     list_page(bk, "สรุปผลการตรวจสอบทุกชิ้นส่วน", "Summary", ms)

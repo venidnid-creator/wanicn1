@@ -121,6 +121,30 @@ def design_footings(data, res) -> list:
             if counts.get(m)] + cf_lines
 
 
+def fire_sizes(data) -> list:
+    """The slabs and columns up to the least size of their fire rating
+    (ประกาศ มท. 2567 ตาราง 17) — only when the building needs a rating."""
+    from core import wanic_building as B
+    from core import wanic_fire as FI
+    lib = dict(data.get("library") or {})
+    full = B.library_of(data)
+    out = []
+    for grp, mark, f_, _w, need, _have, txt in FI.checks(data):
+        if grp not in ("slab", "column"):
+            continue
+        sp = dict(lib.get(mark) or {})
+        if grp == "slab":
+            sp["t"] = max(float(full[mark].get("t", 0.1)), need / 1000)
+        else:
+            for k in ("b", "h"):
+                sp[k] = max(float(full[mark].get(k, 0.2)), need / 1000)
+        lib[mark] = sp
+        out.append(f"{mark} (ทนไฟ): {txt}")
+    if out:
+        data["library"] = lib
+    return out
+
+
 def _combine(data, need, sizes, marks, loads, D_, b_, base, counts) -> list:
     """ฐานรากร่วม (ข12): the single footings that would overlap become one
     footing under both columns (CF1 …, alike ones share a mark)."""
@@ -271,7 +295,7 @@ def design(data, rounds: int = 8) -> dict:
     res = C.analyse(data)
     n = 0
     for n in range(1, rounds + 1):
-        for line in design_footings(data, res) + design_columns(data, C.analyse(data)):
+        for line in design_footings(data, res) + design_columns(data, C.analyse(data)) + fire_sizes(data):
             words[line.split(" ", 1)[0]] = line
         for line in AD.apply_mark_fixes(data, rounds=3):
             mk = line.split(" ", 1)[0]
