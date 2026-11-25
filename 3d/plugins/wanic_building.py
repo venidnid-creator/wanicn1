@@ -1308,6 +1308,9 @@ class BoqDialog(QDialog):
                  self.paste_prices),
                 ("🌐 เปิดเว็บราคาจังหวัด (สนค.)", P.PRICE_SITE,
                  self.open_price_site),
+                ("🗺 เติมราคาจังหวัดข้างเคียง เฉพาะที่ขาด",
+                 "รายการที่พาณิชย์จังหวัดไม่มีราคา ใช้ราคาที่จังหวัดที่มีพรมแดนติดกันประกาศ — "
+                 "เติมเฉพาะช่องที่ว่าง พร้อมหมายเหตุบอกจังหวัด", self.fill_neighbours),
                 ("🏛 เติมราคาส่วนกลาง (กรุงเทพฯ) เฉพาะที่ขาด",
                  "รายการที่พาณิชย์จังหวัดไม่มีราคา ใช้ราคาวัสดุก่อสร้างส่วนกลาง (กรุงเทพมหานคร) — "
                  "ที่ยังไม่มีอีกให้สืบราคาท้องถิ่นแล้วกรอกเอง", self.fill_central))):
@@ -1454,7 +1457,8 @@ class BoqDialog(QDialog):
                           else ""))
         left = len(Q.missing_lines(self.result))
         text += (f"<br><span style='background:#FDBA74;color:#7C2D12'>&nbsp;<b>ยังไม่มีราคา {left} รายการ "
-                 "(แถวสีส้ม)</b> — พาณิชย์จังหวัดไม่มี → กด «🏛 เติมราคาส่วนกลาง» แล้วสืบราคาท้องถิ่นกรอกเอง "
+                 "(แถวสีส้ม)</b> — พาณิชย์จังหวัดไม่มี → กด «🗺 เติมราคาจังหวัดข้างเคียง» แล้ว «🏛 ส่วนกลาง» "
+                 "ที่ยังขาดให้สืบราคาท้องถิ่นกรอกเอง "
                  "(ดับเบิลคลิกแถวสีส้ม) · ส่งออก ปร.1–ปร.4 ได้เมื่อครบ&nbsp;</span>" if left else
                  "<br><span style='color:#2E7D4F'><b>✓ ราคาครบทุกรายการ — ส่งออก ปร.1–ปร.4 ได้</b></span>")
         self.cover.setText(text)
@@ -1822,6 +1826,9 @@ class BoqDialog(QDialog):
                 where = f"พาณิชย์จ.{prov}" if prov else "ไฟล์พาณิชย์"
             elif where == "ส่วนกลาง":
                 where = "ราคาส่วนกลาง (กรุงเทพฯ)"
+            elif where == "ข้างเคียง":
+                nb_ = str((d.get("price_item") or {}).get(k, "")).split(":")[0]
+                where = f"{nb_} (ข้างเคียง)" if nb_ else "จังหวัดข้างเคียง"
             elif where == "กรอกเอง":
                 where = "ท้องตลาด"
             elif where == "สพฐ.":
@@ -2062,6 +2069,61 @@ class BoqDialog(QDialog):
                     self.tree.scrollToItem(ch)
                     return False
         return False
+
+    def fill_neighbours(self, auto=False):
+        """ง4: the materials the province's commerce office has no price of, from the
+        provinces bordering it — only the empty items, each with its province in the note
+        (the neighbour's saved book, or fetched online when there is none)."""
+        from core import wanic_province as P
+        d = self.panel.data()
+        prov = d.get("province") or ""
+        if not prov:
+            if not auto:
+                QMessageBox.information(self, TITLE, "เลือกจังหวัดที่ก่อสร้างก่อน")
+            return 0
+        from core import wanic_std2569 as S
+        keys = self._need_keys()
+        need = dict((self.result or {}).get("need") or {})
+        prices = dict(d.get("prices") or {})
+        src = dict(d.get("price_src") or {})
+        item = dict(d.get("price_item") or {})
+        n, used = 0, []
+        for nb in P.neighbours(prov):
+            if all(float(prices.get(k) or 0) for k in keys):
+                break
+            book = P.load_book(nb)
+            if book is None and not auto and not os.environ.get("WANIC_OFFLINE"):
+                try:
+                    items, month, _u = self._fetch_in_background(nb)
+                    got = P.match(items, keys, {k: need.get(k) or S.price_unit(k) for k in keys})
+                    book = {"prices": {k: v for k, (v, _nm) in got.items()}, "month": month,
+                            "item": {k: nm for k, (_v, nm) in got.items()}}
+                    P.save_book(nb, book["prices"], month, item=book["item"])
+                except P.FetchError:
+                    book = None
+            if not book:
+                continue
+            took = 0
+            for k, v in (book.get("prices") or {}).items():
+                if float(v or 0) > 0 and not float(prices.get(k) or 0):
+                    prices[k] = float(v)
+                    src[k] = "ข้างเคียง"
+                    nm = (book.get("item") or {}).get(k, "")
+                    item[k] = f"จ.{nb}" + (f": {nm}" if nm else "")
+                    took += 1
+            if took:
+                used.append(f"{nb} {took}")
+                n += took
+        if n:
+            d["prices"], d["price_src"], d["price_item"] = prices, src, item
+            self.panel._write(d)
+            self.recompute()
+            self._fill_prices()
+        if not auto:
+            self.panel.status.setText(
+                (f"เติมราคาจังหวัดข้างเคียง {n} รายการ ({', '.join(used)}) — เฉพาะช่องที่ว่าง หมายเหตุบอกจังหวัด"
+                 if n else "จังหวัดข้างเคียงไม่มีราคาของรายการที่ขาด (หรือยังไม่มีสมุดราคาในเครื่อง)"))
+        return n
 
     def fill_central(self, auto=False):
         """ราคาส่วนกลาง (กรุงเทพมหานคร) for the materials the province's

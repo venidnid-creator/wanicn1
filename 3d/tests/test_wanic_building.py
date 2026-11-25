@@ -570,3 +570,36 @@ def test_view_switches_by_kind_and_floor():
                  "พื้น ชั้น 2", "ผนัง ชั้น 1", "อะเส", "จันทัน", "อกไก่", "แป", "วัสดุมุงหลังคา"):
         assert want in labels, want
     assert labels.index("ฐานราก") < labels.index("เสา ชั้น 1") < labels.index("จันทัน") < labels.index("แป")
+
+
+def test_neighbouring_provinces_fill_only_the_empty_items(monkeypatch, tmp_path):
+    """ง4: a bordering province's price fills what the province has not, with a note."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core import wanic_province as P
+    from core import wanic_quantities as Q
+    from plugins.wanic_building import BoqDialog, BuildingPanel
+
+    monkeypatch.setenv("WANIC_PRICE_DIR", str(tmp_path / "books"))
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
+    assert "ขอนแก่น" in P.neighbours("อุดรธานี") and "อุดรธานี" in P.neighbours("ขอนแก่น")
+    assert all(p in P.NEIGHBOURS[q] for p in P.PROVINCES for q in P.NEIGHBOURS[p])     # symmetric
+    P.save_book("อุดรธานี", {"ทรายหยาบ": 600.0, "DB12": 25.0}, "ต.ค. 2569",
+                item={"DB12": "เหล็กข้ออ้อย SD40 12 มม."})
+    panel = BuildingPanel(_App(Scene()))
+    panel.place_room(1.5, 1.5)
+    d = panel.data()
+    d["province"] = "ขอนแก่น"
+    d["prices"], d["price_src"] = {"ทรายหยาบ": 530.0}, {"ทรายหยาบ": "พาณิชย์"}
+    panel._write(d)
+    dlg = BoqDialog(panel)
+    assert dlg.fill_neighbours() >= 1
+    d = panel.data()
+    assert d["prices"]["ทรายหยาบ"] == 530.0                        # the province's own stays
+    assert d["prices"]["DB12"] == 25.0 and d["price_src"]["DB12"] == "ข้างเคียง"
+    assert d["price_item"]["DB12"].startswith("จ.อุดรธานี")
+    db12 = next(ln for ln in Q.priced(d)["lines"] if ln["mat_key"] == "DB12")
+    assert "จังหวัดข้างเคียง" in db12["note"] and "อุดรธานี" in db12["note"]
+    # never saved into the province's own book
+    P.save_book("ขอนแก่น", d["prices"], src=d["price_src"])
+    assert "DB12" not in P.load_book("ขอนแก่น")["prices"]

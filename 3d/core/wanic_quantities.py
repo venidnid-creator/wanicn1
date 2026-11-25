@@ -1211,6 +1211,9 @@ def market_note(province: str, src, price: float, where: str = "",
     it came from, or that the province does not announce one."""
     if src == "พาณิชย์" and price:
         return f"ราคาพาณิชย์จ.{province}: {item}" if item else ""
+    if src == "ข้างเคียง" and price:
+        return (f"ไม่พบราคาที่จังหวัด{province}ประกาศ — ใช้ราคาพาณิชย์จังหวัดข้างเคียง"
+                + (f" ({item})" if item else ""))
     if src == "สพฐ." and price:
         return (f"ไม่พบราคาที่จังหวัด{province}ประกาศ — ใช้ราคาวัสดุ สพฐ."
                 + (f" ({item})" if item else ""))
