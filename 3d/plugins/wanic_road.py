@@ -1454,24 +1454,41 @@ class PavementDesignDialog(QDialog):
         right.addLayout(row)
         lay.addLayout(right, 1)
         self.f = {}
+        self.saved = saved
+        # 1. ข้อมูลโครงการ (จ ข้อ 32: the steps of a design, as กรมทางหลวง's THAI-PAVE lays them out)
+        info = dict(saved.get("info") or {})
+        gb = QGroupBox("1. ข้อมูลโครงการ")
+        gf = QFormLayout(gb)
         self.project = QLineEdit(saved.get("project", ""))
         self.project.setPlaceholderText("ชื่อโครงการ / สายทาง")
-        left.insertWidget(0, self.project)
         self.project.textChanged.connect(lambda _t: self.refresh())
+        gf.addRow("โครงการ / สายทาง", self.project)
+        self.info = {}
+        for key, th in (("designer", "ผู้ออกแบบ"), ("route", "หมายเลขทาง / ตอนควบคุม"),
+                        ("km", "กม. เริ่มต้น – สิ้นสุด")):
+            ed = QLineEdit(str(info.get(key, "")))
+            ed.textChanged.connect(lambda _t: self.refresh())
+            self.info[key] = ed
+            gf.addRow(th, ed)
+        left.insertWidget(0, gb)
 
-        # --- AI 1970 ---
-        w = QWidget()
-        form = QFormLayout(w)
+        # --- AI 1970: 2 จราจร · 3 ดินคันทาง · 4 วัสดุชั้นทาง ---
         ai = saved.get("ai", {})
+        steps = QTabWidget()
+        w, form = self._page(steps, "2. ข้อมูลจราจร")
         for key, label, lo, hi, dec, suf, dflt in (
                 ("idt", "IDT ปริมาณจราจรปีแรก (2 ทิศทาง)", 1, 500000, 0, " คัน/วัน", 1000),
                 ("heavy_pct", "ร้อยละรถบรรทุกหนัก 6 ล้อขึ้นไป (A)", 0.1, 100, 2, " %", 10),
                 ("lanes", "จำนวนช่องจราจร", 1, 12, 0, " ช่อง", 2),
                 ("gross_t", "น้ำหนักเฉลี่ยรถบรรทุกหนัก", 1, 60, 1, " ตัน", 21),
                 ("growth_pct", "อัตราเพิ่มปริมาณจราจร (r)", 0, 20, 2, " %", 5),
-                ("years", "อายุการออกแบบ (n)", 1, 40, 0, " ปี", 15),
-                ("cbr", "CBR ดินคันทาง (เปอร์เซ็นไทล์ 80)", 0.5, 100, 1, " %", 5)):
+                ("years", "อายุการออกแบบ (n)", 1, 40, 0, " ปี", 15)):
             form.addRow(label, self._spin(("ai", key), lo, hi, dec, suf, ai.get(key, dflt)))
+        self._classes(form, "ai", "idt", ai)
+        w, form = self._page(steps, "3. ดินคันทาง")
+        form.addRow("CBR ดินคันทาง (ค่าออกแบบ)", self._spin(("ai", "cbr"), 0.5, 100, 1, " %", ai.get("cbr", 5)))
+        self._cbr_tests(form, "ai", ai)
+        w, form = self._page(steps, "4. วัสดุชั้นทาง")
         self.ai_table = QComboBox()
         self.ai_table.addItem("ออกแบบชั้นทางอัตโนมัติ (ผิว AC + หินคลุก + รองพื้นทาง + คัดเลือก)", "auto")
         self.ai_table.addItem("ตรวจสอบชั้นทางตามตารางในแผง (ข้อ 3)", "table")
@@ -1482,24 +1499,30 @@ class PavementDesignDialog(QDialog):
                       "Substitution Ratio AC 1.0 · หินคลุก 2.0 · มวลรวม 2.7 · คัดเลือก ก 3.0 · ข 3.5</span>")
         note.setWordWrap(True)
         form.addRow(note)
-        self.tabs.addTab(w, "ถนนลาดยาง (AI 1970)")
+        self.tabs.addTab(steps, "ถนนลาดยาง (AI 1970)")
 
-        # --- Road Note 29 ---
-        w = QWidget()
-        form = QFormLayout(w)
+        # --- Road Note 29: 2 จราจร · 3 ดินคันทาง · 4 แผ่นคอนกรีต / วัสดุ ---
         rn = saved.get("rn", {})
         width = self.panel.spins["width"].value() if hasattr(self.panel, "spins") else 6.0
+        steps = QTabWidget()
+        w, form = self._page(steps, "2. ข้อมูลจราจร")
         for key, label, lo, hi, dec, suf, dflt in (
                 ("adt", "ปริมาณการจราจร ADT", 1, 500000, 0, " คัน/วัน", 500),
                 ("lanes", "จำนวนช่องจราจร", 1, 12, 0, " ช่อง", 2),
-                ("width", "ความกว้างผิวจราจร", 2, 60, 2, " ม.", width or 6.0),
                 ("heavy_pct", "ร้อยละรถบรรทุกหนักทั้งหมด", 0.1, 100, 2, " %", 10),
                 ("lt_pct", "ร้อยละรถบรรทุก 6 ล้อ (ของรถหนัก)", 0, 100, 1, " %", 70),
                 ("ht_pct", "ร้อยละรถบรรทุก 10 ล้อ (ของรถหนัก)", 0, 100, 1, " %", 30),
                 ("loaded_pct", "สัดส่วนรถบรรทุกที่บรรทุกของ (: รถเปล่า)", 0, 100, 0, " %", 100),
                 ("growth_pct", "Growth Rate (r)", 0, 20, 2, " %", 4),
-                ("years", "อายุการออกแบบ (n)", 1, 50, 0, " ปี", 20),
-                ("cbr", "Design CBR Subgrade", 0.5, 100, 1, " %", 4),
+                ("years", "อายุการออกแบบ (n)", 1, 50, 0, " ปี", 20)):
+            form.addRow(label, self._spin(("rn", key), lo, hi, dec, suf, rn.get(key, dflt)))
+        self._classes(form, "rn", "adt", rn)
+        w, form = self._page(steps, "3. ดินคันทาง")
+        form.addRow("Design CBR Subgrade", self._spin(("rn", "cbr"), 0.5, 100, 1, " %", rn.get("cbr", 4)))
+        self._cbr_tests(form, "rn", rn)
+        w, form = self._page(steps, "4. แผ่นคอนกรีต / วัสดุ")
+        for key, label, lo, hi, dec, suf, dflt in (
+                ("width", "ความกว้างผิวจราจร", 2, 60, 2, " ม.", width or 6.0),
                 ("slab_length", "ระยะรอยต่อตามขวาง (ยาวแผ่น)", 3, 30, 2, " ม.", 10),
                 ("lane_width", "ความกว้างแผ่น (ช่องจราจร)", 2, 6, 2, " ม.", 3.0),
                 ("chart_mm", "ความหนาที่อ่านจากกราฟเอง (0 = โปรแกรมอ่านให้)", 0, 400, 1, " มม.", 0),
@@ -1530,7 +1553,12 @@ class PavementDesignDialog(QDialog):
         self.rn_ct.setCurrentIndex(0 if rn.get("construction_traffic", True) else 1)
         self.rn_ct.currentIndexChanged.connect(lambda _i: self.refresh())
         form.addRow("ระหว่างก่อสร้าง", self.rn_ct)
-        self.tabs.addTab(w, "ถนน คสล. (Road Note 29)")
+        self.tabs.addTab(steps, "ถนน คสล. (Road Note 29)")
+        steps_note = QLabel("<span style='color:#6b7280;font-size:11px'>ขั้นตอน 1 ข้อมูลโครงการ → 2 จราจร → "
+                            "3 ดินคันทาง → 4 วัสดุ → 5 ผลการออกแบบ (ขวา) → 6 สรุปการออกแบบ → "
+                            "«✅ ใช้ผลการออกแบบ»</span>")
+        steps_note.setWordWrap(True)
+        left.addWidget(steps_note)
         # จ ข้อ 30: ถนนลาดยาง → AI 1970 only, ถนน คสล. → Road Note 29 only (the road type of the panel)
         idx = 1 if self.kind == "concrete" else 0
         self.tabs.setCurrentIndex(idx)
@@ -1540,6 +1568,86 @@ class PavementDesignDialog(QDialog):
         left.insertWidget(1, which)
         self.tabs.currentChanged.connect(lambda _i: self.refresh())
         self.refresh()
+
+    @staticmethod
+    def _page(steps, title):
+        w = QWidget()
+        form = QFormLayout(w)
+        steps.addTab(w, title)
+        return w, form
+
+    def _classes(self, form, tab, adt_key, saved):
+        """ปริมาณรถแยกประเภท → ADT and % heavy (or both typed in directly)."""
+        from PySide6.QtWidgets import QCheckBox, QGridLayout
+        box = QGroupBox("ปริมาณรถเฉลี่ยต่อวันแยกประเภท (คัน/วัน)")
+        box.setCheckable(True)
+        cls = dict(saved.get("classes") or {})
+        box.setChecked(bool(cls))
+        g = QGridLayout(box)
+        spins = {}
+        for i, (k, th, heavy) in enumerate(V.VEHICLES):
+            sp = QDoubleSpinBox()
+            sp.setRange(0, 500000)
+            sp.setDecimals(0)
+            sp.setValue(float(cls.get(k, 0)))
+            g.addWidget(QLabel(th + (" *" if heavy else "")), i // 2, (i % 2) * 2)
+            g.addWidget(sp, i // 2, (i % 2) * 2 + 1)
+            spins[k] = sp
+        g.addWidget(QLabel("<span style='color:#6b7280;font-size:11px'>* รถหนัก (คิด %HV)</span>"), 5, 0, 1, 4)
+
+        def push(*_a):
+            on = box.isChecked()
+            for key in (adt_key, "heavy_pct"):
+                self.f[(tab, key)].setEnabled(not on)
+            if on:
+                adt, hv = V.adt_from_classes({k: sp.value() for k, sp in spins.items()})
+                if adt > 0:
+                    self.f[(tab, adt_key)].setValue(adt)
+                    self.f[(tab, "heavy_pct")].setValue(max(hv, 0.1))
+            self.refresh()
+        for sp in spins.values():
+            sp.valueChanged.connect(push)
+        box.toggled.connect(push)
+        setattr(self, f"_{tab}_classes", (box, spins))
+        form.addRow(box)
+        push()
+
+    def _cbr_tests(self, form, tab, saved):
+        """CBR ของดินคันทางจากการทดสอบหลายจุด → the design CBR at the chosen percentile."""
+        box = QGroupBox("ผลทดสอบ CBR ดินคันทาง (ค่าละ 1 จุด) → CBR ออกแบบ")
+        v = QVBoxLayout(box)
+        t = QTableWidget(12, 1)
+        t.setHorizontalHeaderLabels(["CBR (%)"])
+        t.horizontalHeader().setStretchLastSection(True)
+        for r, x in enumerate((saved.get("cbr_tests") or [])[:12]):
+            t.setItem(r, 0, QTableWidgetItem(f"{float(x):g}"))
+        t.setMinimumHeight(170)
+        v.addWidget(t)
+        row = QHBoxLayout()
+        pc = QComboBox()
+        for x in (80, 85, 90, 95):
+            pc.addItem(f"เปอร์เซ็นไทล์ {x}", float(x))
+        pc.setCurrentIndex(max(0, pc.findData(float(saved.get("cbr_pct", 90)))))
+        btn = QPushButton("คำนวณ CBR ออกแบบ")
+        row.addWidget(pc)
+        row.addWidget(btn)
+        v.addLayout(row)
+
+        def go():
+            vals = []
+            for r in range(t.rowCount()):
+                it = t.item(r, 0)
+                try:
+                    vals.append(float(it.text())) if it and it.text().strip() else None
+                except ValueError:
+                    pass
+            c = V.design_cbr(vals, pc.currentData())
+            if c > 0:
+                self.f[(tab, "cbr")].setValue(round(c, 1))
+            self.refresh()
+        btn.clicked.connect(lambda _=False: _safe(self, go))
+        setattr(self, f"_{tab}_cbr", (t, pc))
+        form.addRow(box)
 
     def _spin(self, key, lo, hi, dec, suf, value):
         s = QDoubleSpinBox()
@@ -1622,6 +1730,10 @@ class PavementDesignDialog(QDialog):
         """The road's own data for the calculation sheet (and its PDF)."""
         p = self.panel
         out = []
+        for key, th in (("designer", "ผู้ออกแบบ"), ("route", "หมายเลขทาง / ตอนควบคุม"), ("km", "กม.")):
+            ed = getattr(self, "info", {}).get(key)
+            if ed is not None and ed.text().strip():
+                out.append((th, ed.text().strip()))
         try:
             sp = {k: float(w.value()) for k, w in p.spins.items()}
             an = getattr(p, "analysis", None)
@@ -1665,6 +1777,18 @@ class PavementDesignDialog(QDialog):
                 "ai": {k: float(w.value()) for (t, k), w in self.f.items() if t == "ai"},
                 "rn": {k: float(w.value()) for (t, k), w in self.f.items() if t == "rn"}}
         data["ai"]["source"] = self.ai_table.currentData()
+        data["info"] = {k: ed.text() for k, ed in getattr(self, "info", {}).items()}
+        for tab in ("ai", "rn"):
+            cl = getattr(self, f"_{tab}_classes", None)
+            if cl and cl[0].isChecked():
+                data[tab]["classes"] = {k: sp.value() for k, sp in cl[1].items()}
+            cb = getattr(self, f"_{tab}_cbr", None)
+            if cb:
+                t, pc = cb
+                data[tab]["cbr_tests"] = [float(t.item(r, 0).text()) for r in range(t.rowCount())
+                                          if t.item(r, 0) and t.item(r, 0).text().strip()
+                                          .replace(".", "", 1).isdigit()]
+                data[tab]["cbr_pct"] = pc.currentData()
         data["rn"].update({"subbase_kind": str(self.rn_sub.currentData()),
                            "fs": float(self.rn_steel.currentData()),
                            "reinforced": bool(self.rn_kind.currentData()),

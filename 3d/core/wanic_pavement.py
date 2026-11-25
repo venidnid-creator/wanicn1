@@ -878,3 +878,41 @@ def summary_html(s: dict, width: float = 0.0, shoulder: float = 0.0, length: flo
     h.append("<p><i>โมเดล 3 มิติ แบบรูปตัด และปริมาณงานใช้ชั้นทางตามตารางนี้ทุกขั้นตอน "
              "(ปริมาณจริงคิดจากรูปตัดทุกสถานี) — ยังไม่มีข้อ 6 จะสร้างโมเดลไม่ได้</i></p>")
     return "".join(h)
+
+
+# ---------------------------------------------------------------------------
+# จ ข้อ 32 — the steps of a pavement design (the workflow of กรมทางหลวง's THAI-PAVE,
+# คู่มือ 2556): the traffic by vehicle class, the design CBR from the tests
+# ---------------------------------------------------------------------------
+
+#: the vehicle classes counted (key, Thai name, heavy?) — heavy: the medium / heavy buses and the
+#: trucks of 6 wheels and more, trailers (the %HV of the design)
+VEHICLES = (("car", "รถยนต์นั่ง ≤ 7 คน", False), ("van", "รถยนต์นั่ง > 7 คน", False),
+            ("lb", "รถโดยสารขนาดเล็ก", False), ("mb", "รถโดยสารขนาดกลาง", True),
+            ("hb", "รถโดยสารขนาดใหญ่", True), ("lt", "รถบรรทุกขนาดเล็ก (4 ล้อ)", False),
+            ("mt", "รถบรรทุก 6 ล้อ", True), ("ht", "รถบรรทุก 10 ล้อ", True),
+            ("ft", "รถพ่วง", True), ("st", "รถกึ่งพ่วง", True))
+
+
+def adt_from_classes(counts: dict) -> tuple:
+    """(ADT vehicles a day, % heavy) from the counts by class."""
+    adt = sum(float(counts.get(k) or 0) for k, _n, _h in VEHICLES)
+    heavy = sum(float(counts.get(k) or 0) for k, _n, h in VEHICLES if h)
+    return adt, (100.0 * heavy / adt if adt else 0.0)
+
+
+def design_cbr(values, percentile: float = 90.0) -> float:
+    """The design CBR from the subgrade tests: the value that ``percentile`` % of
+    the tests reach or pass (linear between the tests)."""
+    v = sorted((float(x) for x in values if x is not None and float(x) > 0), reverse=True)
+    if not v:
+        return 0.0
+    n = len(v)
+    pts = [(100.0 * (i + 1) / n, c) for i, c in enumerate(v)]     # (% ≥ c, c)
+    p = max(0.0, min(100.0, float(percentile)))
+    if p <= pts[0][0]:
+        return pts[0][1]
+    for (p0, c0), (p1, c1) in zip(pts, pts[1:]):
+        if p0 <= p <= p1:
+            return c0 + (c1 - c0) * (p - p0) / (p1 - p0) if p1 > p0 else c1
+    return pts[-1][1]

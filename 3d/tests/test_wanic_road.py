@@ -540,3 +540,40 @@ def test_the_site_map_in_the_exported_pdf(tmp_path, monkeypatch):
     assert "สระบุรี" in " ".join(loc.texts()) and "Google Earth Pro" in " ".join(loc.texts())
     assert out and open(out[0], "rb").read(5) == b"%PDF-"
     assert os.path.getsize(out[0]) > 20000                                 # the picture is in it
+
+
+def test_pavement_design_steps_traffic_by_class_and_design_cbr():
+    """จ ข้อ 32 (คู่มือ THAI-PAVE กรมทางหลวง): ADT and %HV from the counts by class, the design CBR
+    from the tests at a percentile — the manual's own examples."""
+    from core import wanic_pavement as V
+    adt, hv = V.adt_from_classes(dict(car=1816, van=200, lb=138, mb=500, hb=58, lt=1690, mt=376, ht=141,
+                                      ft=457, st=89))
+    assert adt == 5465 and hv == pytest.approx(29.66, abs=0.01)
+    assert V.design_cbr([8, 6, 5, 4, 3, 7, 9, 10, 4, 5], 90) == pytest.approx(4.0)
+    assert V.design_cbr([5], 80) == 5 and V.design_cbr([], 90) == 0
+
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core.scene import Scene
+    from plugins.wanic_road import PavementDesignDialog, RoadPanel
+    from tests.test_wanic_buttons import _App
+    panel = RoadPanel(_App(Scene(), "wanic_road"))
+    panel.pavement.setCurrentIndex(panel.pavement.findData("drr-ac"))
+    dlg = PavementDesignDialog(panel)
+    box, spins = dlg._ai_classes
+    box.setChecked(True)
+    for k, n in (("car", 14567), ("van", 1100), ("hb", 2345), ("lt", 5432), ("mt", 3900), ("ht", 2678)):
+        spins[k].setValue(n)
+    assert dlg.f[("ai", "idt")].value() == 30022 and not dlg.f[("ai", "idt")].isEnabled()
+    assert dlg.f[("ai", "heavy_pct")].value() == pytest.approx(29.72, abs=0.01)
+    t, pc = dlg._ai_cbr
+    from PySide6.QtWidgets import QTableWidgetItem
+    for r, x in enumerate((8, 6, 5, 4, 3, 7, 9, 10, 4, 5)):
+        t.setItem(r, 0, QTableWidgetItem(str(x)))
+    pc.setCurrentIndex(pc.findData(90.0))
+    from PySide6.QtWidgets import QPushButton
+    next(b for b in t.parent().findChildren(QPushButton) if "CBR" in b.text()).click()
+    assert dlg.f[("ai", "cbr")].value() == pytest.approx(4.0)
+    dlg.info["designer"].setText("ผู้ออกแบบทดสอบ")
+    assert "ผู้ออกแบบทดสอบ" in dlg.view.toPlainText()
+    assert panel.pave_design["ai"]["classes"]["car"] == 14567 and panel.pave_design["ai"]["cbr_pct"] == 90.0
