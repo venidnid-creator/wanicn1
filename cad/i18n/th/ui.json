@@ -2108,5 +2108,11 @@
   "PDF import needs PyMuPDF (pip install pymupdf).": "การนำเข้า PDF ต้องมี PyMuPDF (pip install pymupdf)",
   "1:1 (paper millimetres)": "1:1 (มิลลิเมตรบนกระดาษ)",
   "The drawing's scale in the PDF:": "มาตราส่วนของแบบใน PDF:",
-  "PDF page {page}: {lines} lines, {plines} polylines, {texts} texts → {name}": "PDF หน้า {page}: เส้น {lines} · เส้นต่อเนื่อง {plines} · ข้อความ {texts} → {name}"
+  "PDF page {page}: {lines} lines, {plines} polylines, {texts} texts → {name}": "PDF หน้า {page}: เส้น {lines} · เส้นต่อเนื่อง {plines} · ข้อความ {texts} → {name}",
+  "Paper Frame A0-A4 (Venit font)...": "กรอบกระดาษ A0–A4 (ฟอนต์เวนิช)...",
+  "Project": "โครงการ",
+  "Sheet title": "ชื่อแผ่น",
+  "Sheet No.": "แผ่นที่",
+  "Paper": "กระดาษ",
+  "Paper frame {size} at 1:{scale} inserted at 0,0 — ATTEDIT fills its fields.": "แทรกกรอบกระดาษ {size} มาตราส่วน 1:{scale} ที่ 0,0 แล้ว — แก้ข้อความในตารางด้วย ATTEDIT"
 }

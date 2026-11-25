@@ -1591,6 +1591,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                  icon=False)
         # ฉ2 (WANICNSURVEY): a vector PDF back into editable lines and text
         item(insert_menu, tr("PDF Import (Vector to DXF)..."), self._pdf_import)
+        # ฉ3: the A0–A4 sheet frames with their title block, in the «เวนิช» font
+        item(insert_menu, tr("Paper Frame A0-A4 (Venit font)..."), self._paper_frame)
         insert_menu.addSeparator()
         # Classic AutoCAD: Insert > Layout.
         layout_menu = insert_menu.addMenu(tr("Layout"))
@@ -7012,6 +7014,56 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         if res.notes:
             QMessageBox.information(self, tr("PDF Import"), msg)
         return res.path
+
+    def _paper_frame(self, size=None, scale=None, portrait=False, values=None):
+        """ฉ3: an A0–A4 frame and title block (core.paper_blocks) inserted at
+        0,0 at the drawing's scale, the fields as attributes (ATTEDIT)."""
+        from core import paper_blocks as PB
+        from core.actions import AddEntityCommand
+        if self.document is None:
+            return None
+        if size is None:
+            from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+                                           QLineEdit)
+            dlg = QDialog(self)
+            dlg.setWindowTitle(tr("Paper Frame A0-A4 (Venit font)..."))
+            f = QFormLayout(dlg)
+            sz = QComboBox()
+            sz.addItems(list(PB.SIZES))
+            sz.setCurrentText("A3")
+            orient = QComboBox()
+            orient.addItems([tr("Landscape"), tr("Portrait")])
+            sc = QComboBox()
+            sc.addItems([f"1:{n}" for n in (1, 20, 25, 50, 100, 200, 250, 500, 1000)])
+            sc.setCurrentText("1:100")
+            fields = {}
+            for tag, label in (("PROJECT", tr("Project")), ("TITLE", tr("Sheet title")), ("SHEET", tr("Sheet No."))):
+                fields[tag] = QLineEdit()
+                f.addRow(label, fields[tag])
+            f.insertRow(0, tr("Paper"), sz)
+            f.insertRow(1, tr("Orientation"), orient)
+            f.insertRow(2, tr("Scale"), sc)
+            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            bb.accepted.connect(dlg.accept)
+            bb.rejected.connect(dlg.reject)
+            f.addRow(bb)
+            if dlg.exec() != QDialog.Accepted:
+                return None
+            size, portrait = sz.currentText(), orient.currentIndex() == 1
+            scale = float(sc.currentText().split(":")[1])
+            values = {k: e.text() for k, e in fields.items() if e.text().strip()}
+        doc = self.document.doc
+        cmd = AddEntityCommand(
+            "PAPERFRAME", lambda space: PB.insert(doc, size, (0.0, 0.0), float(scale or 1), portrait,
+                                                  values, space), layer=PB.LAYER)
+        self.history.execute(cmd)
+        self.regen_in_memory(zoom_after=True)
+        try:
+            self.command_line.echo(tr("Paper frame {size} at 1:{scale} inserted at 0,0 — ATTEDIT fills its fields.",
+                                      size=size, scale=f"{float(scale or 1):g}"))
+        except Exception:                                         # noqa: BLE001
+            pass
+        return cmd.entity
 
     def open_paths(self, paths) -> None:
         """Several drawings, each in a tab of its own, one after another --

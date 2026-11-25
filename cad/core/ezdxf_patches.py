@@ -53,6 +53,7 @@ def apply() -> None:
     _patch_linetype_dots()
     _patch_thai_font_fallback()
     _patch_caret_decode()
+    _register_bundled_fonts()
 
 
 def dms_text(degrees: float, dimadec: int, dimdsep: str = ".",
@@ -1943,3 +1944,20 @@ def _patch_thai_font_fallback() -> None:
 
     for name in ("get_text_path", "get_text_glyph_paths", "get_text_line_width"):
         setattr(UnifiedTextRenderer, name, wrap(getattr(UnifiedTextRenderer, name)))
+
+
+
+def _register_bundled_fonts() -> None:
+    """ฉ3 (WANICNSURVEY): the fonts shipped with the program — «เวนิช»
+    (Venit, from Charm, OFL) — found by name like an installed font, so a
+    text style that names Venit-Regular.ttf draws in it on any machine."""
+    from ezdxf.fonts import fonts as _fonts
+
+    try:
+        from core.paths import app_root
+        folder = app_root() / "resources" / "fonts"
+        if folder.is_dir() and not getattr(_fonts.font_manager, "_wanic_bundled", False):
+            _fonts.font_manager.scan_folder(folder)
+            _fonts.font_manager._wanic_bundled = True
+    except Exception:                                   # noqa: BLE001 — never stop the program for a font
+        pass

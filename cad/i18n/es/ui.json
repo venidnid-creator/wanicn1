@@ -2327,5 +2327,11 @@
   "PDF import needs PyMuPDF (pip install pymupdf).": "Importar PDF necesita PyMuPDF (pip install pymupdf).",
   "1:1 (paper millimetres)": "1:1 (milímetros de papel)",
   "The drawing's scale in the PDF:": "Escala del dibujo en el PDF:",
-  "PDF page {page}: {lines} lines, {plines} polylines, {texts} texts → {name}": "PDF página {page}: {lines} líneas, {plines} polilíneas, {texts} textos → {name}"
+  "PDF page {page}: {lines} lines, {plines} polylines, {texts} texts → {name}": "PDF página {page}: {lines} líneas, {plines} polilíneas, {texts} textos → {name}",
+  "Paper Frame A0-A4 (Venit font)...": "Marco de papel A0-A4 (fuente Venit)...",
+  "Project": "Proyecto",
+  "Sheet title": "Título del plano",
+  "Sheet No.": "N.º de plano",
+  "Paper": "Papel",
+  "Paper frame {size} at 1:{scale} inserted at 0,0 — ATTEDIT fills its fields.": "Marco {size} a 1:{scale} insertado en 0,0 — ATTEDIT rellena sus campos."
 }
