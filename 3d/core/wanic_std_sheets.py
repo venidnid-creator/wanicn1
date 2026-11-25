@@ -18,6 +18,7 @@ from __future__ import annotations
 from core import wanic_building as B
 from core import wanic_catalog as CAT
 from core import wanic_drawings as D
+from core import wanic_rc as R
 
 ROW = 6.2                     # the standard's ruled row (mm on A3)
 HEAD = 8.0
@@ -2304,7 +2305,7 @@ def _bar_th(text) -> str:
     """«8-DB12» → «8 DB12 มม.», «RB6@0.15» → «ป. RB6 มม.@0.15»."""
     n, name, _d, s_ = D._bars(text)
     if s_:
-        return f"ป. {name} มม.@{s_:.2f}"
+        return f"ป. {name} มม.@{R.spacing(s_)}"
     return f"{n} {name} มม." if n else str(text or "")
 
 
@@ -2613,7 +2614,7 @@ def footing_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
     labels = [((b / 2, (top + zt) / 2), "ตอม่อ ดูขยายเสา"),
               ((w / 2 - cov - 0.02, zr - 0.02), f"เหล็กรัดรอบ {ring} มม."),
               ((w / 2 - cov, zb + cov + hook * 0.6), "งอขึ้นปลายเหล็กตะแกรง"),
-              ((w / 2 - cov - 0.05, zb + cov + 0.02), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]} มม.@{(D._bars(sp.get('bars'))[3] or 0.15):.3f} 2 ทาง"),
+              ((w / 2 - cov - 0.05, zb + cov + 0.02), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]} มม.@{R.spacing(D._bars(sp.get('bars'))[3] or 0.15)} 2 ทาง"),
               ((w / 2, zb - lean / 2), f"คอนกรีตหยาบ 1:3:5 หนา {lean:.2f} ม."),
               ((w / 2, zb - lean - sand / 2), f"ทรายหยาบอัดแน่น หนา {sand:.2f} ม.")]
     if piles:
@@ -2667,7 +2668,7 @@ def footing_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
         sh.line(Q(t_, -l_ / 2 + cov), Q(t_, l_ / 2 - cov), "rebar", 0.1, True)
         tl = -l_ / 2 + cov + i * (l_ - 2 * cov) / max(mm, 1)
         sh.line(Q(-w / 2 + cov, tl), Q(w / 2 - cov, tl), "rebar", 0.1, True)
-    sh.text((Q(w / 2, 0)[0], Q(0, -l_ / 2)[1] - 5), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]}@{s_:.3f} ม. 2 ทาง",
+    sh.text((Q(w / 2, 0)[0], Q(0, -l_ / 2)[1] - 5), f"เหล็กตะแกรง {D._bars(sp.get('bars'))[1]}@{R.spacing(s_)} ม. 2 ทาง",
             2.4, "right")
     sh.rect(*Q(-w / 2 + cov, -l_ / 2 + cov), *Q(w / 2 - cov, l_ / 2 - cov), "rebar", 0.3)     # the ring bar
     import math as _m
@@ -2758,10 +2759,10 @@ def combined_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
     tx = P(Lg / 2 + 0.55, 0)[0]
     labels = [((us[1] + b / 2, (top + zt) / 2), "ตอม่อ ดูขยายเสา")]
     if sp.get("top"):
-        labels.append(((us[1], zt - cov), f"เหล็กบน {D._bars(sp['top'])[1]} มม.@{D._bars(sp['top'])[3] or 0.2:.3f}"))
+        labels.append(((us[1], zt - cov), f"เหล็กบน {D._bars(sp['top'])[1]} มม.@{R.spacing(D._bars(sp['top'])[3] or 0.2)}"))
     labels += [((Lg / 2 - cov, zb + cov + hook * 0.6), "งอขึ้นปลายเหล็กตะแกรง"),
                ((Lg / 2 - cov - 0.05, zb + cov + 0.02),
-                f"เหล็กล่างตามยาว {D._bars(long_bars)[1]} มม.@{(D._bars(long_bars)[3] or 0.15):.3f}"),
+                f"เหล็กล่างตามยาว {D._bars(long_bars)[1]} มม.@{R.spacing(D._bars(long_bars)[3] or 0.15)}"),
                ((Lg / 2, zb - lean / 2), f"คอนกรีตหยาบ 1:3:5 หนา {lean:.2f} ม."),
                ((Lg / 2, zb - lean - sand / 2), f"ทรายหยาบอัดแน่น หนา {sand:.2f} ม.")]
     last = None
@@ -2804,7 +2805,7 @@ def combined_detail(sh, E, mark, n_sec, ox, ytop, sc=25, side=False):
         u_ = -Lg / 2 + cov + i * s_
         sh.line(Q(u_, -Bg / 2 + cov), Q(u_, Bg / 2 - cov), "rebar", 0.1, True)
     sh.text((Q(Lg / 2, 0)[0], Q(0, -Bg / 2)[1] - 5),
-            f"ตามยาว {D._bars(long_bars)[1]}@{sl:.3f} · ตามขวาง {D._bars(cross_bars)[1]}@{s_:.3f} ม.", 2.4, "right")
+            f"ตามยาว {D._bars(long_bars)[1]}@{R.spacing(sl)} · ตามขวาง {D._bars(cross_bars)[1]}@{R.spacing(s_)} ม.", 2.4, "right")
     D.dim_chain(sh, lambda x_, y_: (Q(x_, 0)[0], Q(0, Bg / 2)[1] + 4), [-Lg / 2, us[0], us[1], Lg / 2], 0.0, "x")
     D.dim_chain(sh, lambda x_, y_: (Q(-Lg / 2, 0)[0] - 8, Q(0, y_)[1]), [-Bg / 2, Bg / 2], 0.0, "y")
     by = py0 - Bg * k / 2 - 16
@@ -2988,7 +2989,7 @@ def slab_section(sh, E, mark, cx, ytop, k=50.0, slot=150.0):
         _dot(sh, P(u, -t + c + 0.014), 0.42)
         _dot(sh, P(u, -c - 0.014), 0.42)
         u += s_
-    lab = f"{bname} มม.@{s_:.3f}#".replace("0#", "#").replace("0#", "#")
+    lab = f"{bname} มม.@{R.spacing(s_)}#"
     um = L / 2 + s_ / 2
     _leader(sh, P(um, -c), P(um, 0)[0] + 2, P(0, 0)[1] + 8, lab)
     _leader(sh, P(um, -t + c), P(um, 0)[0] + 2, P(0, -t)[1] - 8, lab)
@@ -3034,7 +3035,7 @@ def ground_slab(sh, E, mark, x, ytop, k=50.0):
         _dot(sh, (P(u, -c)[0], P(u, -c)[1] + 0.8), 0.45)
         u += s_
     _leader(sh, P(0.005, -0.01), P(0.45, 0)[0], P(0, 0)[1] + 11, "รอยต่ออุดด้วยแอสฟัลท์ หนา 1 ซม.")
-    _leader(sh, P(0.6, -c), P(0.8, 0)[0], P(0, 0)[1] + 5.5, f"{bname} มม.@{s_:.3f} #".replace(".000", ""))
+    _leader(sh, P(0.6, -c), P(0.8, 0)[0], P(0, 0)[1] + 5.5, f"{bname} มม.@{R.spacing(s_)} #")
     sh.text((P(W / 2 + 0.2, 0)[0], P(0, -t - sand / 2)[1] - 0.9), "ทรายหยาบบดอัดแน่น", 2.3, "center")
     _vdim(sh, P(W, 0)[0] + 5, P(0, -t)[1], P(0, 0)[1], f"{t:.2f}")
     _vdim(sh, P(W, 0)[0] + 5, P(0, -t - sand)[1], P(0, -t)[1], f"{sand:.2f}")
@@ -3238,7 +3239,7 @@ def drop_detail(sh, E, cx, ytop, k=50.0, drop=0.05):
     sh.poly([P(bb + W, -drop - c), P(c + 0.03, -drop - c), P(c + 0.03, -drop - c - 0.12)], "rebar", 0.45,
             closed=False)
     sh.poly([P(bb + W, -drop - t + c), P(bb - c - 0.06, -drop - t + c)], "rebar", 0.45, closed=False)
-    lab = f"{bname} มม.@{(s_ or 0.2):.3f}#".replace("0#", "#").replace("0#", "#")
+    lab = f"{bname} มม.@{R.spacing(s_ or 0.2)}#"
     _leader(sh, P(-W * 0.2, -c), P(-W * 0.2, 0)[0] + 4, P(0, 0)[1] + 13, lab)
     _leader(sh, P(bb / 2, -bh / 2), P(bb + W * 0.5, 0)[0], P(0, -bh)[1] - 3, f"คาน {bmk}")
     for zz, txt, uu, up in ((0.0, "ระดับพื้นห้อง ±0.00", -W * 0.92, 0.0),

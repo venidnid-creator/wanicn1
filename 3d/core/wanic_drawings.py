@@ -4241,6 +4241,7 @@ def s_rebar_details(sh, E):
     plan (the mat, the stump's starter bars, cover, lean concrete, sand,
     piles), then each beam type along a span (top and bottom bars, the
     stirrups closer at the supports, laps) with its sections A-A, B-B."""
+    from core import wanic_rc as R
     x0, y0, x1, y1 = drawing_area()
     lib = E["lib"]
     used = {e["mark"] for key in ("footings", "stumps", "beams") for e in E[key]}
@@ -4307,7 +4308,7 @@ def s_rebar_details(sh, E):
         sh.text((x + (w + 0.4) * k, gy + 1), "ระดับดินเดิม", 1.8, "right")
         # notes on the right of it
         tx = x + (w + 0.15) * k + 2
-        sh.text((tx, fb + t * k * 0.5), f"{bar}@{sp or 0.15:.2f} ทั้ง 2 ทาง", 2.0)
+        sh.text((tx, fb + t * k * 0.5), f"{bar}@{R.spacing(sp or 0.15)} ทั้ง 2 ทาง", 2.0)
         sh.text((tx, fb + t * k * 0.5 - 3), "งอฉาก 90° ปลายเหล็ก", 1.8)
         sh.text((tx, fb - 1.5), f"คอนกรีตหยาบ {lean:.2f} ม. · ทรายอัดแน่น {sand:.2f} ม.", 1.8)
         sh.text((tx, gy - 6), f"ตอม่อ {stump['b']:.2f}×{stump['h']:.2f} ม.", 1.8)
@@ -4376,21 +4377,22 @@ def s_rebar_details(sh, E):
                 "rebar", 0.5, closed=False)
         sh.poly([(xa, ybb + 0.25 * kb), (xa, ybb), (xb, ybb), (xb, ybb + 0.25 * kb)],
                 "rebar", 0.5, closed=False)
-        # stirrups: s/2 over L/4 at each support, s in the middle
-        q = span / 4
+        # stirrups: the calc book's rule (R.end_stirrups) — closer over 2h at each support
+        q, e_sp = R.end_stirrups(b_)
+        q = min(q, span / 3)
         z_ = 0.05
         while z_ <= span - 0.05 + 1e-6:
             xs_ = bx0 + (cw + z_) * kb
             sh.line((xs_, Y + cv * kb), (xs_, Y + (h - cv) * kb), "rebar", 0.18)
             near = z_ < q or z_ > span - q
-            z_ += st_sp / 2 if near else st_sp
-        _dim_h(sh, bx0 + cw * kb, bx0 + (cw + q) * kb, Y - 5, f"L/4 @{st_sp / 2:.3f}")
-        _dim_h(sh, bx0 + (cw + q) * kb, bx0 + (cw + span - q) * kb, Y - 5, f"L/2 @{st_sp:.2f}")
+            z_ += e_sp if near else st_sp
+        _dim_h(sh, bx0 + cw * kb, bx0 + (cw + q) * kb, Y - 5, f"2h @{R.spacing(e_sp)}")
+        _dim_h(sh, bx0 + (cw + q) * kb, bx0 + (cw + span - q) * kb, Y - 5, f"กลางช่วง @{R.spacing(st_sp)}")
         _dim_h(sh, bx0 + (cw + span - q) * kb, bx0 + (cw + span) * kb, Y - 5,
-               f"L/4 @{st_sp / 2:.3f}")
+               f"2h @{R.spacing(e_sp)}")
         sh.text((bx0 + (cw + span / 2) * kb, Y + h * kb + 7),
                 f"เหล็กบน {b_.get('top', '')} · เหล็กล่าง {b_.get('bot', '')} · "
-                f"ปลอก {st_bar} (ช่วงหัวเสา @{st_sp / 2:.3f} กลางช่วง @{st_sp:.2f})",
+                f"ปลอก {st_bar} (ปลายคานช่วง 2h = {2 * h:.2f} ม. @{R.spacing(e_sp)} กลางช่วง @{R.spacing(st_sp)})",
                 2.0, "center")
         sh.text((bx0 + (cw + span / 2) * kb, Y - 13),
                 f"รูปขยายคาน {', '.join(marks)} {b:.2f}×{h:.2f} ม. 1:30", 2.8, "center",

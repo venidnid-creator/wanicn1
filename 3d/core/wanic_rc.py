@@ -63,6 +63,29 @@ class Bar:
         return FY[self.kind]
 
 
+def spacing(s) -> str:
+    """A bar spacing written the same in the calc book and every drawing
+    (the owner: the drawings follow the calculation): 0.2 → «0.20»,
+    0.125 → «0.125», 0.175 → «0.175» — never rounded to 0.12."""
+    if s is None:
+        return "-"
+    t = f"{float(s):.3f}".rstrip("0")
+    return t if len(t.split(".")[1]) >= 2 else f"{float(s):.2f}"
+
+
+def end_stirrups(spec) -> tuple:
+    """(zone m, spacing m) of the closer stirrups at each end of a beam —
+    over 2h from the support, at min(s, d/4) taken down to 2.5 cm (at
+    least 5 cm); the one rule of the calc book and the drawings."""
+    h = float(spec.get("h", 0.4) or 0.4)
+    st = parse_bar(spec.get("stir"))
+    s = (st.s if st and st.s else 0.15)
+    d = h - COVER["beam"] - 0.012
+    e = min(s, d / 4)
+    e = max(math.floor(e / 0.025 + 1e-9) * 0.025, 0.05)
+    return 2 * h, min(e, s)
+
+
 def parse_bar(text) -> Bar | None:
     """``"4-DB12"`` → Bar(DB, 12, n=4); ``"RB9@0.20"`` → Bar(RB, 9, s=0.20);
     ``None`` for text that is not a bar."""
@@ -153,8 +176,8 @@ def check(mark: str, spec: dict) -> Result:
             C(Check(False, f"เหล็กปลอก «{spec.get('tie', '')}» อ่านไม่ได้ — เขียนแบบ RB6@0.15"))
         elif main and main.n:
             smax = min(16 * main.d / 1000.0, 48 * tie.d / 1000.0, min(b, h))
-            C(_need(tie.s <= smax + 1e-9, f"ปลอก @{tie.s:.2f} ≤ {smax:.2f} ม. (16d, 48dปลอก, ด้านแคบ)",
-                    f"ปลอก @{tie.s:.2f} ม. ห่างเกิน {smax:.2f} ม. (16d, 48dปลอก, ด้านแคบ)"))
+            C(_need(tie.s <= smax + 1e-9, f"ปลอก @{spacing(tie.s)} ≤ {smax:.2f} ม. (16d, 48dปลอก, ด้านแคบ)",
+                    f"ปลอก @{spacing(tie.s)} ม. ห่างเกิน {smax:.2f} ม. (16d, 48dปลอก, ด้านแคบ)"))
     elif kind == "beam":
         b, h = float(spec.get("b", 0) or 0), float(spec.get("h", 0) or 0)
         top, bot, stir = (parse_bar(spec.get(k)) for k in ("top", "bot", "stir"))
@@ -183,9 +206,10 @@ def check(mark: str, spec: dict) -> Result:
             C(Check(False, f"เหล็กปลอก «{spec.get('stir', '')}» อ่านไม่ได้ — เขียนแบบ RB6@0.15"))
         else:
             smax = min(d / 2, 0.30)
-            C(_need(stir.s <= smax + 1e-9, f"ปลอก @{stir.s:.2f} ≤ {smax:.2f} ม. (d/2, 0.30 ม.) · "
-                    f"ปลายคานช่วง 2h ใช้ @{min(stir.s, d / 4):.2f}",
-                    f"ปลอก @{stir.s:.2f} ม. ห่างเกิน d/2 = {smax:.2f} ม."))
+            zone, e = end_stirrups(spec)
+            C(_need(stir.s <= smax + 1e-9, f"ปลอก @{spacing(stir.s)} ≤ {smax:.2f} ม. (d/2, 0.30 ม.) · "
+                    f"ปลายคานช่วง 2h = {zone:.2f} ม. ใช้ @{spacing(e)}",
+                    f"ปลอก @{spacing(stir.s)} ม. ห่างเกิน d/2 = {smax:.2f} ม."))
         if bot and bot.n:
             C(Check(True, f"ทาบเหล็ก {lap_length(bot):.2f} ม. · ระยะหุ้ม {COVER['beam'] * 100:.0f} ซม."))
     elif kind == "slab":

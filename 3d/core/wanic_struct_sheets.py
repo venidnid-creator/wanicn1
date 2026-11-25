@@ -22,6 +22,12 @@ import math
 
 from core import wanic_drawings as D
 
+
+def _sp(s):
+    """A spacing as the calc book writes it (wanic_rc.spacing)."""
+    from core import wanic_rc
+    return wanic_rc.spacing(s)
+
 SECTION_K = 1000.0 / 25          # the sections at 1:25
 
 
@@ -145,45 +151,35 @@ def beam_profile(sh, E, ln, x0, ytop, width, k_max=1000.0 / 30) -> float:
     for xe in (x - 1.5, x + total * k + 1.5):                                     # end hooks down / up
         sh.line((xe, ytb), (xe, ytb - min(4.0, hmax * k * 0.5)), "rebar", 0.45)
         sh.line((xe, ybb), (xe, ybb + min(4.0, hmax * k * 0.5)), "rebar", 0.45)
-    for i, p in enumerate(pts):                                                   # extra top bars at supports
-        left = spans[i - 1] if i > 0 else None
-        right = spans[i] if i < len(spans) else None
-        marks = [s[2] for s in (left, right) if s]
-        nt = max(_count(lib.get(m, {}).get("top"))[0] for m in marks)
-        if nt <= 2:
-            continue
-        la = (left[1] - left[0]) / 4 if left else 0.0
-        lb = (right[1] - right[0]) / 4 if right else 0.0
-        px = x + (p - s0) * k
-        sh.line((px - la * k, ytb - 1.0), (px + lb * k, ytb - 1.0), "rebar", 0.45)
-        sh.text((px + 0.1 * k + 1.5, ytopbeam + 1.2), f"{nt}-{_count(lib[marks[0]].get('top'))[1]}", 1.8, "left", "rebar")
-        if la:
-            sh.text((px - la * k / 2, ytb - 3.6), "L/4", 1.6, "center", "dim")
-        if lb:
-            sh.text((px + lb * k / 2, ytb - 3.6), "L/4", 1.6, "center", "dim")
+    # the owner (25 พ.ย. 69): the drawing follows the calc book — it takes every top and
+    # bottom bar of the beam's settings at L, M and R, so every bar runs the whole span
     for (a, b_, m, _z) in spans:
         spec = lib.get(m, {})
         nb, bname = _count(spec.get("bot"))
         nt, tname = _count(spec.get("top"))
         pa, pb = x + (a - s0) * k, x + (b_ - s0) * k
         L = b_ - a
-        if nb > 2:                                                                # extra bottom bars, L/5 off
-            sh.line((pa + L / 5 * k, ybb + 1.0), (pb - L / 5 * k, ybb + 1.0), "rebar", 0.45)
-        sh.text(((pa + pb) / 2, yb - 3.2), f"{nb}-{bname}", 1.8, "center", "rebar")
-        sh.text(((pa + pb) / 2 + 12, ytopbeam + 1.0), f"{min(nt, 2) if nt else 0}-{tname} ตลอดแนว", 1.6, "left",
-                "rebar")
+        if nb > 2:                                                                # the inner bottom bars, through
+            sh.line((pa + 0.05 * k, ybb + 1.0), (pb - 0.05 * k, ybb + 1.0), "rebar", 0.45)
+        if nt > 2:                                                                # the inner top bars, through
+            sh.line((pa + 0.05 * k, ytb - 1.0), (pb - 0.05 * k, ytb - 1.0), "rebar", 0.45)
+        sh.text(((pa + pb) / 2, yb - 3.2), f"{nb}-{bname} ตลอดแนว", 1.8, "center", "rebar")
+        sh.text(((pa + pb) / 2 + 12, ytopbeam + 1.0), f"{nt}-{tname} ตลอดแนว", 1.6, "left", "rebar")
         _n, sname, _d, ss = D._bars(spec.get("stir"))
         if ss:
-            step = ss * k
-            every = max(1, int(math.ceil(2.6 / step)))
+            from core import wanic_rc as R
+            zone, es = R.end_stirrups(spec)
+            zone = min(zone, L / 3)
             t = pa + 0.05 * k
-            j = 0
+            last = -9.0
             while t < pb - 0.05 * k:
-                if j % every == 0:
+                if t - last >= 1.2:                                               # no closer than 1.2 mm on paper
                     sh.line((t, ybb + 0.3), (t, ytb - 0.3), "rebar", 0.13)
-                t += step
-                j += 1
-            sh.text(((pa + pb) / 2, yb - 6.0), f"ป.{sname}@{ss:.2f}", 1.6, "center", "rebar")
+                    last = t
+                near = (t - pa) < zone * k or (pb - t) < zone * k
+                t += (es if near else ss) * k
+            sh.text(((pa + pb) / 2, yb - 6.0),
+                    f"ป.{sname} ปลายคาน 2h @{R.spacing(es)} · กลางช่วง @{R.spacing(ss)}", 1.6, "center", "rebar")
     # sections at the start, the middle and the end of each span
     ys = yb - 13
     sec_h = 0
@@ -194,7 +190,7 @@ def beam_profile(sh, E, ln, x0, ytop, width, k_max=1000.0 / 30) -> float:
         nb, bname = _count(spec.get("bot"))
         pa, pb = x + (a - s0) * k, x + (b_ - s0) * k
         sk = min(SECTION_K, (pb - pa) / 3 / max(b + 0.25, 0.3))
-        for frac, tn, bn in ((0.12, nt, min(nb, 2)), (0.5, min(nt, 2), nb), (0.88, nt, min(nb, 2))):
+        for frac, tn, bn in ((0.12, nt, nb), (0.5, nt, nb), (0.88, nt, nb)):       # as the calc book's L, M, R
             cx = pa + (pb - pa) * frac
             sx = cx - b * sk / 2
             sy = ys - h * sk
@@ -351,7 +347,8 @@ def column_section(sh, x, y, spec, mark, k=SECTION_K):
     _n, tname, _d, ts = D._bars(spec.get("tie"))
     sh.circle((x + w / 2, y - 8), 2.6, "struct", 0.25)
     sh.text((x + w / 2, y - 8.8), mark, 2.0, "center", "struct", True)
-    sh.text((x + w / 2, y - 14), f"ป. {tname}@{ts:.2f}" if ts else "", 1.7, "center", "rebar")
+    from core import wanic_rc as R
+    sh.text((x + w / 2, y - 14), f"ป. {tname}@{R.spacing(ts)}" if ts else "", 1.7, "center", "rebar")
     sh.text((x + w / 2, y - 17.5), f"ขนาด {b * 100:.0f}×{h * 100:.0f} ซม.", 1.6, "center")
 
 
@@ -392,7 +389,7 @@ def s_slab_details(sh, E):
             sh.rect(xa, y - t * k, xa + L * k, y, "struct", 0.4)
             sh.rect(xa, y - t * k - 0.05 * k, xa + L * k, y - t * k, "hatch", 0.13, True)
             sh.line((xa + 1, y - t * k / 2), (xa + L * k - 1, y - t * k / 2), "rebar", 0.4)
-            sh.text((xa + L * k + 3, y - t * k / 2), f"{bname}@{sp:.2f} ทั้งสองทาง (หรือตะแกรงเหล็ก)", 1.8)
+            sh.text((xa + L * k + 3, y - t * k / 2), f"{bname}@{_sp(sp)} ทั้งสองทาง (หรือตะแกรงเหล็ก)", 1.8)
             sh.text((xa + L * k + 3, y - t * k - 2.5), "พื้นวางบนดิน · ทรายอัดแน่นหนา 0.05 ม.", 1.7)
             sh.text((xa - 2.5, y - t * k / 2), f"{t:.2f}", 1.7, "center", "dim", angle=90)
             y -= t * k + 22
@@ -414,8 +411,8 @@ def s_slab_details(sh, E):
             if s == 1:
                 sh.text(((a + bx) / 2, y + 1.2), "L/4", 1.6, "center", "dim")
                 sh.text(((b_ + bx) / 2, y + 1.2), "L/4", 1.6, "center", "dim")
-        sh.text((xa + L * kk / 2, y - t * kk - 14), f"เหล็กล่าง {bname}@{sp:.2f}", 1.7, "center", "rebar")
-        sh.text((xa + L * kk, y + 4.0), f"เหล็กบน {bname}@{sp:.2f}", 1.7, "center", "rebar")
+        sh.text((xa + L * kk / 2, y - t * kk - 14), f"เหล็กล่าง {bname}@{_sp(sp)}", 1.7, "center", "rebar")
+        sh.text((xa + L * kk, y + 4.0), f"เหล็กบน {bname}@{_sp(sp)}", 1.7, "center", "rebar")
         sh.text((xa + tot * kk + 2.5, y - t * kk / 2), f"{t:.2f}", 1.7, "center", "dim", angle=90)
         sh.text((xa + tot * kk + 6, y - t * kk - 3), "L = ช่วงสั้นของแผ่นพื้น", 1.6, "left")
         y -= t * kk + 26

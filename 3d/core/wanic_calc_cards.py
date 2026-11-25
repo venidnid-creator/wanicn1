@@ -96,9 +96,10 @@ def footing_rows(res_all, data, critical=False) -> list:
         arm = (max(w, l) - c) / 2
         Mu = qu * min(w, l) * arm * arm / 2                       # kg·m across the full width
         As = max(_as_need(Mu, min(w, l) * 100, d * 100, bar, b_), 0.0018 * min(w, l) * 100 * t * 100)
-        nbar = math.ceil(As / bar.area) if bar else 0
-        if bar and bar.s:
-            nbar = max(nbar, int(round((min(w, l) - 0.15) / bar.s)) + 1)
+        need = math.ceil(As / bar.area) if bar else 0
+        # the bars the drawing shows (the spacing in the settings): the calc book reports
+        # those and fails the footing when they are fewer than needed — never more than drawn
+        nbar = (int(round((min(w, l) - 0.15) / bar.s)) + 1) if bar and bar.s else need
         phi = C.phi(b_, "shear") if b_["method"] == "SDM" else 1.0
         vf = 0.53 if b_["method"] == "SDM" else 0.29
         V1 = qu * min(w, l) * max(arm - d, 0.0)
@@ -118,7 +119,8 @@ def footing_rows(res_all, data, critical=False) -> list:
             Mu = max(ck["Mpos"], ck["Mneg"])
             wide = l if along_x else w
             As = max(_as_need(Mu, wide * 100, d * 100, bar, b_), 0.0018 * wide * 100 * t * 100)
-            nbar = math.ceil(As / bar.area) if bar else 0
+            need = math.ceil(As / bar.area) if bar else 0
+            nbar = (int(round((wide - 0.15) / bar.s)) + 1) if bar and bar.s else need
             V1, Vc1, V2, Vc2 = ck["V1"], ck["Vc1"], ck["V2"], ck["Vc2"]
             k = (ax_, ay_)
         piles = int(sp.get("piles") or 0)
@@ -127,8 +129,9 @@ def footing_rows(res_all, data, critical=False) -> list:
         cap = piles * pcap * 1000 if piles else b_["soil"] * 1000 * A
         out.append({"pcap": pcap, "ptype": PL.type_of_spec(sp), "mark": f["mark"], "x": f["x"], "y": f["y"], "w": w, "l": l, "t": t, "depth": depth,
                     "P": P, "q": q, "soil": b_["soil"] * 1000, "cap": cap, "piles": piles, "stump": stumps.get(k, "-"),
-                    "c": c, "Mu": Mu, "As": As, "bar": bar, "nbar": nbar, "V1": V1, "Vc1": Vc1, "V2": V2, "Vc2": Vc2,
-                    "ok": (P + self_w) <= cap and V1 <= Vc1 and V2 <= Vc2})
+                    "c": c, "Mu": Mu, "As": As, "bar": bar, "nbar": nbar, "need": need, "V1": V1, "Vc1": Vc1,
+                    "V2": V2, "Vc2": Vc2,
+                    "ok": (P + self_w) <= cap and V1 <= Vc1 and V2 <= Vc2 and nbar >= need})
     if critical:
         best = {}
         for r in out:
@@ -160,7 +163,8 @@ def footing_pages(bk, res_all, data, critical=False):
                     ("รับน้ำหนักได้", "kg.", f"{r['cap']:,.0f}"),
                     ("ตอม่อ", "", f"{r['stump']} {r['c'] * 100:.0f}×{r['c'] * 100:.0f} ซม."),
                     ("โมเมนต์ Mu", "kg-m", f"{r['Mu']:,.2f}"),
-                    ("As", "cm²", "—" if r["As"] == float("inf") else f"{r['As']:.2f}"),
+                    ("As (ต้องการ)", "cm²", "—" if r["As"] == float("inf") else
+                     f"{r['As']:.2f} ({r.get('need', 0)} เส้น)"),
                     ("เหล็กตามยาว", (f"{bar.kind}{bar.d}" if bar else "-", BLUE), (str(r["nbar"]), BLUE)),
                     ("เหล็กตามกว้าง", (f"{bar.kind}{bar.d}" if bar else "-", BLUE), (str(r["nbar"]), BLUE)),
                     ("เฉือนทางเดียว Vu", "kg.", f"{r['V1']:,.0f}"),
@@ -175,7 +179,10 @@ def footing_pages(bk, res_all, data, critical=False):
                 ("เสาเข็ม" if r["piles"] else "ดินใต้ฐาน") + f"รับได้ ≈ {r['cap'] / 1000:,.1f} ตัน",
                 f"ใช้กำลังไป {r['P'] / r['cap'] * 100 if r['cap'] else 999:,.0f} % · "
                 f"แผ่นฐานรับแรงเฉือนใช้ไป {shear * 100:,.0f} %",
-                "→ ผ่าน" if r["ok"] else "→ ไม่ผ่าน — ขยายฐาน/เพิ่มเข็ม"], r["ok"], 5.0)
+                f"เหล็กตะแกรงในแบบ {r['nbar']} เส้น ต้องการ {r.get('need', 0)} เส้น",
+                "→ ผ่าน" if r["ok"] else ("→ ไม่ผ่าน — ลดระยะเรียงเหล็กฐานราก" if r["nbar"] < r.get("need", 0)
+                                         and (r["P"] <= r["cap"]) else "→ ไม่ผ่าน — ขยายฐาน/เพิ่มเข็ม")],
+                r["ok"], 5.0)
         bk.text(12, 238, 290, 6, "อ้างอิง วสท. 011008 / ACI 318: แรงดันดินจากน้ำหนักใช้งาน · โมเมนต์ที่ผิวตอม่อ · φVc ทางเดียว = φ0.53√fc′bd", 5.0)
         bk.text(12, 244, 290, 6, "เฉือนทางเดียวที่ระยะ d · เฉือนทะลุที่ d/2 รอบตอม่อ φVc = φ1.06√fc′b0d · As ≥ 0.0018bt", 5.0)
 

@@ -637,8 +637,9 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         if c:
             sh.line(c[0], c[1], "hidden", 0.1, True)
             end = c[0] if c[0][0] < c[1][0] else c[1]
-            if free(end) and end[1] + 3 < inner[3]:
-                sh.text((end[0] + 0.8, end[1] + 0.8), f"N {n:,.0f}", 1.6, "left", "dim")
+            if free(end):                                   # under the end when it is at the top edge
+                sh.text((end[0] + 0.8, end[1] + 0.8 if end[1] + 3 < inner[3] else end[1] - 2.6),
+                        f"N {n:,.0f}", 1.6, "left", "dim")
         n += gstep
     # road
     ed = edges_of(an, s0, s1)

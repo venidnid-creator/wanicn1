@@ -14,6 +14,12 @@ from core import wanic_building as B
 from core import wanic_stair as ST
 
 
+def _sp(s):
+    """A spacing as the calc book writes it (wanic_rc.spacing)."""
+    from core import wanic_rc
+    return wanic_rc.spacing(s)
+
+
 def stairs_to_detail(E) -> list:
     """The distinct stairs (the ground floor's; a stair repeated on every
     floor is drawn once)."""
@@ -354,12 +360,12 @@ def s_stair_flight(sh, E, e, fi, no=1):
     # -- labels at the right, kept apart: every bar named (size and spacing)
     tx = P(u_hi, 0)[0] + (fbb * k if not land_hi else 0) + 20
     um = (int(u_top * 0.5 / g)) * g
-    pts = [(P(uk - l4 * 0.5, (uk - l4 * 0.5) * R_ / g - cs), f"เหล็กบน {bname} มม.@{bsp:.2f}"),
-           (P(l4 * 0.6, l4 * 0.6 * R_ / g - cs), f"เหล็กบน {bname} มม.@{bsp:.2f}"),
+    pts = [(P(uk - l4 * 0.5, (uk - l4 * 0.5) * R_ / g - cs), f"เหล็กบน {bname} มม.@{_sp(bsp)}"),
+           (P(l4 * 0.6, l4 * 0.6 * R_ / g - cs), f"เหล็กบน {bname} มม.@{_sp(bsp)}"),
            (P(um + g - c, um / g * R_ + R_ - c), f"{tname} มม. ทุกมุม"),
            (P(um + c, um / g * R_ + R_ * 0.6), f"เหล็กขั้นบันได {tname} มม. ทุกขั้น"),
-           (P(u_top * 0.62, u_top * 0.62 * R_ / g - off + cs), f"เหล็กหลัก {bname} มม.@{bsp:.2f} (ล่าง)"),
-           (P(u_top * 0.4, u_top * 0.4 * R_ / g - off + cs + 0.02), f"เหล็กกันร้าว {tname} มม.@{tsp:.2f}")]
+           (P(u_top * 0.62, u_top * 0.62 * R_ / g - off + cs), f"เหล็กหลัก {bname} มม.@{_sp(bsp)} (ล่าง)"),
+           (P(u_top * 0.4, u_top * 0.4 * R_ / g - off + cs + 0.02), f"เหล็กกันร้าว {tname} มม.@{_sp(tsp)}")]
     last = None
     for q, lab in sorted(pts, key=lambda t: -t[0][1]):
         ty = q[1] if last is None else min(q[1], last - 6.0)

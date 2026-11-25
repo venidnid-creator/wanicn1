@@ -5463,3 +5463,39 @@ def view_categories(groups, H, lift=0.0, n=0) -> list:
     out.sort(key=lambda t: (order.get(t[0][0], 999), t[0][1] if t[0][1] is not None else -1, t[1]))
     return out
 
+
+
+# -- the owner (25 พ.ย. 69): a changed model is calculated again, every item --------------
+
+#: what does not move the structure: prices, the schedule, the stamp itself
+NOT_STRUCTURAL = {"prices", "price_src", "price_item", "labour", "labour_src", "obec", "schedule",
+                  "province", "calc_stamp", "calc_at", "boq", "boq_info"}
+
+
+def struct_stamp(data) -> str:
+    """A fingerprint of everything the calculation reads: any change of the
+    model (rooms, members, settings, loads …) changes it."""
+    import hashlib
+    import json
+    keep = {k: v for k, v in (data or {}).items() if k not in NOT_STRUCTURAL}
+    blob = json.dumps(keep, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def calc_current(data) -> bool:
+    """The structure was calculated (every item passed) for the model as it is now."""
+    return bool(data) and data.get("calc_stamp") == struct_stamp(data)
+
+
+def recalc_all(data) -> tuple:
+    """Calculate every item of the structure again: ([failing members], result).
+    When all pass, the model is stamped as calculated."""
+    from core import wanic_calc as C
+    from core import wanic_fail_view as FV
+    res = C.analyse(data)
+    bad = FV.failing(res)
+    if not bad:
+        import datetime
+        data["calc_stamp"] = struct_stamp(data)
+        data["calc_at"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+    return bad, res

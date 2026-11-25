@@ -24,6 +24,12 @@ from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPdfW
 from core import wanic_calc as C
 from core import wanic_rc as R
 
+
+def _sp(s):
+    """A spacing as the calc book writes it (wanic_rc.spacing)."""
+    from core import wanic_rc
+    return wanic_rc.spacing(s)
+
 BLUE = QColor("#1D4ED8")
 RED = QColor("#DC2626")
 GREEN = QColor("#16A34A")
@@ -677,7 +683,7 @@ def column_pages(bk: Book, res_all, b_, fc):
                 ("Column", "", ("OK" if ok else "NG", GREEN if ok else RED)),
                 ("P", "kg.", f"{c['P']:,.0f}"),
                 ("เหล็กยืน", (f"{main.kind}{main.d}" if main else "-", BLUE), (str(main.n if main else 0), BLUE)),
-                ("เหล็กปลอก", (f"1-{tie.kind}{tie.d}" if tie else "-", BLUE), (f"@{tie.s:.2f}" if tie else "-", BLUE)),
+                ("เหล็กปลอก", (f"1-{tie.kind}{tie.d}" if tie else "-", BLUE), (f"@{_sp(tie.s)}" if tie else "-", BLUE)),
                 ("As", "cm²", f"{As:.2f}"), ("Ag", "cm²", f"{Ag:.2f}"), ("Pg", "", f"{Pg:.3f}"),
                 ("Fc′", "ksc", f"{fc:.2f}"), (cap_lab, "", (f"{cap:,.0f}", RED))], 7.0)
             fl = "ตอม่อ" if c["floor"] < 0 else f"ชั้น {c['floor'] + 1}"
