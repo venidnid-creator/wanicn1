@@ -1248,9 +1248,12 @@ class RCPanel(QWidget):
         """รายการคำนวณพิมพ์ได้เมื่อผ่านทุกรายการเท่านั้น: otherwise say what fails and offer the fix."""
         from core import wanic_calc as C
         from core import wanic_fail_view as FV
-        res = C.analyse(self.data())
-        bad = FV.failing(res)
+        d = self.data()
+        bad, res = B.recalc_all(d)                # every item, again (the owner, 25 พ.ย. 69)
         if not bad:
+            bp = self.building()
+            if bp is not None and d.get("calc_stamp") != bp.data().get("calc_stamp"):
+                bp._write(d)                       # the model is stamped «calculated as it is»
             return True
         names = "\n".join(f"• {m.name} (ใช้กำลัง {m.ratio * 100:.0f} %)" for m in bad[:12])
         more = f"\n… และอีก {len(bad) - 12} รายการ" if len(bad) > 12 else ""

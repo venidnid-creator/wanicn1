@@ -224,6 +224,9 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   where nothing is drawn, a G sheet for the whole set). New technical words on a sheet → add them to `TERMS`.
 - จ36 «ตรวจสอบพื้นที่ก่อสร้าง» (`core/wanic_landcheck.py`): parcels from a file (LandsMaps is not reachable from the
   cloud session), the road footprint clipped strip by strip, rai-ngan-wa, LC-01 PDF report with the permission text.
+- Owner rules (25 พ.ย. 69): drawings (PDF/DXF) show exactly what the calc book checked (`R.spacing`, `R.end_stirrups`,
+  full bars as specified, footing bars as drawn); a changed model is calculated again, every item (`B.struct_stamp`,
+  `B.recalc_all`, the orange banner, exports recalculate first).
 - The start screen's «มีเวอร์ชันใหม่» window (`launcher/update_dialog.py`) downloads the installer (owner, 25 พ.ย. 69). Characters outside cp874 on sheets: map them in
   `D._DXF_SUB` (√ Δ ≥ as AutoCAD `\U+XXXX`).
 - WanicnDesign (the owner's other design program) lives on branch `claude/awesome-pasteur-y5g1in` in `design/WanicnDesign`.

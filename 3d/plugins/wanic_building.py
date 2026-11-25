@@ -2444,6 +2444,13 @@ class BoqDialog(QDialog):
         with open(path, "wb") as fh:
             fh.write(T.boq_xlsx_bytes(res, T.settings_of(td)))
         self.panel.status.setText(f"บันทึก {path} แล้ว")
+        self._calc_note()
+
+    def _calc_note(self):
+        """The owner: a changed model is calculated again, every item, with its BOQ."""
+        note = self.panel.calc_note() if hasattr(self.panel, "calc_note") else ""
+        if note:
+            QMessageBox.information(self, TITLE, "บันทึก BOQ แล้ว" + note)
 
     def save_csv(self):
         from PySide6.QtWidgets import QFileDialog
@@ -2456,6 +2463,7 @@ class BoqDialog(QDialog):
             return
         with open(path, "w", encoding="utf-8-sig", newline="") as fh:
             fh.write(Q.csv_text(self.result))
+        self._calc_note()
 
 
 def render_pdf(sheets, path: str, paper: str = "A3") -> int:
@@ -2745,6 +2753,8 @@ class DrawingDialog(QDialog):
                                   else f"ยังไม่มีราคา {left} รายการ") +
                     " — แบบชุดนี้จะไม่รวมแผ่น BOQ (ปร.) จนกว่าราคาจะครบ: เปิด «📊 BOQ ตามหลักเกณฑ์ 2569…» "
                     "เลือกจังหวัดและกรอกราคาในแถวสีส้มให้ครบก่อน")
+        # the owner (25 พ.ย. 69): a changed model is calculated again, every item, before its drawings
+        note = self.panel.calc_note() if hasattr(self.panel, "calc_note") else ""
         sheets = D.build_set(self.panel.data(), info, info["groups"])
         if not sheets:
             QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
@@ -2773,7 +2783,7 @@ class DrawingDialog(QDialog):
         self.panel.status.setText(f"ส่งออกแบบ {len(sheets)} แผ่น ({groups})")
         QMessageBox.information(
             self, TITLE, f"ส่งออกแบบก่อสร้าง {len(sheets)} แผ่น ({groups})\n" +
-            "\n".join(self.saved))
+            "\n".join(self.saved) + note)
         return self.saved
 
 
@@ -3070,6 +3080,19 @@ class BuildingPanel(QWidget):
         self.status = QLabel()
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
+        # the owner (25 พ.ย. 69): a changed model is calculated again, every item
+        self.stale_row = QWidget()
+        sr = QHBoxLayout(self.stale_row)
+        sr.setContentsMargins(0, 0, 0, 0)
+        self.stale_lbl = QLabel()
+        self.stale_lbl.setWordWrap(True)
+        self.stale_lbl.setStyleSheet("background:#FEF3C7; color:#92400E; border-radius:6px; padding:6px;")
+        sr.addWidget(self.stale_lbl, 1)
+        b = QPushButton("🔄 คำนวณโครงสร้างใหม่ทุกรายการ")
+        b.clicked.connect(lambda _=False: _safe(self, self.recalc_structure))
+        sr.addWidget(b)
+        self.stale_row.setVisible(False)
+        lay.addWidget(self.stale_row)
 
         # Settings.
         self.fields = {}
@@ -4362,7 +4385,49 @@ class BuildingPanel(QWidget):
             self.library.refresh()
         finally:
             self._loading = False
+        self._show_stale(d)
         self.canvas.update()
+
+    def _show_stale(self, d=None):
+        d = d if d is not None else self.data()
+        has = any(f.get("rooms") for f in d.get("floors") or [])
+        stale = has and not B.calc_current(d)
+        if stale:
+            self.stale_lbl.setText(
+                "⚠ โมเดลเปลี่ยนหลังคำนวณโครงสร้างครั้งล่าสุด — ต้องคำนวณใหม่ทุกรายการ ให้รายการคำนวณ "
+                "แบบ PDF/DXF และ BOQ ตรงกัน" + (f" (คำนวณล่าสุด {d['calc_at']})" if d.get("calc_at") else ""))
+        self.stale_row.setVisible(stale)
+        return stale
+
+    def recalc_structure(self):
+        """Every item of the structure again; stamped when all pass."""
+        d = self.data()
+        bad, _res = B.recalc_all(d)
+        if bad:
+            names = "\n".join(f"• {m.name} (ใช้กำลัง {m.ratio * 100:.0f} %)" for m in bad[:12])
+            more = f"\n… และอีก {len(bad) - 12} รายการ" if len(bad) > 12 else ""
+            QMessageBox.warning(self, TITLE, f"คำนวณใหม่ทุกรายการแล้ว — ยังไม่ผ่าน {len(bad)} รายการ\n\n{names}{more}"
+                                "\n\nแก้ในแผง «คำนวณโครงสร้าง» (ปุ่ม «แก้ให้ผ่าน») แล้วคำนวณใหม่อีกครั้ง")
+            return bad
+        self._write(d)
+        QMessageBox.information(self, TITLE, "คำนวณโครงสร้างใหม่ทุกรายการแล้ว — ผ่านทุกรายการ "
+                                "แบบและ BOQ ที่ส่งออกต่อจากนี้ตรงกับรายการคำนวณ")
+        return []
+
+    def calc_note(self) -> str:
+        """Before an export: every item calculated again for the model as it is;
+        the text to add to the export's message ('' when all pass)."""
+        d = self.data()
+        if not any(f.get("rooms") for f in d.get("floors") or []) or B.calc_current(d):
+            return ""
+        bad, _res = B.recalc_all(d)
+        if not bad:
+            self._write(d)
+            return ""
+        self._show_stale(d)
+        return (f"\n\n⚠ คำนวณโครงสร้างใหม่ทุกรายการแล้ว ยังไม่ผ่าน {len(bad)} รายการ "
+                f"(เช่น {', '.join(m.name for m in bad[:3])}) — แบบนี้ยังใช้ยื่นไม่ได้ "
+                "แก้ในแผง «คำนวณโครงสร้าง» ก่อน")
 
     def _frame_preset(self, preset):
         """โครงเหล็ก / โครงไม้: every roof member's section at once."""

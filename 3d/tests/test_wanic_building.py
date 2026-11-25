@@ -603,3 +603,22 @@ def test_neighbouring_provinces_fill_only_the_empty_items(monkeypatch, tmp_path)
     # never saved into the province's own book
     P.save_book("ขอนแก่น", d["prices"], src=d["price_src"])
     assert "DB12" not in P.load_book("ขอนแก่น")["prices"]
+
+
+def test_a_changed_model_is_calculated_again():
+    """The owner (25 พ.ย. 69): when the model changes, every item is calculated
+    again, so the calc book, the drawings and the BOQ belong together."""
+    from core import wanic_rc as R
+    d = R.apply_grid(B.default_data(), [4.0], [4.0], 1)
+    assert not B.calc_current(d)
+    bad, _res = B.recalc_all(d)
+    assert B.calc_current(d) == (not bad)
+    d["calc_stamp"] = B.struct_stamp(d)              # as if every item had passed
+    d["prices"] = {"DB12": 25.0}                     # a price is not the structure
+    d["schedule"] = {"start": "1/1/2570"}
+    assert B.calc_current(d)
+    d["floors"][0]["rooms"][0]["w"] += 0.5           # the model moved
+    assert not B.calc_current(d)
+    d["calc_stamp"] = B.struct_stamp(d)
+    d["library"] = {"B1": {"stir": "RB6@0.10"}}      # a member changed
+    assert not B.calc_current(d)
