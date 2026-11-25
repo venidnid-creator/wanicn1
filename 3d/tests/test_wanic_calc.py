@@ -259,3 +259,37 @@ def test_live_load_reduction_by_floor_from_the_roof():
     assert school == full and "ข้อ 13" not in note_s
     assert C.no_reduction_use({"use": "hospital"}) and not C.no_reduction_use({"use": "house"})
     assert all(ll > 0 for _k, _t, ll, _no in C.OCCUPANCY)
+
+
+def test_no_text_over_another_in_the_book(tmp_path, monkeypatch):
+    """The owner: no red (or any) text over another on any page — table cells shrink their
+    text to fit, an inner support says M− once, the «2 ช่วงแรก» note goes under the tables."""
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core import wanic_calc_book as CB
+    from core import wanic_rc as R
+    rec, page = [], [0]
+    op, ot = CB.Book.page, CB.Book.text
+
+    def pg(self, title, tag, sign=True):
+        page[0] += 1
+        return op(self, title, tag, sign)
+
+    def tx(self, x, y, w, h, t, px=6.0, color=CB.INK, align=Qt.AlignLeft | Qt.AlignVCenter, bold=False):
+        if str(t).strip():
+            r = QFontMetricsF(CB._font(px * self.mm, bold)).boundingRect(
+                QRectF(x * self.mm, y * self.mm, w * self.mm, h * self.mm), int(align), str(t))
+            rec.append((page[0], QRectF(r.x(), r.y() + r.height() * 0.32, r.width(), r.height() * 0.36), str(t)))
+        return ot(self, x, y, w, h, t, px, color, align, bold)
+    monkeypatch.setattr(CB.Book, "page", pg)
+    monkeypatch.setattr(CB.Book, "text", tx)
+    d = B.default_data()
+    R.apply_grid(d, [4.0, 4.0, 4.0], [4.0, 3.0], 2)
+    d["province"] = "เชียงใหม่"
+    d["lateral"] = {"eq_on": True}
+    CB.make_book(C.analyse(d), d, str(tmp_path / "book.pdf"), {})
+    bad = [(p1, s1, s2) for i, (p1, r1, s1) in enumerate(rec) for p2, r2, s2 in rec[i + 1:i + 60]
+           if p1 == p2 and (lambda it: it.width() > 1.5 and it.height() > 1.5)(r1.intersected(r2))]
+    assert not bad, bad[:5]

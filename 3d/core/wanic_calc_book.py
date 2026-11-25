@@ -103,10 +103,18 @@ class Book:
                     cell, col = cell
                 p.setPen(QPen(INK, 1))
                 p.drawRect(QRectF(cx * mm, (y + r * h) * mm, wd * mm, h * mm))
-                self.text(cx + 1, y + r * h, wd - 2, h, str(cell), 5.2, col,
+                self.text(cx + 1, y + r * h, wd - 2, h, str(cell), self.fit(str(cell), wd - 2, 5.2), col,
                           Qt.AlignRight | Qt.AlignVCenter if (c and not left) else Qt.AlignLeft | Qt.AlignVCenter)
                 cx += wd
         return y + len(rows) * h
+
+    def fit(self, t: str, w: float, px: float, least: float = 0.45) -> float:
+        """The text size that keeps ``t`` inside a cell ``w`` wide — never over the next cell
+        (down to ``least`` of ``px``)."""
+        from PySide6.QtGui import QFontMetricsF
+        need = QFontMetricsF(_font(px * self.mm)).horizontalAdvance(t)
+        room = w * self.mm
+        return px if need <= room or need <= 0 else max(px * least, px * room / need * 0.98)
 
     def plain(self, x, y, w, lines, ok=True, px=5.3) -> float:
         """«อธิบายง่าย»: a tinted box with the load that acts and the load
@@ -380,9 +388,10 @@ def basis_page(bk: Book, b_: dict):
              ("ผนังยิปซัม โครงไม้", "25 กก./ตร.ม."),
              ("แรงลม เมือง/ชานเมือง สูงไม่เกิน 10 / 10–20 / 20–40 ม.", "60 / 80 / 120 กก./ตร.ม."),
              ("แรงลม โล่งหรือชายฝั่งทะเล สูงไม่เกิน 10 / 10–20 / 20–40 ม.", "100 / 120 / 160 กก./ตร.ม."),
-             ("ตัวคูณลดกำลัง φ (กฎกระทรวง 2566 ข้อ 8" + (", ควบคุมคุณภาพ)" if b_.get("qc", True) else ", ไม่ระบุการควบคุม)"),
-              f"ดัด {C.phi(b_, 'flex'):.2f} · เฉือน {C.phi(b_, 'shear'):.2f} · เสาปลอกเกลียว {C.phi(b_, 'spiral'):.3g} · "
-              f"เสาปลอกเดี่ยว {C.phi(b_, 'tied'):.2f}")]
+             ("ตัวคูณลดกำลัง φ (กฎกระทรวง 2566 ข้อ 8)",
+              "ควบคุมคุณภาพ" if b_.get("qc", True) else "ไม่ระบุการควบคุม"),
+             ("φ ดัด / เฉือน", f"{C.phi(b_, 'flex'):.2f} / {C.phi(b_, 'shear'):.2f}"),
+             ("φ เสาปลอกเกลียว / ปลอกเดี่ยว", f"{C.phi(b_, 'spiral'):.3g} / {C.phi(b_, 'tied'):.2f}")]
     bk.table(285, 34, [70, 45], right, 8.2)
     bk.text(14, y + 6, 380, 10, "เอกสารนี้ต้องให้วิศวกรโยธาผู้มีใบอนุญาตตรวจสอบและลงนามรับรองก่อนก่อสร้าง", 7, RED)
 
@@ -544,6 +553,7 @@ def _diagram_strip(bk: Book, y, res, kind):
     p.setPen(QPen(INK, 1.4))
     p.drawPolyline(QPolygonF(pts))
     n = 24
+    said = set()                                   # an inner support: one M− label, not one a span
     for i in range(len(res.spans)):
         seg = list(range(i * (n + 1), (i + 1) * (n + 1)))
         if kind == "shear":
@@ -556,8 +566,10 @@ def _diagram_strip(bk: Book, y, res, kind):
                 bk.text(pts[jm].x() / mm - 15, pts[jm].y() / mm + 1, 30, 6, f"M+={vals[jm]:,.1f}", 4.6,
                         align=Qt.AlignCenter)
             for j in (seg[0], seg[-1]):
-                if vals[j] < -1e-6:
-                    bk.text(pts[j].x() / mm - 15, pts[j].y() / mm - 7, 30, 6, f"M−={vals[j]:,.1f}", 4.6,
+                at = round(pts[j].x() / mm, 1)
+                if vals[j] < -1e-6 and at not in said:
+                    said.add(at)
+                    bk.text(pts[j].x() / mm - 15, pts[j].y() / mm - 7, 30, 6, f"M−={abs(vals[j]):,.1f}", 4.6,
                             align=Qt.AlignCenter)
 
 
@@ -614,21 +626,25 @@ def beam_pages(bk: Book, res_all, b_, fc):
                 "แผนภาพต้องอยู่ภายในเส้นกำลัง", 4.6, GREEN)
         _diagram_strip(bk, 112, res, "moment")
         x = 12
+        bottom = 0.0
         for i in range(len(res.spans)):
             head, body, ok = _span_rows(res, i, b_, fc)
             if x + 125 > 290:
                 break
             y = bk.table(x, 135, [20, 20, 20, 18, 20, 22], head, 7.5)
             bk.table(x, y + 3, [29, 19, 25, 25, 25], body, 6.6)
-            bk.text(x, y + 3 + len(body) * 6.6 + 1, 120, 6, "OK" if ok else "ตรวจสอบ — เพิ่มเหล็ก/ขนาดคาน", 5.5,
+            y_ok = y + 3 + len(body) * 6.6 + 1
+            bk.text(x, y_ok, 120, 6, "OK" if ok else "ตรวจสอบ — เพิ่มเหล็ก/ขนาดคาน", 5.5,
                     GREEN if ok else RED)
+            bottom = max(bottom, y_ok + 6)
             x += 128
-        if len(res.spans) > 2:
-            bk.text(12, 262, 270, 6, f"(แสดง 2 ช่วงแรกจาก {len(res.spans)} ช่วง — ช่วงที่เหลือดูในรายการคำนวณแบบสรุป)",
-                    5, RED)
         lines, ok_all = beam_plain(res)
         bk.text(272, 133, 124, 6, "อธิบายง่าย: แรงที่กระทำ เทียบกับ แรงที่รับได้", 5.6, bold=True)
-        bk.plain(272, 140, 124, lines + [m.plain_text()], ok_all and m.ok, 4.9)
+        y_p = bk.plain(272, 140, 124, lines + [m.plain_text()], ok_all and m.ok, 4.9)
+        if len(res.spans) > 2:
+            # beside the tables, under the plain box — never over a table, never off the page
+            bk.text(272, y_p + 2, 124, 6, f"(แสดง 2 ช่วงแรกจาก {len(res.spans)} ช่วง", 5, RED)
+            bk.text(272, y_p + 7.5, 124, 6, "ช่วงที่เหลือดูในรายการคำนวณแบบสรุป)", 5, RED)
 
 
 def column_pages(bk: Book, res_all, b_, fc):
