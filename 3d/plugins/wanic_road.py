@@ -346,6 +346,113 @@ class SectionsView(QWidget):
                        f"NGL  =  {sec.z_ground:.3f}")
 
 
+class LandCheckDialog(QDialog):
+    """จ36 «ตรวจสอบพื้นที่ก่อสร้าง»: the summary in plain words, the table,
+    the footprint's width, and the report (PDF with the picture, CSV)."""
+
+    def __init__(self, panel, an, parcels, source):
+        super().__init__(panel)
+        from core import wanic_landcheck as LC
+        self.panel, self.an, self.parcels, self.source, self.LC = panel, an, parcels, source, LC
+        self.setWindowTitle("ตรวจสอบพื้นที่ก่อสร้าง — แปลงที่ดินที่แนวถนนผ่าน")
+        self.resize(1000, 640)
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("พื้นที่ก่อสร้าง:"))
+        self.mode = QComboBox()
+        self.mode.addItem("ตีนลาดถึงตีนลาด (ตามรูปตัดออกแบบ)", 0.0)
+        for w in (12.0, 16.0, 20.0, 30.0, 40.0):
+            self.mode.addItem(f"เขตทางกว้าง {w:g} ม.", w)
+        self.mode.currentIndexChanged.connect(lambda _i: self.run())
+        row.addWidget(self.mode)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        lay.addWidget(self.summary)
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(["ที่", "เลขที่ดิน", "พื้นที่แปลง (ตร.ม.)", "เข้าไป (ตร.ม.)",
+                                              "ไร่-งาน-ตร.ว.", "% ของแปลง", "ช่วง กม."])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        lay.addWidget(self.table, 1)
+        note = QLabel(f"<span style='color:#888'>ข้อมูลแปลงจากไฟล์ {source} · ใช้วางแผนเบื้องต้น ไม่ใช่การรังวัด"
+                      f"ของกรมที่ดิน</span><br><b>{LC.PERMISSION}</b>")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        b = QPushButton("📄 ออกรายงาน PDF (พร้อมภาพ)")
+        b.clicked.connect(lambda: _safe(self, self.export_pdf))
+        row.addWidget(b)
+        b = QPushButton("💾 ตาราง CSV")
+        b.clicked.connect(lambda: _safe(self, self.export_csv))
+        row.addWidget(b)
+        b = QPushButton("ปิด")
+        b.clicked.connect(self.accept)
+        row.addWidget(b)
+        lay.addLayout(row)
+        self.run()
+
+    def run(self):
+        LC = self.LC
+        w = float(self.mode.currentData() or 0.0)
+        self.chk = c = LC.check(self.an, self.parcels, w or None)
+        self.summary.setText(
+            f"<b>อ่านง่าย:</b> แนวถนนยาว {self.an.length:,.2f} ม. ผ่านที่ดิน <b>{len(c.taken)} แปลง</b> "
+            f"(ทราบเลขที่ดิน {len(c.known)} แปลง · <span style='color:#d97706'>ไม่ทราบเลขที่ดิน "
+            f"{len(c.unknown)} แปลง</span>) · เข้าไปในที่ดินรวม <b>{c.total:,.1f} ตร.ม. "
+            f"= {LC.rai_ngan_wa(c.total)} ไร่-งาน-ตร.ว.</b><br>พื้นที่ก่อสร้างทั้งหมด {c.footprint:,.1f} ตร.ม. "
+            f"({c.width_note}) · ส่วนที่ไม่อยู่ในแปลงใดของไฟล์ {c.outside:,.1f} ตร.ม. "
+            f"· อ่านแปลงจากไฟล์ {len(self.parcels)} แปลง")
+        from core.road import alignment as A
+        right = Qt.AlignRight | Qt.AlignVCenter
+        self.table.setRowCount(len(c.taken))
+        for r, t in enumerate(c.taken):
+            vals = [str(r + 1), t.parcel.number or "ไม่ทราบ", f"{t.parcel.area:,.1f}", f"{t.area:,.1f}",
+                    LC.rai_ngan_wa(t.area), f"{100 * t.share:.1f}",
+                    f"{A.format_station(t.s0, 0)} – {A.format_station(t.s1, 0)}"]
+            for k, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if k in (2, 3, 5):
+                    it.setTextAlignment(right)
+                if not t.parcel.number:
+                    it.setBackground(QColor("#fde7c8"))
+                    it.setForeground(QColor("#111"))
+                self.table.setItem(r, k, it)
+        self.table.resizeColumnsToContents()
+
+    def sheet(self):
+        from core import wanic_drawings as D
+        info = {"project": "ตรวจสอบพื้นที่ก่อสร้าง", "source": self.source}
+        from core import wanic_glossary as GL
+        from core import wanic_road_sheets as RS
+        sh = self.LC.report_sheet(self.an, self.chk, info)
+        GL.add_box(sh, GL.terms_in(sh.texts()), D.drawing_area())
+        sh.number = 1
+        D.frame(sh, info, 1, RS.ROLES)
+        sh.colors = dict(RS.COLORS, **RS.SAT_COLORS)
+        return sh
+
+    def export_pdf(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "บันทึกรายงาน", "ตรวจสอบพื้นที่ก่อสร้าง.pdf",
+                                                  "PDF (*.pdf)")
+            if not path:
+                return None
+        from plugins.wanic_building import render_pdf
+        render_pdf([self.sheet()], path, "A3")
+        return path
+
+    def export_csv(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "บันทึกตาราง", "แปลงที่ดินที่แนวถนนผ่าน.csv",
+                                                  "CSV (*.csv)")
+            if not path:
+                return None
+        self.LC.write_csv(self.chk, path)
+        return path
+
+
 class CentreFitDialog(QDialog):
     """จ35: what «ปรับค่ากึ่งกลาง» will do, in words anyone can follow,
     and every CL shot before and after — nothing changes until «ใช้»."""
@@ -746,6 +853,12 @@ class RoadPanel(QWidget):
         b.setToolTip("ชุดแบบ G (ผังสังเขป ข้อมูลออกแบบ ตารางโค้ง หมุด), PP (แปลนและรูปตัดตามยาว "
                      "พร้อมแถบระดับ), ST (รูปตัดขวางทุกสถานี พร้อมพื้นที่/ปริมาตร), VT (ตารางปริมาณดิน)")
         b.clicked.connect(lambda: _safe(self, self.export_sheets))
+        lay.addWidget(b)
+        b = QPushButton("🗺 ตรวจสอบพื้นที่ก่อสร้าง (แปลงที่ดิน)…")
+        b.setToolTip("แนวถนนผ่านที่ดินกี่แปลง แปลงไหนทราบ/ไม่ทราบเลขที่ดิน เข้าไปในที่ดินกี่ไร่-งาน-ตร.ว. "
+                     "และรายงาน PDF พร้อมภาพ — จากไฟล์แปลงที่ดิน KML/KMZ (LandsMaps, Google Earth), "
+                     "GeoJSON, DXF หรือ CSV")
+        b.clicked.connect(lambda: _safe(self, self.land_check))
         lay.addWidget(b)
         try:
             from core.wanic_sign import label_html
@@ -1436,6 +1549,29 @@ class RoadPanel(QWidget):
         QMessageBox.information(self, TITLE, f"ส่งออกแบบงานทาง {len(sheets)} แผ่น ({groups})\n"
                                 + "\n".join(saved) + (f"\n\n{site_note}" if site_note else ""))
         return saved
+
+    def land_check(self, path=None):
+        """จ36: the parcels the road takes, from a parcel file."""
+        an = self._ensure()
+        if an is None:
+            return None
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "เลือกไฟล์แปลงที่ดิน", "",
+                "แปลงที่ดิน (*.kml *.kmz *.geojson *.json *.dxf *.csv *.txt)")
+            if not path:
+                return None
+        from core import wanic_landcheck as LC
+        zone, datum = self._zone_datum()
+        parcels = LC.read_file(path, zone, datum)
+        if not parcels:
+            QMessageBox.information(self, TITLE, "ไม่พบรูปแปลงที่ดิน (รูปปิด) ในไฟล์นี้")
+            return None
+        dlg = LandCheckDialog(self, an, parcels, Path(path).name)
+        self.land_dialog = dlg
+        if not os.environ.get("WANIC_OFFLINE"):
+            dlg.exec()
+        return dlg
 
     def _site_map(self, an, info):
         """The location sheet's pictures: satellite tiles (downloaded in the
