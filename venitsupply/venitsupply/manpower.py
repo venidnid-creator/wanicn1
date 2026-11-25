@@ -177,6 +177,11 @@ SAMPLE_STANDARD = ("บรรณารักษ์", """
 """)
 
 
+KNOWN_SIDES = {s.replace(" ", "") for s in SIDES} | {"ด้านบริการ", "ด้านแผนงาน", "ด้านบริหารงาน", "ด้านการบริหารงาน",
+                                                     "ด้านการบริหาร", "ด้านการบริหารงานทรัพยากรบุคคล",
+                                                     "ด้านบริหารทรัพยากรและงบประมาณ"}
+
+
 def parse_standard(text: str) -> list[tuple[str, str]]:
     """Text pasted from a มาตรฐานกำหนดตำแหน่ง → [(ด้าน, ลักษณะงาน)].
 
@@ -190,9 +195,15 @@ def parse_standard(text: str) -> list[tuple[str, str]]:
             continue
         if line.startswith("คุณสมบัติเฉพาะ"):
             break
-        m = re.match(r"^\d+\s*[.)]\s*(ด้าน\S.*)$", line) or re.match(r"^(ด้าน\S+)$", line)
-        if m:
+        m = re.match(r"^\d+\s*[.,)]\s*\S{0,2}?(ด้าน\S.*)$", line)
+        if not m:
+            m = re.match(r"^(ด้าน\S+)$", line)
+            if m and re.sub(r"\s+", "", m.group(1)) not in KNOWN_SIDES:
+                m = None                      # บรรทัดต่อของข้อก่อนหน้าที่ขึ้นต้นด้วย «ด้าน…»
+        if m and len(m.group(1)) <= 45:
             name = re.sub(r"\s+", "", m.group(1))
+            name = {"ด้านบริการ": "ด้านการบริการ", "ด้านปฏิบัติการ": "ด้านการปฏิบัติการ",
+                    "ด้านวางแผน": "ด้านการวางแผน", "ด้านประสานงาน": "ด้านการประสานงาน"}.get(name, name)
             side = next((s for s in SIDES if s.replace(" ", "") == name), m.group(1).strip())
             continue
         if side is None:
@@ -207,6 +218,28 @@ def parse_standard(text: str) -> list[tuple[str, str]]:
         else:
             out.append([side, line])
     return [(a, re.sub(r"\s+", " ", b)) for a, b in out]
+
+
+def propose_subs(text: str) -> list[str]:
+    """แตกข้อมาตรฐานเป็นหัวข้อย่อยที่นับปริมาณงานได้: รายการหลัง «เช่น …» (ตัดส่วน «เพื่อ…» ออก).
+    ข้อที่ไม่มีรายการ «เช่น» ไม่แตก — เจ้าหน้าที่เพิ่มหัวข้อย่อยเองได้."""
+    t = re.sub(r"\s+", " ", text or "").strip()
+    i = t.find(" เพื่อ")
+    core = t[:i] if i > 10 else t
+    if "เช่น" not in core:
+        return []
+    head, lst = core.split("เช่น", 1)
+    lst = re.sub(r"\s*(เป็นต้น|ฯลฯ|และอื่น ?ๆ|อื่น ?ๆ)\s*$", "", lst.strip())
+    parts = [p for p in re.split(r"\s*[,、]\s*|\s+(?=การ)", lst) if p.strip()]
+    if len(parts) < 2:
+        parts = [p for p in lst.split(" ") if p.strip()]
+    parts = [re.sub(r"^และ", "", p).strip(" ,") for p in parts]
+    parts = [p for p in parts if len(p) >= 2 and p not in ("และ", "หรือ")]
+    if len(parts) < 2:
+        return []
+    verb = re.split(r"(?:ในงาน|ใน|เกี่ยวกับ|ด้าน|ต่าง ?ๆ)", head.strip(), maxsplit=1)[0].strip() or head.strip()
+    verb = re.sub(r"(ข้อมูล)$", "", verb).strip() or verb
+    return [f"{verb} — {p}" for p in parts][:12]
 
 
 def base_title(title: str) -> str:
@@ -226,7 +259,7 @@ def need_people(fte: float) -> int:
 SQL = """
 CREATE TABLE IF NOT EXISTS duties(
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, side TEXT NOT NULL, seq INTEGER DEFAULT 0, text TEXT NOT NULL,
-  source TEXT DEFAULT '');
+  source TEXT DEFAULT '', parent_id INTEGER);
 CREATE TABLE IF NOT EXISTS pos_load(
   id INTEGER PRIMARY KEY, position_id INTEGER NOT NULL REFERENCES positions(id), duty_id INTEGER,
   side TEXT DEFAULT '', task TEXT NOT NULL, seq INTEGER DEFAULT 0, minutes REAL DEFAULT 0, volume REAL DEFAULT 0,
@@ -243,7 +276,7 @@ class ManpowerMixin:
                                  ("positions", "seq", "INTEGER DEFAULT 0"), ("positions", "is_head", "INTEGER DEFAULT 0"),
                                  ("positions", "position_no", "TEXT DEFAULT ''"),
                                  ("hire_tasks", "side", "TEXT DEFAULT ''"), ("hire_tasks", "duty_id", "INTEGER"),
-                                 ("hire_jobs", "position_id", "INTEGER")):
+                                 ("hire_jobs", "position_id", "INTEGER"), ("duties", "parent_id", "INTEGER")):
             cols = [r[1] for r in self.con.execute(f"PRAGMA table_info({table})")]
             if col not in cols:
                 self.con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
@@ -349,36 +382,94 @@ class ManpowerMixin:
         rows |= {base_title(r["title"]) for r in self.q("SELECT DISTINCT title FROM hire_jobs")}
         return sorted(t for t in rows if t)
 
+    def standard_for(self, title) -> str:
+        """ตำแหน่ง → ชื่อมาตรฐานกำหนดตำแหน่งที่ใช้: ตัวเองถ้ามี; หัวหน้า «… (นักบริหารงาน… ระดับ…)» → นักบริหารงาน…;
+        «ผู้ช่วย…» (พนักงานจ้าง) → ตำแหน่งหลัก; ชื่อที่เขียนต่างกันเล็กน้อย (วิศวกร/วิศวกรรม)."""
+        have = {r["title"] for r in self.q("SELECT DISTINCT title FROM duties WHERE parent_id IS NULL")}
+        t = base_title(title)
+        cands = [t]
+        m = re.search(r"\((นักบริหารงาน[^)]*?)(?:\s*ระดับ[^)]*)?\)", title or "")
+        if m:
+            cands.insert(0, m.group(1).strip())
+        if t.startswith("ผู้ช่วย") and len(t) > 7:
+            cands.append(t[len("ผู้ช่วย"):])
+        cands += [c.replace("วิศวกร", "วิศวกรรม", 1) for c in list(cands) if c.startswith("วิศวกร")]
+        for c in cands:
+            if c in have:
+                return c
+            for h in sorted(have, key=len, reverse=True):     # นักบริหารงานสาธารณสุขและสิ่งแวดล้อม → นักบริหารงานสาธารณสุข
+                if c.startswith("นักบริหารงาน") and c.startswith(h):
+                    return h
+        return t
+
     def duties(self, title):
-        return self.q("SELECT * FROM duties WHERE title=? ORDER BY seq, id", (base_title(title),))
+        """ทุกข้อของตำแหน่ง (ข้อหลักและหัวข้อย่อย) ตามลำดับแสดงผล."""
+        return [r["duty"] for r in self.duty_rows(title)]
+
+    def duty_rows(self, title) -> list[dict]:
+        """[{duty, no '1.1' / '1.1.1', level 0/1, has_subs}] เรียงตามด้าน (SIDES) แล้วลำดับ."""
+        title = base_title(title)
+        rows = self.q("SELECT * FROM duties WHERE title=? ORDER BY seq, id", (title,))
+        mains = [r for r in rows if not r["parent_id"]]
+        subs = {}
+        for r in rows:
+            if r["parent_id"]:
+                subs.setdefault(r["parent_id"], []).append(r)
+        order = {s: i for i, s in enumerate(SIDES)}
+        sides = []
+        for r in mains:
+            if r["side"] not in sides:
+                sides.append(r["side"])
+        sides.sort(key=lambda s: order.get(s, 9))
+        out = []
+        for si, side in enumerate(sides, 1):
+            k = 0
+            for r in (x for x in mains if x["side"] == side):
+                k += 1
+                ss = subs.get(r["id"], [])
+                out.append(dict(duty=r, no=f"{si}.{k}", level=0, has_subs=bool(ss)))
+                for j, s in enumerate(ss, 1):
+                    out.append(dict(duty=s, no=f"{si}.{k}.{j}", level=1, has_subs=False))
+        return out
 
     def save_duty(self, data: dict, did=None) -> int:
-        d = {k: data[k] for k in ("title", "side", "seq", "text", "source") if k in data}
+        d = {k: data[k] for k in ("title", "side", "seq", "text", "source", "parent_id") if k in data}
         if "title" in d:
             d["title"] = base_title(d["title"])
+        if d.get("parent_id"):
+            par = self.one("SELECT * FROM duties WHERE id=?", (d["parent_id"],))
+            d["title"], d["side"] = par["title"], par["side"]
         if "text" in d and not str(d["text"]).strip():
             raise ValueError("กรอกลักษณะงานที่ปฏิบัติ")
         if did:
             self.run(f"UPDATE duties SET {','.join(f'{k}=?' for k in d)} WHERE id=?", (*d.values(), did))
-            self.run("UPDATE pos_load SET task=?, side=? WHERE duty_id=?",
-                     (self.one("SELECT text FROM duties WHERE id=?", (did,))["text"],
-                      self.one("SELECT side FROM duties WHERE id=?", (did,))["side"], did))
-            self.run("UPDATE hire_tasks SET task=?, side=? WHERE duty_id=?",
-                     (self.one("SELECT text FROM duties WHERE id=?", (did,))["text"],
-                      self.one("SELECT side FROM duties WHERE id=?", (did,))["side"], did))
+            r = self.one("SELECT text, side FROM duties WHERE id=?", (did,))
+            self.run("UPDATE duties SET side=? WHERE parent_id=?", (r["side"], did))
+            for tbl in ("pos_load", "hire_tasks"):
+                self.run(f"UPDATE {tbl} SET task=?, side=? WHERE duty_id=?", (r["text"], r["side"], did))
             return did
         if "seq" not in d:
-            d["seq"] = (self.one("SELECT IFNULL(MAX(seq),0) AS s FROM duties WHERE title=?", (d["title"],))["s"] or 0) + 1
+            if d.get("parent_id"):
+                q = ("SELECT IFNULL(MAX(seq),0) AS s FROM duties WHERE parent_id=?", (d["parent_id"],))
+            else:
+                q = ("SELECT IFNULL(MAX(seq),0) AS s FROM duties WHERE title=? AND parent_id IS NULL", (d["title"],))
+            d["seq"] = (self.one(*q)["s"] or 0) + 1
         return self.run(f"INSERT INTO duties({','.join(d)}) VALUES({','.join('?' * len(d))})", tuple(d.values()))
 
     def delete_duty(self, did):
+        for s in self.q("SELECT id FROM duties WHERE parent_id=?", (did,)):
+            self.delete_duty(s["id"])
         self.run("DELETE FROM pos_load WHERE duty_id=?", (did,))
         self.run("UPDATE hire_tasks SET duty_id=NULL WHERE duty_id=?", (did,))
         self.run("DELETE FROM duties WHERE id=?", (did,))
 
     def move_duty(self, did, step):
         d = self.one("SELECT * FROM duties WHERE id=?", (did,))
-        rows = [r["id"] for r in self.duties(d["title"])]
+        if d["parent_id"]:
+            rows = [r["id"] for r in self.q("SELECT id FROM duties WHERE parent_id=? ORDER BY seq, id", (d["parent_id"],))]
+        else:
+            rows = [r["id"] for r in self.q("SELECT id FROM duties WHERE title=? AND side=? AND parent_id IS NULL "
+                                             "ORDER BY seq, id", (d["title"], d["side"]))]
         i = rows.index(did)
         j = max(0, min(len(rows) - 1, i + step))
         rows.insert(j, rows.pop(i))
@@ -386,21 +477,120 @@ class ManpowerMixin:
             self.con.execute("UPDATE duties SET seq=? WHERE id=?", (k, rid))
         self.con.commit()
 
-    def import_standard(self, title, text, replace=False, source="") -> int:
-        items = parse_standard(text)
+    def add_proposed_subs(self, did) -> int:
+        """หัวข้อย่อยที่โปรแกรมเสนอจากข้อความของข้อหลัก (เฉพาะข้อที่ยังไม่มีหัวข้อย่อย)."""
+        if self.q("SELECT 1 FROM duties WHERE parent_id=?", (did,)):
+            return 0
+        d = self.one("SELECT * FROM duties WHERE id=?", (did,))
+        n = 0
+        for s in propose_subs(d["text"]):
+            self.save_duty(dict(parent_id=did, text=s, source="หัวข้อย่อยที่โปรแกรมเสนอ"))
+            n += 1
+        return n
+
+    def import_standard(self, title, text, replace=False, source="", subs=True) -> int:
+        items = parse_standard(text) if isinstance(text, str) else list(text)
         if not items:
             raise ValueError("ไม่พบหัวข้อ «๑. ด้านการปฏิบัติการ» และข้อย่อย «๑.๑ …» ในข้อความ")
         title = base_title(title)
         if replace:
-            for r in self.duties(title):
+            for r in self.q("SELECT id FROM duties WHERE title=? AND parent_id IS NULL", (title,)):
                 self.delete_duty(r["id"])
-        have = {(r["side"], r["text"]) for r in self.duties(title)}
+        have = {(r["side"], r["text"]) for r in self.q("SELECT * FROM duties WHERE title=? AND parent_id IS NULL",
+                                                       (title,))}
         n = 0
         for side, text_ in items:
             if (side, text_) not in have:
-                self.save_duty(dict(title=title, side=side, text=text_, source=source))
+                did = self.save_duty(dict(title=title, side=side, text=text_, source=source))
+                if subs:
+                    self.add_proposed_subs(did)
                 n += 1
         return n
+
+    def load_bundled_standards(self, force=False) -> int:
+        """มาตรฐานกำหนดตำแหน่ง อบต.ไม้ขาว (ไฟล์ data/standards_maikhao.json — อ่านจาก PDF ของ อบต. แล้วตรวจทาน)
+        ใส่ให้ตำแหน่งที่ยังไม่มีมาตรฐาน; ไม่แตะตำแหน่งที่เจ้าหน้าที่แก้ไว้แล้ว."""
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parent / "data" / "standards_maikhao.json"
+        if not p.exists():
+            return 0
+        n = 0
+        for e in json.loads(p.read_text(encoding="utf-8")):
+            title = base_title(e["title"])
+            if not force and self.q("SELECT 1 FROM duties WHERE title=?", (title,)):
+                continue
+            items = [(x["side"], x["text"]) for x in e["duties"]]
+            if items:
+                n += self.import_standard(title, items, source=f"มาตรฐานกำหนดตำแหน่ง {e.get('code', '')} "
+                                                              "(เว็บไซต์ อบต.ไม้ขาว)")
+        return n
+
+    def merge_manpower(self, template=None) -> dict:
+        """เติมโครงสร้างตามแม่แบบลงในฐานข้อมูลเดิมโดยไม่ลบของเดิม: หน่วยงานที่ชื่อตรงหรือใกล้เคียง (เช่น «คลัง» กับ
+        «กองคลัง») ถือเป็นหน่วยงานเดียวกัน — เปลี่ยนเป็นชื่อทางการและเก็บชื่อเดิมไว้ในชื่อย่อ; ตำแหน่งที่มีอยู่แล้วไม่แก้."""
+        template = MAIKHAO_2570 if template is None else template
+        n = dict(units=0, positions=0)
+
+        def norm(s):
+            return re.sub(r"^(กอง|ฝ่าย|งาน|สำนัก)", "", re.sub(r"\s+", "", s or ""))
+
+        def find(name, aliases, parent):
+            rows = self.divisions(parent) if parent else self.divisions()
+            keys = {norm(name)} | {norm(a) for a in aliases.split(",") if a.strip()}
+            for r in rows:
+                if r["name"] == name or norm(r["name"]) in keys or any(
+                        norm(a) in keys for a in (r["aliases"] or "").split(",") if a.strip()):
+                    return r
+            return None
+
+        def add(u, parent):
+            short = u["head"][0].split(" (")[0] if u.get("head") else ""
+            ex = find(u["name"], u.get("aliases", ""), parent)
+            if ex is None:
+                did = self.save_division(dict(parent_id=parent, kind=u["kind"], name=u["name"],
+                                              aliases=u.get("aliases", ""), head_pos=short))
+                n["units"] += 1
+            else:
+                did = ex["id"]
+                al = [a.strip() for a in ((ex["aliases"] or "") + "," + u.get("aliases", "")).split(",") if a.strip()]
+                if ex["name"] != u["name"]:
+                    al.append(ex["name"])
+                upd = dict(name=u["name"], kind=u["kind"], aliases=",".join(dict.fromkeys(al)))
+                if not ex["head_pos"] and short:
+                    upd["head_pos"] = short
+                self.save_division(upd, did)
+            have = {base_title(p["title"]) for p in self.positions(did)}
+            rows = ([(u["head"][0], u["head"][1], "อ", 1, u["head"][2], 1)] if u.get("head") else []) + \
+                   [(t, lv, st, fr, vac, 0) for t, lv, st, fr, vac in u.get("pos", [])]
+            for t, lv, st, frame, vac, head in rows:
+                if base_title(t) in have:
+                    continue
+                line = "วิชาการ" if st in ("ว", "ค", "อ") or t.startswith(("ผู้ช่วยนัก", "ผู้ช่วยนิติกร")) else "ทั่วไป"
+                self.save_position(dict(division_id=did, title=t, level=lv, line=line, kind=STAFF[st], count=frame,
+                                        occupied=frame - vac, is_head=head))
+                n["positions"] += 1
+            for s in u.get("sub", []):
+                add(s, did)
+        for u in template:
+            add(u, None)
+        self.con.commit()
+        return n
+
+    def ensure_manpower(self) -> dict:
+        """ทำครั้งเดียวต่อไฟล์ (เจ้าของสั่ง 25 พ.ย. 2569): ส่วนราชการครบทุกกองตามแผนอัตรากำลัง + มาตรฐานกำหนดตำแหน่ง —
+        เฉพาะ อบต.ไม้ขาว (ชื่อหน่วยงานว่างหรือมีคำว่า «ไม้ขาว»)."""
+        org = self.setting("org_name") or ""
+        out = dict(units=0, positions=0, standards=0)
+        if org and "ไม้ขาว" not in org:
+            return out
+        if self.setting("manpower_template") != "MAIKHAO_2570":
+            out.update(self.merge_manpower())
+            self.set_setting("manpower_template", "MAIKHAO_2570")
+        if self.setting("standards_loaded") != "1":
+            out["standards"] = self.load_bundled_standards()
+            self.set_setting("standards_loaded", "1")
+        return out
 
     # ----------------------------------------------------- workload
     def pos_load(self, pid):
@@ -418,16 +608,27 @@ class ManpowerMixin:
         self.con.commit()
 
     def load_rows_from_standard(self, pid) -> list[dict]:
-        """ลักษณะงานของตำแหน่ง: ที่บันทึกไว้ + ข้อที่ยังไม่มีจากมาตรฐานกำหนดตำแหน่ง (ค่าว่างให้เจ้าหน้าที่เติมเอง)."""
+        """ลักษณะงานของตำแหน่งจากมาตรฐานกำหนดตำแหน่ง (ข้อหลัก + หัวข้อย่อย) พร้อมค่าที่บันทึกไว้;
+        ข้อหลักที่มีหัวข้อย่อยเป็นหัวเรื่อง (kind="head") — กรอกปริมาณงานที่หัวข้อย่อย; ค่าว่างให้เจ้าหน้าที่เติมเอง."""
         p = self.one("SELECT * FROM positions WHERE id=?", (pid,))
-        have = [dict(r) for r in self.pos_load(pid)]
-        used = {r["duty_id"] for r in have if r["duty_id"]}
-        for d in self.duties(p["title"]):
-            if d["id"] not in used:
-                have.append(dict(duty_id=d["id"], side=d["side"], task=d["text"], minutes=0, volume=0, y1=0, y2=0, y3=0))
+        saved = {r["duty_id"]: dict(r) for r in self.pos_load(pid) if r["duty_id"]}
+        out = []
+        for x in self.duty_rows(self.standard_for(p["title"])):
+            d = x["duty"]
+            base = dict(duty_id=d["id"], side=d["side"], task=d["text"], no=x["no"], level=x["level"])
+            if x["has_subs"]:
+                out.append(dict(base, kind="head"))
+                continue
+            v = saved.pop(d["id"], {})
+            out.append(dict(base, kind="leaf", minutes=v.get("minutes", 0), volume=v.get("volume", 0),
+                            y1=v.get("y1", 0), y2=v.get("y2", 0), y3=v.get("y3", 0)))
+        for r in self.pos_load(pid):          # ข้อที่ไม่อยู่ในมาตรฐานแล้ว (เช่น ข้อมูลเดิม) — แสดงไว้ท้ายด้านนั้น
+            if not r["duty_id"] or r["duty_id"] in saved:
+                out.append(dict(duty_id=r["duty_id"], side=r["side"], task=r["task"], no="", level=0, kind="leaf",
+                                minutes=r["minutes"], volume=r["volume"], y1=r["y1"], y2=r["y2"], y3=r["y3"]))
         order = {s: i for i, s in enumerate(SIDES)}
-        have.sort(key=lambda r: (order.get(r["side"], 9), r.get("seq") or 999))
-        return have
+        sides = list(dict.fromkeys(r["side"] for r in out))
+        return sorted(out, key=lambda r: (order.get(r["side"], 9), sides.index(r["side"])))
 
     def position_analysis(self, pid) -> dict:
         p = self.one("SELECT * FROM positions WHERE id=?", (pid,))

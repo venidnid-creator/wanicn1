@@ -3,6 +3,8 @@
 ภาระงานรายตำแหน่ง และตารางวิเคราะห์ว่าต้องการคนเพิ่มกี่คน."""
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit,
@@ -321,20 +323,25 @@ class OrgTab(QWidget):
 
 # ============================================================== workload
 class WorkloadDialog(QDialog):
-    """ภาระงานของตำแหน่ง: ลักษณะงานจากมาตรฐานกำหนดตำแหน่ง (แยกตามด้าน) — เจ้าหน้าที่เติมเวลาและปริมาณงานเอง."""
+    """ภาระงานของตำแหน่ง: ลักษณะงานจากมาตรฐานกำหนดตำแหน่ง แยกด้าน และหัวข้อย่อย (1.1.1 …) ที่นับปริมาณงานได้ —
+    เจ้าหน้าที่เติมเวลาต่อรายและปริมาณงานเอง."""
 
-    HEAD = ["ด้าน / ลักษณะงานที่ปฏิบัติ (จากมาตรฐานกำหนดตำแหน่ง)", "นาที/ราย", "ปริมาณ/ปี", "นาที/ปี", "คน",
+    HEAD = ["ด้าน / ข้อ / หัวข้อย่อย (จากมาตรฐานกำหนดตำแหน่ง)", "นาที/ราย", "ปริมาณ/ปี", "นาที/ปี", "คน",
             "ย้อนหลัง 3 ปี", "ย้อนหลัง 2 ปี", "ย้อนหลัง 1 ปี"]
+    BAND = "#E8EEF5"
 
     def __init__(self, parent, store, pid):
         super().__init__(parent)
         self.s, self.pid = store, pid
         p = store.position(pid)
-        self.title_ = M.base_title(p["title"])
+        self.std = store.standard_for(p["title"])
         self.setWindowTitle(T("ภาระงาน") + f" — {p['title']} · {p['division']}")
         lay = QVBoxLayout(self)
-        info = QLabel(T(f"ลักษณะงานของ «{self.title_}» นำมาจากมาตรฐานกำหนดตำแหน่ง (แท็บ «มาตรฐานกำหนดตำแหน่ง») · "
-                        "เติมเวลาที่ใช้ต่อราย (นาที) และปริมาณงานต่อปีเอง · แถวที่ว่างไม่นำมาคำนวณ"))
+        via = "" if self.std == M.base_title(p["title"]) else f" (ใช้มาตรฐานของ «{self.std}»)"
+        has = bool(store.q("SELECT 1 FROM duties WHERE title=?", (self.std,)))
+        info = QLabel(T(f"ลักษณะงานจากมาตรฐานกำหนดตำแหน่ง «{self.std}»{via} แยกด้านและหัวข้อย่อย · เติมเวลาที่ใช้ต่อราย "
+                        "(นาที) และปริมาณงานต่อปีเองที่หัวข้อย่อย · แถวที่ว่างไม่นำมาคำนวณ")
+                     + ("" if has else T(" — ตำแหน่งนี้ยังไม่มีมาตรฐาน: เพิ่มที่แท็บ «มาตรฐานกำหนดตำแหน่ง» หรือปุ่มด้านล่าง")))
         info.setWordWrap(True)
         lay.addWidget(info)
         self.t = QTableWidget(0, len(self.HEAD))
@@ -349,12 +356,29 @@ class WorkloadDialog(QDialog):
         self.res = QLabel()
         self.res.setTextFormat(Qt.RichText)
         lay.addWidget(self.res)
-        row, _ = _buttons(("เพิ่มลักษณะงานในมาตรฐาน…", self.add_duty), ("ลบแถว", self.del_row), (None, None))
+        row, _ = _buttons(("เพิ่มข้อในมาตรฐาน…", self.add_duty), ("เพิ่มหัวข้อย่อย…", self.add_sub),
+                          ("แก้ไขข้อความ…", self.edit_row), ("ลบแถว", self.del_row), (None, None))
         lay.addLayout(row)
         lay.addWidget(_bb(self))
         self._busy = False
         self.load(store.load_rows_from_standard(pid))
         fit_to_screen(self, px(1250), px(780))
+
+    def _cell(self, i, c, text, editable=False, band=False, bold=False, italic=False, right=False):
+        x = QTableWidgetItem(text)
+        x.setFlags((Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable) if editable
+                   else (Qt.ItemIsEnabled | Qt.ItemIsSelectable))
+        if band:
+            x.setBackground(QColor(self.BAND))
+        if bold or italic:
+            f = x.font()
+            f.setBold(bold)
+            f.setItalic(italic)
+            x.setFont(f)
+        if right:
+            x.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.t.setItem(i, c, x)
+        return x
 
     def load(self, rows):
         self._busy = True
@@ -365,33 +389,26 @@ class WorkloadDialog(QDialog):
                 side = r["side"]
                 i = self.t.rowCount()
                 self.t.insertRow(i)
-                it = QTableWidgetItem(side or T("ลักษณะงาน"))
-                f = it.font()
-                f.setBold(True)
-                it.setFont(f)
-                it.setFlags(Qt.ItemIsEnabled)
-                it.setBackground(QColor("#E8EEF5"))
-                self.t.setItem(i, 0, it)
+                self._cell(i, 0, side or T("ลักษณะงาน"), band=True, bold=True)
                 for c in range(1, len(self.HEAD)):
-                    x = QTableWidgetItem("")
-                    x.setFlags(Qt.ItemIsEnabled)
-                    x.setBackground(QColor("#E8EEF5"))
-                    self.t.setItem(i, c, x)
+                    self._cell(i, c, "", band=True)
             i = self.t.rowCount()
             self.t.insertRow(i)
-            it = QTableWidgetItem(r["task"])
+            pad = "  " if r.get("level") else ""
+            label = f"{pad}{r.get('no') or ''} {r['task']}".rstrip()
+            it = self._cell(i, 0, label, italic=r.get("kind") == "head")
             it.setToolTip(r["task"])
-            it.setData(Qt.UserRole, dict(duty_id=r.get("duty_id"), side=r["side"]))
-            it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.t.setItem(i, 0, it)
+            if r.get("kind") == "head":
+                it.setData(Qt.UserRole + 1, dict(duty_id=r["duty_id"], side=r["side"], task=r["task"], head=True))
+                for c in range(1, len(self.HEAD)):
+                    self._cell(i, c, "")
+                continue
+            it.setData(Qt.UserRole, dict(duty_id=r.get("duty_id"), side=r["side"], task=r["task"]))
             vals = [r.get("minutes"), r.get("volume"), None, None, r.get("y1"), r.get("y2"), r.get("y3")]
             for c, v in enumerate(vals, 1):
-                x = QTableWidgetItem("" if not v else f"{v:g}")
-                x.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                x = self._cell(i, c, "" if not v else f"{v:g}", editable=c not in (3, 4), right=True)
                 if c in (3, 4):
-                    x.setFlags(Qt.ItemIsEnabled)
                     x.setForeground(QColor(MUTED))
-                self.t.setItem(i, c, x)
         self._busy = False
         self._recalc()
 
@@ -407,7 +424,7 @@ class WorkloadDialog(QDialog):
             meta = self.t.item(r, 0).data(Qt.UserRole)
             if not meta:
                 continue
-            out.append(dict(duty_id=meta.get("duty_id"), side=meta.get("side", ""), task=self.t.item(r, 0).text(),
+            out.append(dict(duty_id=meta.get("duty_id"), side=meta.get("side", ""), task=meta.get("task", ""),
                             minutes=self._num(r, 1), volume=self._num(r, 2), y1=self._num(r, 5), y2=self._num(r, 6),
                             y3=self._num(r, 7)))
         return out
@@ -437,33 +454,70 @@ class WorkloadDialog(QDialog):
                          f"{T('ต้องการ')} <b>{need}</b> · {T('กรอบ')} {p['count']} · {T('มีคนครอง')} {occ} · "
                          f"<b style='color:{col}'>{T('ขาด') if short > 0 else T('ขาด/เกิน')} {short:+d}</b>")
 
+    def _reload(self):
+        """อ่านมาตรฐานใหม่ (หลังเพิ่ม/แก้/ลบข้อ) โดยคงค่าที่กรอกไว้."""
+        cur = {r["duty_id"]: r for r in self.rows() if r["duty_id"]}
+        rows = self.s.load_rows_from_standard(self.pid)
+        for r in rows:
+            if r.get("kind") == "leaf" and r["duty_id"] in cur:
+                v = cur[r["duty_id"]]
+                r.update(minutes=v["minutes"], volume=v["volume"], y1=v["y1"], y2=v["y2"], y3=v["y3"])
+        self.load(rows)
+
+    def _selected(self):
+        r = self.t.currentRow()
+        if r < 0:
+            return None
+        it = self.t.item(r, 0)
+        return it.data(Qt.UserRole) or it.data(Qt.UserRole + 1)
+
     def add_duty(self):
-        f = [("side", "ด้าน", "edit-combo", M.SIDES), ("text", "ลักษณะงานที่ปฏิบัติ", "multi")]
-        dlg = FormDialog(self, T("เพิ่มลักษณะงานในมาตรฐานกำหนดตำแหน่ง") + f" — {self.title_}", f,
-                         dict(side=M.SIDES[0]))
+        f = [("side", "ด้าน", "edit-combo", M.SIDES), ("text", "ลักษณะงานที่ปฏิบัติ (ข้อ)", "multi")]
+        dlg = FormDialog(self, T("เพิ่มข้อในมาตรฐานกำหนดตำแหน่ง") + f" — {self.std}", f, dict(side=M.SIDES[0]))
         if dlg.exec():
             v = dlg.values()
-            did = _do(self, self.s.save_duty, dict(title=self.title_, side=v["side"], text=v["text"]))
-            if did:
-                rows = self.rows()
-                rows.append(dict(duty_id=did, side=v["side"], task=v["text"].strip(), minutes=0, volume=0))
-                order = {s: i for i, s in enumerate(M.SIDES)}
-                rows.sort(key=lambda r: order.get(r["side"], 9))
-                self.load(rows)
+            if _do(self, self.s.save_duty, dict(title=self.std, side=v["side"], text=v["text"])):
+                self._reload()
+
+    def add_sub(self):
+        meta = self._selected()
+        if not meta or not meta.get("duty_id"):
+            return need_selection(self)
+        d = self.s.one("SELECT * FROM duties WHERE id=?", (meta["duty_id"],))
+        parent = d["parent_id"] or d["id"]
+        main = self.s.one("SELECT * FROM duties WHERE id=?", (parent,))
+        dlg = FormDialog(self, T("เพิ่มหัวข้อย่อย"), [("text", f"หัวข้อย่อยของ: {main['text'][:60]}…", "multi")])
+        if dlg.exec() and _do(self, self.s.save_duty, dict(parent_id=parent, text=dlg.values()["text"])):
+            self._reload()
+
+    def edit_row(self):
+        meta = self._selected()
+        if not meta or not meta.get("duty_id"):
+            return need_selection(self)
+        d = self.s.one("SELECT * FROM duties WHERE id=?", (meta["duty_id"],))
+        dlg = FormDialog(self, T("แก้ไขข้อความ (มาตรฐานกำหนดตำแหน่ง)"), [("text", "ข้อความ", "multi")],
+                         dict(text=d["text"]))
+        if dlg.exec() and _do(self, self.s.save_duty, dict(text=dlg.values()["text"]), d["id"]):
+            self._reload()
 
     def del_row(self):
-        r = self.t.currentRow()
-        if r < 0 or not self.t.item(r, 0).data(Qt.UserRole):
+        meta = self._selected()
+        if not meta:
             return need_selection(self)
-        meta = self.t.item(r, 0).data(Qt.UserRole)
-        if meta.get("duty_id") and QMessageBox.question(
-                self, PRODUCT_TH, T("ลบลักษณะงานนี้ออกจากมาตรฐานกำหนดตำแหน่งด้วยหรือไม่? "
-                                    "(ไม่ = ลบเฉพาะจากภาระงานของตำแหน่งนี้)")) == QMessageBox.Yes:
-            self.s.delete_duty(meta["duty_id"])
-        rows = [x for k, x in enumerate(self.rows()) if not (x["task"] == self.t.item(r, 0).text()
-                                                               and x["duty_id"] == meta.get("duty_id"))]
-        self._removed = getattr(self, "_removed", set()) | {meta.get("duty_id")}
-        self.load(rows)
+        if meta.get("duty_id"):
+            ans = QMessageBox.question(
+                self, PRODUCT_TH, T("ลบข้อนี้ (และหัวข้อย่อย) ออกจากมาตรฐานกำหนดตำแหน่ง?\n"
+                                    "ไม่ = ล้างเฉพาะตัวเลขที่กรอกของตำแหน่งนี้"),
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if ans == QMessageBox.Cancel:
+                return
+            if ans == QMessageBox.Yes:
+                self.s.delete_duty(meta["duty_id"])
+                return self._reload()
+        r = self.t.currentRow()
+        for c in (1, 2, 5, 6, 7):
+            if self.t.item(r, c):
+                self.t.item(r, c).setText("")
 
     def accept(self):
         rows = [r for r in self.rows() if r["minutes"] or r["volume"] or r["y1"] or r["y2"] or r["y3"]]
@@ -487,6 +541,12 @@ class StandardsTab(QWidget):
         self.search.setPlaceholderText(T("ค้นหาตำแหน่ง…"))
         self.search.textChanged.connect(self.load_titles)
         ll.addWidget(self.search)
+        self.line = QComboBox()
+        for k, lab in (("", "ทุกสายงาน"), ("2", "สายบริหาร (นักบริหารงาน…)"), ("3", "สายวิชาการ"), ("4", "สายทั่วไป"),
+                       ("x", "ตำแหน่งที่ยังไม่มีมาตรฐาน")):
+            self.line.addItem(T(lab), k)
+        self.line.currentIndexChanged.connect(self.load_titles)
+        ll.addWidget(self.line)
         self.titles = QListWidget()
         self.titles.currentTextChanged.connect(self.show)
         ll.addWidget(self.titles, 1)
@@ -499,17 +559,20 @@ class StandardsTab(QWidget):
         self.head = QLabel()
         self.head.setObjectName("section")
         rl.addWidget(self.head)
-        self.t = table(["ด้าน", "ข้อ", "ลักษณะงานที่ปฏิบัติ"], stretch=2)
+        self.t = table(["ด้าน", "ข้อ", "ลักษณะงานที่ปฏิบัติ / หัวข้อย่อย"], stretch=2)
         self.t.setWordWrap(True)
         self.t.doubleClicked.connect(lambda *_: self.edit())
         rl.addWidget(self.t, 1)
-        note = QLabel(T("ลักษณะงานต้องนำมาจากมาตรฐานกำหนดตำแหน่งเท่านั้น — กด «วางข้อความจากมาตรฐาน…» "
-                        "แล้ววางข้อความ «๑. ด้านการปฏิบัติการ ๑.๑ …» โปรแกรมแยกด้านและข้อให้อัตโนมัติ"))
+        note = QLabel(T("มาตรฐานกำหนดตำแหน่งจากเว็บไซต์ อบต.ไม้ขาว (98 ตำแหน่ง ระดับแรกของสายงาน) อ่านจากไฟล์สแกน "
+                        "อาจมีคำผิดเล็กน้อย — ตรวจทานและแก้ได้ · หัวข้อย่อย (1.1.1 …) ใช้กรอกปริมาณงาน "
+                        "โปรแกรมเสนอให้จากรายการ «เช่น …» และเพิ่ม/แก้/ลบได้"))
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{MUTED}")
         rl.addWidget(note)
-        row, _ = _buttons(("วางข้อความจากมาตรฐาน…", self.paste, True), ("เพิ่มข้อ", self.add), ("แก้ไข", self.edit),
-                          ("ลบ", self.delete), ("เลื่อนขึ้น", lambda: self.move(-1)), ("เลื่อนลง", lambda: self.move(1)))
+        row, _ = _buttons(("วางข้อความจากมาตรฐาน…", self.paste), ("เพิ่มข้อ", self.add),
+                          ("เพิ่มหัวข้อย่อย", self.add_sub, True), ("เสนอหัวข้อย่อยอัตโนมัติ", self.propose),
+                          ("แก้ไข", self.edit), ("ลบ", self.delete), ("ขึ้น", lambda: self.move(-1)),
+                          ("ลง", lambda: self.move(1)))
         rl.addLayout(row)
         sp.addWidget(right)
         sp.setSizes([px(340), px(900)])
@@ -523,11 +586,27 @@ class StandardsTab(QWidget):
         q = self.search.text().strip()
         self.titles.blockSignals(True)
         self.titles.clear()
-        counts = {r["title"]: r["n"] for r in self.p.store.q("SELECT title, COUNT(*) AS n FROM duties GROUP BY title")}
-        for t in self.p.store.duty_titles():
+        s = self.p.store
+        counts = {r["title"]: r["n"] for r in s.q("SELECT title, COUNT(*) AS n FROM duties WHERE parent_id IS NULL "
+                                                  "GROUP BY title")}
+        codes = {}
+        for r in s.q("SELECT title, source FROM duties WHERE source LIKE 'มาตรฐานกำหนดตำแหน่ง %' GROUP BY title"):
+            m = re.search(r"(\d{4})", r["source"])
+            if m:
+                codes[r["title"]] = m.group(1)
+        want = self.line.currentData()
+        for t in s.duty_titles():
             if q and q not in t:
                 continue
-            self.titles.addItem(f"{t}" + (f"  ({counts[t]})" if t in counts else ""))
+            c = codes.get(t, "")
+            via = s.standard_for(t)
+            if t not in counts and via != t and via in counts:
+                continue                       # ผู้ช่วย…/หัวหน้า… ใช้มาตรฐานของตำแหน่งหลัก — ไม่แสดงซ้ำ
+            if want == "x" and t in counts:
+                continue
+            if want and want != "x" and not (c.startswith(want) or (want == "2" and c.startswith("1"))):
+                continue
+            self.titles.addItem((f"{c} " if c else "") + f"{t}" + (f"  ({counts[t]})" if t in counts else ""))
         self.titles.blockSignals(False)
         items = [self.titles.item(i) for i in range(self.titles.count())]
         pick = next((it for it in items if cur and it.text() == cur), items[0] if items else None)
@@ -537,23 +616,42 @@ class StandardsTab(QWidget):
 
     def title(self):
         it = self.titles.currentItem()
-        return it.text().split("  (")[0] if it else None
+        return re.sub(r"^\d{4} ", "", it.text().split("  (")[0]) if it else None
 
     def show(self, *_):
         t = self.title()
-        rows = self.p.store.duties(t) if t else []
-        self.head.setText(T("มาตรฐานกำหนดตำแหน่ง") + f" — {t or ''}  ({len(rows)} {T('ข้อ')})")
-        num, side, k = [], None, 0
-        sides = {}
-        for r in rows:
-            if r["side"] != side:
-                side = r["side"]
-                sides[side] = sides.get(side, len(sides) + 1)
-                k = 0
-            k += 1
-            num.append(f"{sides[side]}.{k}")
-        fill(self.t, [[r["side"], n, r["text"]] for r, n in zip(rows, num)], ids=[r["id"] for r in rows])
+        rows = self.p.store.duty_rows(t) if t else []
+        src = rows[0]["duty"]["source"] if rows else ""
+        mains = sum(1 for r in rows if not r["level"])
+        self.head.setText(T("มาตรฐานกำหนดตำแหน่ง") + f" — {t or ''}  ({mains} {T('ข้อ')}, "
+                          f"{len(rows) - mains} {T('หัวข้อย่อย')})" + (f" · {src}" if src else ""))
+        fill(self.t, [[r["duty"]["side"], r["no"], ("\u2003\u2003" if r["level"] else "") + r["duty"]["text"]]
+                      for r in rows], ids=[r["duty"]["id"] for r in rows])
+        for i, r in enumerate(rows):
+            if r["level"]:
+                self.t.item(i, 2).setForeground(QColor("#1A5FA6"))
         self.t.resizeRowsToContents()
+
+    def add_sub(self):
+        did = selected_id(self.t)
+        if not did:
+            return need_selection(self)
+        d = self.p.store.one("SELECT * FROM duties WHERE id=?", (did,))
+        parent = d["parent_id"] or d["id"]
+        main = self.p.store.one("SELECT * FROM duties WHERE id=?", (parent,))
+        dlg = FormDialog(self, T("เพิ่มหัวข้อย่อย"), [("text", f"หัวข้อย่อยของ: {main['text'][:60]}…", "multi")])
+        if dlg.exec() and _do(self, self.p.store.save_duty, dict(parent_id=parent, text=dlg.values()["text"])):
+            self.show()
+
+    def propose(self):
+        t = self.title()
+        if not t:
+            return need_selection(self)
+        n = sum(self.p.store.add_proposed_subs(r["id"]) for r in
+                self.p.store.q("SELECT id FROM duties WHERE title=? AND parent_id IS NULL", (t,)))
+        QMessageBox.information(self, PRODUCT_TH, T(f"เพิ่มหัวข้อย่อยที่โปรแกรมเสนอ {n} หัวข้อ "
+                                                    "(เฉพาะข้อที่ยังไม่มีหัวข้อย่อยและมีรายการ «เช่น …»)"))
+        self.show()
 
     def new_title(self):
         dlg = FormDialog(self, T("ตำแหน่งใหม่"), [("title", "ชื่อตำแหน่ง (ตามมาตรฐานกำหนดตำแหน่ง)", "text")])
@@ -569,7 +667,7 @@ class StandardsTab(QWidget):
             self.search.clear()
             self.load_titles()
             for i in range(self.titles.count()):
-                if self.titles.item(i).text().split("  (")[0] == M.base_title(t):
+                if re.sub(r"^\d{4} ", "", self.titles.item(i).text().split("  (")[0]) == M.base_title(t):
                     self.titles.setCurrentRow(i)
 
     def _dlg(self, values):
@@ -663,7 +761,7 @@ class PickDutiesDialog(QDialog):
         self.title = QComboBox()
         self.title.setEditable(True)
         self.title.addItems(store.duty_titles())
-        self.title.setCurrentText(M.base_title(title))
+        self.title.setCurrentText(store.standard_for(title))
         self.title.currentTextChanged.connect(self.load)
         top.addWidget(self.title, 1)
         lay.addLayout(top)
@@ -678,8 +776,10 @@ class PickDutiesDialog(QDialog):
         fit_to_screen(self, px(1100), px(680))
 
     def load(self, *_):
-        rows = self.s.duties(self.title.currentText())
-        fill(self.t, [["", r["side"], r["text"]] for r in rows], ids=[r["id"] for r in rows])
+        rows = [r for r in self.s.duty_rows(self.title.currentText()) if not r["has_subs"]]   # เฉพาะข้อที่กรอกปริมาณงานได้
+        fill(self.t, [["", r["duty"]["side"], f"{r['no']} {r['duty']['text']}"] for r in rows],
+             ids=[r["duty"]["id"] for r in rows])
+        self._task = {r["duty"]["id"]: r["duty"]["text"] for r in rows}
         for i in range(self.t.rowCount()):
             self.t.item(i, 0).setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             self.t.item(i, 0).setCheckState(Qt.Checked)
@@ -691,7 +791,8 @@ class PickDutiesDialog(QDialog):
         for i in range(self.t.rowCount()):
             if self.t.item(i, 0).checkState() == Qt.Checked:
                 out.append(dict(duty_id=self.t.item(i, 0).data(Qt.UserRole), side=self.t.item(i, 1).text(),
-                                task=self.t.item(i, 2).text(), minutes=0, volume=0))
+                                task=self._task.get(self.t.item(i, 0).data(Qt.UserRole), self.t.item(i, 2).text()),
+                                minutes=0, volume=0))
         return out
 
 

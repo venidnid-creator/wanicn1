@@ -866,7 +866,18 @@ class MainWindow(QMainWindow):
         hm.addAction(a)
 
     def _backfill(self):
-        """ลงทะเบียนครุภัณฑ์/วัสดุย้อนหลังจากการซื้อที่ตรวจรับหรือเบิกจ่ายแล้ว (เจ้าของอนุมัติ 13 พ.ย. 2569)."""
+        """ลงทะเบียนครุภัณฑ์/วัสดุย้อนหลังจากการซื้อที่ตรวจรับหรือเบิกจ่ายแล้ว (เจ้าของอนุมัติ 13 พ.ย. 2569);
+        ส่วนราชการครบทุกกองและมาตรฐานกำหนดตำแหน่ง อบต.ไม้ขาว (เจ้าของสั่ง 25 พ.ย. 2569)."""
+        try:
+            mp = self.store.ensure_manpower()
+        except Exception:  # noqa: BLE001
+            mp = {}
+        if mp.get("units") or mp.get("positions") or mp.get("standards"):
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(300, lambda: QMessageBox.information(
+                self, PRODUCT_TH, f"เติมโครงสร้างส่วนราชการตามแผนอัตรากำลัง 2570–2572 ให้แล้ว: เพิ่ม {mp.get('units', 0)} "
+                f"หน่วยงาน {mp.get('positions', 0)} ตำแหน่ง (ของเดิมไม่ถูกลบ) และมาตรฐานกำหนดตำแหน่ง "
+                f"{mp.get('standards', 0)} ข้อ — ดูได้ที่หน้า «จ้างเหมาบุคคล»"))
         try:
             n = self.store.register_missing()
         except Exception:  # noqa: BLE001 — never block opening the file
@@ -948,6 +959,10 @@ def selftest(out_dir) -> int:
         R.to_pdf(rep, out / f"{name}.pdf")
         assert (out / f"{name}.pdf").stat().st_size > 1000
     R.to_xlsx(R.proc_register(s, 2570), out / "register.xlsx")
+    n = s.one("SELECT COUNT(*) AS n FROM duties WHERE parent_id IS NULL")["n"]
+    assert n > 1000, f"position standards not bundled ({n})"            # data/standards_maikhao.json
+    from . import hire_reports as HR
+    R.to_docx(HR.manpower_report(s), out / "manpower.docx")
     (out / "selftest-ok.txt").write_text(f"{PRODUCT_EN} {__version__} OK", encoding="utf-8")
     return 0
 

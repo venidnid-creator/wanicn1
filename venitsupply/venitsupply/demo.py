@@ -150,21 +150,18 @@ DEMO_SUPPLY = [   # ตัวอย่างจากตารางวิเค
 
 def hire_demo(s: Store):
     """อัตรากำลังจริง อบต.ไม้ขาว (แผนอัตรากำลัง 2570–2572, ไม่มีชื่อบุคคล) + ภาระงานตัวอย่าง + สัญญาจ้างสมมติ."""
-    from .manpower import SAMPLE_STANDARD
     if not s.q("SELECT 1 FROM divisions"):
         s.seed_structure()
     s.assign_divisions(2570)
-    s.import_standard(*SAMPLE_STANDARD, source="ตัวอย่าง ก.ท. 26 พ.ย. 2558")
+    s.ensure_manpower()                     # มาตรฐานกำหนดตำแหน่งจริงของ อบต.ไม้ขาว (ไฟล์ในชุดโปรแกรม)
     units = {d["name"]: d["id"] for d in s.divisions(all_levels=True)}
     fin = units["กองคลัง"]
     s.save_division(dict(officer_pos="เจ้าพนักงานพัสดุ"), units["งานทะเบียนทรัพย์สินและพัสดุ"])
     pos = next(p for p in s.positions(units["งานทะเบียนทรัพย์สินและพัสดุ"]) if p["title"] == "เจ้าพนักงานพัสดุ")
-    rows = []
-    for side, task, mi, vol in DEMO_SUPPLY:
-        did = s.save_duty(dict(title=pos["title"], side=side, text=task, source="ตัวอย่าง (ข้อมูลสมมติ)"))
-        rows.append(dict(duty_id=did, side=side, task=task, minutes=mi, volume=vol,
-                         y1=round(vol * 0.8), y2=round(vol * 0.9), y3=vol))
-    s.set_pos_load(pos["id"], rows)
+    leaves = [r for r in s.load_rows_from_standard(pos["id"]) if r["kind"] == "leaf"]
+    for r, (_, _, mi, vol) in zip(leaves, DEMO_SUPPLY):        # เวลา/ปริมาณงานสมมติ (เจ้าหน้าที่เติมเอง)
+        r.update(minutes=mi, volume=vol, y1=round(vol * 0.8), y2=round(vol * 0.9), y3=vol)
+    s.set_pos_load(pos["id"], [r for r in leaves if r["minutes"]])
     j1 = s.job_from_position(pos["id"], fin)
     s.save_job(dict(difficulty=5, work_place="กองคลัง องค์การบริหารส่วนตำบลไม้ขาว"), j1)
     pal = units["สำนักปลัด"]

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from PySide6.QtCore import QDate, QDateTime, Qt
-from PySide6.QtGui import QValidator
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateEdit, QDialog,
-                               QDialogButtonBox, QDoubleSpinBox, QFrame, QGridLayout,
-                               QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
-                               QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout,
+from PySide6.QtCore import QDate, QLocale, Qt, Signal
+from PySide6.QtWidgets import (QAbstractItemView, QCalendarWidget, QComboBox, QDialog,
+                               QDialogButtonBox, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout,
+                               QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
                                QWidget)
 
 from .i18n import T
@@ -19,6 +18,26 @@ NAVY, ORANGE, BRASS, IVORY, MUTED = "#0F2A44", "#C46420", "#C9A14A", "#F6F3EC", 
 SARABUN = ("TH Sarabun New", "TH SarabunPSK", "Sarabun", "TH Sarabun PSK")
 OTHER_THAI = ("Leelawadee UI", "Leelawadee", "Tahoma", "Loma", "Laksaman", "Noto Sans Thai")
 UI = {"scale": 1.0}
+
+
+def thai_digit_font(family: str) -> bool:
+    """True when the font (regular or bold face) draws 0–9 as Thai digits ๐–๙ — e.g. «IT๙» variants.
+    Such a font makes some numbers in the program Thai and others Arabic, so it is not used for the screens."""
+    try:
+        from PySide6.QtGui import QFont, QPainterPath
+        for bold in (False, True):
+            f = QFont(family, 20)
+            f.setBold(bold)
+            a, b = QPainterPath(), QPainterPath()
+            a.addText(0, 0, f, "0123456789")
+            b.addText(0, 0, f, "๐๑๒๓๔๕๖๗๘๙")
+            ra, rb = a.boundingRect(), b.boundingRect()
+            if a.elementCount() == b.elementCount() and abs(ra.width() - rb.width()) < 0.5 \
+                    and abs(ra.height() - rb.height()) < 0.5:
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
 
 
 def ui_metrics() -> dict:
@@ -32,11 +51,11 @@ def ui_metrics() -> dict:
     try:
         from PySide6.QtGui import QFontDatabase, QGuiApplication
         have = set(QFontDatabase.families())
-        sar = next((f for f in SARABUN if f in have), None)
+        sar = next((f for f in SARABUN if f in have and not thai_digit_font(f)), None)
         if sar:
             fam, base = sar, 16.0
         else:
-            fam = next((f for f in OTHER_THAI if f in have), "Tahoma")
+            fam = next((f for f in OTHER_THAI if f in have and not thai_digit_font(f)), "Tahoma")
             base = 11.5
         scr = QGuiApplication.primaryScreen()
         if scr is not None:
@@ -120,42 +139,191 @@ def fit_to_screen(w, width, height, maximize_if_small=False):
         w.showMaximized()
 
 
-class ThaiDateEdit(QDateEdit):
-    """Date edit that shows and accepts the Buddhist-era year: 13/11/2569."""
+THAI_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม",
+               "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+THAI_MONTHS_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+BE_MIN, BE_MAX = 2400, 2700
+
+
+def parse_be(text: str):
+    """«1/10/2569», «1-10-69», «๑/๑๐/๒๕๖๙», «1 ต.ค. 2569», «1 ตุลาคม 2569» → date (ค.ศ.) or None.
+
+    The year is พ.ศ.; two digits mean 25xx; a ค.ศ. year (1900–2199) is converted. Out of range → None."""
+    import re as _re
+    t = (text or "").strip().translate(str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789"))
+    if not t:
+        return None
+    m = _re.match(r"^(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{2,4})$", t)
+    if m:
+        d, mo, y = (int(x) for x in m.groups())
+    else:
+        m = _re.match(r"^(\d{1,2})\s*([^\d\s]+)\s*(\d{2,4})$", t)
+        if not m:
+            return None
+        name = m.group(2).replace(" ", "")
+        mo = next((i + 1 for i, (a, b) in enumerate(zip(THAI_MONTHS, THAI_MONTHS_SHORT))
+                   if name in (a, b, b.replace(".", ""))), None)
+        if mo is None:
+            return None
+        d, y = int(m.group(1)), int(m.group(3))
+    if y < 100:
+        y += 2500
+    if 1900 <= y < 2200:          # พิมพ์เป็น ค.ศ. — แปลงให้
+        y += 543
+    if not (BE_MIN <= y <= BE_MAX):
+        return None
+    try:
+        return _dt.date(y - 543, mo, d)
+    except ValueError:
+        return None
+
+
+def fmt_be(d) -> str:
+    return f"{d.day}/{d.month}/{d.year + 543}" if d else ""
+
+
+class _BECalendar(QFrame):
+    """Popup calendar: Thai month names and พ.ศ. year (QCalendarWidget's own header shows ค.ศ., so it is hidden)."""
+
+    def __init__(self, owner):
+        super().__init__(owner, Qt.Popup)
+        self.owner = owner
+        self.setFrameShape(QFrame.StyledPanel)
+        lay = QVBoxLayout(self)
+        top = QHBoxLayout()
+        prev, nxt = QToolButton(), QToolButton()
+        prev.setText("‹")
+        nxt.setText("›")
+        self.month = QComboBox()
+        self.month.addItems(THAI_MONTHS)
+        self.year = QSpinBox()
+        self.year.setRange(BE_MIN, BE_MAX)
+        self.year.setPrefix("พ.ศ. ")
+        for w in (prev, self.month, self.year, nxt):
+            top.addWidget(w)
+        lay.addLayout(top)
+        self.cal = QCalendarWidget()
+        self.cal.setNavigationBarVisible(False)
+        self.cal.setLocale(QLocale(QLocale.Thai, QLocale.Thailand))
+        self.cal.setFirstDayOfWeek(Qt.Sunday)
+        self.cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.cal.setGridVisible(True)
+        lay.addWidget(self.cal)
+        today = QPushButton(T("วันนี้"))
+        lay.addWidget(today)
+        prev.clicked.connect(lambda: self.cal.showPreviousMonth())
+        nxt.clicked.connect(lambda: self.cal.showNextMonth())
+        self.month.currentIndexChanged.connect(self._go)
+        self.year.valueChanged.connect(self._go)
+        self.cal.currentPageChanged.connect(self._page)
+        self.cal.clicked.connect(self._pick)
+        self.cal.activated.connect(self._pick)
+        today.clicked.connect(lambda: self._pick(QDate.currentDate()))
+
+    def open_at(self, q: QDate):
+        self.cal.setSelectedDate(q)
+        self.cal.setCurrentPage(q.year(), q.month())
+        self._page(q.year(), q.month())
+        self.adjustSize()
+        self.move(self.owner.mapToGlobal(self.owner.rect().bottomLeft()))
+        self.show()
+        self.cal.setFocus()
+
+    def _page(self, y, m):
+        for w, v in ((self.month, m - 1), (self.year, y + 543)):
+            w.blockSignals(True)
+            (w.setCurrentIndex if w is self.month else w.setValue)(v)
+            w.blockSignals(False)
+
+    def _go(self, *_):
+        self.cal.setCurrentPage(self.year.value() - 543, self.month.currentIndex() + 1)
+
+    def _pick(self, q):
+        self.owner.setDate(q)
+        self.hide()
+
+
+class ThaiDateEdit(QWidget):
+    """Date field in พ.ศ.: type «1/10/2569» (also 1/10/69, ๑/๑๐/๒๕๖๙, 1 ต.ค. 2569) or pick from a Thai calendar.
+    Empty / invalid values never fall back to a strange year: an invalid entry is refused with a message
+    and the previous date is kept."""
+
+    dateChanged = Signal(QDate)
 
     def __init__(self, value=None, parent=None):
         super().__init__(parent)
-        self.setCalendarPopup(True)
-        self.setDisplayFormat("d/M/yyyy")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText("วัน/เดือน/ปี พ.ศ. เช่น 1/10/2569")
+        self.edit.setToolTip(T("พิมพ์วันที่เป็น พ.ศ. เช่น 1/10/2569 หรือ 1/10/69 หรือกดปุ่มปฏิทิน"))
+        self.btn = QToolButton()
+        self.btn.setText("📅")
+        self.btn.setToolTip(T("เลือกจากปฏิทิน"))
+        lay.addWidget(self.edit, 1)
+        lay.addWidget(self.btn)
+        self.thai = QLabel()
+        self.thai.setObjectName("hint")
+        lay.addWidget(self.thai)
+        self._d = _dt.date.today()
+        self._popup = None
+        self.edit.editingFinished.connect(self._typed)
+        self.btn.clicked.connect(self._show_cal)
         self.set_iso(value or _dt.date.today().isoformat())
 
-    def textFromDateTime(self, dt: QDateTime) -> str:  # noqa: N802 (Qt)
-        d = dt.date()
-        return f"{d.day()}/{d.month()}/{d.year() + 543}"
+    # ---- API (compatible with the former QDateEdit subclass)
+    def date(self) -> QDate:
+        return QDate(self._d.year, self._d.month, self._d.day)
 
-    def _parse(self, text):
-        try:
-            d, m, y = (int(x) for x in text.strip().split("/"))
-            y = y - 543 if y > 2400 else y
-            q = QDate(y, m, d)
-            return q if q.isValid() else None
-        except ValueError:
-            return None
-
-    def dateTimeFromText(self, text: str) -> QDateTime:  # noqa: N802 (Qt)
-        q = self._parse(text)
-        return QDateTime(q) if q else QDateTime(self.date())
-
-    def validate(self, text, pos):
-        return (QValidator.Acceptable if self._parse(text) else QValidator.Intermediate, text, pos)
+    def setDate(self, q):
+        d = _dt.date(q.year(), q.month(), q.day()) if isinstance(q, QDate) else q
+        if d is None or not (BE_MIN <= d.year + 543 <= BE_MAX):
+            return
+        changed = d != self._d
+        self._d = d
+        self._show()
+        if changed:
+            self.dateChanged.emit(self.date())
 
     def iso(self) -> str:
-        return self.date().toString("yyyy-MM-dd")
+        return self._d.isoformat()
 
     def set_iso(self, s):
-        q = QDate.fromString(str(s)[:10], "yyyy-MM-dd")
-        if q.isValid():
-            self.setDate(q)
+        try:
+            d = _dt.date.fromisoformat(str(s)[:10]) if s else _dt.date.today()
+        except ValueError:
+            d = _dt.date.today()
+        if not (BE_MIN <= d.year + 543 <= BE_MAX):
+            d = _dt.date.today()
+        self.setDate(d)
+        self._show()
+
+    # ---- internals
+    def _show(self):
+        self.edit.setText(fmt_be(self._d))
+        self.edit.setStyleSheet("")
+        self.thai.setText(f"{THAI_MONTHS_SHORT[self._d.month - 1]}")
+
+    def _typed(self):
+        if getattr(self, "_warning", False) or self.edit.text().strip() == fmt_be(self._d):
+            return
+        d = parse_be(self.edit.text())
+        if d is None:
+            self._warning = True
+            self.edit.setStyleSheet("border: 2px solid #C72B1E;")
+            QMessageBox.warning(self, T("วันที่ไม่ถูกต้อง"),
+                                T(f"«{self.edit.text()}» ไม่ใช่วันที่ที่ถูกต้อง — พิมพ์เป็น วัน/เดือน/ปี พ.ศ. "
+                                  f"เช่น 1/10/2569 (ปี พ.ศ. {BE_MIN}–{BE_MAX})"))
+            self._warning = False
+            self._show()
+            return
+        self.setDate(d)
+
+    def _show_cal(self):
+        if self._popup is None:
+            self._popup = _BECalendar(self)
+        self._popup.open_at(self.date())
 
 
 class FormDialog(QDialog):

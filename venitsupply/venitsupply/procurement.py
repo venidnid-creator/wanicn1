@@ -139,10 +139,14 @@ class ProcurementMixin:
                 d["division_id"] = bi["division_id"]          # the กอง that owns the budget
         if d.get("budget_item_id"):
             b = self.budget_item(d["budget_item_id"])
-            fy = d.get("fy") or (cur["fy"] if cur else TD.fiscal_year(d.get("date_request") or TD.today()))
+            when = d.get("date_request") or (cur["date_request"] if cur else None) or str(TD.today())
+            fy = d.get("fy") or TD.fiscal_year(when)
             if b and b["fy"] != fy:
-                raise ValueError(f"รายการนี้เป็นงบประมาณปี {b['fy']} — การจัดซื้อจัดจ้างปี {fy} "
-                                 f"ต้องใช้ข้อบัญญัติปี {fy}")
+                raise ValueError(f"วันที่ขอ {TD.thai(when, False)} อยู่ในปีงบประมาณ พ.ศ. {fy} แต่เลือกรายการงบของปี "
+                                 f"พ.ศ. {b['fy']} — ให้เลือกรายการงบตามข้อบัญญัติปี พ.ศ. {fy} "
+                                 "(งบประมาณปีไหนใช้ปีนั้น ห้ามข้ามปี)")
+            if cur and d.get("date_request"):
+                d["fy"] = fy
         if d.get("budget_item_id") and "amount" in d:
             self.check_budget(d["budget_item_id"], d["amount"], exclude_proc=pid)
         if not pid and not d.get("method"):
@@ -177,16 +181,30 @@ class ProcurementMixin:
                  (*cols.values(), pid))
         return p
 
+    def _in_year(self, p, date, step):
+        """งบประมาณปีไหนใช้ปีนั้น: ขั้น «ขออนุมัติ / อนุมัติ / ก่อหนี้ผูกพัน» ต้องอยู่ในปีงบประมาณของรายการ
+        (1 ต.ค. – 30 ก.ย.); เมื่อก่อหนี้ผูกพันในปีแล้ว ตรวจรับและเบิกจ่ายข้ามปีได้ (เบิกเหลื่อมปี)."""
+        if not p or not p["fy"] or not date:
+            return
+        if TD.fiscal_year(date) != p["fy"]:
+            s, e = TD.fiscal_range(p["fy"])
+            raise ValueError(
+                f"{step}วันที่ {TD.thai(date, False)} อยู่ในปีงบประมาณ พ.ศ. {TD.fiscal_year(date)} แต่รายการนี้ใช้งบประมาณ"
+                f"ปี พ.ศ. {p['fy']} ({TD.thai(s, False)} – {TD.thai(e, False)}) — งบประมาณปีไหนใช้ปีนั้น "
+                "ห้ามข้ามปี (ข้ามปีได้เฉพาะการตรวจรับ/เบิกจ่ายของรายการที่ก่อหนี้ผูกพันไว้แล้วในปีนั้น)")
+
     def approve(self, pid, date=None):
         p = self.procurement(pid)
+        self._in_year(p, str(date or TD.today()), "อนุมัติ")
         if p and p["budget_item_id"]:
             self.check_budget(p["budget_item_id"], p["amount"], exclude_proc=pid)
         self._status(pid, ("ขออนุมัติ",), "อนุมัติแล้ว", date_approve=str(date or TD.today()))
 
     def order(self, pid, vendor, contract_amount, order_no="", date=None, due_date=None,
               contract_type=CONTRACT_TYPES[0], egp_no=None, vendor_vat=None, vendor_tax_id=None):
-        """ก่อหนี้ผูกพัน: ออกใบสั่งซื้อ/สั่งจ้าง หรือทำสัญญา."""
+        """ก่อหนี้ผูกพัน: ออกใบสั่งซื้อ/สั่งจ้าง หรือทำสัญญา — ต้องภายในปีงบประมาณของรายการ."""
         p = self.procurement(pid)
+        self._in_year(p, str(date or TD.today()), "ก่อหนี้ผูกพัน (ใบสั่ง/สัญญา) ")
         if p and p["budget_item_id"]:
             self.check_budget(p["budget_item_id"], contract_amount, exclude_proc=pid)
         cols = dict(vendor=vendor, contract_amount=float(contract_amount), order_no=order_no,

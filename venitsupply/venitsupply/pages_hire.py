@@ -541,6 +541,13 @@ class ContractDialog(FormDialog):
             self.total.setText(f"<span style='color:{RED}'>{exc}</span>")
             return
         tot = sum(x["amount"] for x in plan)
+        fy0, fy1 = TD.fiscal_year(v["start"]), TD.fiscal_year(v["end"])
+        if fy0 != fy1:
+            e = TD.fiscal_range(fy0)[1]
+            self.total.setText(f"<span style='color:{RED}'>{T('สัญญาเริ่มในปีงบประมาณ พ.ศ.')} {fy0} — "
+                               f"{T('วันสิ้นสุดต้องไม่เกิน')} {TD.thai(e, False)} "
+                               f"({T('งบประมาณปีไหนใช้ปีนั้น ห้ามข้ามปี')})</span>")
+            return
         part = [f"{H.month_name(x['month'])} {x['days']} {T('วัน')} = {m(x['amount'])}" for x in plan if not x["full"]]
         self.total.setText(f"{len(plan)} {T('งวด')} · {T('รวมตามสัญญา')} <b>{m(tot)}</b> {T('บาท')} "
                            f"({T('วันละ')} {m(v['monthly'] / 30)})" + (" · " + ", ".join(part) if part else ""))

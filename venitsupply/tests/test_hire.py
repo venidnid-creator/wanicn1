@@ -263,3 +263,86 @@ def test_word_excel_and_memos(tmp_path):
         x = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
     assert "<f>C5*D5</f>" in x and "ROUND(E5/82800,2)" in x and "SUM(F" in x
     assert "เอกสารหมายเลข 5" in HR.position_history_sheet(s, pid).html()
+
+
+def test_thai_dates_be():
+    """วันที่ พ.ศ.: พิมพ์ได้หลายแบบ ปีผิดไม่ยอมรับ ไม่มีปีเพี้ยน (2295)."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from venitsupply.widgets import ThaiDateEdit, parse_be
+    QApplication.instance() or QApplication([])
+    d = H._dt.date
+    for s in ("1/10/2569", "1/10/69", "๑/๑๐/๒๕๖๙", "1 ต.ค. 2569", "1 ตุลาคม 2569", "1-10-2569", "1/10/2026"):
+        assert parse_be(s) == d(2026, 10, 1), s
+    for s in ("31/2/2569", "1/10/2295", "", "abc"):
+        assert parse_be(s) is None
+    w = ThaiDateEdit("")
+    assert w.iso() == str(d.today()) and w.edit.text().endswith(str(d.today().year + 543))
+    w.set_iso("1752-09-14")                                        # ค่าต่ำสุดเก่าของ QDateEdit → ใช้วันนี้
+    assert w.iso() == str(d.today())
+    w.edit.setText("30/9/2570")
+    w._typed()
+    assert w.iso() == "2027-09-30" and w.edit.text() == "30/9/2570"
+
+
+def test_budget_year_no_crossing():
+    """งบประมาณปีไหนใช้ปีนั้น: ขอ/อนุมัติ/ก่อหนี้ในปีเท่านั้น; ตรวจรับ/เบิกจ่ายข้ามปีได้เมื่อก่อหนี้แล้ว."""
+    s = _store()
+    item = next(b for b in s.budget_items(2570) if b["category"] == "วัสดุ" or b["name"] == "วัสดุสำนักงาน")
+    with pytest.raises(ValueError, match="ปีงบประมาณ พ.ศ. 2571"):
+        s.save_procurement(dict(kind="ซื้อ", title="x", budget_item_id=item["id"], amount=1000,
+                                date_request="2027-10-05"))
+    pid = s.save_procurement(dict(kind="ซื้อ", title="x", budget_item_id=item["id"], amount=1000,
+                                  date_request="2027-09-20"))
+    with pytest.raises(ValueError, match="ห้ามข้ามปี"):
+        s.approve(pid, "2027-10-01")
+    s.approve(pid, "2027-09-21")
+    with pytest.raises(ValueError, match="ห้ามข้ามปี"):
+        s.order(pid, "ร้าน", 1000, date="2027-10-02")
+    s.order(pid, "ร้าน", 1000, date="2027-09-25")
+    s.inspect_proc(pid, "2027-10-10")                              # เบิกเหลื่อมปี: ก่อหนี้ไว้แล้วในปี 2570
+    s.pay(pid, date="2027-10-15")
+    assert s.procurement(pid)["status"] == "เบิกจ่ายแล้ว" and s.balance(item["id"])["paid"] >= 1000
+
+
+def test_merge_structure_and_bundled_standards():
+    """ไฟล์ที่เจ้าหน้าที่สร้าง «คลัง» ไว้เอง: เติมครบทุกกองโดยไม่ลบของเดิม + มาตรฐานกำหนดตำแหน่ง 98 ตำแหน่ง."""
+    s = Store()
+    s.set_setting("org_name", "องค์การบริหารส่วนตำบลไม้ขาว")
+    own = s.save_division(dict(kind="กอง", name="คลัง"))
+    s.save_position(dict(division_id=own, title="ผู้อำนวยการกอง", count=1, occupied=1))
+    out = s.ensure_manpower()
+    tops = {d["name"]: d for d in s.divisions()}
+    assert len(tops) == 7 and tops["กองคลัง"]["id"] == own and "คลัง" in tops["กองคลัง"]["aliases"]
+    assert out["standards"] > 1000 and s.ensure_manpower() == dict(units=0, positions=0, standards=0)   # ครั้งเดียว
+    assert any(p["title"] == "ผู้อำนวยการกอง" for p in s.positions(own))                               # ของเดิมอยู่ครบ
+    assert s.unit_analysis(own)["frame"] == 25                                                           # 24 + 1 ของเดิม
+    assert s.standard_for("ผู้ช่วยเจ้าพนักงานพัสดุ") == "เจ้าพนักงานพัสดุ"
+    assert s.standard_for("ผู้อำนวยการกองคลัง (นักบริหารงานการคลัง ระดับต้น)") == "นักบริหารงานการคลัง"
+    assert s.standard_for("หัวหน้าฝ่ายบริหารงานสาธารณสุข (นักบริหารงานสาธารณสุขและสิ่งแวดล้อม ระดับต้น)") \
+        == "นักบริหารงานสาธารณสุข"
+    rows = s.duty_rows("นักวิชาการพัสดุ")
+    assert rows[0]["no"] == "1.1" and any(r["level"] == 1 and r["no"].count(".") == 2 for r in rows)
+    units = {d["name"]: d["id"] for d in s.divisions(all_levels=True)}
+    pos = next(p for p in s.positions(units["งานทะเบียนทรัพย์สินและพัสดุ"]) if p["title"] == "ผู้ช่วยเจ้าพนักงานพัสดุ")
+    load = s.load_rows_from_standard(pos["id"])
+    assert load and all(r["side"] in ("ด้านการปฏิบัติการ", "ด้านการบริการ") for r in load)
+    heads = [r for r in load if r["kind"] == "head"]
+    leaves = [r for r in load if r["kind"] == "leaf"]
+    assert leaves and all(r["minutes"] == 0 for r in leaves)                 # เจ้าหน้าที่เติมเอง
+    main = s.q("SELECT id FROM duties WHERE title='เจ้าพนักงานพัสดุ' AND parent_id IS NULL ORDER BY seq")[0]["id"]
+    sub = s.save_duty(dict(parent_id=main, text="จัดซื้อวัสดุสำนักงาน"))
+    load2 = s.load_rows_from_standard(pos["id"])
+    assert len([r for r in load2 if r["kind"] == "head"]) == len(heads) + (0 if any(
+        h["duty_id"] == main for h in heads) else 1)
+    assert any(r["duty_id"] == sub and r["no"].count(".") == 2 for r in load2)
+    s.delete_duty(main)
+    assert not s.q("SELECT 1 FROM duties WHERE id=?", (sub,))
+
+
+def test_propose_subs():
+    from venitsupply.manpower import propose_subs
+    subs = propose_subs("ตรวจสอบ ปรับปรุงแก้ไข ซ่อมแซม บำรุงรักษาในงานด้านการช่างต่าง ๆ เช่น ถนน สะพาน ทางเท้า "
+                        "และสิ่งสาธารณประโยชน์อื่นๆ เพื่อให้เป็นไปตามบทบัญญัติของกฎหมาย")
+    assert subs[:2] == ["ตรวจสอบ ปรับปรุงแก้ไข ซ่อมแซม บำรุงรักษา — ถนน", "ตรวจสอบ ปรับปรุงแก้ไข ซ่อมแซม บำรุงรักษา — สะพาน"]
+    assert propose_subs("วางแผนการทำงานที่รับผิดชอบ เพื่อให้งานสำเร็จ") == []

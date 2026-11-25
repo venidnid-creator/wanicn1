@@ -411,7 +411,9 @@ class HireMixin:
         total = self.contract_total(merged["start"], merged["end"], merged["monthly"])
         fy = TD.fiscal_year(merged["start"])
         if TD.fiscal_year(merged["end"]) != fy:
-            raise ValueError("สัญญาต้องอยู่ภายในปีงบประมาณเดียวกัน (1 ต.ค. – 30 ก.ย.) ตามงบของปีนั้น")
+            s_, e_ = TD.fiscal_range(fy)
+            raise ValueError(f"สัญญาเริ่ม {TD.thai(merged['start'], False)} อยู่ในปีงบประมาณ พ.ศ. {fy} — วันสิ้นสุดต้อง"
+                             f"ไม่เกิน {TD.thai(e_, False)} (งบประมาณปีไหนใช้ปีนั้น ห้ามข้ามปี)")
         job = self.job(merged["job_id"]) if merged.get("job_id") else None
         title = f"จ้างเหมาบริการบุคคลธรรมดา {job['title'] if job else ''} ({merged['person']})".replace("  ", " ")
         if not merged.get("contract_no"):
