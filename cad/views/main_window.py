@@ -1589,6 +1589,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                  icon=False)
         cmd_item(insert_menu, tr("PDF as Raster Image..."), "PDFATTACH",
                  icon=False)
+        # ฉ2 (WANICNSURVEY): a vector PDF back into editable lines and text
+        item(insert_menu, tr("PDF Import (Vector to DXF)..."), self._pdf_import)
         insert_menu.addSeparator()
         # Classic AutoCAD: Insert > Layout.
         layout_menu = insert_menu.addMenu(tr("Layout"))
@@ -6959,6 +6961,57 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self._autosave_discard()
         self._autosave_arm()
         return True
+
+    def _pdf_import(self, path=None, page=None, scale=None) -> str | None:
+        """PDFIMPORT: one page of a vector PDF (a drawing printed by any CAD)
+        written as a DXF beside it — lines, polylines, curves, text, at the
+        drawing's scale — and opened to edit."""
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+        from views import file_dialogs
+        if path is None:
+            path = file_dialogs.get_open_file(self, tr("Select PDF File"), tr("PDF (*.pdf)"))
+            if not path:
+                return None
+        try:
+            from formats import pdf_in
+            count = pdf_in.page_count(path)
+        except ImportError:
+            QMessageBox.warning(self, tr("PDF Import"), tr("PDF import needs PyMuPDF (pip install pymupdf)."))
+            return None
+        except Exception as exc:                                  # noqa: BLE001 — not a PDF
+            QMessageBox.warning(self, tr("PDF Import"), tr("Cannot read {name} as a PDF.", name=path) + f"\n{exc}")
+            return None
+        if page is None:
+            page = 0
+            if count > 1:
+                n, ok = QInputDialog.getInt(self, tr("PDF Page"), tr("Page (1-{count}):", count=count), 1, 1, count)
+                if not ok:
+                    return None
+                page = n - 1
+        if scale is None:
+            labels = [tr("1:1 (paper millimetres)")] + [f"1:{n}" for n in pdf_in.SCALES[1:]]
+            pick, ok = QInputDialog.getItem(self, tr("PDF Import"), tr("The drawing's scale in the PDF:"),
+                                            labels, labels.index("1:100"), False)
+            if not ok:
+                return None
+            scale = 1 if pick == labels[0] else int(pick.split(":")[1])
+        res = pdf_in.convert(path, page=page, scale=scale)
+        msg = tr("PDF page {page}: {lines} lines, {plines} polylines, {texts} texts → {name}",
+                 page=page + 1, lines=res.lines, plines=res.polylines, texts=res.texts,
+                 name=Path(res.path).name)
+        if res.notes:
+            msg += "\n\n" + "\n".join(res.notes)
+        if res.raster_only:
+            QMessageBox.information(self, tr("PDF Import"), msg)
+            return None
+        self.open_path(Path(res.path))
+        try:
+            self.statusBar().showMessage(msg.split("\n")[0], 8000)
+        except Exception:                                         # noqa: BLE001
+            pass
+        if res.notes:
+            QMessageBox.information(self, tr("PDF Import"), msg)
+        return res.path
 
     def open_paths(self, paths) -> None:
         """Several drawings, each in a tab of its own, one after another --

@@ -2496,6 +2496,13 @@ def render_pdf(sheets, path: str, paper: str = "A3") -> int:
         if key not in fonts:
             f = QFont("Tahoma")
             f.setStyleHint(QFont.SansSerif)
+            # ฉ2: no contextual glyph swaps (+ - = beside digits): a PDF whose every glyph
+            # is a character — read back into CAD (PDFIMPORT) or searched as text
+            for tag in ("calt", "case", "liga"):
+                try:
+                    f.setFeature(QFont.Tag(tag), 0)
+                except Exception:                         # noqa: BLE001 — an older Qt
+                    pass
             f.setPixelSize(max(1, int(round(h * k * 1.3))))
             f.setBold(bool(bold))
             fonts[key] = f

@@ -2102,5 +2102,11 @@
   "World": "โลก",
   "3 Point": "3 จุด",
   "Align to View": "จัดแนวตามมุมมอง",
-  "Z": "Z"
+  "Z": "Z",
+  "PDF Import (Vector to DXF)...": "นำเข้า PDF เป็นเส้น (แปลงเป็น DXF)...",
+  "PDF Import": "นำเข้า PDF",
+  "PDF import needs PyMuPDF (pip install pymupdf).": "การนำเข้า PDF ต้องมี PyMuPDF (pip install pymupdf)",
+  "1:1 (paper millimetres)": "1:1 (มิลลิเมตรบนกระดาษ)",
+  "The drawing's scale in the PDF:": "มาตราส่วนของแบบใน PDF:",
+  "PDF page {page}: {lines} lines, {plines} polylines, {texts} texts → {name}": "PDF หน้า {page}: เส้น {lines} · เส้นต่อเนื่อง {plines} · ข้อความ {texts} → {name}"
 }

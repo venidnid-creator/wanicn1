@@ -46,6 +46,7 @@ for tool in ("dwg2dxf", "dxf2dwg"):
 # ezdxf finds these through its own registry rather than a plain import, so
 # PyInstaller's static analysis does not see them.
 hiddenimports = [
+    "pymupdf",                     # ฉ2 PDFIMPORT (vector PDF → DXF)
     "ezdxf.addons.drawing.pyqt",
     "ezdxf.addons.drawing.frontend",
     "ezdxf.addons.drawing.text_renderer",
