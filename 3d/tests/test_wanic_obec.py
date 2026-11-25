@@ -121,3 +121,28 @@ def test_csv_list(tmp_path):
     it = O.read_file(f)
     assert it == [{"code": "A1016", "desc": "ทรายหยาบ", "unit": "ลบ.ม.",
                    "mat": 510.0, "lab": None, "note": ""}]
+
+
+def test_province_prices_from_word_and_pdf_text(tmp_path):
+    """ง5: a commerce office's list as a Word table, or as a PDF's lines (marks a letter late)."""
+    import zipfile as Z
+    from core import wanic_province as P
+    doc = tmp_path / "ราคา.docx"
+    W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+    def row(*cells):
+        return "<w:tr>" + "".join(f"<w:tc><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:tc>" for c in cells) + "</w:tr>"
+    body = (f'<w:document {W}><w:body><w:p><w:r><w:t>ราคาวัสดุก่อสร้าง ประจำเดือนตุลาคม 2569</w:t></w:r></w:p>'
+            "<w:tbl>" + row("รหัส", "รายการ", "หน่วย", "ราคา") + row("01", "ทรายหยาบ", "ลบ.ม.", "530") +
+            row("07", "เหล็กข้ออ้อย SD40 ขนาด 12 มม.", "กก.", "23.80") + "</w:tbl></w:body></w:document>")
+    with Z.ZipFile(doc, "w") as z:
+        z.writestr("word/document.xml", body)
+    items, _m = P.read_table(str(doc))
+    got = P.match(items, ["ทรายหยาบ", "DB12"], {"ทรายหยาบ": "ลบ.ม.", "DB12": "กก."})
+    assert got["ทรายหยาบ"][0] == 530 and got["DB12"][0] == 23.8
+    # the units read with their marks late: ตัน and ต้น kept apart by their marks
+    assert P._unit_token("ตนั") == "ตัน" and P._unit_token("ตน้") == "ต้น" and P._unit_token("ถงุ") == "ถุง"
+    rows = P.rows_from_lines(["01 ทรายหยาบ ลบ.ม. 510 520", "ปนู ซีเมนตผ์ สม ( 50 ก.ก./ถงุ ) ถงุ 133 140"])
+    got = P.match(P.parse_rows(rows), ["ทรายหยาบ", "ปูนซีเมนต์ผสม (มอก. 80/2566)"],
+                  {"ทรายหยาบ": "ลบ.ม.", "ปูนซีเมนต์ผสม (มอก. 80/2566)": "กก."})
+    assert got["ทรายหยาบ"][0] == 520 and got["ปูนซีเมนต์ผสม (มอก. 80/2566)"][0] == 2.8

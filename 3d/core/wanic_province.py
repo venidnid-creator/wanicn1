@@ -420,17 +420,99 @@ def read_table(path: str) -> tuple[list, str]:
     return parse_rows(rows), detect_month(rows)
 
 
+#: Thai marks above / below the line (a PDF's text may put them a letter late)
+_MARKS = re.compile("[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]")
+
+
+def _strip(s: str) -> str:
+    return _MARKS.sub("", str(s or "")).replace("ำ", "า")
+
+
+#: a unit read with its marks out of place → the unit (only where that is not ambiguous:
+#: ตัน and ต้น read alike, so neither is guessed)
+def _mark_key(s: str) -> tuple:
+    """(the letters, the marks) — the same for a word whose marks sit a letter late."""
+    s = str(s or "").replace("ำ", "\u0e4dา")
+    return _MARKS.sub("", s).rstrip("."), "".join(sorted(_MARKS.findall(s)))
+
+
+_UNIT_FIX = {}
+for _u0 in _UNITS + ("ตารางเมตร", "ลูกบาศก์เมตร", "กิโลกรัม", "ขวด", "กระป๋อง", "ลัง", "ขด"):
+    _UNIT_FIX.setdefault(_mark_key(_u0), []).append(_u0)
+_UNIT_FIX = {k: v[0] for k, v in _UNIT_FIX.items() if len(v) == 1}
+
+
+def _unit_token(tok: str):
+    """The unit a token is (its marks put back in place), or None."""
+    if _is_unit(tok):
+        return tok
+    return _UNIT_FIX.get(_mark_key(tok))
+
+
+def rows_from_lines(lines) -> list:
+    """Rows of a list read line by line (a PDF): «name … unit price [price]» → [name, unit, prices…]."""
+    rows = []
+    for ln in lines:
+        t = str(ln).split()
+        for i in range(1, len(t) - 1):
+            u = _unit_token(t[i])
+            if u and _num(t[i + 1]) is not None:
+                name = t[:i]
+                if len(name) > 1 and re.fullmatch(r"[A-Z]{0,2}\d[\d.\-]*", name[0]):
+                    name = name[1:]                 # the list's own item code
+                rows.append([" ".join(name), u] + t[i + 1:])
+                break
+        else:
+            if t:
+                rows.append([" ".join(t)])
+    return rows
+
+
+def rows_from_pdf(path: str) -> list:
+    """The PDF's lines as rows (QtPdf — nothing to install)."""
+    from core import wanic_obec as O
+    return rows_from_lines(O.read_pdf(path).splitlines())
+
+
+def rows_from_docx(data: bytes) -> list:
+    """The rows of every table of a Word file (.docx), and its other
+    paragraphs line by line."""
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    root = ET.fromstring(zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml"))
+
+    def text(el):
+        return "".join(t.text or "" for t in el.iter(w + "t")).strip()
+    rows, in_table = [], set()
+    for tbl in root.iter(w + "tbl"):
+        for tr in tbl.iter(w + "tr"):
+            cells = [text(tc) for tc in tr.findall(w + "tc")]
+            if any(cells):
+                rows.append(cells)
+        for p_ in tbl.iter(w + "p"):
+            in_table.add(id(p_))
+    lines = [text(p_) for p_ in root.iter(w + "p") if id(p_) not in in_table]
+    return rows + rows_from_lines([x for x in lines if x])
+
+
 def _file_rows(path: str) -> list:
     with open(path, "rb") as fh:
         data = fh.read()
     if data[:2] == b"PK":
+        names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        if "word/document.xml" in names:
+            return rows_from_docx(data)
         return rows_from_xlsx(data)
     if data[:5] == b"%PDF-":
-        raise ValueError("ไฟล์ PDF อ่านเป็นตารางไม่ได้ — เลือกดาวน์โหลดเป็น Excel "
-                         "หรือคัดลอกตารางจากหน้าเว็บมาวาง")
+        try:
+            rows = rows_from_pdf(path)
+        except ValueError:
+            raise ValueError("เปิดไฟล์ PDF ไม่ได้ — ใช้ไฟล์ Excel หรือคัดลอกตารางจากหน้าเว็บมาวาง") from None
+        if not any(len(r) > 1 for r in rows):
+            raise ValueError("ไม่พบตารางราคาในไฟล์ PDF นี้ (อาจเป็นภาพสแกน) — ใช้ไฟล์ Excel หรือคัดลอกตารางมาวาง")
+        return rows
     if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
-        raise ValueError("ไฟล์ .xls รุ่นเก่า — เปิดใน Excel แล้วบันทึกเป็น .xlsx "
-                         "หรือ CSV ก่อน หรือคัดลอกตารางมาวาง")
+        raise ValueError("ไฟล์ .xls / .doc รุ่นเก่า — เปิดแล้วบันทึกเป็น .xlsx / .docx หรือ CSV ก่อน "
+                         "หรือคัดลอกตารางมาวาง")
     for enc in ("utf-8-sig", "cp874", "tis-620"):
         try:
             text = data.decode(enc)
@@ -498,7 +580,8 @@ def unit_factor(name: str, unit: str, target: str):
         if u == "ตัน":
             return 0.001
         m = (re.search(r"บรรจุ\s*([\d.]+)\s*กก", name) or
-             re.search(r"(?:นน\.?|น้ำหนัก)\s*(?:สุทธิ)?\s*([\d.]+)\s*กก", name))
+             re.search(r"(?:นน\.?|น้ำหนัก)\s*(?:สุทธิ)?\s*([\d.]+)\s*กก", name) or
+             re.search(r"([\d.]+)\s*ก\.?\s*ก\.?\s*/\s*(?:ถุง|ถงุ|ลัง|กระสอบ)", name))
         if m and u in ("ถุง", "ลัง", "กระสอบ", "ท่อน", "ม้วน", "ถัง", "เส้น"):
             return 1.0 / float(m.group(1))
         m = re.search(r"น้ำหนักต่อขด\s*([\d.]+)\s*-\s*([\d.]+)\s*กก", name)
@@ -601,22 +684,39 @@ def match(items, keys, units=None, cutoff: float = 0.8) -> dict:
         found = candidates(key, rows, cutoff)
         if found:
             take(key, *found)
+    # a PDF's text may hold the Thai marks a letter late: what is still missing is looked
+    # for again with the marks left out of both sides (the units stay as they are)
+    loose = [(n, u, p, re.sub(r"(?<=[\u0e00-\u0e7f])\s+(?=[\u0e00-\u0e7f])", "", _strip(nn)))
+             for n, u, p, nn in rows]
+    for key in dict.fromkeys(keys):
+        if key not in out:
+            found = candidates(key, loose, cutoff, loose=True)
+            if found:
+                take(key, *found)
     return out
 
 
-def candidates(key: str, rows, cutoff: float = 0.8):
+def candidates(key: str, rows, cutoff: float = 0.8, loose: bool = False):
     """``(rows, preferred-pattern)`` that may price ``key``; ``rows`` are
-    ``(name, unit, price, normalised name)``.  None when no rule applies."""
-    nk = _norm(key)
+    ``(name, unit, price, normalised name)``.  None when no rule applies.
+    ``loose``: the names without their Thai marks (and the rules too)."""
+    if loose:
+        S_ = _strip
+        rules = [(S_(a), S_(b) if b else b, S_(c) if c else c) for a, b, c in _RULES]
+    else:
+        def S_(x):
+            return x
+        rules = _RULES
+    nk = S_(_norm(key))
     bar = _bar(key)
     if bar:
         return [r for r in rows if _bar(r[0]) == bar], r"sd\.?\s*40|sr\.?\s*24"
-    rule = next((r for r in _RULES if re.search(r[0], nk)), None)
+    rule = next((r for r in rules if re.search(r[0], nk)), None)
     if rule:
         if rule[1] is None:                        # ready-mixed by strength
             st = _strength(nk)
-            return [r for r in rows if r[3].startswith("คอนกรีต")
-                    and "ผสมเสร็จ" in r[3] and _strength(r[3]) == st], \
+            return [r for r in rows if r[3].startswith(S_("คอนกรีต"))
+                    and S_("ผสมเสร็จ") in r[3] and _strength(r[3]) == st], \
                 r"ซีแพค|cpac"
         return [r for r in rows if re.search(rule[1], r[3])], rule[2]
     same = [r for r in rows if r[3] == nk]
