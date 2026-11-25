@@ -503,7 +503,7 @@ def pm_curve(spec: dict, b_: dict, steps: int = 40) -> list:
     fy = fy_of(bar, b_)
     Es = 2.04e6
     B_, H_ = b * 100, h * 100
-    dp = (R.COVER["column"] + 0.006 + (bar.d if bar else 12) / 2000.0) * 100
+    dp = (R.cover_of(spec, "column") + 0.006 + (bar.d if bar else 12) / 2000.0) * 100
     d = H_ - dp
     beta = 0.85 if fc <= 280 else max(0.65, 0.85 - 0.05 * (fc - 280) / 70)
     Ag, Ast = B_ * H_, 2 * As1
@@ -1296,9 +1296,11 @@ def analyse(data) -> dict:
     # การทนไฟ (ข12): กฎกระทรวง 2566 ข้อ 22–24, ประกาศ มท. 2567 ตาราง 17 — the least sizes
     try:
         from core import wanic_fire as FI
-        for grp, mark, f_, _what, need, have, txt in FI.checks(data, R.COVER["column"]):
+        for grp, mark, f_, _what, need, have, txt in FI.checks(data):
             if grp == "cover":
-                continue                              # a note in the book (the cover is the detailing's)
+                out.append(Member("column", f"{mark} ทนไฟ ระยะหุ้ม ชั้น {f_ + 1}", f"ระยะหุ้ม {have / 10:.1f} ซม.",
+                                  f"ต้อง ≥ {need / 10:.0f} ซม. (ตาราง 18)", need / have if have else 9.9, txt))
+                continue
             out.append(Member(grp, f"{mark} ทนไฟ ชั้น {f_ + 1}",
                               f"{'หนา' if grp == 'slab' else 'ด้านแคบ'} {have / 10:.0f} ซม.",
                               f"ต้อง ≥ {need / 10:.0f} ซม. (ตาราง 17)", need / have if have else 9.9, txt))

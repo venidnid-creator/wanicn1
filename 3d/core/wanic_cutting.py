@@ -127,7 +127,7 @@ def items(E) -> list:
                     length, shape = L + R.lap_length(main), "ตรง (ทาบเหนือพื้น)"
                 add(group, c["mark"], "เหล็กยืน", main, shape, length, main.n)
             if tie and tie.s:
-                cv_ = R.COVER["stump" if group == "ตอม่อ" else "column"]
+                cv_ = R.cover_of(sp, "stump" if group == "ตอม่อ" else "column")
                 add(group, c["mark"], "ปลอก", tie, "ปลอกปิด ขอ 135°", _tie(tie, b, h, cv_), int(L / tie.s) + 1)
     # beams: collinear spans of a mark on a level are one run — the top bars continuous over
     # it, the bottom bars span by span, both with 90° hooks into the end columns

@@ -130,10 +130,12 @@ def fire_sizes(data) -> list:
     full = B.library_of(data)
     out = []
     for grp, mark, f_, _w, need, _have, txt in FI.checks(data):
-        if grp not in ("slab", "column"):
+        if grp not in ("slab", "column", "cover"):
             continue
         sp = dict(lib.get(mark) or {})
-        if grp == "slab":
+        if grp == "cover":
+            sp["cover"] = max(float(full[mark].get("cover") or 0), need / 1000)
+        elif grp == "slab":
             sp["t"] = max(float(full[mark].get("t", 0.1)), need / 1000)
         else:
             for k in ("b", "h"):

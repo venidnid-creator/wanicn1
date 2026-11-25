@@ -25,6 +25,15 @@ GRADE = {"RB": "SR24", "DB": "SD40"}
 #: Bar sizes on the Thai market (mm).
 SIZES = {"RB": (6, 9, 12, 15, 19, 25), "DB": (10, 12, 16, 20, 25, 28, 32)}
 COVER = {"footing": 0.075, "stump": 0.040, "column": 0.035, "beam": 0.030, "slab": 0.020}
+
+
+def cover_of(spec, kind="column") -> float:
+    """The cover of a column / stump mark: its own (ทนไฟ, ประกาศ มท. 2567 ตาราง 18) or the default."""
+    try:
+        v = float((spec or {}).get("cover") or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return max(v, COVER[kind]) if v else COVER[kind]
 WASTE = 0.05                                    # cutting waste on the take-off
 TIE_WIRE_KG_PER_T = 20.0                        # ลวดผูกเหล็ก
 
@@ -313,7 +322,7 @@ def takeoff(E) -> dict:
                 if main and main.n:
                     _add(bars, main, main.n * (L + lap_length(main)))
                 if tie and tie.s:
-                    cv = COVER[kind]
+                    cv = cover_of(sp, kind)
                     per = 2 * (b + h - 4 * cv) + 2 * 0.10            # with 135° hooks
                     _add(bars, tie, (int(L / tie.s) + 1) * per)
             run(c["mark"], col)

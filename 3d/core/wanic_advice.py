@@ -320,6 +320,8 @@ def advice_by_member(res_all, data) -> dict:
                 tips = column_advice(m, data, b_)
             elif m.group == "roof":
                 tips = roof_advice(m, b_)
+            elif " ทนไฟ ระยะหุ้ม " in m.name:
+                tips = [f"{m.name.split(' ')[0]}: {m.note} — กด «แก้ไขให้ผ่าน» (ตั้งระยะหุ้มให้อัตโนมัติ)"]
             elif " ทนไฟ ชั้น " in m.name:
                 tips = [f"{m.name.split(' ')[0]}: {m.note} — กด «แก้ไขให้ผ่าน»"]
             elif m.group == "slab" and "พื้นสำเร็จรูป" in m.name:
@@ -661,14 +663,12 @@ def member_fix(res_all, data, m) -> dict | None:
     if m.ok:
         return None
     lib = B.library_of(data)
-    if m.group in ("beam", "column"):
-        # the values that make every member of the mark pass (its worst one)
-        mark = m.diagram.mark if m.group == "beam" else m.name.split(" ")[0]
-        fixes = [f for f in mark_fixes(res_all, data) if f[0] == mark
-                 and lib.get(mark, {}).get("kind") in ((m.group, "stump") if m.group == "column" else (m.group,))]
-        tips = beam_advice(m, b_) if m.group == "beam" else column_advice(m, data, b_)
-        ch = fixes[0][1] if fixes else {}
-        return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}  # balanced in mark_fixes
+    if " ทนไฟ ระยะหุ้ม " in m.name:                 # ตาราง 18: the cover for the rating
+        mark = m.name.split(" ")[0]
+        mm = re.search(r"ต้อง ≥ ([\d.]+) ซม", m.capacity or "")
+        need = float(mm.group(1)) / 100 if mm else 0.05
+        return {"target": "lib", "key": mark, "kind": "column", "changes": {"cover": need},
+                "advice": [f"{mark}: {m.note} — ระยะหุ้มเพิ่ม กำลังรับ P-M ของเสาจะลดลงเล็กน้อย"]}
     if " ทนไฟ ชั้น " in m.name:                    # ตาราง 17: the least size for the rating
         mark = m.name.split(" ")[0]
         mm = re.search(r"ต้อง ≥ (\d+) ซม", m.capacity or "")
@@ -678,6 +678,14 @@ def member_fix(res_all, data, m) -> dict | None:
             {k: max(float(sp.get(k, 0.2) or 0.2), need) for k in ("b", "h")}
         return {"target": "lib", "key": mark, "kind": m.group, "changes": balanced_changes(sp, ch),
                 "advice": [f"{mark}: {m.note}"]}
+    if m.group in ("beam", "column"):
+        # the values that make every member of the mark pass (its worst one)
+        mark = m.diagram.mark if m.group == "beam" else m.name.split(" ")[0]
+        fixes = [f for f in mark_fixes(res_all, data) if f[0] == mark
+                 and lib.get(mark, {}).get("kind") in ((m.group, "stump") if m.group == "column" else (m.group,))]
+        tips = beam_advice(m, b_) if m.group == "beam" else column_advice(m, data, b_)
+        ch = fixes[0][1] if fixes else {}
+        return {"target": "lib", "key": mark, "kind": m.group, "changes": ch, "advice": tips}  # balanced in mark_fixes
     if m.group == "slab" and "พื้นสำเร็จรูป" in m.name:
         mark = m.name.split(" ")[0]
         return {"target": "lib", "key": mark, "kind": "slab", "changes": {},

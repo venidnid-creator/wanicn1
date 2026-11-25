@@ -112,9 +112,17 @@ def checks(data, cover_col_m: float = 0.035) -> list:
             seen.add((c["mark"], h))
             out.append(("column", c["mark"], f, "เสา", need, side,
                         f"ทนไฟ {h} ชม. ด้านแคบต้อง ≥ {need / 10:.0f} ซม. (ตาราง 17)"))
-    for h in sorted(set(req["hours"].values())):
-        if cover_col_m * 1000 + 1e-6 < COVER_COLUMN[h]:
-            out.append(("cover", "", -1, "ระยะหุ้มเสา", COVER_COLUMN[h], cover_col_m * 1000,
-                        f"ทนไฟ {h} ชม.: ระยะหุ้มเหล็กเสาต้อง ≥ {COVER_COLUMN[h]} มม. (ใช้อยู่ "
-                        f"{cover_col_m * 1000:.0f} มม.) — ตาราง 18"))
+    from core import wanic_rc as R
+    for kind, rows in (("stump", E["stumps"]), ("column", E["columns"])):
+        for c in rows:
+            sp = lib.get(c["mark"], {})
+            f = max(int(c.get("floor", 0)), 0)
+            h = req["hours"].get(f)
+            if not h:
+                continue
+            have = R.cover_of(sp, kind) * 1000
+            if have + 1e-6 < COVER_COLUMN[h] and (c["mark"], "cover", h) not in seen:
+                seen.add((c["mark"], "cover", h))
+                out.append(("cover", c["mark"], f, "ระยะหุ้มเสา", COVER_COLUMN[h], have,
+                            f"ทนไฟ {h} ชม. ระยะหุ้มเหล็กต้อง ≥ {COVER_COLUMN[h] / 10:.0f} ซม. (ตาราง 18)"))
     return out
