@@ -229,3 +229,40 @@ def test_the_curve_tables_in_plain_words():
     g = [s for s in RS.build_road_set(an, {}, shots) if s.code == "G-02"][0]
     t = " ".join(g.texts())
     assert "อธิบายตารางให้เข้าใจง่าย" in t and "ความหมายของหัวตาราง" in t
+
+
+def test_every_sheet_explains_its_terms():
+    """The owner (25 พ.ย. 69): a box «คำอธิบายศัพท์» with the terms on each
+    sheet, where nothing is drawn; a full sheet points to the glossary
+    sheet, which lists every term of the set; all of it fits a Thai DXF."""
+    from core import wanic_drawings as D
+    from core import wanic_glossary as GL
+    from core import wanic_road_sheets as RS
+    _true, shots = _noisy_road(0.0)
+    fit = R.fit_centreline(shots)
+    shots = R.apply_fit(shots, fit)
+    tin = R.build_tin(shots)
+    an = R.analyse(shots, fit.axis, R.auto_pvis(tin, fit.axis), R.Settings(), tin, fit.curves)
+    S = RS.build_road_set(an, {}, shots)
+    g = [s for s in S if s.title == "คำอธิบายศัพท์ทั้งชุดแบบ"][0]
+    assert g.code == "G-03" and any("พบในแผ่น" in t for t in g.texts())
+    boxed = [s for s in S if getattr(s, "glossary", None)]
+    assert len(boxed) >= len(S) // 2
+    for s in S:
+        if s is g or "ความหมายของหัวตาราง" in s.texts():
+            continue
+        t = " ".join(s.texts())
+        assert "คำอธิบายศัพท์" in t, s.code
+    # the box sits on nothing: no text of the sheet inside it but its own
+    s = boxed[0]
+    for s in boxed:
+        box = s.glossary_box
+        start = next(k for k, it in enumerate(s.items)
+                     if it[0] == "text" and it[2].startswith(GL.TITLE))
+        for it in s.items[:start - 1]:                   # everything drawn before the box
+            if it[0] == "text":
+                x0, y0, x1, y1 = GL._text_box(it)
+                assert x1 < box[0] or x0 > box[2] or y1 < box[1] or y0 > box[3], (s.code, it[2])
+    for s in S:
+        for t in s.texts():
+            D.dxf_text(t).encode("cp874")

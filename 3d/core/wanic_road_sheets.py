@@ -1472,6 +1472,23 @@ def location_sheet(an, info, site) -> "D.Sheet":
     return sh
 
 
+def _glossary(sheets) -> None:
+    """The owner (25 พ.ย. 69): every sheet explains its technical terms in a
+    small box where nothing is drawn, and one G sheet explains them all."""
+    from core import wanic_glossary as GL
+    gs = [s for s in sheets if s.group == "G"]
+    g, _n = GL.glossary_sheet(D, sheets, "G-00")
+    at = sheets.index(gs[-1]) + 1 if gs else 0
+    sheets.insert(at, g)
+    for i, s in enumerate([s for s in sheets if s.group == "G"], 1):
+        s.code = f"G-{i:02d}"
+    area = D.drawing_area()
+    for s in sheets:
+        if s is g or "ความหมายของหัวตาราง" in s.texts():
+            continue                       # the glossary itself, the curve tables' own block
+        GL.add_box(s, GL.terms_in(s.texts()), area, g.code)
+
+
 def build_road_set(an, info=None, shots=None,
                    groups=("G", "PP", "ST", "VT", "SD", "DR", "TS", "QS"), site=None) -> list:
     """Every sheet of the road drawing set, numbered, with its title
@@ -1513,6 +1530,8 @@ def build_road_set(an, info=None, shots=None,
             sheets += RF.ts_sheets(an, info)
     if "QS" in groups:
         sheets.append(qs_sheet(an, info, shots))
+    if info.get("glossary", True) and "G" in groups:
+        _glossary(sheets)
     for i, s in enumerate(sheets, 1):
         s.number = i
     info.setdefault("project", "งานออกแบบถนน")

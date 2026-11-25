@@ -219,7 +219,10 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   wanic_road.py — `core/road/*` must stay byte-for-byte the CAD's), curve entry speed `R.entry_speed` / `an.curve_speed`
   in the results table, the G-02 curve table and the PP plan. The owner wants every table explained for lay readers
   (`RS.plain_words`, `PLAIN_GLOSSARY` on G-02). จ35 «ปรับค่ากึ่งกลาง»: `R.fit_centreline` / `apply_fit` /
-  `CentreFitDialog` move the CL shots onto the fitted tangents + arcs (N E Z), with undo. Characters outside cp874 on sheets: map them in
+  `CentreFitDialog` move the CL shots onto the fitted tangents + arcs (N E Z), with undo.
+- Every road/survey sheet carries «คำอธิบายศัพท์» (`core/wanic_glossary.py`: terms found on the sheet, a box placed
+  where nothing is drawn, a G sheet for the whole set). New technical words on a sheet → add them to `TERMS`.
+- The start screen's «มีเวอร์ชันใหม่» window (`launcher/update_dialog.py`) downloads the installer (owner, 25 พ.ย. 69). Characters outside cp874 on sheets: map them in
   `D._DXF_SUB` (√ Δ ≥ as AutoCAD `\U+XXXX`).
 - WanicnDesign (the owner's other design program) lives on branch `claude/awesome-pasteur-y5g1in` in `design/WanicnDesign`.
 
