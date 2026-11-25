@@ -211,6 +211,14 @@ road, RC 2026.11.11.1, ReadWanicn2027).
   BOQ «แสดงเฉพาะรายการที่ยังไม่มีราคา», takeoff «ซ่อนชิ้นที่มีราคาแล้ว».
 - ง3/ง6: the สพฐ. price book (`core/wanic_obec.py`) is a second source ONLY for a สพฐ. job (`data["obec"]`), filling
   only empty items after พาณิชย์จังหวัด / ว480; it must never reach the province book or another job.
+- ข12 (from WanicnDesign, written ourselves): `wanic_frame` (stiffness frames + drift), `wanic_combined` (combined
+  footings), LL reduction (never for the ข้อ 14 uses), precast slabs, `wanic_fire` (fire rating + column cover set
+  automatically), `wanic_cutting` (10 m bar cutting list), `wanic_schedule` (CPM + S-curve + installments).
+- จ (roads): the pavement design must give «6. สรุปการออกแบบ» before the layer table / 3D model; the design dialog
+  follows the THAI-PAVE steps (workflow only). จ34: a surveyed axis is smoothed to true arcs (`R.smooth_axis`, in
+  wanic_road.py — `core/road/*` must stay byte-for-byte the CAD's), curve entry speed `R.entry_speed` / `an.curve_speed`
+  in the results table, the G-02 curve table and the PP plan. Characters outside cp874 on sheets: map them in
+  `D._DXF_SUB` (√ Δ ≥ as AutoCAD `\U+XXXX`).
 - WanicnDesign (the owner's other design program) lives on branch `claude/awesome-pasteur-y5g1in` in `design/WanicnDesign`.
 
 ## 7. Future development (agreed or proposed — confirm with the owner before starting)

@@ -392,7 +392,7 @@ def fit_radius(a, b, c, cl: list, t_max: float) -> tuple:
 
 
 def alignment_from_pis(stakes: list[PiStake], cl: Optional[list] = None,
-                       step: float = 5.0) -> PiAlignment:
+                       step: float = 1.0) -> PiAlignment:
     """The designed axis through the field PI stakes: tangents between
     them and a circular curve at each PI, its radius from the field (R,
     or the external distance E or tangent T staked at the PI), else the
@@ -717,6 +717,90 @@ def superelevation_plan(curves, settings: Settings) -> list:
     return out
 
 
+def smooth_axis(points: list, curves: list,
+                step: float = 1.0) -> tuple:
+    """จ34: the axis with every circular curve drawn as its true arc — the
+    shots between PC and PT replaced by points every ``step`` m on the
+    circle tangent to both straights, so the plan, the edges and the
+    sections follow a smooth curve, not the chords of the survey. Returns
+    the new polyline and the curves with their PC / PT stations on it.
+    A curve that runs into the one before, or has no radius, stays as
+    surveyed."""
+    if len(points) < 3 or not curves:
+        return list(points), list(curves)
+    pts = [p for k, p in enumerate(points)
+           if k == 0 or math.hypot(p[0] - points[k - 1][0], p[1] - points[k - 1][1]) > 1e-9]
+    chain = [0.0]
+    for p, q in zip(pts, pts[1:]):
+        chain.append(chain[-1] + math.hypot(q[0] - p[0], q[1] - p[1]))
+    out: list = []
+    done = 0.0                           # chainage of the surveyed axis consumed
+    arcs = []                            # (curve, index of its PC in out, index of PT)
+
+    def upto(s):
+        for k in range(1, len(pts)):
+            if done + 1e-6 < chain[k] < s - 1e-6:
+                out.append(pts[k])
+
+    out.append(pts[0])
+    for c in sorted(curves, key=lambda c: c.s_pc):
+        if c.radius <= 0 or c.s_pc < done + 1e-3 or c.s_pt <= c.s_pc + 1e-3:
+            continue
+        half = math.radians(abs(c.delta)) / 2.0
+        din = (c.pi[0] - c.pc[0], c.pi[1] - c.pc[1])
+        nd = math.hypot(*din)
+        if nd < 1e-9 or half < 1e-9:
+            continue
+        upto(c.s_pc)
+        if math.hypot(out[-1][0] - c.pc[0], out[-1][1] - c.pc[1]) > 1e-6:
+            out.append(c.pc)
+        i0 = len(out) - 1
+        # the centre: R to the inside of the turn (+ delta: to the right)
+        nx, ny = (din[1] / nd, -din[0] / nd) if c.delta > 0 else (-din[1] / nd, din[0] / nd)
+        cen = (c.pc[0] + nx * c.radius, c.pc[1] + ny * c.radius)
+        a0 = math.atan2(c.pc[1] - cen[1], c.pc[0] - cen[0])
+        sweep = -2 * half if c.delta > 0 else 2 * half
+        n = max(2, math.ceil(c.radius * abs(sweep) / step))
+        for j in range(1, n):
+            a = a0 + sweep * j / n
+            out.append((cen[0] + c.radius * math.cos(a), cen[1] + c.radius * math.sin(a)))
+        out.append(c.pt)
+        arcs.append((c, i0, len(out) - 1))
+        done = c.s_pt
+    for k in range(1, len(pts)):
+        if chain[k] > done + 1e-6:
+            out.append(pts[k])
+    run = [0.0]
+    for p, q in zip(out, out[1:]):
+        run.append(run[-1] + math.hypot(q[0] - p[0], q[1] - p[1]))
+    new = []
+    moved = {id(c): (run[i0], run[i1]) for c, i0, i1 in arcs}
+    for c in curves:
+        if id(c) in moved:
+            a, b = moved[id(c)]
+        else:
+            a, b = A.station_of(out, c.pc), A.station_of(out, c.pt)
+        new.append(A.HorizontalCurve(c.number, c.pi, c.delta, c.radius, a, b, c.pc, c.pt))
+    return out, new
+
+
+def entry_speed(radius: float, e_pct: float) -> float:
+    """จ34: the speed a curve of radius R (m) takes with superelevation e
+    (%): V = √(127 R (e + f)), f the side friction of ทถ-2-104 at that
+    speed (solved by iteration), rounded down to 5 km/h, at most 120."""
+    R = float(radius or 0.0)
+    if R <= 0:
+        return 0.0
+    e = max(float(e_pct or 0.0), 0.0) / 100.0
+    v = 60.0
+    for _ in range(40):
+        v2 = math.sqrt(127.0 * R * (e + _interp(SIDE_FRICTION, v)))
+        if abs(v2 - v) < 1e-4:
+            break
+        v = v2
+    return float(min(120, math.floor(v / 5.0 + 1e-9) * 5))
+
+
 def _ramp(s, a, b):
     if b - a <= 1e-9:
         return 1.0 if s >= b else 0.0
@@ -812,6 +896,12 @@ class Analysis:
         if not self.grade:
             return 0.0
         return max(0.0, min(self.length, self.grade[-1][0]) - max(0.0, self.grade[0][0]))
+
+    def curve_speed(self, c) -> float:
+        """จ34: the entry speed of horizontal curve ``c`` (km/h): with the
+        superelevation the plan gives it, else the road's e max."""
+        se = next((p for p in (self.se_plan or []) if p.number == c.number), None)
+        return entry_speed(c.radius, se.e if se is not None else self.settings.emax)
 
     def layer_quantities(self) -> list:
         """(name, thickness, width, volume m³) of each pavement layer, and
@@ -966,6 +1056,14 @@ def analyse(shots: list[Shot], axis: list, pvis: list, settings: Settings,
     # that close to the axis's ends are its ends, or the end section
     # falls past the grade and loses its design
     length = A.polyline_length(axis)
+    if hcurves is None:
+        # จ34: a surveyed axis — its curves drawn as true arcs, not the
+        # chords between the shots; a PVI at the old end stays at the end
+        axis, hcurves = smooth_axis(axis, A.horizontal_curves(axis))
+        new = A.polyline_length(axis)
+        if pvis and abs(pvis[-1][0] - length) < 0.01:
+            pvis[-1] = (new,) + pvis[-1][1:]
+        length = new
     if pvis and abs(pvis[0][0]) < 0.01:
         pvis[0] = (0.0,) + pvis[0][1:]
     if pvis and abs(pvis[-1][0] - length) < 0.01:
@@ -985,7 +1083,7 @@ def analyse(shots: list[Shot], axis: list, pvis: list, settings: Settings,
     else:
         warnings.append("ยังไม่มีเส้นระดับออกแบบ (ต้องมี PVI อย่างน้อย 2 จุด) "
                         "— แสดงเฉพาะระดับดินเดิม")
-    hcurves = list(hcurves) if hcurves is not None else A.horizontal_curves(axis)
+    hcurves = list(hcurves)
     plan = superelevation_plan(hcurves, settings) if float(getattr(settings, "speed", 0) or 0) > 0 else []
     for c in plan:
         warnings += [f"โค้ง {c.number}: {n}" for n in c.notes]

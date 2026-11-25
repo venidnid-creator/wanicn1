@@ -112,3 +112,24 @@ def test_points_order_in_southern_thailand():
     c = R.parse_points("1,936000,446000,10,CL\n")[0]
     assert (a.e, a.n) == (b.e, b.n) == (c.e, c.n) == (446000.0, 936000.0)
     assert R.header_order(["Point", "Northing", "Easting", "Elev", "Code"]) == "PNEZD"
+
+
+def test_a_surveyed_curve_is_drawn_as_its_true_arc_with_its_speed():
+    """จ34: shots every 15 m on a 90° curve of R 50 — the axis becomes the
+    arc (every point on the circle, 1 m apart), PC/PT on the new axis, and
+    the entry speed V = √(127 R (e + f))."""
+    import math
+    from core.road import alignment as A
+    pts = [(-100.0, 0.0), (-50.0, 0.0), (0.0, 0.0)]
+    for k in range(1, 6):
+        a = -math.pi / 2 + math.pi / 2 * k / 6
+        pts.append((50 * math.cos(a), 50 + 50 * math.sin(a)))
+    pts += [(50.0, 50.0), (50.0, 100.0), (50.0, 150.0)]
+    axis, curves = R.smooth_axis(pts, A.horizontal_curves(pts))
+    c = curves[0]
+    assert abs(c.radius - 50) < 1e-6 and abs(c.s_pc - 100) < 1e-6
+    assert abs((c.s_pt - c.s_pc) - c.length) < 0.01           # PC→PT is the arc
+    on = [p for p in axis if p[0] > 1e-6 and p[1] < 50 - 1e-6]
+    assert len(on) > 70 and max(abs(math.hypot(x, y - 50) - 50) for x, y in on) < 1e-6
+    assert R.entry_speed(100, 6) == 50 and R.entry_speed(500, 6) == 100
+    assert R.entry_speed(0, 6) == 0 and R.entry_speed(5000, 8) == 120

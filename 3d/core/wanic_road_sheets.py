@@ -124,7 +124,7 @@ def clip(a, b, box):
     return ((a[0] + t0 * dx, a[1] + t0 * dy), (a[0] + t1 * dx, a[1] + t1 * dy))
 
 
-def edges_of(an, s0, s1, step=2.0):
+def edges_of(an, s0, s1, step=1.0):
     """Offset lines of the stretch: pavement, shoulder and the toe of the
     side slopes (from the sections) — {name: [(x, y)…]} for each side."""
     st = an.settings
@@ -279,12 +279,13 @@ def curve_rows(an):
         if c.radius <= 0:
             rows.append((str(c.number), sta(c.s_pi), A.format_dms(c.delta) +
                          (" ขวา" if c.delta > 0 else " ซ้าย"), "มุมหักเห", "", "",
-                         "", "", "", f"{c.pi[0]:,.3f}", f"{c.pi[1]:,.3f}"))
+                         "", "", "", "", f"{c.pi[0]:,.3f}", f"{c.pi[1]:,.3f}"))
             continue
         rows.append((str(c.number), sta(c.s_pi), A.format_dms(c.delta) +
                      (" ขวา" if c.delta > 0 else " ซ้าย"), f"{c.radius:,.2f}",
                      f"{c.tangent:,.2f}", f"{c.length:,.2f}", f"{c.external:,.2f}",
-                     sta(c.s_pc), sta(c.s_pt), f"{c.pi[0]:,.3f}", f"{c.pi[1]:,.3f}"))
+                     sta(c.s_pc), sta(c.s_pt), f"{an.curve_speed(c):.0f}",
+                     f"{c.pi[0]:,.3f}", f"{c.pi[1]:,.3f}"))
     return rows
 
 
@@ -292,6 +293,7 @@ CURVE_COLS = [("โค้ง", 10, "center"), ("PI STA", 22, "center"),
               ("มุมเบี่ยง Δ", 30, "center"), ("R (ม.)", 18, "right"),
               ("T (ม.)", 16, "right"), ("L (ม.)", 16, "right"),
               ("E (ม.)", 14, "right"), ("PC", 22, "center"), ("PT", 22, "center"),
+              ("V (กม./ชม.)", 20, "center"),
               ("PI ตะวันออก (E)", 30, "right"), ("PI เหนือ (N)", 30, "right")]
 
 
@@ -426,7 +428,7 @@ def g_sheets(an, info, chunks, shots):
         g.text((X0, Y1 - 3), "ตารางองค์ประกอบโค้งราบ (Horizontal curves)", 3.4,
                "left", "text", True)
         yy = D.table(g, X0, Y1 - 6, CURVE_COLS, hrows[i:i + per] or
-                     [("-",) + ("",) * 10], 2.0, 5.2, 6.0)
+                     [("-",) + ("",) * 11], 2.0, 5.2, 6.0)
         if i == 0:
             g.text((X0, yy - 8), "ตารางโค้งดิ่ง (Vertical curves)", 3.4, "left",
                    "text", True)
@@ -434,6 +436,7 @@ def g_sheets(an, info, chunks, shots):
                     [("-",) + ("",) * 9], 2.0, 5.2, 6.0)
             g.text((X0, Y0 + 3), "Δ มุมเบี่ยง · R รัศมี · T ระยะสัมผัส · L ความยาวโค้ง · "
                    "E ระยะภายนอก · PC จุดเริ่มโค้ง · PT จุดสิ้นโค้ง · PI จุดตัดแนวสัมผัส · "
+                   "V ความเร็วเข้าโค้ง = √(127 R (e + f)) · "
                    "A = g2 − g1 · K = L / |A|", 2.0)
     return out
 
@@ -466,7 +469,7 @@ def chunks_of(an, hscale):
 def pp_plan(sh, an, s0, s1, shots, chunks, idx):
     bx = PLAN_BOX
     st = an.settings
-    part = [A.point_at(an.axis, s) for s in _range(s0, s1, 5.0)]
+    part = [A.point_at(an.axis, s) for s in _range(s0, s1, 1.0)]
     a, b = part[0], part[-1]
     ang = math.atan2(b.y - a.y, b.x - a.x)
     cen = ((a.x + b.x) / 2, (a.y + b.y) / 2)
@@ -568,13 +571,28 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
             if c.radius > 0:
                 sh.text((q[0] + 1.5, q[1] - 1.8), f"R={c.radius:,.0f} Δ={A.format_dms(c.delta)}",
                         1.7, "left", "roof")
+                sh.text((q[0] + 1.5, q[1] - 4.3), f"L={c.length:,.2f} V={an.curve_speed(c):.0f} กม./ชม.",
+                        1.7, "left", "roof")
+        if c.radius > 0:
+            # the tangents PC → PI → PT, thin and dashed
+            for e_ in (c.pc, c.pt):
+                cc = clip(v(*e_), q, inner)
+                if cc:
+                    sh.line(cc[0], cc[1], "roof", 0.13, True)
         for s_, t in ((c.s_pc, "PC"), (c.s_pt, "PT")):
             if c.radius > 0 and s0 <= s_ <= s1:
                 p = A.point_at(an.axis, s_)
+                # on the side away from the station labels, along the tick
+                far = st.width / 2 + st.shoulder + 3
                 a_ = v(*p.offset_point(-st.width / 2 - 3))
-                b_ = v(*p.offset_point(st.width / 2 + 3))
+                b_ = v(*p.offset_point(far))
                 sh.line(a_, b_, "roof", 0.25)
-                sh.text((b_[0] + 0.5, b_[1] + 0.5), t, 1.8, "left", "roof")
+                ang_t = math.degrees(math.atan2(b_[1] - a_[1], b_[0] - a_[0]))
+                flip = not (-90 < ang_t <= 90)
+                if flip:
+                    ang_t += 180 if ang_t <= -90 else -180
+                sh.text(v(*p.offset_point(far + 0.8)), f"{t} {sta(s_)}", 1.8,
+                        "right" if flip else "left", "roof", False, ang_t)
     for bm in bench_marks(shots):
         q = v(bm.e, bm.n)
         if inner[0] < q[0] < inner[2] and inner[1] < q[1] < inner[3]:
@@ -738,8 +756,11 @@ def pp_bands(sh, an, s0, s1, hscale):
                     "left", "roof")
             continue
         sh.poly([(a, yh), (a, yh + up), (b, yh + up), (b, yh)], "roof", 0.35, False)
-        sh.text(((a + b) / 2, yh + up + (0.6 if up > 0 else -2.6)),
-                f"{c.number}: R={c.radius:,.0f}", 1.6, "center", "roof")
+        # inside the bracket, never over the band beside it
+        txt = f"{c.number}: R={c.radius:,.0f} V={an.curve_speed(c):.0f}"
+        if b - a < len(txt) * 1.6 * 0.55:
+            txt = f"{c.number}: R={c.radius:,.0f}"
+        sh.text(((a + b) / 2, yh + (0.5 if up > 0 else -2.3)), txt, 1.6, "center", "roof")
     # vertical alignment diagram
     yv = top - 5 * BAND_H - BAND_H / 2
     sh.line((bx0, yv), (right, yv), "roof", 0.25)

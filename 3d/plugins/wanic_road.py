@@ -204,8 +204,9 @@ class ProfileView(QWidget):
             p.drawLine(QPointF(a.x(), yb), QPointF(b.x(), yb))
             p.drawLine(QPointF(a.x(), yb - 4), QPointF(a.x(), yb + 4))
             p.drawLine(QPointF(b.x(), yb - 4), QPointF(b.x(), yb + 4))
-            p.drawText(QRectF(a.x(), yb + 2, max(b.x() - a.x(), 160), 14), Qt.AlignLeft,
-                       f" PI-{c.number}  R = {c.radius:.3f}  Δ = {A.format_dms(c.delta)} {c.side}")
+            p.drawText(QRectF(a.x(), yb + 2, max(b.x() - a.x(), 300), 14), Qt.AlignLeft,
+                       f" PI-{c.number}  R = {c.radius:.3f}  Δ = {A.format_dms(c.delta)} {c.side}"
+                       f"  V = {an.curve_speed(c):.0f} กม./ชม.")
         p.setPen(CYAN)
         font.setPointSizeF(9.5)
         p.setFont(font)
@@ -381,10 +382,11 @@ class ResultsDialog(QDialog):
         self.earth_sum.setStyleSheet("QLabel{background:#0F2A44;color:white;border-radius:6px;padding:6px 10px;}")
         ev.addWidget(self.earth_sum)
         self.tabs.addTab(earth, "ปริมาณดิน")
-        self.curves = QTableWidget(0, 14)
+        self.curves = QTableWidget(0, 15)
         self.curves.setHorizontalHeaderLabels(
             ["PI", "สถานี PI", "E (PI)", "N (PI)", "Δ", "ทิศ", "R (ม.)", "T (ม.)", "L (ม.)",
-             "E ระยะภายนอก (ม.)", "M ระยะกลางโค้ง (ม.)", "LC คอร์ด (ม.)", "สถานี PC", "สถานี PT"])
+             "E ระยะภายนอก (ม.)", "M ระยะกลางโค้ง (ม.)", "LC คอร์ด (ม.)", "สถานี PC", "สถานี PT",
+             "ความเร็วเข้าโค้ง (กม./ชม.)"])
         self.curves.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.curves.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.tabs.addTab(self.curves, "โค้งราบ (PI PC PT)")
@@ -446,9 +448,10 @@ class ResultsDialog(QDialog):
                     A.format_dms(c.delta), c.side]
             if c.radius > 0:
                 vals += [f"{c.radius:.3f}", f"{c.tangent:.3f}", f"{c.length:.3f}", f"{c.external:.3f}",
-                         f"{c.middle_ordinate:.3f}", f"{c.chord:.3f}", fs(c.s_pc, 3), fs(c.s_pt, 3)]
+                         f"{c.middle_ordinate:.3f}", f"{c.chord:.3f}", fs(c.s_pc, 3), fs(c.s_pt, 3),
+                         f"{an.curve_speed(c):.0f}"]
             else:
-                vals += ["จุดหักมุม", "", "", "", "", "", "", ""]
+                vals += ["จุดหักมุม", "", "", "", "", "", "", "", ""]
             for k, v in enumerate(vals):
                 it = QTableWidgetItem(v)
                 if k > 1:
