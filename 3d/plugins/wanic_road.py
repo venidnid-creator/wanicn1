@@ -423,7 +423,9 @@ class LandCheckDialog(QDialog):
 
     def sheet(self):
         from core import wanic_drawings as D
-        info = {"project": "ตรวจสอบพื้นที่ก่อสร้าง", "source": self.source}
+        zone, datum = self.panel._zone_datum()
+        info = {"project": "ตรวจสอบพื้นที่ก่อสร้าง", "source": self.source, "zone": zone, "datum": datum,
+                "location": getattr(self.panel, "_place", "") or ""}
         from core import wanic_glossary as GL
         from core import wanic_road_sheets as RS
         sh = self.LC.report_sheet(self.an, self.chk, info)

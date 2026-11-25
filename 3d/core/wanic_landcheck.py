@@ -465,15 +465,52 @@ def report_sheet(an, chk: Check, info: dict | None = None):
         sh.text(c, f"{i + 1}", 2.6, "center", "text", True)
         sh.text((c[0], c[1] - 3.4), t.parcel.number or "ไม่ทราบเลขที่ดิน", 1.7, "center",
                 "text" if t.parcel.number else "roof")
-    s = 0.0
-    while s <= an.length + 1e-6:
+    s = 100.0                              # the two ends are labelled as key points
+    while s < an.length - 20.0:
         p = A.point_at(an.axis, s)
         q = v(p.offset_point(-(abs(chk.strips[0][1]) + 2.0 / k)))   # beside the footprint
         sh.circle(v((p.x, p.y)), 0.5, "roof", 0.25)
         sh.text((q[0] - 0.8, q[1]), A.format_station(s, 0), 1.6, "right", "dim")
         s += 100.0
+    # the UTM grid: lines every round step, E along the bottom and N up the left edge
+    def w(q):                                         # paper → UTM
+        return (cx + (q[0] - mx) / k, cy + (q[1] - my) / k)
+    lo, hi = w((px0, py0)), w((px1, py1))
+    span = max(hi[0] - lo[0], hi[1] - lo[1])
+    step = next((g for g in (10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000) if span / g <= 8), 10000)
+    e = math.ceil(lo[0] / step) * step
+    while e < hi[0]:
+        x = v((e, 0))[0]
+        if px0 + 3 < x < px1 - 3:
+            sh.line((x, py0), (x, py1), "grid", 0.08, True)
+            sh.line((x, py0), (x, py0 + 2), "text", 0.18)
+            sh.text((x + 0.6, py0 + 2.6), f"E {e:,.0f}", 1.6, "left", "dim", False, 90)
+        e += step
+    n = math.ceil(lo[1] / step) * step
+    while n < hi[1]:
+        y = v((0, n))[1]
+        if py0 + 3 < y < py1 - 3:
+            sh.line((px0, y), (px1, y), "grid", 0.08, True)
+            sh.line((px1 - 2, y), (px1, y), "text", 0.18)
+            sh.text((px1 - 2.6, y + 0.6), f"N {n:,.0f}", 1.6, "right", "dim")
+        n += step
+    # the key points (their coordinates in the table on the right)
+    keypts = [("เริ่มต้น", 0.0, A.point_at(an.axis, 0.0))]
+    for c in getattr(an, "hcurves", []) or []:
+        keypts.append((f"PI-{c.number}", c.s_pi, type("P", (), {"x": c.pi[0], "y": c.pi[1]})))
+    keypts.append(("สิ้นสุด", an.length, A.point_at(an.axis, an.length)))
+    for lab, _s, p in keypts:
+        q = v((p.x, p.y))
+        sh.circle(q, 0.9, "roof", 0.3)
+        if q[0] - len(lab) * 1.1 - 2 < px0:         # near the left edge: on the right, below
+            sh.text((q[0] + 1.4, q[1] - 5.0), lab, 1.7, "left", "roof", True)
+        else:
+            sh.text((q[0] - 1.4, q[1] + 1.4), lab, 1.7, "right", "roof", True)
     D.north(sh, (px1 - 8, py1 - 10), 4)
-    sh.text((px0 + 2, py0 + 2.5), f"มาตราส่วนโดยประมาณ 1:{1000 / k:,.0f}", 1.8, "left", "dim")
+    zone, datum = int(info.get("zone") or 47), str(info.get("datum") or "WGS84")
+    sh.text((px0 + 2, py1 - 4), f"ระบบพิกัด UTM {datum} โซน {zone}N · หน่วยเมตร · "
+            f"ตารางกริดทุก {step:,} ม. · มาตราส่วนโดยประมาณ 1:{1000 / k:,.0f}", 2.0, "left", "text", True)
+
     # the legend, under the plan
     ly = py0 - 6
     sh.line((px0, ly + 1), (px0 + 10, ly + 1), "roof", 0.35)
@@ -507,8 +544,14 @@ def report_sheet(an, chk: Check, info: dict | None = None):
         rows.append((str(i + 1), t.parcel.number or "ไม่ทราบ", f"{t.parcel.area:,.1f}", f"{t.area:,.1f}",
                      rai_ngan_wa(t.area), f"{100 * t.share:.1f}",
                      f"{A.format_station(t.s0, 0)}–{A.format_station(t.s1, 0)}"))
-    per = 34
-    D.table(sh, tx, y - 2, cols, rows[:per] or [("-",) + ("",) * 6], 1.9, 4.8, 6.0)
+    per = 26
+    y = D.table(sh, tx, y - 2, cols, rows[:per] or [("-",) + ("",) * 6], 1.9, 4.8, 6.0)
+    zone, datum = int(info.get("zone") or 47), str(info.get("datum") or "WGS84")
+    sh.text((tx, y - 6), f"พิกัดจุดสำคัญของแนวถนน (UTM {datum} โซน {zone}N)", 2.2, "left", "text", True)
+    D.table(sh, tx, y - 8, [("จุด", 22, "center"), ("กม.", 26, "center"), ("E (ม.)", 40, "right"),
+                            ("N (ม.)", 42, "right")],
+            [(lab, A.format_station(s_, 2), f"{p.x:,.3f}", f"{p.y:,.3f}") for lab, s_, p in keypts[:8]],
+            1.9, 4.8, 6.0)
     if len(rows) > per:
         sh.text((tx, Y0 + 30), f"… อีก {len(rows) - per} แปลง (ดูไฟล์ Excel/CSV)", 1.9, "left", "dim")
     sh.text((tx, Y0 + 22), "หมายเหตุ: ตรวจสอบจากข้อมูลแปลงที่ดินในไฟล์ "
