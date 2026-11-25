@@ -566,29 +566,22 @@ class RoadPanel(QWidget):
             self.pavement.addItem(title, key)
         self.pavement.currentIndexChanged.connect(lambda _i: _safe(self, self._pavement_changed))
         v.addWidget(self.pavement)
-        self.layers = QTableWidget(0, 2)
-        self.layers.setHorizontalHeaderLabels(["ชั้นทาง (บนลงล่าง) — เลือกหรือพิมพ์ชื่อ", "หนา (ม.)"])
+        self.layers = QTableWidget(0, 3)
+        self.layers.setHorizontalHeaderLabels(["ชั้นทาง (บนลงล่าง) — ตามผลการออกแบบ", "หนา (ม.)", "Layer"])
         self.layers.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.layers.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.layers.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.layers.setMinimumHeight(170)
         v.addWidget(self.layers)
         self.structure = QLabel()
         v.addWidget(self.structure)
-        row = QHBoxLayout()
-        for text, fn in (("➕ เพิ่มชั้น", self.add_layer), ("➖ ลบชั้น", self.remove_layer),
-                         ("▲", lambda: self.move_layer(-1)), ("▼", lambda: self.move_layer(1))):
-            b = QPushButton(text)
-            b.clicked.connect(lambda _=False, fn=fn: _safe(self, fn))
-            row.addWidget(b)
-        v.addLayout(row)
-        calc = QPushButton("🧮 ออกแบบความหนาโครงสร้างทาง (AI 1970 / Road Note 29)…")
+        calc = QPushButton("🧮 ออกแบบความหนาโครงสร้างทาง (ลาดยาง: AI 1970 · คสล.: Road Note 29)…")
         calc.setToolTip("คำนวณ DTN / ESA ความหนาแต่ละชั้น ตรวจสอบทุกชั้น เทียบแบบมาตรฐาน ทช. "
                         "ใส่ผลลงตารางชั้นทาง และบันทึกรายการคำนวณเป็น PDF")
         calc.clicked.connect(lambda _=False: _safe(self, self.open_pavement_design))
         v.addWidget(calc)
-        note = QLabel("<span style='color:#6b7280;font-size:11px'>ความหนาเป็นค่าเริ่มต้นตามแบบทั่วไปของ "
-                      "ทช./ทล. — ตรวจกับแบบมาตรฐานที่เลือกตามปริมาณจราจรและ CBR ของโครงการ "
-                      "แล้วแก้ในตารางได้ · ดินตัด-ถมคิดถึงใต้ชั้นทาง</span>")
+        note = QLabel("<span style='color:#6b7280;font-size:11px'>ตารางชั้นทางแสดงผลการออกแบบ (ข้อ 6 สรุปการออกแบบ) "
+                      "ซึ่งใช้สร้างโมเดลและคิดปริมาณงาน — แก้ความหนาที่หน้าต่างออกแบบ · ดินตัด-ถมคิดถึงใต้ชั้นทาง</span>")
         note.setWordWrap(True)
         v.addWidget(note)
         lay.addWidget(box)
@@ -682,7 +675,7 @@ class RoadPanel(QWidget):
         s = R.Settings(**{k: float(w.value()) for k, w in self.spins.items()})
         s.method = self.method.currentData()
         s.pavement = self.pavement.currentData()
-        s.layers = self.layer_rows()
+        s.layers = self.layer_rows() or None             # not designed yet: the preset (earthworks only)
         return s
 
     # ---- pavement layers -----------------------------------------------------------------
@@ -726,6 +719,12 @@ class RoadPanel(QWidget):
         spin.valueChanged.connect(lambda _v: self._layers_edited())
         self.layers.setCellWidget(r, 0, combo)
         self.layers.setCellWidget(r, 1, spin)
+        en = QTableWidgetItem(V.en_name(name))
+        en.setFlags(en.flags() & ~Qt.ItemIsEditable)
+        self.layers.setItem(r, 2, en)
+        # จ: the layers are the design's — changed in «🧮 ออกแบบความหนา…», not typed here
+        combo.setEnabled(False)
+        spin.setEnabled(False)
         self.layers.setRowHeight(r, 28)
 
     def _layers_edited(self):
@@ -735,12 +734,26 @@ class RoadPanel(QWidget):
     def _show_structure(self):
         rows = self.layer_rows() if hasattr(self, "structure") else []
         if hasattr(self, "structure"):
-            self.structure.setText(f"รวม {len(rows)} ชั้น หนา {sum(t for _n, t, _c in rows):.3f} ม.")
+            if not rows:
+                self.structure.setText("<span style='color:#B45309'><b>ยังไม่ได้ออกแบบชั้นทาง</b> — กด «🧮 ออกแบบ"
+                                       "ความหนาโครงสร้างทาง» แล้ว «✅ ใช้ผลการออกแบบ» ตารางจะแสดงชั้นทางตามที่ออกแบบ "
+                                       "(ยังสร้างโมเดลไม่ได้จนกว่าจะมีข้อ 6 สรุปการออกแบบ)</span>")
+            else:
+                sm = getattr(self, "pave_summary", None) or {}
+                how = {"ai": "AI 1970", "rn29": "Road Note 29", "std": "แบบมาตรฐาน ทช."}.get(sm.get("method"), "")
+                self.structure.setText(f"รวม {len(rows)} ชั้น หนา {sum(t for _n, t, _c in rows):.3f} ม."
+                                       + (f" · ตามผลการออกแบบ {how}" if how else ""))
 
     def _pavement_changed(self):
+        """จ: the layers wait for the design — another road type drops the summary of the old one."""
         key = self.pavement.currentData()
-        if key != "custom":
-            self.set_layers(R.pavement_layers(key))
+        sm = getattr(self, "pave_summary", None)
+        if sm and (sm.get("kind") != R.pavement_kind(key) or sm.get("pavement") != key):
+            self.pave_summary = None
+        if getattr(self, "pave_summary", None):
+            self.set_layers(self.pave_summary["layers"])
+        else:
+            self.set_layers([])
         self.analysis = None
 
     def _selected_layer(self) -> int:
@@ -810,6 +823,8 @@ class RoadPanel(QWidget):
                 "layers": [[n, t] for n, t, _c in self.layer_rows()]}
         if getattr(self, "pave_design", None):
             data["pave_design"] = self.pave_design
+        if getattr(self, "pave_summary", None):
+            data["pave_summary"] = self.pave_summary
         self._last = json.loads(json.dumps(data))
         setter = getattr(self.app, "set_document_data", None)
         if callable(setter):
@@ -844,9 +859,9 @@ class RoadPanel(QWidget):
             self.pavement.blockSignals(True)
             self.pavement.setCurrentIndex(i)
             self.pavement.blockSignals(False)
-        if "layers" in data:
-            self.set_layers(data["layers"])
         self.pave_design = data.get("pave_design")
+        self.pave_summary = data.get("pave_summary")
+        self.set_layers(self.pave_summary["layers"] if self.pave_summary else [])
         self.grid.blockSignals(True)
         self.grid.setCurrentIndex(int(data.get("grid", 0)))
         self.grid.blockSignals(False)
@@ -1127,6 +1142,13 @@ class RoadPanel(QWidget):
         return self.analysis or self.analyse()
 
     def build_model(self):
+        # the owner: no «6. สรุปการออกแบบ», no model — concrete or asphalt
+        sm = getattr(self, "pave_summary", None)
+        if not sm or sm.get("kind") != R.pavement_kind(self.pavement.currentData()):
+            QMessageBox.warning(self, TITLE, "ยังไม่มี «6. สรุปการออกแบบ» ของโครงสร้างชั้นทาง — สร้างโมเดลไม่ได้\n\n"
+                                "กด «🧮 ออกแบบความหนาโครงสร้างทาง» ออกแบบให้ผ่าน แล้วกด «✅ ใช้ผลการออกแบบ» "
+                                "โมเดลและปริมาณงานจะใช้ชั้นทางตามผลการออกแบบนั้น")
+            return
         an = self._ensure()
         if an is None:
             return
@@ -1411,6 +1433,7 @@ class PavementDesignDialog(QDialog):
         self.setWindowTitle("ออกแบบความหนาโครงสร้างชั้นทาง — AI 1970 / Road Note 29")
         self.resize(1180, 760)
         saved = dict(getattr(panel, "pave_design", None) or {})
+        self.kind = R.pavement_kind(panel.pavement.currentData()) if hasattr(panel, "pavement") else "asphalt"
         lay = QHBoxLayout(self)
         left = QVBoxLayout()
         self.tabs = QTabWidget()
@@ -1421,7 +1444,7 @@ class PavementDesignDialog(QDialog):
         self.view = QTextBrowser()
         right.addWidget(self.view, 1)
         row = QHBoxLayout()
-        for text, fn in (("✅ ใส่ลงตารางชั้นทาง", self.apply_layers),
+        for text, fn in (("✅ ใช้ผลการออกแบบ (ข้อ 6)", self.apply_layers),
                          ("📐 ใช้ตามแบบมาตรฐาน ทช.", self.apply_standard),
                          ("🖨 บันทึกรายการคำนวณ PDF", self.save_pdf),
                          ("ปิด", self.accept)):
@@ -1508,7 +1531,13 @@ class PavementDesignDialog(QDialog):
         self.rn_ct.currentIndexChanged.connect(lambda _i: self.refresh())
         form.addRow("ระหว่างก่อสร้าง", self.rn_ct)
         self.tabs.addTab(w, "ถนน คสล. (Road Note 29)")
-        self.tabs.setCurrentIndex(1 if saved.get("method") == "rn29" else 0)
+        # จ ข้อ 30: ถนนลาดยาง → AI 1970 only, ถนน คสล. → Road Note 29 only (the road type of the panel)
+        idx = 1 if self.kind == "concrete" else 0
+        self.tabs.setCurrentIndex(idx)
+        self.tabs.setTabVisible(1 - idx, False)
+        which = QLabel(f"<b>{'ถนน คสล. → ออกแบบด้วย Road Note 29' if idx else 'ถนนลาดยาง → ออกแบบด้วย AI 1970'}</b>"
+                       "<br><span style='color:#6b7280;font-size:11px'>เปลี่ยนชนิดถนนที่แผงออกแบบถนน ข้อ 3</span>")
+        left.insertWidget(1, which)
         self.tabs.currentChanged.connect(lambda _i: self.refresh())
         self.refresh()
 
@@ -1553,7 +1582,8 @@ class PavementDesignDialog(QDialog):
                          subbase_kind=str(self.rn_sub.currentData()))
 
     def method(self) -> str:
-        return "rn29" if self.tabs.currentIndex() == 1 else "ai"
+        return "rn29" if getattr(self, "kind", "") == "concrete" or (
+            not hasattr(self, "kind") and self.tabs.currentIndex() == 1) else "ai"
 
     def result(self):
         if self.method() == "ai":
@@ -1564,8 +1594,29 @@ class PavementDesignDialog(QDialog):
         res = self.result()
         proj = self.project.text().strip()
         road = self.road_data()
-        return V.ai_report(res, proj, road=road) if self.method() == "ai" else \
-            V.rn29_report(res, proj, images=True, road=road)
+        six = self.six_html(self.summary(res))
+        return V.ai_report(res, proj, road=road, six=six) if self.method() == "ai" else \
+            V.rn29_report(res, proj, images=True, road=road, six=six)
+
+    def _key(self) -> str:
+        """The panel's road type when it is of this kind, else the DRR one."""
+        key = self.panel.pavement.currentData() if hasattr(self.panel, "pavement") else ""
+        if key and key != "custom" and R.pavement_kind(key) == self.kind:
+            return key
+        return "drr-rc" if self.kind == "concrete" else "drr-ac"
+
+    def summary(self, res=None) -> dict:
+        res = res if res is not None else self.result()
+        return V.summary(res, self.method(), self.kind, self._key())
+
+    def six_html(self, sm) -> str:
+        p = self.panel
+        try:
+            width, shoulder = float(p.spins["width"].value()), float(p.spins["shoulder"].value())
+        except (AttributeError, KeyError):
+            width, shoulder = 6.0, 0.0
+        an = getattr(p, "analysis", None)
+        return V.summary_html(sm, width, shoulder, float(an.designed_length) if an is not None else 0.0)
 
     def road_data(self) -> list:
         """The road's own data for the calculation sheet (and its PDF)."""
@@ -1634,12 +1685,19 @@ class PavementDesignDialog(QDialog):
         p._flash(note)
 
     def apply_layers(self):
+        """ข้อ 6 สรุปการออกแบบ → the panel: its layers become the table, the model's and the quantities'."""
         res = self.result()
+        if not res.ok:
+            QMessageBox.warning(self, "ออกแบบโครงสร้างชั้นทาง", "ผลการออกแบบยังไม่ผ่าน — แก้ข้อมูลให้ผ่านก่อน "
+                                "จึงจะใช้สร้างโมเดลได้")
+            return
+        sm = self.summary(res)
+        self.panel.pave_summary = sm
         if self.method() == "ai":
-            self._put("drr-ac", V.ai_layers(res), f"ใส่ชั้นทางตาม AI 1970 (DTN {res.dtn:,.0f}) แล้ว")
+            self._put(sm["pavement"], sm["layers"], f"ใช้ผลการออกแบบ AI 1970 (DTN {res.dtn:,.0f}) — สร้างโมเดลได้")
         else:
-            self._put("drr-rc", V.rn29_layers(res),
-                      f"ใส่ชั้นทาง คสล. หนา {res.slab_cm:g} ซม. ตาม Road Note 29 แล้ว")
+            self._put(sm["pavement"], sm["layers"],
+                      f"ใช้ผลการออกแบบ คสล. หนา {res.slab_cm:g} ซม. ตาม Road Note 29 — สร้างโมเดลได้")
 
     def apply_standard(self):
         if self.method() == "ai":
@@ -1654,7 +1712,9 @@ class PavementDesignDialog(QDialog):
             QMessageBox.information(self, "แบบมาตรฐาน ทช.",
                                     "ปริมาณจราจรเกินช่วงของตารางแบบมาตรฐาน ทช. — ใช้ผลการคำนวณแทน")
             return
-        self._put(key, std["layers"], f"ใส่ชั้นทางตามแบบมาตรฐาน ทช. {std['sheet']} แล้ว")
+        key = self._key()
+        self.panel.pave_summary = V.summary(std["layers"], "std", self.kind, key, std["sheet"])
+        self._put(key, std["layers"], f"ใช้ชั้นทางตามแบบมาตรฐาน ทช. {std['sheet']} — สร้างโมเดลได้")
 
     def save_pdf(self):
         name = "รายการคำนวณโครงสร้างทาง_" + ("AI1970" if self.method() == "ai" else "RoadNote29")

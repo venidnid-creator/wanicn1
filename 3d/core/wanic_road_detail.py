@@ -264,7 +264,8 @@ def section_sheet(ds: Design, info=None) -> D.Sheet:
                 sh.poly(q, "wall", 0.25)
         xm = xr - i * step
         pts_leader.append((P(xm, _surface(ds, xm) - d - t / 2),
-                           f"{spec_of(name, ds.fc)} หนา {t:.2f} ม."))
+                           f"{spec_of(name, ds.fc)}" + (f" ({V.en_name(name)})" if V.en_name(name) else "")
+                           + f" หนา {t:.2f} ม."))
         if not ds.concrete and i + 1 < len(ds.layers):
             xc = xm - step / 2
             nxt_name = ds.layers[i + 1][0]

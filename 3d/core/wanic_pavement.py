@@ -647,7 +647,7 @@ _CSS = ("<style>body{font-family:'Tahoma','Leelawadee UI',sans-serif;font-size:1
         "padding:2px 6px}th{background:#e5e7eb;color:#111}h3{margin:12px 0 4px 0}</style>")
 
 
-def ai_report(res: AIResult, project: str = "", signer=SIGNER, road=None) -> str:
+def ai_report(res: AIResult, project: str = "", signer=SIGNER, road=None, six: str = "") -> str:
     """``road``: [(item, value)] of the road itself (place, length, widths,
     slopes, speed) printed as «ข้อมูลการออกแบบถนน» at the top."""
     i = res.inp
@@ -693,12 +693,13 @@ def ai_report(res: AIResult, project: str = "", signer=SIGNER, road=None) -> str
     for w in res.warnings:
         h.append(f"<p style='color:#b45309'>⚠ {w}</p>")
     h.append(f"<p><b>สรุป: โครงสร้างชั้นทาง {_ok(res.ok)}</b></p>")
+    h.append(six)
     h.append(_sign(signer))
     return "".join(h)
 
 
 def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = False,
-                road=None) -> str:
+                road=None, six: str = "") -> str:
     """The calculation sheet; ``images`` puts in the truck figures and the
     Fig. 3.16 chart with its red reading lines (resources ``rn29trucks``
     and ``rn29chart`` that the caller adds to its document)."""
@@ -779,6 +780,7 @@ def rn29_report(res: RNResult, project: str = "", signer=SIGNER, images: bool = 
     for w in res.warnings:
         h.append(f"<p style='color:#b45309'>⚠ {w}</p>")
     h.append(f"<p><b>สรุป: {_ok(res.ok)}</b></p>")
+    h.append(six)
     h.append(_sign(signer))
     return "".join(h)
 
@@ -797,3 +799,82 @@ def rn29_layers(res: RNResult) -> list:
 
 def ai_layers(res: AIResult) -> list:
     return [(n, t / 100.0) for n, t, *_r in res.layers]
+
+
+# ---------------------------------------------------------------------------
+# ชื่อชั้นทางภาษาอังกฤษ (จ ข้อ 31) and 6. สรุปการออกแบบ (the owner: the model and the
+# quantities come from it — no summary, no model, concrete or asphalt)
+# ---------------------------------------------------------------------------
+
+#: a word of the Thai name → the layer's English name, the more particular first
+_EN = (("Wearing", "Wearing Course (AC)"), ("Binder", "Binder Course (AC)"),
+       ("DBST", "Double Bituminous Surface Treatment (DBST)"),
+       ("SST", "Single Bituminous Surface Treatment (SBST)"),
+       ("คอนกรีตไม่เสริมเหล็ก", "Plain Concrete Pavement (JPCP)"),
+       ("คอนกรีตเสริมเหล็ก", "Reinforced Concrete Pavement (JRCP)"),
+       ("แอสฟัลต์คอนกรีต", "Asphalt Concrete Surface (AC)"),
+       ("ทรายรองพื้น", "Sand Cushion"), ("ทรายถม", "Sand Fill"),
+       ("พื้นทางหินคลุก", "Base (Crushed Rock)"), ("พื้นทางดินซีเมนต์", "Base (Soil Cement)"),
+       ("รองพื้นทางวัสดุมวลรวม", "Subbase (Soil Aggregate)"), ("รองพื้นทางลูกรัง", "Subbase (Laterite)"),
+       ("รองพื้นทางหินคลุก", "Subbase (Crushed Rock)"),
+       ("คัดเลือก ก", "Selected Material A"), ("คัดเลือก ข", "Selected Material B"),
+       ("พื้นทาง", "Base"), ("รองพื้นทาง", "Subbase"))
+
+
+def en_name(name: str) -> str:
+    """The English name of a pavement layer (Base, Subbase …), "" when unknown."""
+    n = str(name or "")
+    for word, en in _EN:
+        if word in n:
+            return en
+    return ""
+
+
+def label(name: str) -> str:
+    """«ชั้นพื้นทางหินคลุก (Base (Crushed Rock))» — the Thai name with its English behind it."""
+    en = en_name(name)
+    return f"{name} ({en})" if en and en not in name else str(name)
+
+
+def summary(res, method: str, kind: str, pavement: str, standard: str = "") -> dict:
+    """6. สรุปการออกแบบ: what the model and the quantities are built from —
+    {"method", "kind", "pavement", "layers": [[name, t m]], "ok", "lines": [text], "standard"}."""
+    if method == "std":
+        layers = [[n, float(t)] for n, t in res]
+        ok, lines = True, [f"ใช้ตามแบบมาตรฐาน ทช. {standard}"]
+    elif method == "rn29":
+        layers = [[n, float(t)] for n, t in rn29_layers(res)]
+        ok = bool(res.ok)
+        lines = [f"ESA {res.esa / 1e6:,.3f} × 10⁶ · แผ่นคอนกรีตหนา {res.slab_cm:g} ซม. fc′ ≥ {res.inp.fc:g} กก./ตร.ซม.",
+                 f"เหล็กเสริม ตามยาว {res.steel_long[0]} · ตามขวาง {res.steel_trans[0]}",
+                 f"รอยต่อ: Dowel {res.joints['dowel']} · Tie {res.joints['tie']} · ยาวแผ่น {res.inp.slab_length:g} ม."]
+    else:
+        layers = [[n, float(t)] for n, t in ai_layers(res)]
+        ok = bool(res.ok)
+        lines = [f"DTN {res.dtn:,.0f} ({traffic_class(res.dtn)}) · TA ที่ต้องการ {res.ta:.2f} ซม. · "
+                 f"ความหนารวม {res.total:g} ซม."]
+    return {"method": method, "kind": kind, "pavement": pavement, "ok": ok, "lines": lines,
+            "standard": standard, "layers": layers}
+
+
+def summary_html(s: dict, width: float = 0.0, shoulder: float = 0.0, length: float = 0.0) -> str:
+    """The «6. สรุปการออกแบบ» section: the layers (Thai + English), thickness, width and
+    quantity per metre and for the designed length — the very values the model is built from."""
+    if not s:
+        return ""
+    how = {"ai": "AI 1970", "rn29": "Road Note 29", "std": "แบบมาตรฐาน ทช."}.get(s["method"], s["method"])
+    h = ["<h3>6. สรุปการออกแบบ (ใช้สร้างโมเดลและคิดปริมาณงาน)</h3>",
+         f"ชนิดถนน: <b>{'ถนนคอนกรีตเสริมเหล็ก' if s['kind'] == 'concrete' else 'ถนนลาดยาง'}</b> · วิธี {how}<br>"]
+    h += [f"{x}<br>" for x in s.get("lines") or []]
+    h.append("<table class='t'><tr><th>ชั้นทาง</th><th>Layer</th><th>หนา (ซม.)</th><th>กว้าง (ม.)</th>"
+             "<th>ต่อ 1 ม. (ลบ.ม.)</th>" + ("<th>ตลอดสาย (ลบ.ม.)</th>" if length else "") + "</tr>")
+    for i, (n, t) in enumerate(s["layers"]):
+        w = width if i == 0 else width + 2 * shoulder
+        h.append(f"<tr><td>{n}</td><td>{en_name(n)}</td><td align='right'>{t * 100:g}</td>"
+                 f"<td align='right'>{_f(w)}</td><td align='right'>{_f(t * w, 3)}</td>"
+                 + (f"<td align='right'>{_f(t * w * length, 2)}</td>" if length else "") + "</tr>")
+    h.append(f"<tr><td colspan='2'><b>รวม</b></td><td align='right'><b>"
+             f"{sum(t for _n, t in s['layers']) * 100:g}</b></td><td colspan='3'></td></tr></table>")
+    h.append("<p><i>โมเดล 3 มิติ แบบรูปตัด และปริมาณงานใช้ชั้นทางตามตารางนี้ทุกขั้นตอน "
+             "(ปริมาณจริงคิดจากรูปตัดทุกสถานี) — ยังไม่มีข้อ 6 จะสร้างโมเดลไม่ได้</i></p>")
+    return "".join(h)

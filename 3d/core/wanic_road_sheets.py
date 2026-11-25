@@ -322,7 +322,8 @@ def design_data(an, info):
     st = an.settings
     grades = P.grade_slopes([(s, z) for s, z, *_ in an.pvis]) if len(an.pvis) > 1 else []
     rmin = min((c.radius for c in an.hcurves if c.radius > 0), default=0)
-    layers = ", ".join(f"{n} {t * 100:.0f} ซม." for n, t, _c in st.pavement_layers())
+    from core import wanic_pavement as V
+    layers = ", ".join(f"{V.label(n)} {t * 100:.0f} ซม." for n, t, _c in st.pavement_layers())
     return [
         ("ความยาวทาง", f"{an.length:,.2f} ม. (0+000 – {sta(an.length)})"),
         ("ความยาวที่ออกแบบระดับ", f"{_val(an.designed_length):,.2f} ม."),

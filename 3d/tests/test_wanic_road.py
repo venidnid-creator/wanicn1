@@ -202,15 +202,25 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     assert panel.results.curves.rowCount() == len(an.hcurves)
     assert panel.results.pavement.rowCount() == len(an.settings.pavement_layers())
     panel.pavement.setCurrentIndex(panel.pavement.findData("drr-rc"))
+    # จ: the layers wait for the design; no «6. สรุปการออกแบบ» → no model
+    assert panel.layer_rows() == [] and "ยังไม่ได้ออกแบบ" in panel.structure.text()
+    groups = len(scene.groups)
+    from PySide6.QtWidgets import QMessageBox as _MB
+    warned = []
+    monkeypatch.setattr(_MB, "warning", staticmethod(lambda *a, **k: warned.append(a[2])))
+    panel.build_model()
+    assert len(scene.groups) == groups and "สรุปการออกแบบ" in warned[-1]
+    from plugins.wanic_road import PavementDesignDialog as _PD
+    dlg = _PD(panel)
+    assert dlg.method() == "rn29" and not dlg.tabs.isTabVisible(0)          # คสล. → Road Note 29 only
+    for k, v in (("adt", 300), ("width", 6.0), ("heavy_pct", 5), ("cbr", 4)):
+        dlg.f[("rn", k)].setValue(v)
+    assert "6. สรุปการออกแบบ" in dlg.view.toPlainText()
+    dlg.apply_layers()
     assert panel.layer_rows()[0][0].startswith("ผิวทางคอนกรีต")
     assert panel.layer_rows()[1][0] == "ชั้นทรายรองพื้น"
-    # the thickness is typed in its own box; a layer goes in under the selected one
-    panel.layers.cellWidget(1, 1).setValue(0.07)
-    panel.layers.setCurrentCell(2, 0)
-    panel.add_layer()
-    assert len(panel.layer_rows()) == 5 and panel.layer_rows()[3][0] == "ชั้นทรายรองพื้น"
-    assert "หนา 0.670 ม." in panel.structure.text()
-    groups = len(scene.groups)
+    assert panel.layers.item(2, 2).text().startswith("Subbase")          # the English name beside
+    assert not panel.layers.cellWidget(0, 1).isEnabled()                 # the design's, not typed here
     panel.build_model()
     assert len(scene.groups) == groups + 2
     from PySide6.QtWidgets import QDialog
@@ -220,9 +230,8 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     monkeypatch.setattr(PavementDesignDialog, "exec", lambda self: QDialog.Accepted)
     done = _click_all(panel, skip=("ใช้เส้นที่เลือก",))
     assert any("วิเคราะห์" in t for t in done)
-    pdf = [p for p in saved if p.endswith(".pdf")]
-    assert pdf and open(pdf[-1], "rb").read(5) == b"%PDF-"          # the A3 sheet set
-    assert os.path.exists(pdf[-1][:-4] + "_แผ่นแบบ.dxf")
+    pdf = [p for p in saved if p.endswith(".pdf") and os.path.exists(p[:-4] + "_แผ่นแบบ.dxf")]
+    assert pdf and open(pdf[-1], "rb").read(5) == b"%PDF-"          # the A3 sheet set (+ its DXF)
     assert any(p.endswith(".dxf") and os.path.exists(p) for p in saved)
     assert any(p.endswith(".csv") and os.path.exists(p) for p in saved)
     _click_all(panel.results)
@@ -245,8 +254,8 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     # the document keeps the job: a fresh panel reads it back
     again = RoadPanel(app)
     again.load()
-    assert again.pavement.currentData() == "drr-rc" and len(again.layer_rows()) == 5
-    assert again.layer_rows()[1][:2] == ("ชั้นทรายรองพื้น", pytest.approx(0.07))
+    assert again.pavement.currentData() == "drr-rc" and again.layer_rows() == panel.layer_rows()
+    assert again.pave_summary and again.pave_summary["kind"] == "concrete"
     assert len(again.shots) == len(panel.shots) and [c for p in again.pvis() for c in p] == pytest.approx(
         [c for p in panel.pvis() for c in p])
 
@@ -268,7 +277,9 @@ def test_pavement_design_dialog_fills_the_layers_and_prints(tmp_path, monkeypatc
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
     app = _App(Scene(), "wanic_road")
     panel = RoadPanel(app)
+    panel.pavement.setCurrentIndex(panel.pavement.findData("drr-ac"))
     dlg = PavementDesignDialog(panel)
+    assert dlg.method() == "ai" and not dlg.tabs.isTabVisible(1)          # ลาดยาง → AI 1970 only
     # AI 1970: the manual's example traffic, the automatic layers
     for k, v in (("idt", 11014), ("heavy_pct", 13.94), ("lanes", 4), ("gross_t", 25.5),
                  ("growth_pct", 6.5), ("years", 15), ("cbr", 5)):
@@ -280,8 +291,11 @@ def test_pavement_design_dialog_fills_the_layers_and_prints(tmp_path, monkeypatc
     assert panel.layer_rows()[0][1] == pytest.approx(0.10)
     dlg.save_pdf()
     assert open(saved[-1], "rb").read(5) == b"%PDF-"
+    assert panel.pave_summary["method"] == "ai" and panel.pave_summary["layers"][0][1] == pytest.approx(0.10)
     # Road Note 29: a village road, the DRR standard sheet
-    dlg.tabs.setCurrentIndex(1)
+    panel.pavement.setCurrentIndex(panel.pavement.findData("drr-rc"))
+    assert panel.pave_summary is None and panel.layer_rows() == []        # another type: designed again
+    dlg = PavementDesignDialog(panel)
     for k, v in (("adt", 300), ("width", 5.0), ("heavy_pct", 5), ("cbr", 4)):
         dlg.f[("rn", k)].setValue(v)
     dlg.apply_layers()
