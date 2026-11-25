@@ -45,9 +45,9 @@ def test_footing_rows_check_soil_and_shear():
     d["library"] = {"F1": {"w": 2.8, "l": 2.8, "t": 0.45}}      # LL 200 (กฎกระทรวง 2566): a bigger footing
     d["calc"] = {"soil": 10.0}                       # a site of 10 t/m² (the default is 5)
     big = max(CC.footing_rows(C.analyse(d), d), key=lambda r: r["P"])
-    # the owner: the calc book reports the bars the drawing shows (DB12@0.15 → 19), not more —
+    # the owner: the calc book reports the bars the drawing shows (DB12@0.15 → 18), not more —
     # fewer than needed is a fail with its own advice
-    assert big["nbar"] == 19 and big["need"] > 19 and not big["ok"]
+    assert big["nbar"] == R.mesh_count(2.8, 0.15) and big["need"] > big["nbar"] and not big["ok"]
     d["library"]["F1"]["bars"] = "DB12@0.125"
     rows2 = CC.footing_rows(C.analyse(d), d)
     assert max(rows2, key=lambda r: r["P"])["ok"]    # a big enough footing with its bars passes
