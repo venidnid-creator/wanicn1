@@ -91,9 +91,40 @@ def test_latest_release_link(ST):
     assert ST.newer("v2026.11.04.3", "2026.11.04.2") and not ST.newer("v2026.11.04.3", "2026.11.04.3")
     assert ST.thai_day(d["published"]) == "5 พ.ย. 2569"          # 17:30 UTC is the next day in Thailand
     line = ST.latest_line(d, "2026.11.04.2")
-    assert "มีรุ่นใหม่ v2026.11.04.3" in line and "ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่" in line
-    assert "href" not in line and "ดาวน์โหลด" not in line          # a notice only, no download
+    assert "มีรุ่นใหม่ v2026.11.04.3" in line and "ดาวน์โหลดได้จากหน้าต่างแจ้งเวอร์ชันใหม่" in line
+    assert "href" not in line                  # the corner tells; the update window downloads
     assert "คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง (v2026.11.04.2)" in line
     assert "ปรับปรุงล่าสุด v2026.11.04.3" in ST.latest_line(d, "2026.11.04.3")
     assert "เป็นรุ่นล่าสุดแล้ว" in ST.latest_line(d, "2026.11.04.3")
     assert "href" not in ST.text({"downloads": d}, version="dev")
+
+
+def test_the_update_window_like_readwanicn(ST, monkeypatch):
+    """The owner (25 พ.ย. 69): «มีเวอร์ชันใหม่» opens a window with the notes,
+    the installer to download, and the year of use carried on; ReadWanicn's
+    releases in the same repository are not WANICNSURVEY's."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("WANIC_OFFLINE", "1")
+    from PySide6.QtWidgets import QApplication
+    _app = QApplication.instance() or QApplication([])
+    data = [
+        {"tag_name": "readwanicn-v2027.4.11", "published_at": "2026-11-24T05:00:00Z",
+         "assets": [{"name": "readwanicn2027-setup.exe", "download_count": 9}]},
+        {"tag_name": "v2026.11.25.1", "published_at": "2026-11-25T03:00:00Z", "body": "## ใหม่\n- ทางโค้ง",
+         "html_url": "https://github.com/x/y/releases/tag/v2026.11.25.1",
+         "assets": [{"name": "wanicnsurvey-setup-2026.11.25.1.exe", "download_count": 3,
+                     "browser_download_url": "https://github.com/x/y/releases/download/v2026.11.25.1/s.exe"}]},
+        {"tag_name": "v2026.11.12.1", "assets": [{"name": "w.exe", "download_count": 5}]},
+    ]
+    d = ST.summary(data)
+    assert d["tag"] == "v2026.11.25.1" and d["installer"].endswith("/s.exe") and "ทางโค้ง" in d["notes"]
+    import update_dialog as UD
+    s = _Settings()
+    assert UD.should_show(d, "2026.11.12.1", s) and not UD.should_show(d, "2026.11.25.1", s)
+    assert not UD.should_show(d, "dev", s)
+    dlg = UD.UpdateDialog(d, "2026.11.12.1", None, None, s)
+    dlg.skip.setChecked(True)
+    dlg.go.click()
+    assert dlg.opened == [d["installer"]] and s["update/skip"] == "v2026.11.25.1"
+    assert not UD.should_show(d, "2026.11.12.1", s)                 # «ไม่ต้องเตือนรุ่นนี้อีก»

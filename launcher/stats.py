@@ -60,10 +60,15 @@ def summary(data) -> dict:
     GitHub's release list: installer downloads, and the usage files'."""
     if not isinstance(data, list):
         raise ValueError("unexpected answer")
+    # WANICNSURVEY's own releases (v2026.11…): not ReadWanicn's (readwanicn-v…) in the same repository
     rels = [r for r in data if any(_installer(str(a.get("name") or ""))
-                                   for a in r.get("assets") or [])]
-    latest = rels[0] if rels else {}
+                                   for a in r.get("assets") or [])
+            and str(r.get("tag_name") or "").startswith("v") and not r.get("draft")]
+    latest = max(rels, key=lambda r: _tag_key(r.get("tag_name", ""))) if rels else {}
+    exe = next((a for a in latest.get("assets") or [] if _installer(str(a.get("name") or ""))), {})
     return {"published": str(latest.get("published_at") or latest.get("created_at") or ""),
+            "notes": str(latest.get("body") or ""),
+            "installer": str(exe.get("browser_download_url") or ""),
             "url": str(latest.get("html_url") or
                        f"https://github.com/{REPO}/releases/latest"),
             "total": sum(_count(r, _installer) for r in data),
@@ -71,6 +76,13 @@ def summary(data) -> dict:
             "tag": latest.get("tag_name", ""), "releases": len(rels),
             "users": sum(_count(r, lambda n: n == INSTALL_FILE) for r in data),
             "opens": sum(_count(r, lambda n: n == OPEN_FILE) for r in data)}
+
+
+def _tag_key(tag: str) -> list:
+    out = []
+    for part in str(tag).lstrip("v").split("."):
+        out.append(int(part) if part.isdigit() else 0)
+    return out
 
 
 def downloads(opener=None) -> dict:
@@ -199,14 +211,14 @@ def latest_line(d: dict, version: str = "") -> str:
         if new:
             line += (f"<br><span style='color:#C0392B'><b>⚠ คุณใช้เวอร์ชันที่ยังไม่ปรับปรุง "
                      f"(v{str(version).lstrip('v')}) — มีรุ่นใหม่ {d['tag']} "
-                     f"กรุณาติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่</b></span>")
+                     f"กด «⬇ ดาวน์โหลดตัวติดตั้ง» ในหน้าต่างแจ้งเวอร์ชันใหม่</b></span>")
         else:
             line += " <span style='color:#2E7D32'>✓ เป็นรุ่นล่าสุดแล้ว</span>"
     return line
 
 
-#: The new version is not downloaded from the program: the developer gives it.
-CONTACT_TAIL = " — ติดต่อผู้พัฒนาเพื่อรับรุ่นใหม่"
+#: The owner (25 พ.ย. 69): the new version is downloaded from the update window, like ReadWanicn2027.
+CONTACT_TAIL = " — ดาวน์โหลดได้จากหน้าต่างแจ้งเวอร์ชันใหม่"
 
 
 def text(info: dict, cached: dict | None = None, version: str = "") -> str:

@@ -692,6 +692,24 @@ class StartWindow(QWidget):
             self.settings.setValue("usage/cache", json.dumps(self._cached))
         self._stats_html = self._ST.text(info, self._cached, _version())
         self._show_stats_text()
+        self._offer_update(info.get("downloads") or {})
+
+    def _offer_update(self, d: dict) -> None:
+        """มีเวอร์ชันใหม่: the window once per start (like ReadWanicn2027)."""
+        if getattr(self, "_update_shown", False):
+            return
+        import update_dialog as UD
+        if not UD.should_show(d, _version(), self.settings):
+            return
+        self._update_shown = True
+        try:
+            import wanic_license
+            lic = wanic_license.License()
+        except Exception:                        # noqa: BLE001 -- the dialog still tells the rule
+            lic = None
+        self.update_dialog = UD.UpdateDialog(d, _version(), lic, asset("wanicnsurvey-128.png"),
+                                             self.settings, self)
+        self.update_dialog.open()
 
     def _show_stats(self) -> None:
         self._fetch_stats(False)
