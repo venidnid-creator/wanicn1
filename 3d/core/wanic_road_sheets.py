@@ -238,6 +238,8 @@ def key_plan(sh, an, box, chunks=None, mark=None, bms=(), labels=True):
 
     def v(x, y):
         return (ox + (x - min(xs)) * k, oy + (y - min(ys)) * k)
+    if not labels:                     # in a plan's corner: over the grid lines under it
+        sh.fill([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], "mask")
     sh.rect(bx0, by0, bx1, by1, "text", 0.25)
     if labels:
         span = max((bx1 - bx0) / k, (by1 - by0) / k)
@@ -261,16 +263,41 @@ def key_plan(sh, an, box, chunks=None, mark=None, bms=(), labels=True):
         q = v(b.e, b.n)
         sh.poly([(q[0], q[1] + 1.4), (q[0] - 1.2, q[1] - 0.8),
                  (q[0] + 1.2, q[1] - 0.8)], "grid", 0.25)
-    s = A.point_at(an.axis, 0.0)
-    q = v(s.x, s.y)
-    sh.text((q[0] + 1.5, q[1] - 3), "เริ่มต้น 0+000", 1.8, "left", "text")
-    e = A.point_at(an.axis, an.length)
-    q = v(e.x, e.y)
-    sh.text((q[0] + 1.5, q[1] - 3), f"สิ้นสุด {sta(an.length)}", 1.8, "left")
+    # จ39: the two ends' labels inside the box, clear of the north arrow
+    # จ39: the north arrow in the first corner the road does not pass through
+    aw, ah = (22, 24) if labels else (14, 18)
+    path = [v(*p) for p in an.axis]
+    corners = [(bx1 - aw, by1 - ah, bx1, by1), (bx1 - aw, by0, bx1, by0 + ah),     # the N labels
+               (bx0, by1 - ah, bx0 + aw, by1), (bx0, by0, bx0 + aw, by0 + ah)]     # run up the left
+    arrow = next((c for c in corners if not any(c[0] - 2 <= x <= c[2] + 2 and c[1] - 2 <= y <= c[3] + 2
+                                                for x, y in path)), corners[0])
+    from core import wanic_glossary as GL
+    taken = [arrow] + [GL._text_box(it) for it in sh.items if it[0] == "text"]
+    for s_, txt in ((0.0, "เริ่มต้น 0+000"), (an.length, f"สิ้นสุด {sta(an.length)}")):
+        p = A.point_at(an.axis, s_)
+        q = v(p.x, p.y)
+        w_ = len(txt) * 1.8 * 0.62
+        for dx, dy, al in ((1.5, -3.0, "left"), (-1.5, -3.0, "right"), (1.5, 1.2, "left"),
+                           (-1.5, 1.2, "right")):
+            x0_ = q[0] + dx if al == "left" else q[0] + dx - w_
+            box_ = (x0_, q[1] + dy - 0.5, x0_ + w_, q[1] + dy + 2.0)
+            inside_ = bx0 + 0.5 < box_[0] and box_[2] < bx1 - 0.5 and by0 + 0.5 < box_[1] and box_[3] < by1 - 0.5
+            clear_ = all(box_[2] < t[0] or box_[0] > t[2] or box_[3] < t[1] or box_[1] > t[3] for t in taken)
+            if inside_ and clear_:
+                break
+        else:
+            # the end under the north arrow: the label left of it, with a leader to the point
+            tx_, ty_ = arrow[0] - 1.0, min(q[1] - 3.0, by1 - 4.0)
+            sh.line(q, (tx_ + 0.5, ty_ + 0.6), "text", 0.13)
+            dx, dy, al = tx_ - q[0], ty_ - q[1], "right"
+        sh.text((q[0] + dx, q[1] + dy), txt, 1.8, al, "text")
+        taken.append(GL._text_box(sh.items[-1]))
     if labels:
-        compass(sh, (bx1 - 10, by1 - 11), 4.5, plate=True)
+        compass(sh, (arrow[2] - 10 if arrow[2] == bx1 else arrow[0] + 12,
+                     arrow[3] - 11 if arrow[3] == by1 else arrow[1] + 13), 4.5, plate=True)
     else:
-        D.north(sh, (bx1 - 7, by1 - 9), 4)
+        D.north(sh, (arrow[2] - 7 if arrow[2] == bx1 else arrow[0] + 7,
+                     arrow[3] - 9 if arrow[3] == by1 else arrow[1] + 9), 4)
 
 
 def curve_rows(an):
@@ -584,7 +611,10 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
     cap_x = bx[0] + 6 + len(cap) * 2.8 * 0.55
 
     def free(p):
-        return not (p[0] < cap_x + 14 and p[1] < bx[1] + 8)
+        # not under the caption, the key plan (upper right) or the north arrow (upper left)
+        return not (p[0] < cap_x + 14 and p[1] < bx[1] + 8) and \
+            not (p[0] > bx[2] - 72 and p[1] > bx[3] - 40) and \
+            not (p[0] < bx[0] + 40 and p[1] > bx[3] - 30)
     gstep = 50.0 if scale <= 1000 else 100.0
     lo = [min(pp[0] for pp in axis_part) - 200, min(pp[1] for pp in axis_part) - 200]
     hi = [max(pp[0] for pp in axis_part) + 200, max(pp[1] for pp in axis_part) + 200]
@@ -595,7 +625,11 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
             sh.line(c[0], c[1], "hidden", 0.1, True)
             end = c[1] if c[1][1] > c[0][1] else c[0]
             if free(end):
-                sh.text((end[0] + 0.8, end[1] - 3), f"E {e:,.0f}", 1.6, "left", "dim")
+                lab = f"E {e:,.0f}"
+                if end[0] + 0.8 + len(lab) * 1.6 * 0.62 > inner[2] - 1:     # จ39: not past the box
+                    sh.text((end[0] - 0.8, end[1] - 3), lab, 1.6, "right", "dim")
+                else:
+                    sh.text((end[0] + 0.8, end[1] - 3), lab, 1.6, "left", "dim")
         e += gstep
     n = math.ceil(lo[1] / gstep) * gstep
     while n <= hi[1]:
@@ -603,7 +637,7 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         if c:
             sh.line(c[0], c[1], "hidden", 0.1, True)
             end = c[0] if c[0][0] < c[1][0] else c[1]
-            if free(end):
+            if free(end) and end[1] + 3 < inner[3]:
                 sh.text((end[0] + 0.8, end[1] + 0.8), f"N {n:,.0f}", 1.6, "left", "dim")
         n += gstep
     # road
@@ -624,13 +658,14 @@ def pp_plan(sh, an, s0, s1, shots, chunks, idx):
         tl = st.width / 2 + st.shoulder + (2.0 if big else 1.0)
         a_, b_ = v(*p.offset_point(-tl)), v(*p.offset_point(tl))
         sh.line(a_, b_, "dim", 0.35 if big else 0.18)
-        ang_t = math.degrees(math.atan2(b_[1] - a_[1], b_[0] - a_[0]))
-        while ang_t <= -45:                 # read upwards, never flipping
-            ang_t += 180
-        while ang_t > 135:
-            ang_t -= 180
+        # จ39: along the tick, away from the road, and never upside down
+        out = math.degrees(math.atan2(a_[1] - b_[1], a_[0] - b_[0]))
         lab = v(*p.offset_point(-tl - 1.5))
-        sh.text(lab, sta(s, 0), 2.2 if big else 1.8, "left", "dim", big, ang_t)
+        if -90 < out <= 90:
+            sh.text(lab, sta(s, 0), 2.2 if big else 1.8, "left", "dim", big, out)
+        else:
+            sh.text(lab, sta(s, 0), 2.2 if big else 1.8, "right", "dim", big,
+                    out - 180 if out > 0 else out + 180)
         s += 20.0
     # curves
     for c in an.hcurves:
@@ -777,7 +812,7 @@ def pp_profile(sh, an, s0, s1, hscale, vscale=None):
     sh.text((bx[0], bx[3] + 1.5), f"รูปตัดตามยาว  มาตราส่วน ราบ 1:{hscale}  ดิ่ง 1:{vscale}",
             2.8, "left", "text", True)
     sh.text((right - 1, bx[3] + 1.5), "— ระดับดินเดิม   — ระดับออกแบบ", 2.0, "right")
-    sh.text((bx[0] - 2, bx[3] - 3), "ระดับ (ม.รทก.)", 1.8, "right", "dim")
+    sh.text((bx[0] - 2, bx[3] + 1.5), "ระดับ (ม.รทก.)", 1.8, "right", "dim")    # จ39: above the top level
     return vscale
 
 
@@ -1039,11 +1074,12 @@ def _section_layers(sh, an, sec, P_):
         sh.text((mid, yd + 2.4), part, 1.1, "center", "dim")
     d = sec.design or []
     if len(d) > 3:
-        for seg in ((d[0], d[1]), (d[-2], d[-1])):
-            (o1, z1), (o2, z2) = seg
+        # จ39: near the toe and on the outer side, clear of the levels written at the shoulder edge
+        for (toe, edge), al, dx in (((d[0], d[1]), "right", -0.8), ((d[-1], d[-2]), "left", 0.8)):
+            (o1, z1), (o2, z2) = toe, edge
             if abs(z2 - z1) > 0.05 and abs(o2 - o1) > 0.05:
-                q = P_((o1 + o2) / 2, (z1 + z2) / 2)
-                sh.text((q[0], q[1] + 1.0), f"1:{abs(o2 - o1) / abs(z2 - z1):.1f}", 1.2, "center", "dim")
+                q = P_(o1 + (o2 - o1) * 0.3, z1 + (z2 - z1) * 0.3)
+                sh.text((q[0] + dx, q[1] + 0.6), f"1:{abs(o2 - o1) / abs(z2 - z1):.1f}", 1.2, al, "dim")
     if tpl.se is not None and (se[4] or se[5]):
         sh.text(P_(0, (sec.z_design or 0.0) - an.settings.structure - 0.4),
                 f"ขยายผิว {max(se[4], se[5]):.2f} ม.", 1.2, "center", "roof")

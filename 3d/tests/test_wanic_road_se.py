@@ -266,3 +266,32 @@ def test_every_sheet_explains_its_terms():
     for s in S:
         for t in s.texts():
             D.dxf_text(t).encode("cp874")
+
+
+def test_no_text_over_another_on_any_road_sheet():
+    """จ39 (the owner): every sheet, PDF and DXF alike (one list of items):
+    no text lies on another; station labels read the right way up."""
+    from core import wanic_glossary as GL
+    from core import wanic_road_sheets as RS
+    _true, shots = _noisy_road(0.0)
+    fit = R.fit_centreline(shots)
+    shots = R.apply_fit(shots, fit)
+    tin = R.build_tin(shots)
+    st = R.Settings()
+    st.speed = 60
+    an = R.analyse(shots, fit.axis, R.auto_pvis(tin, fit.axis), st, tin, fit.curves)
+
+    def core_(b, k=0.15):
+        x0, y0, x1, y1 = b
+        dx, dy = (x1 - x0) * k / 2, (y1 - y0) * k / 2
+        return (x0 + dx, y0 + dy, x1 - dx, y1 - dy)
+    for s in RS.build_road_set(an, {"project": "x"}, shots):
+        ts = [it for it in s.items if it[0] == "text"]
+        bx = [core_(GL._text_box(it)) for it in ts]
+        for i in range(len(ts)):
+            for j in range(i + 1, len(ts)):
+                a, b = bx[i], bx[j]
+                assert not (a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]), \
+                    (s.code, ts[i][2], ts[j][2])
+            ang = ts[i][7] if len(ts[i]) > 7 else 0.0
+            assert -90 < ang <= 90, (s.code, ts[i][2], ang)

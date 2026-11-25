@@ -300,7 +300,7 @@ def section_sheet(ds: Design, info=None) -> D.Sheet:
     top = P(0, _surface(ds, 0))
     sh.line((top[0], top[1] + 34), (top[0], P(0, gz)[1] - 4), "grid", 0.18, True)
     sh.text((top[0], top[1] + 35), "CL", 3.0, "center", "grid")
-    sh.text((top[0] + 1.5, top[1] + 2.0), "ระดับก่อสร้าง", 1.8, "left", "dim")
+    sh.text((top[0] + 1.5, top[1] + 5.0), "ระดับก่อสร้าง", 1.8, "left", "dim")
     for sg in (-1, 1):
         a = P(sg * ds.width * 0.25, _surface(ds, ds.width * 0.25))
         sh.text((a[0], a[1] + 2.0), f"{ds.crown:.1f}%", 2.0, "center", "dim")
@@ -997,7 +997,8 @@ def cutfill_sheet(ds: Design) -> D.Sheet:
     sh.poly([P(xf, zf), P(-B, zB)], "wall", 0.45, False)
     sh.poly([P(B, zB), P(xd0, zd), P(xd1, zd), P(xb, zb)], "wall", 0.45, False)
     sh.text(P((xf - B) / 2 - 0.4, (zf + zB) / 2), f"SIDE SLOPE {ds.fill_hv:g}:1", 1.9, "right", "dim")
-    sh.text(P((B + xd0) / 2 + 0.3, (zB + zd) / 2 + 0.2), f"SIDE SLOPE {ds.fill_hv:g}:1", 1.9, "left", "dim")
+    # จ39: left of the ditch's bottom, clear of the 1.25 (MIN) dimension
+    sh.text((P(xd0, zd)[0] - 1.5, P(xd0, zd)[1] + 0.4), f"SIDE SLOPE {ds.fill_hv:g}:1", 1.9, "right", "dim")
     sh.text(P((xd1 + xb) / 2 + 0.5, (zd + zb) / 2), f"BACK SLOPE {ds.cut_hv:g}:1", 1.9, "left", "dim")
     sh.line(P(B + 0.2, zB), P(xd1 + 0.3, zB), "dim", 0.13, True)
     D._dim_v(sh, P(xd1, 0)[0] + 1.0, P(0, zd)[1], P(0, zB)[1], "1.25 (MIN)")
@@ -1011,7 +1012,7 @@ def cutfill_sheet(ds: Design) -> D.Sheet:
     yt = P(0, 0)[1]
     sh.line((P(0, 0)[0], yt + 26), (P(0, 0)[0], P(0, g(0))[1] - 6), "grid", 0.18, True)
     sh.text((P(0, 0)[0], yt + 27), "CL", 2.8, "center", "grid")
-    sh.text((P(0, 0)[0] + 1.5, yt + 2.0), "ระดับก่อสร้าง", 1.8, "left", "dim")
+    sh.text((P(0, 0)[0] + 1.5, yt + 5.0), "ระดับก่อสร้าง", 1.8, "left", "dim")      # จ39: over the crossfall
     xs = [-B, -ds.width / 2, 0.0, ds.width / 2, B]
     names = ["ไหล่ทาง", "ครึ่งผิวจราจร", "ครึ่งผิวจราจร", "ไหล่ทาง"]
     for (a, b), nm in zip(zip(xs, xs[1:]), names):

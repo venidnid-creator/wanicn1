@@ -171,15 +171,18 @@ def frame(sh: Sheet, info: dict, total: int, roles=None):
 
     # Project block (no government emblem: the owner's own drawing).
     band(30)
-    sh.text((cx, y + 22), info.get("office") or "WANICNSURVEY", 3.2,
+    # จ39: the lines centred in their box whether or not there is an owner
+    lift = 0.0 if info.get("owner") else -3.5
+    sh.text((cx, y + 22 + lift), info.get("office") or "WANICNSURVEY", 3.2,
             "center", "title", True)
-    sh.text((cx, y + 15), "แบบก่อสร้าง", 3.0, "center", "title")
+    sh.text((cx, y + 15 + lift), "แบบก่อสร้าง", 3.0, "center", "title")
     sh.text((cx, y + 8), info.get("owner") or "", 2.4, "center", "title")
     band(18)
     sh.text((x0 + 2, y + 14), "โครงการ", 2.0, "left", "title")
     proj = info.get("project") or "อาคาร"
-    for i, line in enumerate(_wrap(proj, 26)[:2]):
-        sh.text((cx, y + 9 - i * 4.5), line, 3.0, "center", "title", True)
+    plines = _wrap(proj, 26)[:2]
+    for i, line in enumerate(plines):
+        sh.text((cx, y + (9 if len(plines) > 1 else 6.5) - i * 4.5), line, 3.0, "center", "title", True)
     band(9)
     sh.text((x0 + 2, y + 5.5), "สถานที่", 2.0, "left", "title")
     sh.text((x0 + 14, y + 5.5), (info.get("location") or "")[:30], 2.2,
@@ -190,10 +193,12 @@ def frame(sh: Sheet, info: dict, total: int, roles=None):
         sh.text((x0 + 2, y + 7), l1, 2.0, "left", "title")
         # a long second line (โครงสร้าง/ระบายน้ำ) is set smaller to stay in its cell
         sh.text((x0 + 2, y + 2.8), l2, 2.0 if len(l2) <= 12 else 1.6, "left", "title")
-        sh.text((x1 - 2, y + 1.5), who, 1.8, "right", "title")
+        # จ39: a line to sign on, its title at the end of it
+        sh.line((x0 + 25, y + 3.0), (x1 - 3 - len(who) * 1.8 * 0.62 - 1.5, y + 3.0), "title", 0.13, True)
+        sh.text((x1 - 2, y + 2.4), who, 1.8, "right", "title")
         name = (info.get("signers") or {}).get(l1 + l2, "")
         if name:
-            sh.text((x0 + 24, y + 5), name, 2.0, "left", "title")
+            sh.text((x0 + 24, y + 6), name, 2.0, "left", "title")
     # The program's signature (every development carries it).
     band(16, 0.35)
     # room to sign above the name (the label is left out on purpose)
@@ -202,8 +207,9 @@ def frame(sh: Sheet, info: dict, total: int, roles=None):
     sh.text((cx, y + 2.5), ROLE, 2.0, "center", "title")
     band(14)
     sh.text((x0 + 2, y + 10.5), "แสดงแบบ", 2.0, "left", "title")
-    for i, line in enumerate(_wrap(sh.title, 24)[:2]):
-        sh.text((cx, y + 6 - i * 4), line, 2.8, "center", "title", True)
+    tlines = _wrap(sh.title, 24)[:2]
+    for i, line in enumerate(tlines):
+        sh.text((cx, y + (6 if len(tlines) > 1 else 4.0) - i * 4), line, 2.8, "center", "title", True)
     band(7)
     sh.text((x0 + 2, y + 2.2), "มาตราส่วน", 2.0, "left", "title")
     sh.text((x0 + 26, y + 2.2), sh.scale, 2.2, "left", "title")
