@@ -1202,7 +1202,8 @@ class BoqDialog(QDialog):
                 ("📊 บันทึก Excel (ปร.1–ปร.4 + BOQ)", "#0F2A44",
                  self.save_xlsx),
                 ("📄 บันทึก CSV", "#3B6FB6", self.save_csv),
-                ("💼 ประมาณราคาเอกชน 8 หมวด", "#7C3AED", self.private_est)):
+                ("💼 ประมาณราคาเอกชน 8 หมวด", "#7C3AED", self.private_est),
+                ("📅 แผนงานก่อสร้าง (CPM)", "#B45309", self.schedule)):
             b = QPushButton(text)
             b.setStyleSheet(f"QPushButton{{background:{color};color:white;"
                             "font-weight:bold;padding:6px;border-radius:6px}}")
@@ -1216,6 +1217,16 @@ class BoqDialog(QDialog):
         sig = QLabel(label_html("WANIC ออกแบบอาคาร · BOQ ตามหลักเกณฑ์ 2569"))
         lay.addWidget(sig)
         self.recompute()
+
+    def schedule(self):
+        """แผนงานก่อสร้าง CPM · S-Curve · งวดงาน (ข12) from this BOQ; the values kept with the job."""
+        from core.wanic_schedule_view import ScheduleDialog
+        d = self.panel.data()
+        dlg = ScheduleDialog(self, self.result, d)
+        dlg.exec()
+        d = self.panel.data()
+        d["schedule"] = dlg.values()
+        self.panel._write(d)
 
     def _check_standards(self):
         import threading
