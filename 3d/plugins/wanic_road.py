@@ -1518,8 +1518,6 @@ class RoadPanel(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return []
         info = dlg.info()
-        if info.get("drain", {}).get("u_both"):             # both sides, the whole road
-            info["drain"]["u_length"] = 2.0 * an.designed_length
         zone, datum = self._zone_datum()
         info.update(zone=zone, datum=datum, pave=getattr(self, "pave_design", None),
                     crs=f"UTM {datum} โซน {zone}N · ระดับ MSL",
@@ -2175,7 +2173,6 @@ class RoadSheetsDialog(QDialog):
               ("VT", "VT — ตารางปริมาณดินขุด-ถมทุกสถานี"),
               ("SD", "SD — แบบมาตรฐานโครงสร้างทาง: รูปตัดชั้นทาง เหล็กเสริม/รอยต่อ รายการประกอบแบบ "
                      "รูปตัดดินตัด-ดินถม บัญชีปริมาณงาน"),
-              ("DR", "DR — งานระบายน้ำ (ทถ-5): ท่อลอด คสล. ตำแหน่ง/ขนาด/ความยาว กำแพงปากท่อ รางระบายน้ำ"),
               ("TS", "TS — ป้ายและเครื่องหมายจราจร (ทถ-3): แผนผังป้าย หลัก กม. หลักนำโค้ง GUARD RAIL เส้นจราจร"),
               ("QS", "QS — สรุปปริมาณงานทั้งหมดของโครงการ (แผ่นสุดท้าย)")]
 
@@ -2206,19 +2203,6 @@ class RoadSheetsDialog(QDialog):
             c.setChecked(True)
             self.checks[g] = c
             f.addRow(c)
-        self.pipe = QComboBox()
-        for d in (0.40, 0.60, 0.80, 1.00, 1.20, 1.50):
-            self.pipe.addItem(f"ท่อลอด คสล. Ø {d:.2f} ม.", d)
-        self.pipe.setCurrentIndex(1)
-        self.pipe.setToolTip("DR: ขนาดท่อลอดที่จุดต่ำของพื้นดินตามแนวทาง (Ø 0.60 ม. ขนาดเล็กสุดที่ทำความสะอาดได้)")
-        self.udrain = QComboBox()
-        self.udrain.addItem("ไม่มีรางระบายน้ำ คสล.", "")
-        for t in ("ก-30", "ข-30", "ค-30", "ง-30", "ก-50", "ข-50", "ค-50", "ง-50"):
-            self.udrain.addItem(f"รางระบายน้ำ คสล. ย่านชุมชน แบบ {t} (ทถ-5-301) สองข้างทาง", t)
-        row0 = QHBoxLayout()
-        row0.addWidget(self.pipe)
-        row0.addWidget(self.udrain, 1)
-        f.addRow("งานระบายน้ำ (DR)", row0)
         self.speed = QComboBox()
         for v in (40, 50, 60, 70, 80, 90):
             self.speed.addItem(f"ความเร็วออกแบบ {v} กม./ชม.", v)
@@ -2284,8 +2268,6 @@ class RoadSheetsDialog(QDialog):
         i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
         i["pdf"] = self.pdf.isChecked()
         i["paper"] = self.paper.currentData() or "A3"
-        ut = self.udrain.currentData() or ""
-        i["drain"] = {"pipe_d": self.pipe.currentData(), "u_type": ut or None, "u_both": bool(ut)}
         i["signs"] = {"speed": self.speed.currentData(), "urban": self.urban.isChecked()}
         i["dxf"] = self.dxf.isChecked()
         return i

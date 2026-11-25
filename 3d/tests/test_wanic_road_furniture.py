@@ -68,7 +68,10 @@ def test_dr_and_ts_sheets_in_the_set():
     an, shots = _analysis = _road()
     S = RS.build_road_set(an, {"drain": {"u_type": "ข-50", "u_length": 400.0}, "signs": {"speed": 60}},
                           shots, ("DR", "TS"))
-    assert [s.code for s in S] == ["DR-01", "DR-02", "TS-01", "TS-02"]
+    # จ38 (the owner): no drainage pipes in the road set, even when asked — signs only
+    assert [s.code for s in S] == ["TS-01", "TS-02"]
+    assert all(RS.PERMISSION in s.texts() for s in S)                 # จ37: on every sheet
+    S = RF.dr_sheets(an, {"drain": {"u_type": "ข-50", "u_length": 400.0}}) + S   # still there on its own
     t = " ".join(x for s in S for x in s.texts())
     for word in ("ทถ-5-101", "ทถ-5-103", "ทถ-5-301", "Manning", "ทถ-3-112", "GUARD RAIL", "หลักกิโลเมตร",
                  "THERMOPLASTIC", "ตารางท่อลอด"):

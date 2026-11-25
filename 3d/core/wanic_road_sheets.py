@@ -36,7 +36,7 @@ from core.road import alignment as A
 from core.road import profile as P
 
 ROLES = [("วิศวกร", "สำรวจ", "วิศวกร"), ("วิศวกร", "ออกแบบทาง", "วิศวกร"),
-         ("วิศวกร", "โครงสร้าง/ระบายน้ำ", "วิศวกร"), ("ผู้ตรวจ", "", ""),
+         ("วิศวกร", "โครงสร้างทาง", "วิศวกร"), ("ผู้ตรวจ", "", ""),
          ("ผู้อนุมัติ", "", "")]
 BM_CODES = re.compile(r"^(BM|CP|GPS|GNSS|PK|PRS|หมุด|RTK|PI|POT|PC\b|PT\b)", re.I)
 #: The PDF pens of a road sheet (like a road study's coloured sheets).
@@ -1490,7 +1490,7 @@ def _glossary(sheets) -> None:
 
 
 def build_road_set(an, info=None, shots=None,
-                   groups=("G", "PP", "ST", "VT", "SD", "DR", "TS", "QS"), site=None) -> list:
+                   groups=("G", "PP", "ST", "VT", "SD", "TS", "QS"), site=None) -> list:
     """Every sheet of the road drawing set, numbered, with its title
     column.  ``an`` is :func:`core.wanic_road.analyse`'s result; with
     ``site`` (:func:`location_sheet`) the set opens with the site map."""
@@ -1521,13 +1521,12 @@ def build_road_set(an, info=None, shots=None,
             se.code = f"SD-{len(sd) + 1:02d}"
             sd.append(se)
         sheets += sd
-    if "DR" in groups or "TS" in groups:
-        # งานระบายน้ำ (ทถ-5) and ป้าย/เครื่องหมายจราจร (ทถ-3) from the road itself
+    # จ38 (the owner): the road set has no drainage pipes — the road (คสล. or ลาดยาง) and its
+    # signs only; RF.dr_sheets stays for a drainage job of its own
+    if "TS" in groups:
+        # ป้าย/เครื่องหมายจราจร (ทถ-3) from the road itself
         from core import wanic_road_furniture as RF
-        if "DR" in groups:
-            sheets += RF.dr_sheets(an, info)
-        if "TS" in groups:
-            sheets += RF.ts_sheets(an, info)
+        sheets += RF.ts_sheets(an, info)
     if "QS" in groups:
         sheets.append(qs_sheet(an, info, shots))
     if info.get("glossary", True) and "G" in groups:
@@ -1538,4 +1537,14 @@ def build_road_set(an, info=None, shots=None,
     for s in sheets:
         D.frame(s, info, len(sheets), ROLES)
         s.colors = dict(COLORS, **SAT_COLORS)
+        # จ37 (the owner): bottom right of every sheet, under the title column; the
+        # footer's «A3 scale» moves left to make room
+        for k, it in enumerate(s.items):
+            if it[0] == "text" and it[2].startswith("A3  ") and abs(it[1][1] - (D.MARGIN - 4.5)) < 0.01:
+                s.items[k] = (it[0], (D.PAPER[0] - D.MARGIN - 72.0, it[1][1])) + it[2:]
+        s.text((D.PAPER[0] - D.MARGIN, D.MARGIN - 4.5), PERMISSION, 1.8, "right", "text", True)
     return sheets
+
+
+#: จ37: on every sheet of the survey/road set
+PERMISSION = "การนำข้อมูลไปใช้จะต้องได้รับอนุญาตจากเจ้าของพื้นที่แล้วเท่านั้น"
