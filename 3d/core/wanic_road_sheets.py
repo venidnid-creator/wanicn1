@@ -886,10 +886,13 @@ def draw_section(sh, sec, row, box, sc, span, an=None):
         info += [("ปริมาตรขุด", f"{row.cut_volume:,.2f}"), ("ปริมาตรถม", f"{row.fill_volume:,.2f}"),
                  ("ขุดสะสม", f"{row.cut_total:,.2f}"), ("ถมสะสม", f"{row.fill_total:,.2f}"),
                  ("สุทธิ", f"{row.mass:,.2f}")]
+    half = (x1 - x0) / 2                              # two columns: never down into the next row
     for i, (a, b) in enumerate(info):
-        y = y0 - 9 - i * 2.6
-        sh.text((x0 + 1, y), a, 1.6)
-        sh.text((x1 - 1, y), b, 1.6, "right")
+        col, rw = (0, i) if i < 4 else (1, i - 4)
+        y = y0 - 9 - rw * 2.4
+        xa = x0 + 1 + col * half
+        sh.text((xa, y), a, 1.5)
+        sh.text((xa + half - 3, y), b, 1.5, "right")
 
 
 def _section_layers(sh, an, sec, P_):
@@ -914,9 +917,39 @@ def _section_layers(sh, an, sec, P_):
         sh.text((q[0] + 0.5, q[1] + 1.2), f"{z:,.3f}", 1.1, "left", "dim", angle=90)
     se = tpl.se or (tpl.crown, tpl.crown, tpl.shoulder_slope, tpl.shoulder_slope, 0.0, 0.0)
     hl, hr = tpl.width / 2 + se[4], tpl.width / 2 + se[5]
+    # as the DOH / DRR typical sections (ทล-102, ทถ-2-201): C.R. on each lane, the shoulder's
+    # slope, the widths dimensioned over the top, the side slopes 1:n
     for sg, slope, half in ((-1, se[0], hl), (1, se[1], hr)):
         q = P_(sg * half / 2, (sec.z_design or 0.0) - slope / 100.0 * half / 2)
-        sh.text((q[0], q[1] - 2.6), f"{slope:.1f}%", 1.2, "center", "dim")
+        sh.text((q[0], q[1] + 0.9), f"C.R. {slope:.1f}%", 1.2, "center", "dim")
+    if tpl.shoulder > 0:
+        for sg, slope, half in ((-1, se[2], hl), (1, se[3], hr)):
+            o = sg * (half + tpl.shoulder / 2)
+            z = _z_on(top, o)
+            if z is not None:
+                q = P_(o, z)
+                sh.text((q[0], q[1] + 0.9), f"{slope:.1f}%", 1.1, "center", "dim")
+    zt = max(z for _o, z in top)
+    yd = P_(0, zt)[1] + 10.0                          # over the levels written upright at the edges
+    offs = sorted({round(o, 3) for o, _z in top} | {0.0})
+    for a, b in zip(offs, offs[1:]):
+        pa, pb = P_(a, zt), P_(b, zt)
+        sh.line((pa[0], yd), (pb[0], yd), "dim", 0.12)
+        for x in (pa[0], pb[0]):
+            sh.line((x - 0.6, yd - 0.6), (x + 0.6, yd + 0.6), "dim", 0.22)
+            sh.line((x, yd - 1.0), (x, yd + 1.0), "dim", 0.12)
+        mid = (pa[0] + pb[0]) / 2
+        sh.text((mid, yd + 0.6), f"{b - a:.2f}", 1.2, "center", "dim")
+        part = "ไหล่ทาง" if (abs(a) > tpl.width / 2 + 1e-6 or abs(b) > tpl.width / 2 + 1e-6) and \
+            tpl.shoulder > 0 else "ช่องจราจร"
+        sh.text((mid, yd + 2.4), part, 1.1, "center", "dim")
+    d = sec.design or []
+    if len(d) > 3:
+        for seg in ((d[0], d[1]), (d[-2], d[-1])):
+            (o1, z1), (o2, z2) = seg
+            if abs(z2 - z1) > 0.05 and abs(o2 - o1) > 0.05:
+                q = P_((o1 + o2) / 2, (z1 + z2) / 2)
+                sh.text((q[0], q[1] + 1.0), f"1:{abs(o2 - o1) / abs(z2 - z1):.1f}", 1.2, "center", "dim")
     if tpl.se is not None and (se[4] or se[5]):
         sh.text(P_(0, (sec.z_design or 0.0) - an.settings.structure - 0.4),
                 f"ขยายผิว {max(se[4], se[5]):.2f} ม.", 1.2, "center", "roof")
