@@ -143,6 +143,7 @@ class RCPanel(QWidget):
         pm.addAction("📘 รูปเล่มรายการคำนวณ A4 (.pdf) — แนะนำ", self.export_book)
         pm.addAction("📄 รายการคำนวณแบบย่อ (.pdf)", self.export_pdf)
         pm.addAction("📊 รายงานโครงสร้าง (.xlsx)", self.export)
+        pm.addAction("✂ ตารางตัดเหล็ก + แผนตัดเหล็กเส้น 10 ม. (.xlsx)", self.export_cutting)
         self.book_btn.setMenu(pm)
         self.lat_btn = QPushButton("แรงด้านข้าง (แผ่นดินไหว/ลม)…")
         self.lat_btn.setToolTip("มยผ. 1301/1302-61 · มยผ. 1311-50 หรือสูตรเดิม · แรงแต่ละชั้น · ตรวจเสา P-M")
@@ -1266,6 +1267,16 @@ class RCPanel(QWidget):
             return
         R.report_xlsx(self.elements(), path)
         self.status.setText(f"บันทึกรายงานแล้ว: {path}")
+
+    def export_cutting(self):
+        """ตารางตัดเหล็ก (ข12): every bar's shape, length and number, cut from 10 m stock."""
+        from core import wanic_cutting as CT
+        path, _ = QFileDialog.getSaveFileName(self, "ตารางตัดเหล็ก", "ตารางตัดเหล็ก.xlsx", "ตารางคำนวณ (*.xlsx)")
+        if not path:
+            return
+        r = CT.write_xlsx(self.elements(), path)
+        self.status.setText(f"บันทึกตารางตัดเหล็กแล้ว: {r['items']} รายการ · ซื้อเหล็กเส้น 10 ม. {r['bars']} เส้น "
+                            f"({r['kg']:,.0f} กก.) — {path}")
 
 
 def setup(app) -> None:

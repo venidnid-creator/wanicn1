@@ -359,6 +359,39 @@ def axis_name(i: int) -> str:
     return letters[i] if i < len(letters) else f"A{i - len(letters) + 1}"
 
 
+def s_cutting(sh, E):
+    """สรุปตารางตัดเหล็ก (ข12): the bars to buy (10 m stock) and the list by member."""
+    from core import wanic_cutting as CT
+    x0, y0, x1, y1 = drawing_area()
+    rows = CT.items(E)
+    pl = CT.plans(rows)
+    sh.text((x0 + 10, y1 - 10), "สรุปการสั่งซื้อเหล็กเส้น (ยาว 10 ม.)", 3.2, "left", "text", True)
+    buy = [(p.size, str(p.bars), f"{p.used:,.1f}", f"{p.waste_pct:.1f}", f"{p.bought * CT.kg_m(p.size):,.1f}")
+           for p in pl]
+    buy.append(("รวม", str(sum(p.bars for p in pl)), "", "", f"{sum(p.bought * CT.kg_m(p.size) for p in pl):,.1f}"))
+    y = table(sh, x0 + 10, y1 - 14, [("ขนาด", 18, "center"), ("ซื้อ (เส้น)", 20, "center"),
+                                      ("ใช้จริง (ม.)", 24, "center"), ("เศษ (%)", 18, "center"),
+                                      ("น้ำหนักซื้อ (กก.)", 28, "center")], buy, 2.2, 5.5, 6.5)
+    sh.text((x0 + 10, y - 6), "แผนตัด (เส้นละ 10 ม.)", 3.0, "left", "text", True)
+    pat = []
+    for p in pl:
+        for n, cuts in p.patterns[:6]:
+            txt = CT.cuts_text(cuts).replace("×", "x")
+            pat.append((p.size, str(n), txt if len(txt) < 46 else txt[:44] + "…", f"{CT.STOCK - sum(cuts):.2f}"))
+    table(sh, x0 + 10, y - 9, [("ขนาด", 16, "center"), ("จำนวนเส้น", 18, "center"), ("ตัดเป็น (ม.)", 80, "left"),
+                               ("เศษ (ม.)", 16, "center")], pat[:28], 2.0, 5.0, 6.0)
+    xr = x0 + (x1 - x0) * 0.52
+    sh.text((xr, y1 - 10), "ตารางตัดเหล็ก", 3.2, "left", "text", True)
+    lst = [(it.group, it.mark, it.bar, it.size, f"{it.length:.2f}", str(it.count)) for it in rows]
+    table(sh, xr, y1 - 14, [("ชิ้นส่วน", 16, "center"), ("เบอร์", 12, "center"), ("เหล็ก", 40, "left"),
+                            ("ขนาด", 14, "center"), ("ยาว (ม.)", 16, "center"), ("จำนวน", 14, "center")],
+          lst[:44], 2.0, 4.6, 6.0)
+    if len(lst) > 44:
+        sh.text((xr, y0 + 20), f"… และอีก {len(lst) - 44} รายการ — ดูไฟล์ตารางตัดเหล็ก (.xlsx)", 2.2)
+    sh.text((x0 + 10, y0 + 12), "ทาบ 40d (ข้ออ้อย) / 48d (กลม) ไม่น้อยกว่า 0.30 ม. · ขอ 90 องศา 12d · ปลอกขอ 135 องศา 6d ไม่น้อยกว่า 75 มม. · "
+            "ตัดแบบ first-fit decreasing", 2.2)
+
+
 def grids(E):
     from core import wanic_building as B
     pts = B.foot_nodes(E)
@@ -3109,6 +3142,7 @@ def build_set(data, info=None,
         for lines in SS.beam_sheets(E):
             add("S", "รายละเอียดคาน", lambda sh, _a, lines=lines: SS.s_beam_details(sh, E, lines), "1:30")
         add("S", "รายละเอียดการเสริมเหล็กคานทั่วไป", lambda sh, _a: SS.s_typical_beam(sh, E), "1:50")
+        add("S", "สรุปตารางตัดเหล็ก", lambda sh, _a: s_cutting(sh, E), "-")
         from core import wanic_steel_sheets as ST
         if ST.has_steel(data):
             add("S", "มาตรฐานงานเชื่อม", lambda sh, _a: ST.s_weld_standard(sh, E), "-")
