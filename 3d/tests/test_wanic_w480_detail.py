@@ -614,7 +614,9 @@ def test_bath_elevations_and_rebar_details_in_the_set():
     rb = titles["แบบขยายเหล็กเสริมฐานรากและคาน"]
     txt = " ".join(rb.texts())
     assert "รูปตัดฐานราก F1" in txt and "รูปตัด A-A (ที่หัวเสา)" in txt
-    assert "L/4 @0.075" in txt and rb.count("circle", "rebar") > 8
+    from core import wanic_rc as R                                     # the calc book's end zone (2h)
+    _zone, e = R.end_stirrups({"h": 0.4, "stir": "RB6@0.15"})
+    assert f"2h @{R.spacing(e)}" in txt and rb.count("circle", "rebar") > 8
     assert D._bars("2-DB12")[:3] == (2, "DB12", 12)
     assert D._bars("DB12@0.15")[3] == 0.15
 

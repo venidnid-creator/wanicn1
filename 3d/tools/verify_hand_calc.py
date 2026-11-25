@@ -12,6 +12,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 d = B.default_data()
 RC.apply_grid(d, [4.9, 4.9], [4.9, 2.0], 2)
 AD.apply_fixes(d)
+# the hand formulas are those of a single spread footing: the footings that the design joins
+# into a combined footing (ข12, overlapping) are checked here each on its own
+d["combined_footings"] = []
 res = C.analyse(d)
 M = res["members"]
 lib = B.library_of(d)
