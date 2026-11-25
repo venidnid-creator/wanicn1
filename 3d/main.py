@@ -55,8 +55,8 @@ def _init_language() -> None:
     """
     saved = QSettings().value("language")
     import os
-    pick = os.environ.get("WANIC_LANG")            # the start screen's ไทย / EN
-    if pick in ("th", "en"):
+    pick = os.environ.get("WANIC_LANG")            # the start screen's language (ฉ1: seven)
+    if pick in ("th", "en", "lo", "vi", "id", "zh-CN", "zh-TW"):
         saved = pick
         QSettings().setValue("language", pick)
     if not saved:

@@ -111,9 +111,11 @@ def _init_language() -> None:
     """
     from core import branding
     import os
-    pick = os.environ.get("WANIC_LANG")            # the start screen's ไทย / EN
-    if pick in ("th", "en"):
-        QSettings().setValue("language", pick)
+    pick = os.environ.get("WANIC_LANG")            # the start screen's language (ฉ1: seven)
+    if pick:
+        from pathlib import Path as _P
+        has = pick in ("th", "en") or (_P(__file__).resolve().parent / "i18n" / pick).exists()
+        QSettings().setValue("language", pick if has else "en")   # no catalog yet: English
     i18n.set_language(str(QSettings().value("language", branding.DEFAULT_LANGUAGE)))
     from views import qt_translations
 

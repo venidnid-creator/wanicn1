@@ -226,6 +226,121 @@ TEXT = {
         cannot="WANICNSURVEY cannot open this kind of file yet", open_title="Open file"),
 }
 
+#: ฉ1 (the owner): five more languages of the start screen — what a language
+#: leaves out falls back to English (:func:`text_of`).
+TEXT["lo"] = dict(
+    suite="2027 · ຊຸດໂປຣແກຣມສຳຫຼວດ ແຕ້ມແບບ ອອກແບບ", ready="ພ້ອມໃຊ້ງານ · ລຸ້ນ {v}", theme="ທີມ",
+    hero="ຈາກຫຼັກໝາຍສຳຫຼວດ ສູ່ແບບກໍ່ສ້າງ ແລະ ປະລິມານວຽກ",
+    hero_sub="ສຳຫຼວດ ແຕ້ມແບບ 2 ມິຕິ ສ້າງໂມເດລ 3 ມິຕິ ອອກແບບໂຄງສ້າງຄອນກຣີດເສີມເຫຼັກ "
+             "ແລະ ຖອດປະລິມານວຽກ (BOQ) ໃນຊຸດໂປຣແກຣມດຽວ",
+    start="ເລີ່ມວຽກໃໝ່  →", new="ໃໝ່", open="ເປີດໄຟລ໌…", drop="ລາກໄຟລ໌ມາວາງໃສ່ໜ້າຕ່າງນີ້ໄດ້",
+    link_title="ຂໍ້ມູນເຊື່ອມກັນທັງຊຸດ",
+    link_sub="ແບບ 2 ມິຕິ ໂມເດລ 3 ມິຕິ ແລະ ບັນຊີປະລິມານວຽກ ມາຈາກຂໍ້ມູນຊຸດດຽວກັນ",
+    recent="ໄຟລ໌ຫຼ້າສຸດ", no_recent="ຍັງບໍ່ມີໄຟລ໌ — ກົດບັດດ້ານເທິງ ຫຼື «ເປີດໄຟລ໌…»",
+    nav=["ໜ້າຫຼັກ", "ແຕ້ມແບບ 2 ມິຕິ", "ໂມເດລ 3 ມິຕິ", "ອອກແບບໂຄງສ້າງ ຄສລ.", "ອອກແບບຖະໜົນ",
+         "ຖອດປະລິມານ / BOQ", "ເປີດໄຟລ໌", "ສະຖິຕິຜູ້ໃຊ້ໂປຣແກຣມ"],
+    cards=[("ແຕ້ມແບບ 2 ມິຕິ", "ແຜນຜັງ ຮູບດ້ານ ຮູບຕັດ ວຽກສຳຫຼວດ ພູມີປະເທດ ເສັ້ນຊັ້ນຄວາມສູງ ແລະ ດິນຕັດ-ດິນຖົມ"),
+           ("ໂມເດລ 3 ມິຕິ", "ສ້າງຮູບ ດັນ-ດຶງ ອອກແບບອາຄານ ຫຼັງຄາຕາມແບບມາດຕະຖານ ວັດໄລຍະ ແລະ ຮູບທັດສະນີຍະພາບ"),
+           ("ອອກແບບໂຄງສ້າງ ຄສລ.", "ກຣິດ ຖານຮາກ ເສົາເຂັມ ຕໍ່ມໍ່ ເສົາ ຄານ ພື້ນ ຮອດໂຄງຫຼັງຄາ "
+                                   "ພ້ອມເຫຼັກເສີມ ແລະ ບັນຊີປະລິມານວຽກ"),
+           ("ອອກແບບຖະໜົນ", "ແນວທາງ ຮູບຕັດຕາມຍາວ-ຕາມຂວາງ ດິນຕັດ-ດິນຖົມ ຊັ້ນທາງ ແລະ ແບບມາດຕະຖານ")],
+    dev="ຜູ້ພັດທະນາ", dev_role="ວິສະວະກອນສຳຫຼວດ", stats="ສະຖິຕິຜູ້ໃຊ້ໂປຣແກຣມ",
+    contact="ຕິດຕໍ່ຜູ້ພັດທະນາ", line="ສະແກນເພີ່ມໝູ່ LINE", free="ໃຊ້ງານຟຣີ ບໍ່ມີຄ່າລິຂະສິດ",
+    support="ສະໜັບສະໜູນຜູ້ພັດທະນາ:", copy="ກ໊ອບປີ້ເລກບັນຊີ", copied="ກ໊ອບປີ້ແລ້ວ ✓",
+    thanks="ຂອບໃຈທີ່ໃຊ້ງານ ແລະ ສະໜັບສະໜູນ", update="↻ ອັບເດດຕົວເລກ",
+    missing="ບໍ່ພົບໂປຣແກຣມໃນໂຟນເດີຕິດຕັ້ງ — ລອງຕິດຕັ້ງ WANICNSURVEY ໃໝ່",
+    cannot="ໄຟລ໌ປະເພດນີ້ຍັງເປີດດ້ວຍ WANICNSURVEY ບໍ່ໄດ້", open_title="ເປີດໄຟລ໌")
+TEXT["vi"] = dict(
+    suite="2027 · Bộ phần mềm Khảo sát · Vẽ · Thiết kế", ready="Sẵn sàng · phiên bản {v}", theme="Giao diện",
+    hero="Từ mốc khảo sát đến bản vẽ thi công và khối lượng",
+    hero_sub="Khảo sát, vẽ 2D, dựng mô hình 3D, thiết kế kết cấu bê tông cốt thép "
+             "và bóc tách khối lượng (BOQ) trong một bộ phần mềm",
+    start="Dự án mới  →", new="MỚI", open="Mở tệp…", drop="Có thể kéo thả tệp vào cửa sổ này",
+    link_title="Một mô hình, mọi đầu ra",
+    link_sub="Bản vẽ 2D, mô hình 3D và bảng khối lượng đều từ cùng một dữ liệu",
+    recent="Tệp gần đây", no_recent="Chưa có tệp — chọn một thẻ ở trên hoặc «Mở tệp…»",
+    nav=["Trang chủ", "Vẽ 2D", "Mô hình 3D", "Thiết kế kết cấu BTCT", "Thiết kế đường",
+         "Bóc khối lượng / BOQ", "Mở tệp", "Thống kê người dùng"],
+    cards=[("Vẽ 2D", "Mặt bằng, mặt đứng, mặt cắt, khảo sát, địa hình, đường đồng mức, đào và đắp"),
+           ("Mô hình 3D", "Dựng hình kéo-đẩy, thiết kế nhà, mái tiêu chuẩn, đo đạc và phối cảnh"),
+           ("Thiết kế kết cấu BTCT", "Lưới trục, móng, cọc, cổ móng, cột, dầm, sàn đến khung mái, "
+                                     "kèm cốt thép và khối lượng"),
+           ("Thiết kế đường", "Tuyến, trắc dọc, trắc ngang, đào đắp, kết cấu áo đường và bản vẽ tiêu chuẩn")],
+    dev="Nhà phát triển", dev_role="Kỹ sư khảo sát", stats="Thống kê người dùng",
+    contact="Liên hệ nhà phát triển", line="Quét để kết bạn LINE", free="Sử dụng miễn phí, không thu phí bản quyền",
+    support="Ủng hộ nhà phát triển:", copy="Sao chép số tài khoản", copied="Đã sao chép ✓",
+    thanks="Cảm ơn bạn đã sử dụng và ủng hộ", update="↻ Làm mới",
+    missing="Không tìm thấy chương trình trong thư mục cài đặt — hãy cài lại WANICNSURVEY",
+    cannot="WANICNSURVEY chưa mở được loại tệp này", open_title="Mở tệp")
+TEXT["id"] = dict(
+    suite="2027 · Paket Survei · Gambar · Desain", ready="Siap · versi {v}", theme="Tema",
+    hero="Dari patok survei ke gambar konstruksi dan volume pekerjaan",
+    hero_sub="Survei, gambar 2D, pemodelan 3D, desain struktur beton bertulang beserta tulangannya "
+             "dan perhitungan volume (BOQ) dalam satu paket",
+    start="Proyek baru  →", new="BARU", open="Buka berkas…", drop="Berkas dapat diseret ke jendela ini",
+    link_title="Satu model, semua keluaran",
+    link_sub="Gambar 2D, model 3D, dan daftar volume berasal dari data yang sama",
+    recent="Berkas terakhir", no_recent="Belum ada berkas — pilih kartu di atas atau «Buka berkas…»",
+    nav=["Beranda", "Gambar 2D", "Model 3D", "Desain struktur beton", "Desain jalan",
+         "Volume / BOQ", "Buka berkas", "Statistik pengguna"],
+    cards=[("Gambar 2D", "Denah, tampak, potongan, survei, topografi, kontur, galian dan timbunan"),
+           ("Model 3D", "Pemodelan tarik-dorong, desain bangunan, atap standar, pengukuran dan perspektif"),
+           ("Desain struktur beton", "Grid, fondasi, tiang pancang, pedestal, kolom, balok dan pelat sampai "
+                                     "rangka atap, dengan tulangan dan volume"),
+           ("Desain jalan", "Trase, potongan memanjang dan melintang, galian-timbunan, lapis perkerasan, "
+                            "gambar standar")],
+    dev="Pengembang", dev_role="Insinyur survei", stats="Statistik pengguna",
+    contact="Hubungi pengembang", line="Pindai untuk tambah teman LINE", free="Gratis, tanpa biaya lisensi",
+    support="Dukung pengembang:", copy="Salin nomor rekening", copied="Tersalin ✓",
+    thanks="Terima kasih telah menggunakan dan mendukung", update="↻ Perbarui",
+    missing="Program tidak ada di folder instalasi — pasang ulang WANICNSURVEY",
+    cannot="WANICNSURVEY belum dapat membuka berkas jenis ini", open_title="Buka berkas")
+TEXT["zh-CN"] = dict(
+    suite="2027 · 测量 · 绘图 · 设计 软件套件", ready="就绪 · 版本 {v}", theme="主题",
+    hero="从测量桩点到施工图与工程量",
+    hero_sub="测量、二维绘图、三维建模、钢筋混凝土结构设计（含配筋）及工程量计算（BOQ），一套软件全部完成",
+    start="新建项目  →", new="新", open="打开文件…", drop="可将文件拖放到此窗口",
+    link_title="同一模型，全部成果", link_sub="二维图纸、三维模型与工程量清单来自同一份数据",
+    recent="最近文件", no_recent="暂无文件 — 点击上方卡片或「打开文件…」",
+    nav=["主页", "二维绘图", "三维模型", "钢筋混凝土结构设计", "道路设计", "工程量 / BOQ", "打开文件", "用户统计"],
+    cards=[("二维绘图", "平面图、立面图、剖面图、测量、地形、等高线与挖填方"),
+           ("三维模型", "推拉建模、建筑设计、标准屋顶、测距与效果图"),
+           ("钢筋混凝土结构设计", "轴网、基础、桩、短柱、柱、梁、板直至屋架，含配筋与工程量"),
+           ("道路设计", "路线、纵断面与横断面、挖填方、路面结构层与标准图")],
+    dev="开发者", dev_role="测量工程师", stats="用户统计",
+    contact="联系开发者", line="扫码添加 LINE 好友", free="免费使用，无需授权费",
+    support="支持开发者：", copy="复制账号", copied="已复制 ✓", thanks="感谢您的使用与支持", update="↻ 刷新",
+    missing="安装文件夹中找不到程序 — 请重新安装 WANICNSURVEY",
+    cannot="WANICNSURVEY 暂时无法打开此类文件", open_title="打开文件")
+TEXT["zh-TW"] = dict(
+    suite="2027 · 測量 · 繪圖 · 設計 軟體套件", ready="就緒 · 版本 {v}", theme="主題",
+    hero="從測量樁點到施工圖與工程數量",
+    hero_sub="測量、二維繪圖、三維建模、鋼筋混凝土結構設計（含配筋）及數量計算（BOQ），一套軟體全部完成",
+    start="新增專案  →", new="新", open="開啟檔案…", drop="可將檔案拖放到此視窗",
+    link_title="同一模型，所有成果", link_sub="二維圖說、三維模型與數量清單來自同一份資料",
+    recent="最近的檔案", no_recent="尚無檔案 — 點選上方卡片或「開啟檔案…」",
+    nav=["首頁", "二維繪圖", "三維模型", "鋼筋混凝土結構設計", "道路設計", "數量計算 / BOQ", "開啟檔案", "使用者統計"],
+    cards=[("二維繪圖", "平面圖、立面圖、剖面圖、測量、地形、等高線與挖填方"),
+           ("三維模型", "推拉建模、建築設計、標準屋頂、量測與透視圖"),
+           ("鋼筋混凝土結構設計", "軸線、基礎、基樁、短柱、柱、梁、版直至屋架，含配筋與數量"),
+           ("道路設計", "路線、縱斷面與橫斷面、挖填方、路面結構層與標準圖")],
+    dev="開發者", dev_role="測量工程師", stats="使用者統計",
+    contact="聯絡開發者", line="掃描加入 LINE 好友", free="免費使用，無需授權費",
+    support="支持開發者：", copy="複製帳號", copied="已複製 ✓", thanks="感謝您的使用與支持", update="↻ 重新整理",
+    missing="安裝資料夾中找不到程式 — 請重新安裝 WANICNSURVEY",
+    cannot="WANICNSURVEY 目前無法開啟此類檔案", open_title="開啟檔案")
+for _code, _t in TEXT.items():                   # every word: English where a language has none
+    for _k, _v in TEXT["en"].items():
+        _t.setdefault(_k, _v)
+
+THEME_NAMES = {"blueprint": {"lo": "ບລູພຣິ້ນ", "zh-CN": "蓝图", "zh-TW": "藍圖"},
+               "light": {"lo": "ສະຫວ່າງ", "vi": "Sáng", "id": "Terang", "zh-CN": "浅色", "zh-TW": "淺色"},
+               "dark": {"lo": "ມືດ", "vi": "Tối", "id": "Gelap", "zh-CN": "深色", "zh-TW": "深色"}}
+
+#: the language menu (ฉ1): code → its own name
+LANGUAGES = [("th", "ไทย"), ("en", "English"), ("lo", "ລາວ"), ("vi", "Tiếng Việt"),
+             ("id", "Bahasa Indonesia"), ("zh-CN", "简体中文"), ("zh-TW", "繁體中文（台灣）")]
+
 #: The cards: (tag, program, 3D panel to open, icon path (24×24 stroke), files)
 CARDS = [("2D", "cad", "", "M3 21V3h18v18H3zM3 9h18M9 21V9", "DWG · DXF"),
          ("3D", "3d", "", "M12 2l9 5v10l-9 5-9-5V7l9-5zM12 12l9-5M12 12v10M12 12L3 7", "IGZ · SKP · OBJ"),
@@ -314,6 +429,11 @@ class StartWindow(QWidget):
             QPushButton#pill:hover {{ border-color: {c['accent']}; }}
             QPushButton#pill[on="true"] {{ background: {c['accent']}; color: {c['accent_ink']};
                 border-color: {c['accent']}; font-weight: 700; }}
+            QComboBox#langBox {{ background: {c['accent']}; color: {c['accent_ink']}; border: 0;
+                border-radius: 18px; padding: 0 14px; min-height: 36px; font-weight: 700; }}
+            QComboBox#langBox::drop-down {{ border: 0; width: 18px; }}
+            QComboBox#langBox QAbstractItemView {{ background: {c['card']}; color: {c['text']};
+                selection-background-color: {c['accent']}; selection-color: {c['accent_ink']}; }}
             QFrame#card {{ background: {c['card']}; border: 1px solid {c['border']}; border-radius: 16px; }}
             QFrame#card[hot="true"] {{ border: 2px solid {c['accent']}; }}
             QPushButton#go {{ background: {c['chip']}; color: {c['text']}; border: 0; border-radius: 10px;
@@ -427,7 +547,11 @@ class StartWindow(QWidget):
         lab.setStyleSheet(f"color: {c['muted']};")
         row.addWidget(lab)
         for key, th in THEMES.items():
-            b = QPushButton(th[self.lang])
+            name = th.get(self.lang) or THEME_NAMES.get(key, {}).get(self.lang) or th["en"]
+            # ฉ1: the chosen theme by name, the others by their colour (the name on hover) —
+            # the bar fits the window in every language
+            b = QPushButton(name if key == self.theme else "")
+            b.setToolTip(name)
             b.setObjectName("pill")
             b.setProperty("on", key == self.theme)
             b.setCursor(Qt.PointingHandCursor)
@@ -435,14 +559,20 @@ class StartWindow(QWidget):
             b.clicked.connect(lambda _=False, k=key: self.set_theme(k))
             row.addWidget(b)
         row.addSpacing(10)
-        for code, label in (("th", "ไทย"), ("en", "EN")):
-            b = QPushButton(label)
-            b.setObjectName("pill")
-            b.setProperty("on", code == self.lang)
-            b.setMinimumWidth(58)
-            b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, k=code: self.set_lang(k))
-            row.addWidget(b)
+        # ฉ1: seven languages — a menu, not a row of buttons
+        from PySide6.QtWidgets import QComboBox
+        self.lang_box = QComboBox()
+        self.lang_box.setObjectName("langBox")
+        for code, label in LANGUAGES:
+            self.lang_box.addItem("🌐 " + label, code)
+        self.lang_box.setCurrentIndex(max(self.lang_box.findData(self.lang), 0))
+        self.lang_box.setCursor(Qt.PointingHandCursor)
+        self.lang_box.setFixedWidth(132)                   # the window keeps its width; the list is wider
+        self.lang_box.view().setMinimumWidth(210)
+        self.lang_box.setToolTip("ภาษา · Language · ພາສາ · Ngôn ngữ · Bahasa · 语言 · 語言")
+        self.lang_box.currentIndexChanged.connect(
+            lambda _i: self.set_lang(self.lang_box.currentData()))
+        row.addWidget(self.lang_box)
         return bar
 
     @staticmethod
@@ -633,7 +763,7 @@ class StartWindow(QWidget):
         if self.stats_label is None:
             return
         html = self._stats_html
-        if self.lang == "en":
+        if self.lang != "th":                     # the numbers' words in English for the others
             for th, en in STATS_EN:
                 html = html.replace(th, en)
         try:
