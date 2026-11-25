@@ -133,3 +133,96 @@ def test_a_surveyed_curve_is_drawn_as_its_true_arc_with_its_speed():
     assert len(on) > 70 and max(abs(math.hypot(x, y - 50) - 50) for x, y in on) < 1e-6
     assert R.entry_speed(100, 6) == 50 and R.entry_speed(500, 6) == 100
     assert R.entry_speed(0, 6) == 0 and R.entry_speed(5000, 8) == 120
+
+
+def _noisy_road(noise, seed=3):
+    """A straight 150 m, a 70° left curve of R 80, a straight 160 m; the
+    CL shots every 20 m off the line by up to ``noise`` m, side shots
+    every 10 m to ±20 m."""
+    import math
+    import random
+    from core.road import alignment as A
+    rnd, d = random.Random(seed), math.radians(70)
+    true = [(745900.0, 1454500.0), (746050.0, 1454500.0)]
+    for k in range(1, 41):
+        a = -math.pi / 2 + d * k / 40
+        true.append((746050 + 80 * math.cos(a), 1454580 + 80 * math.sin(a)))
+    true.append((true[-1][0] + 160 * math.cos(d), true[-1][1] + 160 * math.sin(d)))
+    rows, num = [], 1
+    for st in A.stations(true, 10.0):
+        for o in range(-20, 21, 2):
+            if o:
+                x, y = st.offset_point(o)
+                rows.append(f"{num},{x:.3f},{y:.3f},{95 + st.s / 100 + 0.03 * o:.3f},N")
+                num += 1
+    for k, st in enumerate(A.stations(true, 20.0)):
+        if abs(st.s / 20 - round(st.s / 20)) < 1e-6:
+            x, y = st.offset_point(rnd.uniform(-noise, noise))
+            rows.append(f"C{k:03d},{x:.3f},{y:.3f},{95 + st.s / 100:.3f},CL")
+    return true, R.parse_points("\n".join(rows))
+
+
+def test_centre_fit_puts_the_cl_shots_on_the_line_to_be_built():
+    """จ35 «ปรับค่ากึ่งกลาง»: tangents + the circle found from shots off
+    by 0.3 m, every CL shot moved onto it (N E, and Z by the ground's
+    slope), nearer the true line than before; the other shots untouched."""
+    import math
+    from core.road import alignment as A
+
+    def off(line, e, n):
+        st = A.point_at(line, A.station_of(line, (e, n)))
+        return math.hypot(st.x - e, st.y - n)
+    true, shots = _noisy_road(0.0)
+    fit = R.fit_centreline(shots)
+    assert [s.radius for s in fit.stakes if s.kind == "PI"] == [80.0] and fit.worst < 0.02
+    true, shots = _noisy_road(0.3)
+    fit = R.fit_centreline(shots)
+    assert [s.radius for s in fit.stakes if s.kind == "PI"] == [80.0]
+    new = R.apply_fit(shots, fit)
+    cl = [k for k, s in enumerate(shots) if s.code == "CL"]
+    assert len(fit.moves) == len(cl) and [m[5] for m in fit.moves] == sorted(m[5] for m in fit.moves)
+    before = sum(off(true, shots[k].e, shots[k].n) for k in cl) / len(cl)
+    after = sum(off(true, new[k].e, new[k].n) for k in cl) / len(cl)
+    assert after < before * 0.7
+    assert all(off(fit.axis, new[k].e, new[k].n) < 0.01 for k in cl)
+    assert all(abs(new[k].z - shots[k].z) < 0.05 for k in cl)
+    assert all(new[k] is shots[k] for k in range(len(shots)) if k not in cl)
+    # one shot coded CL by mistake, 3 m off: flagged, and the line not steered by it
+    shots.append(R.Shot("X1", 746060.0, 1454503.5, 95.6, "CL"))
+    fit = R.fit_centreline(shots)
+    assert [s.radius for s in fit.stakes if s.kind == "PI"] == [80.0]
+    assert max(fit.moves, key=lambda m: m[4])[1] == "X1"
+
+
+def test_the_centre_fit_button_and_undo(qtbot=None):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["WANIC_OFFLINE"] = "1"
+    from PySide6.QtWidgets import QApplication
+    _app = QApplication.instance() or QApplication([])
+    from core.scene import Scene
+    from plugins.wanic_road import RoadPanel
+    from tests.test_wanic_buttons import _App
+    _true, shots = _noisy_road(0.3)
+    panel = RoadPanel(_App(Scene(), "wanic_road"))
+    panel.shots = shots
+    panel.axis = R.centerline_from_codes(shots)
+    fit = panel.centre_fit(ask=False)
+    assert fit and panel.undo_fit.isVisibleTo(panel)
+    assert panel.shots is not shots and len(panel.axis) == len(fit.moves)
+    panel.centre_undo()
+    assert panel.shots is shots and not panel.undo_fit.isVisibleTo(panel)
+
+
+def test_the_curve_tables_in_plain_words():
+    """The owner: the G sheet tells anyone what each curve is."""
+    from core import wanic_road_sheets as RS
+    _true, shots = _noisy_road(0.0)
+    cl = R.centerline_from_codes(shots)
+    tin = R.build_tin(shots)
+    an = R.analyse(shots, cl, R.auto_pvis(tin, cl), R.Settings(), tin)
+    words = RS.plain_words(an)
+    assert any("เลี้ยวซ้าย 70 องศา" in w and "รัศมี 80 ม." in w and "กม./ชม." in w for w in words)
+    g = [s for s in RS.build_road_set(an, {}, shots) if s.code == "G-02"][0]
+    t = g.texts()
+    assert "อธิบายตารางให้เข้าใจง่าย" in t and "ความหมายของหัวตาราง" in t

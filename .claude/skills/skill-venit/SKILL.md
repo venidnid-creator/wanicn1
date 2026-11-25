@@ -217,7 +217,9 @@ road, RC 2026.11.11.1, ReadWanicn2027).
 - จ (roads): the pavement design must give «6. สรุปการออกแบบ» before the layer table / 3D model; the design dialog
   follows the THAI-PAVE steps (workflow only). จ34: a surveyed axis is smoothed to true arcs (`R.smooth_axis`, in
   wanic_road.py — `core/road/*` must stay byte-for-byte the CAD's), curve entry speed `R.entry_speed` / `an.curve_speed`
-  in the results table, the G-02 curve table and the PP plan. Characters outside cp874 on sheets: map them in
+  in the results table, the G-02 curve table and the PP plan. The owner wants every table explained for lay readers
+  (`RS.plain_words`, `PLAIN_GLOSSARY` on G-02). จ35 «ปรับค่ากึ่งกลาง»: `R.fit_centreline` / `apply_fit` /
+  `CentreFitDialog` move the CL shots onto the fitted tangents + arcs (N E Z), with undo. Characters outside cp874 on sheets: map them in
   `D._DXF_SUB` (√ Δ ≥ as AutoCAD `\U+XXXX`).
 - WanicnDesign (the owner's other design program) lives on branch `claude/awesome-pasteur-y5g1in` in `design/WanicnDesign`.
 

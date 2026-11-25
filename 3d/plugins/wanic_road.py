@@ -346,6 +346,64 @@ class SectionsView(QWidget):
                        f"NGL  =  {sec.z_ground:.3f}")
 
 
+class CentreFitDialog(QDialog):
+    """จ35: what «ปรับค่ากึ่งกลาง» will do, in words anyone can follow,
+    and every CL shot before and after — nothing changes until «ใช้»."""
+
+    def __init__(self, panel, fit):
+        super().__init__(panel)
+        self.fit = fit
+        self.setWindowTitle("ปรับค่ากึ่งกลาง — จุด CL ไปอยู่บนแนวถนนที่จะก่อสร้าง")
+        self.resize(980, 640)
+        lay = QVBoxLayout(self)
+        curves = [s for s in fit.stakes if s.kind == "PI"]
+        far = [m for m in fit.moves if m[4] > 0.5]
+        what = [f"<b>ทำอะไร:</b> จุดกึ่งกลางถนน (CL) ที่สำรวจมามักคลาดไปซ้ายหรือขวาเล็กน้อย "
+                "เพราะความคลาดเคลื่อนของกล้องและการตั้งเป้า ถนนจริงก่อสร้างเป็น<b>ทางตรง</b>ต่อกับ"
+                "<b>โค้งวงกลม</b> โปรแกรมจึงหาแนวนั้นจากจุดทั้งหมด แล้วย้ายทุกจุด CL ไปยังจุดที่ใกล้ที่สุดบนแนว",
+                f"<b>แนวที่ได้:</b> ทางตรง {len(curves) + 1} ช่วง โค้ง {len(curves)} โค้ง"
+                + (" (" + ", ".join(f"โค้งที่ {k + 1} รัศมี {s.radius:,.0f} ม." if s.radius else
+                                    f"มุมหักที่ {k + 1}" for k, s in enumerate(curves)) + ")" if curves else ""),
+                f"<b>ระยะที่ขยับ:</b> {len(fit.moves)} จุด เฉลี่ย {fit.rms:.3f} ม. มากที่สุด {fit.worst:.3f} ม. "
+                "· ค่า N E ย้ายไปบนแนว ค่า Z ปรับตามความลาดของดินระหว่างตำแหน่งเดิมกับตำแหน่งใหม่",
+                "<b>หลังกดใช้:</b> แนวศูนย์กลาง รูปตัด และปริมาณดินคิดจากค่าใหม่ "
+                "กด «↩ คืนค่า CL เดิม» ในแผงเพื่อย้อนกลับได้"]
+        if far:
+            what.append(f"<span style='color:#d97706'>⚠ มี {len(far)} จุดที่ขยับเกิน 0.50 ม. (แถวสีส้ม) "
+                        "ตรวจว่าเป็นจุด CL จริงหรือถนนเดิมไม่ตรงแนว ก่อนกดใช้</span>")
+        what += [f"<span style='color:#d97706'>⚠ {n}</span>" for n in fit.notes]
+        info = QLabel("<br>".join(what))
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        t = QTableWidget(len(fit.moves), 9)
+        t.setHorizontalHeaderLabels(["จุด", "กม.", "E เดิม", "N เดิม", "Z เดิม", "E ใหม่", "N ใหม่",
+                                     "Z ใหม่", "ขยับ (ม.)"])
+        t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        right = Qt.AlignRight | Qt.AlignVCenter
+        for r, (_i, name, old, new, d, st) in enumerate(fit.moves):
+            vals = [name, A.format_station(st, 2)] + [f"{v:,.3f}" for v in old + new] + [f"{d:.3f}"]
+            for k, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if k:
+                    it.setTextAlignment(right)
+                if d > 0.5:
+                    it.setBackground(QColor("#fde7c8"))
+                    it.setForeground(QColor("#111"))
+                t.setItem(r, k, it)
+        t.resizeColumnsToContents()
+        lay.addWidget(t, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        ok = QPushButton("✅ ใช้ค่าที่ปรับ")
+        ok.clicked.connect(self.accept)
+        no = QPushButton("ยกเลิก")
+        no.clicked.connect(self.reject)
+        row.addWidget(ok)
+        row.addWidget(no)
+        lay.addLayout(row)
+        self.table = t
+
+
 class ResultsDialog(QDialog):
     """The analysis in three tabs and its exports."""
 
@@ -389,7 +447,15 @@ class ResultsDialog(QDialog):
              "ความเร็วเข้าโค้ง (กม./ชม.)"])
         self.curves.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.curves.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.tabs.addTab(self.curves, "โค้งราบ (PI PC PT)")
+        cw = QWidget()
+        cl_ = QVBoxLayout(cw)
+        cl_.setContentsMargins(0, 0, 0, 0)
+        # the owner: the table in words anyone can follow, above the numbers
+        self.curves_plain = QLabel()
+        self.curves_plain.setWordWrap(True)
+        cl_.addWidget(self.curves_plain)
+        cl_.addWidget(self.curves, 1)
+        self.tabs.addTab(cw, "โค้งราบ (PI PC PT)")
         self.pavement = QTableWidget(0, 5)
         self.pavement.setHorizontalHeaderLabels(
             ["ชั้นทาง", "หนา (ม.)", "กว้าง (ม.)", "ปริมาตร (ม³)", "พื้นที่ (ม²)"])
@@ -441,6 +507,14 @@ class ResultsDialog(QDialog):
                 if c:
                     it.setTextAlignment(right)
                 self.table.setItem(r, c, it)
+        from core import wanic_road_sheets as RS
+        words = [w for w in RS.plain_words(an) if "โค้งราบ" in w or "มุมหัก" in w]
+        self.curves_plain.setText(
+            "<b>อ่านง่าย:</b><br>" + "<br>".join(words[:8]) +
+            ("<br>…" if len(words) > 8 else "") +
+            "<br><span style='color:#888'>PC = จุดเริ่มโค้ง · PT = จุดสิ้นสุดโค้ง · R = รัศมี "
+            "(ยิ่งมากโค้งยิ่งกว้าง) · Δ = มุมที่ถนนเลี้ยว · ความเร็วเข้าโค้ง = ความเร็วสูงสุดที่ปลอดภัย</span>"
+            if words else "ไม่มีโค้งราบ — ถนนเป็นทางตรงตลอดสาย")
         self.curves.setRowCount(len(an.hcurves))
         fs = A.format_station
         for r, c in enumerate(an.hcurves):
@@ -514,6 +588,16 @@ class RoadPanel(QWidget):
         b = QPushButton("แนวทางจากจุด CL")
         b.clicked.connect(lambda: _safe(self, self.axis_from_codes))
         row.addWidget(b)
+        b = QPushButton("🎯 ปรับค่ากึ่งกลาง")
+        b.setToolTip("จุด CL ที่สำรวจมามักคลาดไปซ้ายขวาเล็กน้อย — โปรแกรมหาแนวถนนที่จะก่อสร้าง "
+                     "(ทางตรง + โค้งวงกลม) แล้วขยับทุกจุด CL ไปอยู่บนแนวนั้น ค่า N E Z ขยับตาม "
+                     "ดูรายการก่อนกดใช้ และคืนค่าเดิมได้")
+        b.clicked.connect(lambda: _safe(self, self.centre_fit))
+        row.addWidget(b)
+        self.undo_fit = QPushButton("↩ คืนค่า CL เดิม")
+        self.undo_fit.setVisible(False)
+        self.undo_fit.clicked.connect(lambda: _safe(self, self.centre_undo))
+        row.addWidget(self.undo_fit)
         b = QPushButton("📍 แนวทางจากหมุด PI")
         b.setToolTip("ออกแบบแนวทางผ่านหมุด PI/POT ที่วางในสนาม: แนวตรงระหว่างหมุด และโค้งวงกลม"
                      "ที่ทุก PI — รัศมีจากรหัส PIR=…, PIE=… (ระยะ E) หรือ PIT=… ในสนาม "
@@ -964,6 +1048,38 @@ class RoadPanel(QWidget):
         self.save()
         self._report()
         QMessageBox.information(self, TITLE, self._pi_summary(notes))
+
+    def centre_fit(self, ask=True):
+        """จ35 «ปรับค่ากึ่งกลาง»: the CL shots onto the line to be built."""
+        if len(R.centerline_from_codes(self.shots, self._codes())) < 3:
+            QMessageBox.information(self, TITLE, "ต้องมีจุดรหัส CL อย่างน้อย 3 จุด")
+            return None
+        fit = R.fit_centreline(self.shots, self._codes())
+        dlg = CentreFitDialog(self, fit)
+        if ask and dlg.exec() != QDialog.Accepted:
+            return None
+        self._before_fit = list(self.shots)
+        self.shots = R.apply_fit(self.shots, fit)
+        self.axis = R.centerline_from_codes(self.shots, self._codes())
+        self.pis, self.pi_curves = [], []
+        self.analysis = None
+        self.undo_fit.setVisible(True)
+        self.save()
+        self._report()
+        self._flash(f"ปรับจุด CL {len(fit.moves)} จุดให้อยู่บนแนวก่อสร้างแล้ว "
+                    f"(ขยับเฉลี่ย {fit.rms:.3f} ม. มากสุด {fit.worst:.3f} ม.)")
+        return fit
+
+    def centre_undo(self):
+        if not getattr(self, "_before_fit", None):
+            return
+        self.shots, self._before_fit = self._before_fit, None
+        self.axis = R.centerline_from_codes(self.shots, self._codes())
+        self.analysis = None
+        self.undo_fit.setVisible(False)
+        self.save()
+        self._report()
+        self._flash("คืนค่าจุด CL ตามที่สำรวจแล้ว")
 
     def axis_from_codes(self):
         axis = R.centerline_from_codes(self.shots, self._codes())

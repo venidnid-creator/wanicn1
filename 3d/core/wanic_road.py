@@ -388,6 +388,29 @@ def fit_radius(a, b, c, cl: list, t_max: float) -> tuple:
         rms = math.sqrt(sum(_local_offset(q, a, b, c, r) ** 2 for q in near) / len(near))
         if rms < best[0] - 1e-6:
             best = (rms, r)
+
+    def rms_of(r):
+        return math.sqrt(sum(_local_offset(q, a, b, c, r) ** 2 for q in near) / len(near))
+    if best[1] > 0:
+        # จ35: the 4 % steps are coarse on a large radius — refine between
+        # the neighbouring steps, then the designer's round figure nearest
+        lo, hi = best[1] / 1.04, best[1] * 1.04
+        if half > 1e-9:
+            hi = min(hi, t_max / math.tan(half))
+        for _ in range(40):
+            m1, m2 = lo + (hi - lo) * 0.382, lo + (hi - lo) * 0.618
+            if rms_of(m1) <= rms_of(m2):
+                hi = m2
+            else:
+                lo = m1
+        r = (lo + hi) / 2
+        cands = {nice_radius(r)}
+        step = 1.0 if r < 100 else 5.0 if r < 1000 else 10.0
+        cands |= {nice_radius(r) - step, nice_radius(r) + step}
+        if half > 1e-9:
+            cands = {x for x in cands if x > 0 and x * math.tan(half) <= t_max} or {nice_radius(r)}
+        rr = min(cands, key=rms_of)
+        return rr, rms_of(rr)
     return nice_radius(best[1]), best[0]
 
 
@@ -502,6 +525,170 @@ def alignment_from_pis(stakes: list[PiStake], cl: Optional[list] = None,
 def pi_rows(stakes: list[PiStake]) -> list:
     """The stakes as saved in the job: [name, e, n, kind, radius]."""
     return [[s.name, s.e, s.n, s.kind, s.radius or 0.0, s.source] for s in stakes]
+
+
+# -- 2c. จ35: the surveyed centreline put on the line to be built ------------------------
+
+@dataclass
+class CentreFit:
+    axis: list                      # the fitted axis: tangents and circular curves
+    curves: list                    # A.HorizontalCurve
+    stakes: list                    # PiStake: the computed PIs (with their radii)
+    moves: list                     # (index in shots, name, (e, n, z) before, (e, n, z) after, shift m, station)
+    notes: list = field(default_factory=list)
+
+    @property
+    def rms(self) -> float:
+        return math.sqrt(sum(m[4] ** 2 for m in self.moves) / len(self.moves)) if self.moves else 0.0
+
+    @property
+    def worst(self) -> float:
+        return max((m[4] for m in self.moves), default=0.0)
+
+
+def _simplify(pts: list, tol: float) -> list:
+    """Douglas-Peucker: the indices of the vertices kept."""
+    keep = {0, len(pts) - 1}
+    stack = [(0, len(pts) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        ax, ay = pts[a]
+        dx, dy = pts[b][0] - ax, pts[b][1] - ay
+        L = math.hypot(dx, dy) or 1e-12
+        k, d = max(((i, abs((pts[i][0] - ax) * dy - (pts[i][1] - ay) * dx) / L)
+                    for i in range(a + 1, b)), key=lambda t: t[1])
+        if d > tol:
+            keep.add(k)
+            stack += [(a, k), (k, b)]
+    return sorted(keep)
+
+
+def _fit_line(pts: list):
+    """The least-squares line through ``pts``: (a point, the unit direction)."""
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    sxx = sum((p[0] - cx) ** 2 for p in pts)
+    syy = sum((p[1] - cy) ** 2 for p in pts)
+    sxy = sum((p[0] - cx) * (p[1] - cy) for p in pts)
+    th = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    u = (math.cos(th), math.sin(th))
+    first, last = pts[0], pts[-1]
+    if (last[0] - first[0]) * u[0] + (last[1] - first[1]) * u[1] < 0:
+        u = (-u[0], -u[1])
+    return (cx, cy), u
+
+
+def _off(axis, p) -> float:
+    st = A.point_at(axis, A.station_of(axis, p))
+    return math.hypot(st.x - p[0], st.y - p[1])
+
+
+def _fit_tangents(cl: list, tol: float):
+    """The stakes (BOP, PIs, EOP) of the straights through ``cl`` and notes."""
+    keep = _simplify(cl, tol)
+    gaps = sorted(math.dist(p, q) for p, q in zip(cl, cl[1:]))
+    spacing = gaps[len(gaps) // 2]
+    runs = [(a, b) for a, b in zip(keep, keep[1:])
+            if math.dist(cl[a], cl[b]) >= 3 * spacing - 1e-6]
+    notes = []
+    if not runs:
+        runs = [(0, len(cl) - 1)]
+        notes.append("ไม่พบช่วงทางตรงที่ยาวพอ — ใช้เส้นตรงเส้นเดียวตลอดสาย")
+
+    def line(a, b):
+        # the shots of the run, not its two ends (they may be on a curve)
+        return _fit_line(cl[a + 1:b] if b - a >= 4 else cl[a:b + 1])
+    lines = [line(a, b) for a, b in runs]
+    k = 0
+    while k < len(lines) - 1:                      # one straight split by the noise
+        u0, u1 = lines[k][1], lines[k + 1][1]
+        if abs(u0[0] * u1[1] - u0[1] * u1[0]) < math.sin(math.radians(1.0)):
+            runs[k:k + 2] = [(runs[k][0], runs[k + 1][1])]
+            lines[k:k + 2] = [line(*runs[k])]
+        else:
+            k += 1
+
+    def foot(p, ln):
+        (cx, cy), u = ln
+        t = (p[0] - cx) * u[0] + (p[1] - cy) * u[1]
+        return (cx + u[0] * t, cy + u[1] * t)
+    stakes = [PiStake("BOP", *foot(cl[0], lines[0]), kind="POT")]
+    for k in range(len(lines) - 1):
+        (p0, u0), (p1, u1) = lines[k], lines[k + 1]
+        den = u0[0] * u1[1] - u0[1] * u1[0]
+        t = ((p1[0] - p0[0]) * u1[1] - (p1[1] - p0[1]) * u1[0]) / den
+        stakes.append(PiStake(f"PI-{len(stakes)}", p0[0] + u0[0] * t, p0[1] + u0[1] * t))
+    stakes.append(PiStake("EOP", *foot(cl[-1], lines[-1]), kind="POT"))
+    if any(math.dist((p.e, p.n), (q.e, q.n)) < 1e-3 for p, q in zip(stakes, stakes[1:])):
+        raise ValueError("PI ซ้อนกัน")
+    return stakes, notes
+
+
+def fit_centreline(shots: list, codes=CL_CODES, tol: float = 0.30,
+                   tin: Optional[T.Tin] = None) -> CentreFit:
+    """จ35 «ปรับค่ากึ่งกลาง»: the centreline shots carry the survey's
+    error; the road is built on straight tangents and circular curves.
+    The straights are found (Douglas-Peucker at ``tol`` m, a run at least
+    three shot spacings long), each fitted by least squares through its
+    shots, the PIs where they meet, and the radius at each PI the one the
+    shots follow best (:func:`alignment_from_pis`). Every CL shot is then
+    moved to the nearest point of that line: E and N onto the line, Z by
+    the ground's slope between the two places (the surface of all the
+    shots), so the level read in the field is kept."""
+    idx = [i for i, s in enumerate(shots) if is_cl(s.code, codes)]
+    cl = centerline_from_codes(shots, codes)
+    if len(cl) < 3:
+        raise ValueError("ต้องมีจุดรหัส CL อย่างน้อย 3 จุด")
+    # the survey's error is not known: of the tolerances tried, the line
+    # with the fewest PIs that fits the shots nearly as well as the best
+    def best_line(pts):
+        tried = []
+        for t in sorted({tol, tol * 1.6, tol * 2.5, tol * 4, tol * 6}):
+            try:
+                stakes, notes = _fit_tangents(pts, t)
+            except ValueError:
+                continue
+            al = alignment_from_pis(stakes, pts)
+            rms = math.sqrt(sum(_off(al.axis, p) ** 2 for p in pts) / len(pts))
+            tried.append((rms, len(stakes), al, notes))
+        if not tried:
+            raise ValueError("หาแนวตรงจากจุด CL ไม่ได้")
+        low = min(t[0] for t in tried)
+        return min((t for t in tried if t[0] <= low * 1.25 + 0.01), key=lambda t: (t[1], t[0]))
+    rms, _n, al, notes = best_line(cl)
+    # a shot far off the line (a wrong code, the old road off the new
+    # line) does not steer the fit: once more without it
+    far = [p for p in cl if _off(al.axis, p) > max(1.0, 3 * rms)]
+    if far and len(cl) - len(far) >= 3:
+        try:
+            rms, _n, al, notes = best_line([p for p in cl if p not in far])
+        except ValueError:
+            pass
+    notes = notes + al.notes
+    tin = tin or build_tin(shots)
+    moves = []
+    for i in idx:
+        s = shots[i]
+        st = A.point_at(al.axis, A.station_of(al.axis, (s.e, s.n)))
+        z = s.z
+        z0, z1 = tin.z_at(s.e, s.n), tin.z_at(st.x, st.y)
+        if z0 is not None and z1 is not None:
+            z = s.z + (z1 - z0)
+        moves.append((i, s.name, (s.e, s.n, s.z), (st.x, st.y, z), math.hypot(st.x - s.e, st.y - s.n), st.s))
+    moves.sort(key=lambda m: m[5])                 # along the road
+    return CentreFit(al.axis, al.curves, al.stakes, moves, notes)
+
+
+def apply_fit(shots: list, fit: CentreFit) -> list:
+    """The shots with the CL shots moved (a new list, the others as they were)."""
+    out = list(shots)
+    for i, _name, _old, (e, n, z), _d, _s in fit.moves:
+        s = shots[i]
+        out[i] = Shot(s.name, e, n, z, s.code, s.swapped)
+    return out
 
 
 def stakes_of(rows: list) -> list[PiStake]:

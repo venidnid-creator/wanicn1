@@ -309,6 +309,51 @@ def vcurve_rows(an):
     return rows
 
 
+def plain_words(an) -> list:
+    """จ34 (the owner): the curve tables in words anyone can follow — one
+    sentence per curve."""
+    out = []
+    for c in an.hcurves:
+        way = "เลี้ยวขวา" if c.delta > 0 else "เลี้ยวซ้าย"
+        if c.radius <= 0:
+            out.append(f"• ที่ กม. {sta(c.s_pi)} ถนน{way} {abs(c.delta):.0f} องศา เป็นมุมหัก (ไม่มีโค้ง)")
+            continue
+        out.append(f"• โค้งราบที่ {c.number} ถนน{way} {abs(c.delta):.0f} องศา เริ่มโค้งที่ กม. {sta(c.s_pc)} "
+                   f"สุดโค้งที่ กม. {sta(c.s_pt)} ยาวตามโค้ง {c.length:,.2f} ม. รัศมี {c.radius:,.0f} ม. "
+                   f"(เท่าวงกลมกว้าง {2 * c.radius:,.0f} ม.) ขับเข้าโค้งได้ไม่เกิน {an.curve_speed(c):.0f} กม./ชม.")
+    for c in an.curves:
+        a = c.g2 - c.g1
+
+        def way(g):
+            return "ทางราบ" if abs(g) < 0.005 else (f"ขึ้นเนิน {g:.2f}%" if g > 0 else f"ลงเนิน {abs(g):.2f}%")
+        kind = "โค้งคว่ำ (ยอดเนิน)" if a < 0 else "โค้งหงาย (ท้องแอ่ง)"
+        out.append(f"• ที่ กม. {sta(c.s)} ระดับ {c.z:,.3f} ม. ถนนเปลี่ยนจาก{way(c.g1)} เป็น{way(c.g2)} "
+                   f"ทำเป็น{kind} ยาว {c.length:,.2f} ม. ตั้งแต่ กม. {sta(c.bvc)} ถึง {sta(c.evc)}")
+    return out
+
+
+#: every head of the two tables, in plain Thai
+PLAIN_GLOSSARY = [
+    ("กม. 0+145.00", "ระยะทางจากจุดเริ่มต้นถนน อ่านว่า กิโลเมตรที่ 0 บวก 145.00 เมตร"),
+    ("PI", "จุดที่แนวทางตรงสองเส้นมาตัดกัน (จุดหักของแนว) ถนนจริงไม่ผ่านจุดนี้ แต่โค้งเลี่ยงไป"),
+    ("Δ มุมเบี่ยง", "มุมที่ถนนเลี้ยว ซ้ายหรือขวา (องศา ลิปดา ฟิลิปดา)"),
+    ("R รัศมี", "ความกว้างของโค้ง ยิ่งรัศมีมาก โค้งยิ่งกว้าง ขับได้เร็วและปลอดภัยกว่า"),
+    ("T ระยะสัมผัส", "ระยะจากจุดเริ่มโค้ง (หรือสุดโค้ง) ถึงจุด PI"),
+    ("L ความยาวโค้ง", "ระยะทางที่ขับจริงบนโค้ง จาก PC ถึง PT"),
+    ("E ระยะภายนอก", "ระยะจากจุด PI ถึงกึ่งกลางโค้ง"),
+    ("PC / PT", "จุดเริ่มโค้ง / จุดสิ้นสุดโค้ง (ทางตรงต่อกับโค้งที่จุดนี้)"),
+    ("V ความเร็วเข้าโค้ง", "ความเร็วสูงสุดที่ปลอดภัยเมื่อขับเข้าโค้ง จากรัศมีและการยกโค้ง"),
+    ("E / N", "พิกัดบนแผนที่ (ตะวันออก / เหนือ) ระบบ UTM หน่วยเมตร"),
+    ("PVI", "จุดที่ความลาดของถนนเปลี่ยน (ขึ้นเนินเป็นลงเนิน หรือกลับกัน)"),
+    ("g1 / g2", "ความลาดก่อนและหลังจุด PVI เช่น +0.89% คือสูงขึ้น 0.89 ม. ทุกระยะ 100 ม. (ลบคือลง)"),
+    ("A", "ผลต่างความลาด g2 - g1 ยิ่งมากยิ่งต้องใช้โค้งดิ่งยาว"),
+    ("L (โค้งดิ่ง)", "ความยาวโค้งดิ่งที่ทำให้รถขับผ่านเนินหรือแอ่งได้นุ่มนวลและมองเห็นทางข้างหน้า"),
+    ("K", "ความยาวโค้งต่อความลาด 1% (L / A) ยิ่งมากยิ่งนุ่มนวล"),
+    ("BVC / EVC", "จุดเริ่ม / จุดสิ้นสุดโค้งดิ่ง"),
+    ("โค้งคว่ำ / หงาย", "โค้งบนยอดเนิน (Crest) / โค้งในท้องแอ่ง (Sag)"),
+]
+
+
 VCURVE_COLS = [("PVI STA", 22, "center"), ("ระดับ PVI", 20, "right"),
                ("g1", 16, "right"), ("g2", 16, "right"), ("A", 16, "right"),
                ("L (ม.)", 16, "right"), ("K", 14, "right"),
@@ -432,13 +477,41 @@ def g_sheets(an, info, chunks, shots):
         if i == 0:
             g.text((X0, yy - 8), "ตารางโค้งดิ่ง (Vertical curves)", 3.4, "left",
                    "text", True)
-            D.table(g, X0, yy - 11, VCURVE_COLS, vrows[:20] or
-                    [("-",) + ("",) * 9], 2.0, 5.2, 6.0)
-            g.text((X0, Y0 + 3), "Δ มุมเบี่ยง · R รัศมี · T ระยะสัมผัส · L ความยาวโค้ง · "
-                   "E ระยะภายนอก · PC จุดเริ่มโค้ง · PT จุดสิ้นโค้ง · PI จุดตัดแนวสัมผัส · "
-                   "V ความเร็วเข้าโค้ง = √(127 R (e + f)) · "
-                   "A = g2 − g1 · K = L / |A|", 2.0)
+            yy = D.table(g, X0, yy - 11, VCURVE_COLS, vrows[:20] or
+                         [("-",) + ("",) * 9], 2.0, 5.2, 6.0)
+            _plain_block(g, an, yy - 9)
     return out
+
+
+def _plain_block(g, an, y):
+    """«อ่านตารางอย่างไร»: each curve in a sentence on the left, every head
+    of the tables in plain words on the right — as far as the sheet holds."""
+    gap = 4.6
+    xl, xr = X0, X0 + 178
+    g.text((xl, y), "อธิบายตารางให้เข้าใจง่าย (สำหรับผู้อ่านทั่วไป)", 3.2, "left", "text", True)
+    g.text((xr, y), "ความหมายของหัวตาราง", 3.2, "left", "text", True)
+    yl = y - 7
+    for line in plain_words(an):
+        parts = D._wrap(line, 100)
+        if yl - gap * len(parts) < Y0 + 10:
+            g.text((xl, yl), "… (ดูโค้งที่เหลือในตาราง)", 2.1, "left", "dim")
+            break
+        for k, t in enumerate(parts):
+            g.text((xl + (2.5 if k else 0), yl), t, 2.1)
+            yl -= gap
+        yl -= 1.0
+    yr = y - 7
+    for head, text in PLAIN_GLOSSARY:
+        parts = D._wrap(text, 62)
+        if yr - gap * len(parts) < Y0 + 10:
+            break
+        g.text((xr, yr), head, 2.1, "left", "text", True)
+        for t in parts:
+            g.text((xr + 34, yr), t, 2.1)
+            yr -= gap
+        yr -= 0.8
+    g.text((X0, Y0 + 3), "ความเร็วเข้าโค้ง V = √(127 R (e + f)) กม./ชม. "
+           "e = การยกโค้ง f = แรงเสียดทานด้านข้างตาม ทถ-2-104 · K = L / |A|", 2.0)
 
 
 # ---------------------------------------------------------------------------
