@@ -78,13 +78,13 @@ Single-file data: SQLite `.vsdb` (default `Documents\VenitSupply\พัสดุ
 | `venitsupply/venitsupply/depreciation.py` | 63 | ค่าเสื่อมราคาครุภัณฑ์ — วิธีเส้นตรง ตามหลักเกณฑ์กรมบัญชีกลาง. | schedule, for_year |
 | `venitsupply/venitsupply/docx.py` | 322 | Minimal Word (.docx) writer (no outside library): converts the simple HTML the reports produce | write |
 | `venitsupply/venitsupply/hire.py` | 556 | จ้างเหมาบริการบุคคลธรรมดา แยกตามกอง (ไม่รวมงานก่อสร้าง). | classify, month_iter, HireMixin(39), month_name |
-| `venitsupply/venitsupply/hire_reports.py` | 767 | เอกสารจ้างเหมาบริการบุคคลธรรมดา: บัญชีคำนวณปริมาณงาน, รายงานขอจ้าง, TOR, ราคากลาง บก.06, | baht_text, workload_sheet, position_workload_sheet, position_history_sheet, proposal_text, manpower_report, legal_refs, budget_text, memo, hire_approval_memo, tor_report_memo, price_report_memo |
+| `venitsupply/venitsupply/hire_reports.py` | 769 | เอกสารจ้างเหมาบริการบุคคลธรรมดา: บัญชีคำนวณปริมาณงาน, รายงานขอจ้าง, TOR, ราคากลาง บก.06, | baht_text, workload_sheet, position_workload_sheet, position_history_sheet, proposal_text, manpower_report, legal_refs, budget_text, memo, hire_approval_memo, tor_report_memo, price_report_memo |
 | `venitsupply/venitsupply/i18n.py` | 99 | ไทย / English for the program's screens (official forms stay in Thai). | T, set_lang |
-| `venitsupply/venitsupply/manpower.py` | 702 | อัตรากำลังตามสายการบังคับบัญชา: กอง › ฝ่าย › งาน › ตำแหน่ง (กรอบ / มีคนครอง / ว่าง), | U, parse_standard, propose_subs, base_title, need_people, ManpowerMixin(23) |
+| `venitsupply/venitsupply/manpower.py` | 722 | อัตรากำลังตามสายการบังคับบัญชา: กอง › ฝ่าย › งาน › ตำแหน่ง (กรอบ / มีคนครอง / ว่าง), | U, parse_standard, propose_subs, base_title, is_executive, need_people, ManpowerMixin(23) |
 | `venitsupply/venitsupply/ordinance_pdf.py` | 477 | อ่านข้อบัญญัติงบประมาณรายจ่าย (PDF จากระบบ e-LAAS) — ใช้ในโปรแกรมและจากบรรทัดคำสั่ง. | fix_thai, words, column, parse, skeleton, parse_details, reflow, attach_details, write_csv, read_ordinance, to_rows |
 | `venitsupply/venitsupply/pages_budget.py` | 1252 | หน้าจองบประมาณ (ข้อบัญญัติ), จัดซื้อจัดจ้าง และสถิติ. | fy_spin, m, MoneyCard(1), BudgetBox(1), BudgetPage(14), LineTable(3), ProcDialog(2), ProcPage(12), BarChart(3), StatsPage(4) |
 | `venitsupply/venitsupply/pages_hire.py` | 823 | หน้าจอ «จ้างเหมาบุคคล»: โครงสร้างหน่วยงาน (กอง/หน่วยงานย่อย/ตำแหน่ง), งานที่จะจ้างและค่างาน, | HirePage(4), AssignDialog(3), JobTab(12), RatesDialog(2), ContractDialog(1), ContractTab(13), DocSettingsDialog(1), SummaryTab(2) |
-| `venitsupply/venitsupply/pages_manpower.py` | 874 | หน้าจออัตรากำลัง: โครงสร้างตามสายการบังคับบัญชา (กอง › ฝ่าย › งาน › ตำแหน่ง), มาตรฐานกำหนดตำแหน่ง, | OrgTab(16), WorkloadDialog(7), StandardsTab(12), PasteStandardDialog(2), PickDutiesDialog(2), AnalysisTab(2) |
+| `venitsupply/venitsupply/pages_manpower.py` | 878 | หน้าจออัตรากำลัง: โครงสร้างตามสายการบังคับบัญชา (กอง › ฝ่าย › งาน › ตำแหน่ง), มาตรฐานกำหนดตำแหน่ง, | OrgTab(16), WorkloadDialog(7), StandardsTab(12), PasteStandardDialog(2), PickDutiesDialog(2), AnalysisTab(2) |
 | `venitsupply/venitsupply/pages_ordinance.py` | 338 | หน้าต่าง «นำเข้าข้อบัญญัติ»: เลือกปีงบประมาณ → เลือกไฟล์ (PDF/ตาราง) → อ่าน → ตรวจรายการ → บันทึก. | m, rows_to_items, OrdinanceDialog(7) |
 | `venitsupply/venitsupply/procurement.py` | 457 | จัดซื้อ จัดจ้าง เช่า แลกเปลี่ยน — ผูกกับงบประมาณตามข้อบัญญัติ. | suggest_method, wht, ProcurementMixin(23) |
 | `venitsupply/venitsupply/reports.py` | 510 | รายงานพัสดุ: HTML (สำหรับพิมพ์/ส่งออก PDF) และแถวตาราง (ส่งออกตารางคำนวณ). | money, qty, Report(2), asset_list, asset_card, depreciation_year, material_balance, stock_card, issue_slip, loans_report, inspection_report, disposal_report |
@@ -93,7 +93,7 @@ Single-file data: SQLite `.vsdb` (default `Documents\VenitSupply\พัสดุ
 | `venitsupply/venitsupply/xlsx.py` | 78 | Minimal .xlsx writer (no outside library): sheets of text/number rows. | write |
 | `venitsupply/main.py` | 8 | พัสดุเวนิช (VENIT SUPPLY) — start the program. |  |
 | `venitsupply/tools/build_skill.py` | 167 | Regenerate the automatic parts of the «venit-supply» skill and package it. | block_version, block_builds, block_modules, block_data, block_tests, block_history, render, package, main |
-| `venitsupply/tools/build_standards.py` | 95 | Build venitsupply/data/standards_maikhao.json from the มาตรฐานกำหนดตำแหน่ง PDFs of อบต.ไม้ขาว. | clean_line, clean_text, noise |
+| `venitsupply/tools/build_standards.py` | 96 | Build venitsupply/data/standards_maikhao.json from the มาตรฐานกำหนดตำแหน่ง PDFs of อบต.ไม้ขาว. | clean_line, clean_text, noise |
 
 Other files: `venitsupply/packaging/venitsupply.spec`, `venitsupply/installer/venitsupply.iss`, `venitsupply/installer/release-notes.md`, `venitsupply/requirements.txt`, `venitsupply/HANDOFF.md`, `.github/workflows/venitsupply-windows.yml`, assets in `venitsupply/assets/`.
 <!-- /AUTO:modules -->
@@ -260,7 +260,7 @@ Commit history: `git log --date=short --format='%ad %h %s' -- venitsupply .claud
 - งบประมาณปีไหนใช้ปีนั้น ห้ามข้ามปี: ขอ/อนุมัติ/ก่อหนี้ผูกพันต้องอยู่ในปีงบประมาณของรายการงบ — ตรวจรับและเบิกจ่าย
   ข้ามปีได้เฉพาะรายการที่ก่อหนี้ไว้แล้ว (เบิกเหลื่อมปี); ข้อความแจ้งบอกปีของวันที่และปีของงบชัดเจน
 - ส่วนราชการครบทุกกองตามแผนอัตรากำลัง 2570–2572 เติมให้อัตโนมัติเมื่อเปิดไฟล์ ไม่ลบของเดิม («คลัง» → «กองคลัง»)
-- มาตรฐานกำหนดตำแหน่ง อบต.ไม้ขาว 98 ตำแหน่ง (สายบริหาร วิชาการ ทั่วไป) อ่านจากไฟล์ของ อบต. ใส่ไว้ในโปรแกรม
+- มาตรฐานกำหนดตำแหน่ง อบต.ไม้ขาว 88 ตำแหน่ง (สายวิชาการและสายทั่วไป — ไม่ใช้สายบริหาร/สายอำนวยการ) อ่านจากไฟล์ของ อบต. ใส่ไว้ในโปรแกรม
   ตำแหน่ง «ผู้ช่วย…» และหัวหน้าส่วนราชการใช้มาตรฐานของตำแหน่งหลักให้อัตโนมัติ
 - หัวข้อย่อย (1.1.1 …) สำหรับนับปริมาณงานรายปี โปรแกรมเสนอจากรายการ «เช่น …» เพิ่ม แก้ไข ลบได้
   หน้าภาระงานดึงมาตรฐานของตำแหน่งมาให้ทันที เจ้าหน้าที่เติมเวลาและปริมาณงานเอง

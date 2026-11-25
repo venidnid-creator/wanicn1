@@ -190,6 +190,8 @@ def position_history_sheet(store, pid) -> Report:
 
 def proposal_text(a) -> str:
     """ข้อเสนอจากผลวิเคราะห์ของตำแหน่ง."""
+    if a.get("excluded"):
+        return "สายบริหาร/อำนวยการ — ไม่วิเคราะห์"
     if a.get("need") is None:
         return "ยังไม่ได้กรอกปริมาณงาน"
     s = a["short"]

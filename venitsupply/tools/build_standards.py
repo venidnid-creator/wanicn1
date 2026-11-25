@@ -90,6 +90,7 @@ for url, label in lst.items():
         sides[s] = sides.get(s, 0) + 1
     out.append(dict(code=code, title=title, url=url, duties=[dict(side=s, text=t) for s, t in items]))
     report.append((code, title, sides))
+out = [e for e in out if not e["code"].startswith(("1", "2"))]     # เจ้าของ 25 พ.ย.: ไม่ใช้สายบริหาร/สายอำนวยการ
 json.dump(sorted(out, key=lambda e: e["code"]), open(f"{D}/standards_maikhao.json", "w"), ensure_ascii=False, indent=1)
 for r in sorted(report):
     print(r[0], r[1], r[2])

@@ -314,13 +314,14 @@ def test_merge_structure_and_bundled_standards():
     out = s.ensure_manpower()
     tops = {d["name"]: d for d in s.divisions()}
     assert len(tops) == 7 and tops["กองคลัง"]["id"] == own and "คลัง" in tops["กองคลัง"]["aliases"]
-    assert out["standards"] > 1000 and s.ensure_manpower() == dict(units=0, positions=0, standards=0)   # ครั้งเดียว
+    assert out["standards"] == 1019 and s.ensure_manpower() == dict(units=0, positions=0, standards=0)   # ครั้งเดียว
     assert any(p["title"] == "ผู้อำนวยการกอง" for p in s.positions(own))                               # ของเดิมอยู่ครบ
     assert s.unit_analysis(own)["frame"] == 25                                                           # 24 + 1 ของเดิม
     assert s.standard_for("ผู้ช่วยเจ้าพนักงานพัสดุ") == "เจ้าพนักงานพัสดุ"
-    assert s.standard_for("ผู้อำนวยการกองคลัง (นักบริหารงานการคลัง ระดับต้น)") == "นักบริหารงานการคลัง"
-    assert s.standard_for("หัวหน้าฝ่ายบริหารงานสาธารณสุข (นักบริหารงานสาธารณสุขและสิ่งแวดล้อม ระดับต้น)") \
-        == "นักบริหารงานสาธารณสุข"
+    assert not s.q("SELECT 1 FROM duties WHERE title LIKE 'นักบริหารงาน%'")       # ไม่ใช้สายบริหาร/อำนวยการ
+    head = next(p for p in s.positions(own) if p["is_head"])
+    a = s.position_analysis(head["id"])
+    assert a["excluded"] and s.unit_analysis(own)["positions"] == 17     # 20 แถวตำแหน่ง + 1 ของเดิม − ผอ./หัวหน้าฝ่าย 4
     rows = s.duty_rows("นักวิชาการพัสดุ")
     assert rows[0]["no"] == "1.1" and any(r["level"] == 1 and r["no"].count(".") == 2 for r in rows)
     units = {d["name"]: d["id"] for d in s.divisions(all_levels=True)}

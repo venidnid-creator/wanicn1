@@ -293,6 +293,8 @@ class OrgTab(QWidget):
         pid = self.pid()
         if not pid:
             return need_selection(self)
+        if M.is_executive(self.p.store.position(pid)):
+            return QMessageBox.information(self, PRODUCT_TH, T("ตำแหน่งสายบริหาร/สายอำนวยการ ไม่ใช้วิเคราะห์ภาระงาน"))
         if WorkloadDialog(self, self.p.store, pid).exec():
             self.refresh()
 
@@ -542,7 +544,7 @@ class StandardsTab(QWidget):
         self.search.textChanged.connect(self.load_titles)
         ll.addWidget(self.search)
         self.line = QComboBox()
-        for k, lab in (("", "ทุกสายงาน"), ("2", "สายบริหาร (นักบริหารงาน…)"), ("3", "สายวิชาการ"), ("4", "สายทั่วไป"),
+        for k, lab in (("", "ทุกสายงาน"), ("3", "สายวิชาการ"), ("4", "สายทั่วไป"),
                        ("x", "ตำแหน่งที่ยังไม่มีมาตรฐาน")):
             self.line.addItem(T(lab), k)
         self.line.currentIndexChanged.connect(self.load_titles)
@@ -563,7 +565,7 @@ class StandardsTab(QWidget):
         self.t.setWordWrap(True)
         self.t.doubleClicked.connect(lambda *_: self.edit())
         rl.addWidget(self.t, 1)
-        note = QLabel(T("มาตรฐานกำหนดตำแหน่งจากเว็บไซต์ อบต.ไม้ขาว (98 ตำแหน่ง ระดับแรกของสายงาน) อ่านจากไฟล์สแกน "
+        note = QLabel(T("มาตรฐานกำหนดตำแหน่งจากเว็บไซต์ อบต.ไม้ขาว (สายวิชาการและสายทั่วไป 88 ตำแหน่ง ระดับแรกของสายงาน) อ่านจากไฟล์สแกน "
                         "อาจมีคำผิดเล็กน้อย — ตรวจทานและแก้ได้ · หัวข้อย่อย (1.1.1 …) ใช้กรอกปริมาณงาน "
                         "โปรแกรมเสนอให้จากรายการ «เช่น …» และเพิ่ม/แก้/ลบได้"))
         note.setWordWrap(True)
@@ -604,7 +606,9 @@ class StandardsTab(QWidget):
                 continue                       # ผู้ช่วย…/หัวหน้า… ใช้มาตรฐานของตำแหน่งหลัก — ไม่แสดงซ้ำ
             if want == "x" and t in counts:
                 continue
-            if want and want != "x" and not (c.startswith(want) or (want == "2" and c.startswith("1"))):
+            if t.startswith("นักบริหารงาน") or t.startswith(("ผู้อำนวยการ", "หัวหน้า", "ปลัด", "รองปลัด")):
+                continue                       # สายบริหาร/สายอำนวยการ: ไม่ใช้ (เจ้าของ 25 พ.ย. 2569)
+            if want and want != "x" and not c.startswith(want):
                 continue
             self.titles.addItem((f"{c} " if c else "") + f"{t}" + (f"  ({counts[t]})" if t in counts else ""))
         self.titles.blockSignals(False)

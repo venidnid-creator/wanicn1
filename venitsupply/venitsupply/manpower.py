@@ -249,6 +249,20 @@ def base_title(title: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+EXEC_KIND = STAFF["อ"]
+
+
+def is_executive(p) -> bool:
+    """ตำแหน่งสายบริหาร/สายอำนวยการ (ปลัด, ผอ.กอง, หัวหน้าฝ่าย — นักบริหารงาน…) — เจ้าของสั่ง 25 พ.ย. 2569:
+    ไม่ใช้มาตรฐานและไม่วิเคราะห์ภาระงานจ้างเหมา."""
+    keys = p.keys() if hasattr(p, "keys") else p
+    kind = p["kind"] if "kind" in keys else ""
+    head = p["is_head"] if "is_head" in keys else 0
+    title = (p["title"] or "").strip()
+    return bool(head) or kind == EXEC_KIND or "นักบริหารงาน" in title or \
+        title.startswith(("ผู้อำนวยการกอง", "หัวหน้าสำนัก", "หัวหน้าฝ่าย", "ปลัด", "รองปลัด"))
+
+
 def need_people(fte: float) -> int:
     """จำนวนคนที่ต้องการจาก FTE: ปัดเศษ (ตั้งแต่ .50 ขึ้น) และอย่างน้อย 1 เมื่อมีภาระงาน."""
     if fte <= 0:
@@ -587,9 +601,13 @@ class ManpowerMixin:
         if self.setting("manpower_template") != "MAIKHAO_2570":
             out.update(self.merge_manpower())
             self.set_setting("manpower_template", "MAIKHAO_2570")
-        if self.setting("standards_loaded") != "1":
+        if self.setting("standards_loaded") != "2":
+            if self.setting("standards_loaded") == "1":       # รุ่น 2026.11.25.1 ใส่สายบริหาร/อำนวยการไว้ — ลบออก
+                for r in self.q("SELECT id FROM duties WHERE parent_id IS NULL AND (source LIKE 'มาตรฐานกำหนดตำแหน่ง 1%' "
+                                "OR source LIKE 'มาตรฐานกำหนดตำแหน่ง 2%')"):
+                    self.delete_duty(r["id"])
             out["standards"] = self.load_bundled_standards()
-            self.set_setting("standards_loaded", "1")
+            self.set_setting("standards_loaded", "2")
         return out
 
     # ----------------------------------------------------- workload
@@ -640,7 +658,7 @@ class ManpowerMixin:
         need = need_people(fte) if rows and fte > 0 else None
         short = (need - occ) if need is not None else None
         return dict(position=p, fte=fte, frame=frame, occupied=occ, vacant=max(0, frame - occ), need=need,
-                    short=short, has_load=bool(rows and fte > 0),
+                    short=short, has_load=bool(rows and fte > 0), excluded=is_executive(p),
                     total=sum((r["minutes"] or 0) * (r["volume"] or 0) for r in rows))
 
     def unit_analysis(self, did) -> dict:
@@ -649,9 +667,11 @@ class ManpowerMixin:
         for d in self.descendants(did):
             for p in self.positions(d):
                 a = self.position_analysis(p["id"])
-                t["positions"] += 1
                 for k in ("frame", "occupied", "vacant"):
                     t[k] += a[k]
+                if a["excluded"]:
+                    continue                      # สายบริหาร/สายอำนวยการ: นับกรอบ แต่ไม่วิเคราะห์ภาระงาน
+                t["positions"] += 1
                 if a["has_load"]:
                     t["analysed"] += 1
                     t["fte"] += a["fte"]
