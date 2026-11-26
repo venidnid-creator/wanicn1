@@ -363,7 +363,22 @@ class WorkloadDialog(QDialog):
         lay.addLayout(row)
         lay.addWidget(_bb(self))
         self._busy = False
-        self.load(store.load_rows_from_standard(pid))
+        rows = store.load_rows_from_standard(pid)
+        self.load(rows)
+        if not rows:
+            self._busy = True
+            for sd in M.SIDES[:1] + M.SIDES[3:]:
+                i = self.t.rowCount()
+                self.t.insertRow(i)
+                self._cell(i, 0, sd, band=True, bold=True)
+                for c in range(1, len(self.HEAD)):
+                    self._cell(i, c, "", band=True)
+                i = self.t.rowCount()
+                self.t.insertRow(i)
+                self._cell(i, 0, T("(ว่าง — กด «เพิ่มข้อในมาตรฐาน…» เพื่อเพิ่มลักษณะงาน)"), italic=True)
+                for c in range(1, len(self.HEAD)):
+                    self._cell(i, c, "")
+            self._busy = False
         fit_to_screen(self, px(1250), px(780))
 
     def _cell(self, i, c, text, editable=False, band=False, bold=False, italic=False, right=False):
@@ -545,7 +560,7 @@ class StandardsTab(QWidget):
         ll.addWidget(self.search)
         self.line = QComboBox()
         for k, lab in (("", "ทุกสายงาน"), ("3", "สายวิชาการ"), ("4", "สายทั่วไป"),
-                       ("x", "ตำแหน่งที่ยังไม่มีมาตรฐาน")):
+                       ("x", "ตำแหน่งที่มาตรฐานยังว่าง (รอเพิ่มข้อมูล)")):
             self.line.addItem(T(lab), k)
         self.line.currentIndexChanged.connect(self.load_titles)
         ll.addWidget(self.line)
@@ -610,7 +625,7 @@ class StandardsTab(QWidget):
                 continue                       # สายบริหาร/สายอำนวยการ: ไม่ใช้ (เจ้าของ 25 พ.ย. 2569)
             if want and want != "x" and not c.startswith(want):
                 continue
-            self.titles.addItem((f"{c} " if c else "") + f"{t}" + (f"  ({counts[t]})" if t in counts else ""))
+            self.titles.addItem((f"{c} " if c else "") + f"{t}" + (f"  ({counts[t]})" if t in counts else "  (ว่าง)"))
         self.titles.blockSignals(False)
         items = [self.titles.item(i) for i in range(self.titles.count())]
         pick = next((it for it in items if cur and it.text() == cur), items[0] if items else None)
@@ -620,7 +635,7 @@ class StandardsTab(QWidget):
 
     def title(self):
         it = self.titles.currentItem()
-        return re.sub(r"^\d{4} ", "", it.text().split("  (")[0]) if it else None
+        return re.sub(r"^\d{4} ", "", it.text().split("  (")[0]) if it else None   # «  (ว่าง)» ตัดออกด้วย
 
     def show(self, *_):
         t = self.title()
@@ -631,6 +646,13 @@ class StandardsTab(QWidget):
                           f"{len(rows) - mains} {T('หัวข้อย่อย')})" + (f" · {src}" if src else ""))
         fill(self.t, [[r["duty"]["side"], r["no"], ("\u2003\u2003" if r["level"] else "") + r["duty"]["text"]]
                       for r in rows], ids=[r["duty"]["id"] for r in rows])
+        if t and not rows:                    # มาตรฐานว่าง: แสดงโครงด้านไว้ให้เพิ่มข้อ
+            fill(self.t, [[sd, "—", T("(ว่าง — กด «เพิ่มข้อ» หรือ «วางข้อความจากมาตรฐาน…» เพื่อเพิ่มข้อมูล)")]
+                          for sd in M.SIDES])
+            for i in range(self.t.rowCount()):
+                for c in range(3):
+                    self.t.item(i, c).setForeground(QColor(MUTED))
+            self.head.setText(T("มาตรฐานกำหนดตำแหน่ง") + f" — {t}  " + T("(ว่าง — รอเพิ่มข้อมูล)"))
         for i, r in enumerate(rows):
             if r["level"]:
                 self.t.item(i, 2).setForeground(QColor("#1A5FA6"))
@@ -683,7 +705,9 @@ class StandardsTab(QWidget):
         t = self.title()
         if not t:
             return need_selection(self)
-        v = self._dlg(dict(side=M.SIDES[0]))
+        r = self.t.currentRow()
+        side = self.t.item(r, 0).text() if r >= 0 and self.t.item(r, 0) else M.SIDES[0]
+        v = self._dlg(dict(side=side if side in M.SIDES else M.SIDES[0]))
         if v and _do(self, self.p.store.save_duty, dict(title=t, side=v["side"], text=v["text"])):
             self.load_titles()
 

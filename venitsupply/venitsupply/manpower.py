@@ -274,6 +274,8 @@ SQL = """
 CREATE TABLE IF NOT EXISTS duties(
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, side TEXT NOT NULL, seq INTEGER DEFAULT 0, text TEXT NOT NULL,
   source TEXT DEFAULT '', parent_id INTEGER);
+CREATE TABLE IF NOT EXISTS standard_titles(
+  title TEXT PRIMARY KEY, kind TEXT DEFAULT '', note TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS pos_load(
   id INTEGER PRIMARY KEY, position_id INTEGER NOT NULL REFERENCES positions(id), duty_id INTEGER,
   side TEXT DEFAULT '', task TEXT NOT NULL, seq INTEGER DEFAULT 0, minutes REAL DEFAULT 0, volume REAL DEFAULT 0,
@@ -393,8 +395,14 @@ class ManpowerMixin:
     def duty_titles(self) -> list[str]:
         rows = {base_title(r["title"]) for r in self.q("SELECT DISTINCT title FROM positions")}
         rows |= {r["title"] for r in self.q("SELECT DISTINCT title FROM duties")}
+        rows |= {r["title"] for r in self.q("SELECT title FROM standard_titles")}
         rows |= {base_title(r["title"]) for r in self.q("SELECT DISTINCT title FROM hire_jobs")}
         return sorted(t for t in rows if t)
+
+    def empty_standard(self, title) -> bool:
+        """ตำแหน่งที่มาตรฐานยังว่าง (ใส่ชื่อไว้ รอเจ้าหน้าที่เพิ่มข้อมูล)."""
+        t = base_title(title)
+        return not self.q("SELECT 1 FROM duties WHERE title=?", (t,))
 
     def standard_for(self, title) -> str:
         """ตำแหน่ง → ชื่อมาตรฐานกำหนดตำแหน่งที่ใช้: ตัวเองถ้ามี; หัวหน้า «… (นักบริหารงาน… ระดับ…)» → นักบริหารงาน…;
@@ -537,6 +545,10 @@ class ManpowerMixin:
             if not force and self.q("SELECT 1 FROM duties WHERE title=?", (title,)):
                 continue
             items = [(x["side"], x["text"]) for x in e["duties"]]
+            if not items:                     # มาตรฐานว่าง — แสดงไว้ให้เจ้าหน้าที่เพิ่มข้อมูลเอง
+                self.con.execute("INSERT OR IGNORE INTO standard_titles(title, kind, note) VALUES(?,?,?)",
+                                 (title, e.get("kind", ""), e.get("source", "")))
+                self.con.commit()
             if items:
                 n += self.import_standard(title, items, source=e.get("source") or
                                           f"มาตรฐานกำหนดตำแหน่ง {e.get('code', '')} (เว็บไซต์ อบต.ไม้ขาว)")
@@ -603,13 +615,13 @@ class ManpowerMixin:
         if self.setting("manpower_template") != "MAIKHAO_2570":
             out.update(self.merge_manpower())
             self.set_setting("manpower_template", "MAIKHAO_2570")
-        if self.setting("standards_loaded") not in ("3",):
+        if self.setting("standards_loaded") not in ("4",):
             if self.setting("standards_loaded") == "1":       # รุ่น 2026.11.25.1 ใส่สายบริหาร/อำนวยการไว้ — ลบออก
                 for r in self.q("SELECT id FROM duties WHERE parent_id IS NULL AND (source LIKE 'มาตรฐานกำหนดตำแหน่ง 1%' "
                                 "OR source LIKE 'มาตรฐานกำหนดตำแหน่ง 2%')"):
                     self.delete_duty(r["id"])
             out["standards"] = self.load_bundled_standards()
-            self.set_setting("standards_loaded", "3")
+            self.set_setting("standards_loaded", "4")
         return out
 
     # ----------------------------------------------------- workload
