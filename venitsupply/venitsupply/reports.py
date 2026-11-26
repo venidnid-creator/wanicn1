@@ -508,3 +508,36 @@ def budget_compare(store, level="category") -> Report:
     r.totals = ["รวม"] + [""] * (n - 1) + tot
     r.signers = ["officer", "head"]
     return r
+
+
+def lifecycle_report(store, fy=None, department_id=None, state=None, status=None) -> Report:
+    """บัญชีพิจารณาครุภัณฑ์ แยกตามกองและปีที่ได้มา: อายุการใช้งาน หมดอายุ และข้อเสนอ ซ่อม/ปรับปรุง/จำหน่าย."""
+    rows = store.lifecycle_rows(fy, department_id, state, status)
+    sub = " · ".join(x for x in (
+        store.one("SELECT name FROM departments WHERE id=?", (department_id,))["name"] if department_id else "ทุกกอง",
+        f"ได้มาปีงบประมาณ {fy}" if fy else "ทุกปีที่ได้มา", state or "", status or "") if x)
+    r = Report(store, "บัญชีพิจารณาครุภัณฑ์ (อายุการใช้งาน ซ่อมแซม ปรับปรุง จำหน่าย)", sub, landscape=True)
+    r.header = ["ลำดับ", "เลขรหัสครุภัณฑ์", "รายการ", "กอง/หน่วยงาน", "ปีที่ได้มา", "ราคา (บาท)", "อายุ (ปี)",
+                "หมดอายุ", "อายุการใช้งาน", "สถานะ", "ข้อเสนอ"]
+    r.align = ["center", "left", "left", "left", "center", "right", "center", "center", "center", "center", "left"]
+    group, k = None, 0
+    tot = 0.0
+    for x in rows:
+        a = x["asset"]
+        g = f"{a['department'] or 'ไม่ระบุกอง'} · ปีงบประมาณ {x['fy'] or 'ไม่ทราบ'}"
+        if g != group:
+            group = g
+            r.rows.append(["", "", f"【{g}】", "", "", "", "", "", "", "", ""])
+        k += 1
+        tot += float(a["price"] or 0)
+        r.rows.append([k, a["number"] or "", a["name"], a["department"] or "", x["fy"] or "", float(a["price"] or 0),
+                       f"{x['life']:g}" if x["life"] else "", TD.thai(x["end"]), x["state"], a["status"],
+                       x["suggestion"]])
+    r.totals = ["", "", f"รวม {k:,} รายการ", "", "", tot, "", "", "", "", ""]
+    n = store.current_notice()
+    r.after = ("<p style='font-size:11pt'>อายุการใช้งานตาม" + (n["title"] + " ลงวันที่ " + TD.thai(n["notice_date"], False)
+                                                              if n else "ประกาศของหน่วยงาน")
+               + " · ข้อเสนอเป็นเครื่องมือช่วยพิจารณาตามระเบียบกระทรวงการคลังว่าด้วยการจัดซื้อจัดจ้างและการบริหาร"
+               "พัสดุภาครัฐ พ.ศ. 2560 ข้อ 213–215 — คณะกรรมการตรวจสอบพัสดุและผู้มีอำนาจเป็นผู้พิจารณา</p>")
+    r.signers = [("ประธานกรรมการตรวจสอบพัสดุ", "", ""), ("กรรมการ", "", ""), ("กรรมการ", "", "")]
+    return r

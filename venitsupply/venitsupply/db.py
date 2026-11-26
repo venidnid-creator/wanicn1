@@ -15,6 +15,7 @@ from .budget import BudgetMixin
 from .procurement import ProcurementMixin
 from .hire import HireMixin
 from .manpower import ManpowerMixin
+from .lifecycle import LifecycleMixin
 from . import thaidate as TD
 
 SCHEMA_VERSION = 2
@@ -37,7 +38,7 @@ MATERIAL_TYPES = [
     ("M07", "วัสดุวิทยาศาสตร์หรือการแพทย์"), ("M08", "วัสดุการเกษตร"), ("M09", "วัสดุโฆษณาและเผยแพร่"),
     ("M10", "วัสดุคอมพิวเตอร์"), ("M11", "วัสดุสำรวจ"), ("M12", "วัสดุอื่น"),
 ]
-STATUSES = ["ใช้งาน", "ชำรุด", "เสื่อมสภาพ", "สูญหาย", "ไม่จำเป็นต้องใช้", "จำหน่ายแล้ว"]
+STATUSES = ["ใช้งาน", "รอซ่อม", "ชำรุด", "เสื่อมสภาพ", "สูญหาย", "ไม่จำเป็นต้องใช้", "จำหน่ายแล้ว"]
 METHODS = ["วิธีเฉพาะเจาะจง", "วิธีประกาศเชิญชวนทั่วไป (e-bidding)", "วิธีคัดเลือก",
            "รับบริจาค", "รับโอน", "อื่น ๆ"]
 BUDGETS = ["เงินงบประมาณ", "เงินนอกงบประมาณ", "เงินรายได้", "เงินบริจาค", "อื่น ๆ"]
@@ -100,7 +101,7 @@ CREATE TABLE IF NOT EXISTS inspections(
 """
 
 
-class Store(BudgetMixin, ProcurementMixin, HireMixin, ManpowerMixin):
+class Store(BudgetMixin, ProcurementMixin, HireMixin, ManpowerMixin, LifecycleMixin):
     """All data of one agency in one file."""
 
     def __init__(self, path: str | Path = ":memory:"):
@@ -113,6 +114,7 @@ class Store(BudgetMixin, ProcurementMixin, HireMixin, ManpowerMixin):
         self._proc_init()
         self._hire_init()
         self._manpower_init()
+        self._lifecycle_init()
         if self.setting("schema") is None:
             self._seed()
         for k, v in DEFAULT_SETTINGS.items():     # settings added by newer versions

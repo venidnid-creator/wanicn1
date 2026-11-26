@@ -124,3 +124,49 @@ def test_leap_year_is_one_full_year():
     full = [r for r in rows if r["days"] in (365, 366)]
     assert all(r["dep"] == 56999.8 for r in full[:-1])
     assert rows[-1]["acc"] == 284999.0
+
+
+def test_life_notice_import_and_alerts(tmp_path):
+    """ประกาศ อบต.ไม้ขาว 3 ต.ค. 2565: ฟ้าอ่อน/เหลือง/ส้ม + นำเข้าบัญชีตรวจสอบ + สีอายุการใช้งาน."""
+    import datetime as dt
+    import openpyxl
+    from venitsupply import lifecycle as L, reports as R
+    s = Store()
+    s.set_setting("org_name", "องค์การบริหารส่วนตำบลไม้ขาว")
+    s.save_category("asset", "99", "ครุภัณฑ์ทดลอง", 4)
+    out = s.ensure_lifecycle()
+    cats = {c["code"]: c for c in s.categories("asset")}
+    assert cats["01"]["life_years"] == 12 and cats["11"]["life_years"] == 5 and cats["01"]["notice_status"] == "match"
+    assert "ปรับอายุจาก 8 เป็น 12 ปี" in cats["01"]["notice_note"]
+    assert cats["17"]["notice_status"] == "added" and cats["99"]["notice_status"] == "missing"
+    assert all(c["notice_note"].startswith("แจ้งสถานะ") for c in cats.values())
+    assert out["categories"] >= 22 and s.current_notice()["notice_date"] == L.NOTICE_DATE
+    assert L.parse_thai_date("01 ตุลาคม 2550") == dt.date(2007, 10, 1)
+    assert L.parse_thai_date("15 กรกฏาคม 2560") == dt.date(2017, 7, 15) and L.parse_thai_date(2557) == dt.date(2013, 10, 1)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "บัญชี 1ชำรุด"
+    ws.append(["ลำดับที่", "หมายเลขครุภัณฑ์", "รายการ", "ได้รับมาเมื่อ", "ราคาที่ได้มา"])
+    ws.append(["กองคลัง"])
+    ws.append([1, "416-56-0001", "เครื่องคอมพิวเตอร์ Lenovo", "01 ตุลาคม 2555", 25000])
+    ws.append([2, "482-58-0020/1", "กล้องวงจรปิดพร้อมเลนส์", "01 ตุลาคม 2565", 9000])
+    ws2 = wb.create_sheet("บัญชี4 พร้อมใช้งาน")
+    ws2.append(["ลำดับ", "หมายเลขครุภัณฑ์", "รายการ", "ได้รับมาเมื่อ", "ราคาที่ได้มา"])
+    ws2.append(["สำนักปลัด"])
+    ws2.append([1, "400-69-0001", "โต๊ะทำงาน", "01 ตุลาคม 2568", 5000])
+    ws2.append([2, "416-56-0001", "เครื่องคอมพิวเตอร์ Lenovo", "01 ตุลาคม 2555", 25000])        # เลขซ้ำ
+    p = tmp_path / "x.xlsx"
+    wb.save(p)
+    st = s.import_inspection_xlsx(p)
+    assert st["added"] == 4 and st["sheets"]["บัญชี 1ชำรุด"] == 2
+    a = {x["number"]: x for x in s.assets()}
+    assert a["416-56-0001"]["category"] == "ครุภัณฑ์คอมพิวเตอร์" and a["416-56-0001"]["department"] == "กองคลัง"
+    assert a["482-58-0020/1"]["life_years"] == 5 and a["400-69-0001"]["life_years"] == 12   # ชนิดย่อย: กล้องวงจรปิด
+    assert "416-56-0001#2" in a
+    info = s.asset_life(a["416-56-0001"], dt.date(2026, 11, 26))
+    assert info["state"] == "หมดอายุแล้ว" and info["color"] == "#F8C9C4"
+    assert "ขายทอดตลาด" in s.suggestion(a["416-56-0001"], info)
+    assert L.life_state(dt.date(2027, 6, 1), dt.date(2026, 11, 26))[0] == "เหลือไม่เกิน 1 ปี"
+    assert L.life_state(dt.date(2030, 1, 1), dt.date(2026, 11, 26))[1] == "#D5F0DD"
+    rep = R.lifecycle_report(s)
+    assert "กองคลัง · ปีงบประมาณ 2556" in rep.html()

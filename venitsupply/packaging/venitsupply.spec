@@ -15,6 +15,7 @@ a = Analysis(
         (str(ROOT / "venitsupply" / "data" / "*.csv"), "venitsupply/data"),
         (str(ROOT / "venitsupply" / "data" / "*.json"), "venitsupply/data"),  # มาตรฐานกำหนดตำแหน่ง + พนักงานจ้าง
         (str(ROOT / "venitsupply" / "data" / "README.md"), "venitsupply/data"),
+        (str(ROOT / "venitsupply" / "data" / "*.pdf"), "venitsupply/data"),
         (str(ROOT / "assets" / "*"), "assets"),
     ],
     hiddenimports=collect_submodules("pdfminer") + collect_submodules("venitsupply"),

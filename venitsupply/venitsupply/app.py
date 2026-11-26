@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QGuiApplication, QIcon, QPixmap
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
                                QFormLayout, QFrame, QGridLayout, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox,
@@ -25,7 +25,7 @@ from . import hire_reports as HR
 from . import reports as R
 from . import thaidate as TD
 from .i18n import T
-from .widgets import (NAVY, ORANGE, FormDialog, fit_to_screen, make_style, pt, px, scrolled, error, fill, need_selection,
+from .widgets import (MUTED, NAVY, ORANGE, FormDialog, fit_to_screen, make_style, pt, px, scrolled, error, fill, need_selection,
                       selected_id, table)
 
 FREE_USE = "โปรแกรมใช้ได้ฟรี ไม่มีค่าลิขสิทธิ์"
@@ -147,7 +147,12 @@ class HomePage(QWidget):
         g3 = QGroupBox(T("สถานะครุภัณฑ์"))
         self.status = QListWidget()
         QVBoxLayout(g3).addWidget(self.status)
-        for g in (g1, g2, g3):
+        g4 = QGroupBox(T("อายุการใช้งานครุภัณฑ์ (แจ้งเตือน)"))
+        self.life = QListWidget()
+        self.life.setWordWrap(True)
+        self.life.itemDoubleClicked.connect(self._open_life)
+        QVBoxLayout(g4).addWidget(self.life)
+        for g in (g4, g1, g2, g3):
             lists.addWidget(g)
         dev = QScrollArea()
         dev.setWidgetResizable(True)
@@ -232,17 +237,35 @@ class HomePage(QWidget):
         self.status.clear()
         for k, n in s["by_status"].items():
             self.status.addItem(f"{T(k)}: {n:,}")
+        al = self.win.store.life_alerts()
+        self.life.clear()
+        for key, label, color in (("expired", "หมดอายุการใช้งานแล้ว", "#C72B1E"),
+                                  ("month", "จะหมดอายุภายใน 1 เดือน", "#B45309"),
+                                  ("year", "จะหมดอายุภายใน 1 ปี", "#B45309")):
+            it = QListWidgetItem(f"{T(label)}: {al[key]:,} {T('รายการ')}")
+            it.setForeground(QColor(color if al[key] else MUTED))
+            it.setData(Qt.UserRole, key)
+            self.life.addItem(it)
+        self.life.addItem(T("ดับเบิลคลิกเพื่อดูรายการ"))
+
+    def _open_life(self, item):
+        key = item.data(Qt.UserRole)
+        if key:
+            self.win.go(self.win.pages.index(self.win.assets))
+            self.win.assets.show_state({"expired": "หมดอายุแล้ว", "month": "เหลือไม่เกิน 1 ปี",
+                                        "year": "เหลือไม่เกิน 1 ปี"}[key])
 
 
 class AssetPage(QWidget):
-    HEAD = ["เลขรหัสครุภัณฑ์", "รายการ ", "ประเภท", "ยี่ห้อ", "วันที่ได้มา", "ราคาต่อหน่วย (บาท)",
-            "หน่วยงาน", "สถานที่ตั้ง", "ผู้รับผิดชอบ", "สถานะ"]
+    HEAD = ["เลขรหัสครุภัณฑ์", "รายการ ", "ประเภท", "หน่วยงาน", "วันที่ได้มา", "ราคาต่อหน่วย (บาท)",
+            "อายุ (ปี)", "หมดอายุ", "อายุการใช้งาน", "สถานะ", "ข้อเสนอ (ระเบียบฯ ข้อ 213–215)"]
 
     def __init__(self, win):
         super().__init__()
         self.win = win
-        w, lay = page("ครุภัณฑ์", "ทะเบียนครุภัณฑ์ — เลขรหัส ประวัติ ผู้รับผิดชอบ และค่าเสื่อมราคา "
-                      "(ราคาต่อหน่วยตั้งแต่เกณฑ์ที่ตั้งไว้ คิดค่าเสื่อมแบบเส้นตรง)")
+        w, lay = page("ครุภัณฑ์", "ทะเบียนครุภัณฑ์ — อายุการใช้งานตามประกาศของหน่วยงาน · สีอายุ: แดง = หมดอายุแล้ว · "
+                      "ส้ม = เหลือไม่เกิน 1 ปี · เขียว = มากกว่า 1 ปี · แยกตามกองและปีที่ได้มา เพื่อพิจารณาซ่อมแซม "
+                      "ปรับปรุง หรือจำหน่าย (ขายทอดตลาด)")
         QVBoxLayout(self).addWidget(w)
         top = QHBoxLayout()
         self.search = QLineEdit()
@@ -252,24 +275,110 @@ class AssetPage(QWidget):
         self.filter.addItem(T("ทุกสถานะ"), None)
         for s in DB.STATUSES:
             self.filter.addItem(T(s), s)
-        self.filter.currentIndexChanged.connect(self.refresh)
+        self.dept = QComboBox()
+        self.fyf = QComboBox()
+        self.cat = QComboBox()
+        self.state = QComboBox()
+        for k in ("", "หมดอายุแล้ว", "เหลือไม่เกิน 1 ปี", "มากกว่า 1 ปี", "ไม่ทราบ"):
+            self.state.addItem(T(k or "ทุกอายุการใช้งาน"), k or None)
+        for wdg in (self.filter, self.dept, self.fyf, self.cat, self.state):
+            wdg.currentIndexChanged.connect(self.refresh)
         top.addWidget(self.search, 1)
-        top.addWidget(self.filter)
+        for wdg in (self.dept, self.fyf, self.cat, self.state, self.filter):
+            top.addWidget(wdg)
         lay.addLayout(top)
-        self.t = table(self.HEAD, stretch=1)
+        self.alert = QLabel()
+        self.alert.setTextFormat(Qt.RichText)
+        lay.addWidget(self.alert)
+        self.t = table(self.HEAD, stretch=10)
+        hh = self.t.horizontalHeader()
+        from PySide6.QtWidgets import QHeaderView as _HV
+        for c, wpx in ((1, 300), (2, 190), (3, 150)):
+            hh.setSectionResizeMode(c, _HV.Interactive)
+            hh.resizeSection(c, px(wpx))
         self.t.doubleClicked.connect(self.edit)
         lay.addWidget(self.t, 1)
         row, _ = buttons(("เพิ่ม", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete),
-                         (None, None), ("ทะเบียนคุม", self.card), ("ยืมครุภัณฑ์", self.lend),
-                         ("จำหน่าย", self.dispose), ("ส่งออกตาราง", self.export))
+                         (None, None), ("นำเข้าผลตรวจสอบ (Excel)", self.import_xlsx),
+                         ("พิจารณาซ่อม/จำหน่าย", self.consider), ("ทะเบียนคุม", self.card),
+                         ("ยืมครุภัณฑ์", self.lend), ("จำหน่าย", self.dispose), ("ส่งออกตาราง", self.export))
         lay.addLayout(row)
+        self._combos_loaded = False
+
+    def _load_combos(self):
+        s = self.win.store
+        for box, items, first in (
+                (self.dept, [(d["id"], d["name"]) for d in s.departments()], "ทุกกอง/หน่วยงาน"),
+                (self.cat, [(c["id"], f"{c['code']} {c['name']}") for c in s.categories("asset")], "ทุกประเภท"),
+                (self.fyf, [(y, f"{T('ได้มาปีงบประมาณ')} {y}") for y in sorted(
+                    {TD.fiscal_year(a["acquire_date"]) for a in s.q("SELECT acquire_date FROM assets "
+                                                                    "WHERE acquire_date IS NOT NULL")},
+                    reverse=True)], "ทุกปีที่ได้มา")):
+            cur = box.currentData()
+            box.blockSignals(True)
+            box.clear()
+            box.addItem(T(first), None)
+            for k, v in items:
+                box.addItem(v, k)
+            box.setCurrentIndex(max(0, box.findData(cur)))
+            box.blockSignals(False)
+
+    def show_state(self, state=None, category_id=None):
+        self._load_combos()
+        for box, v in ((self.state, state), (self.cat, category_id)):
+            box.blockSignals(True)
+            box.setCurrentIndex(max(0, box.findData(v)))
+            box.blockSignals(False)
+        self.refresh()
 
     def refresh(self):
-        rows = self.win.store.assets(self.search.text().strip(), self.filter.currentData())
-        fill(self.t, [[a["number"], a["name"], a["category"], " ".join(
-            x for x in (a["brand"], a["model"]) if x), TD.thai(a["acquire_date"]), float(a["price"] or 0),
-            a["department"], a["location"], a["custodian"], T(a["status"])] for a in rows],
-            ids=[a["id"] for a in rows])
+        s = self.win.store
+        self._load_combos()
+        rows = s.lifecycle_rows(self.fyf.currentData(), self.dept.currentData(), self.state.currentData(),
+                                self.filter.currentData(), self.search.text().strip())
+        if self.cat.currentData():
+            rows = [r for r in rows if r["asset"]["category_id"] == self.cat.currentData()]
+        if self.filter.currentData() == "จำหน่ายแล้ว":
+            rows = [dict(asset=a, **s.asset_life(a), suggestion="จำหน่ายแล้ว")
+                    for a in s.assets(self.search.text().strip(), "จำหน่ายแล้ว")]
+        self.t.setUpdatesEnabled(False)
+        fill(self.t, [[r["asset"]["number"], r["asset"]["name"], r["asset"]["category"], r["asset"]["department"],
+                       TD.thai(r["asset"]["acquire_date"]) or T("ไม่ทราบวันที่"), float(r["asset"]["price"] or 0),
+                       f"{r['life']:g}" if r["life"] else "", TD.thai(r["end"]), T(r["state"]),
+                       T(r["asset"]["status"]), r["suggestion"]] for r in rows],
+             ids=[r["asset"]["id"] for r in rows])
+        for i, r in enumerate(rows):
+            if r["color"]:
+                for c in (7, 8):
+                    self.t.item(i, c).setBackground(QColor(r["color"]))
+        self.t.setUpdatesEnabled(True)
+        al = s.life_alerts()
+        val = sum(float(r["asset"]["price"] or 0) for r in rows)
+        self.alert.setText(
+            f"{T('แสดง')} <b>{len(rows):,}</b> {T('รายการ')} ({T('มูลค่า')} {val:,.2f} {T('บาท')}) · "
+            f"<span style='background:#F8C9C4'>&nbsp;{T('หมดอายุแล้ว')} {al['expired']:,}&nbsp;</span> "
+            f"<span style='background:#FDE3C8'>&nbsp;{T('ภายใน 1 เดือน')} {al['month']:,} · "
+            f"{T('ภายใน 1 ปี')} {al['year']:,}&nbsp;</span>")
+
+    def import_xlsx(self):
+        path, _ = QFileDialog.getOpenFileName(self, T("นำเข้าบัญชีผลการตรวจสอบพัสดุประจำปี"), "",
+                                              "Excel (*.xlsx *.xlsm)")
+        if not path:
+            return
+        try:
+            st = self.win.store.import_inspection_xlsx(path)
+        except Exception as exc:  # noqa: BLE001
+            return error(self, exc)
+        sheets = "\n".join(f"  • {k}: {v:,}" for k, v in st["sheets"].items())
+        QMessageBox.information(self, PRODUCT_TH, T(
+            f"นำเข้าแล้ว {st['total']:,} รายการ — เพิ่มใหม่ {st['added']:,} · ปรับปรุงสถานะ {st['updated']:,}\n{sheets}\n"
+            f"ส่วนประกอบที่รวมไว้ในหมายเหตุ {st['components']} · จัดประเภทไม่ได้ (ใส่ «ครุภัณฑ์อื่น») "
+            f"{st['unclassified']} — ตรวจและแก้ประเภทได้"))
+        self.win.refresh()
+
+    def consider(self):
+        self.win.preview(R.lifecycle_report(self.win.store, self.fyf.currentData(), self.dept.currentData(),
+                                            self.state.currentData(), self.filter.currentData()))
 
     def fields(self):
         s = self.win.store
@@ -359,7 +468,8 @@ class AssetPage(QWidget):
             self.win.refresh()
 
     def export(self):
-        save_report(self, R.asset_list(self.win.store, self.filter.currentData()), "xlsx")
+        save_report(self, R.lifecycle_report(self.win.store, self.fyf.currentData(), self.dept.currentData(),
+                                             self.state.currentData(), self.filter.currentData()), "xlsx")
 
 
 class MaterialPage(QWidget):
@@ -740,24 +850,113 @@ class SettingsPage(QWidget):
         b.clicked.connect(self.save)
         left.addWidget(b)
         left.addStretch(1)
-        g = QGroupBox(T("ประเภทครุภัณฑ์และอายุการใช้งาน"))
+        g = QGroupBox(T("ประเภทครุภัณฑ์และอายุการใช้งาน (ตามประกาศของหน่วยงาน)"))
         v = QVBoxLayout(g)
-        self.cats = table(["รหัส", "ประเภท", "อายุการใช้งาน (ปี)"], stretch=1)
+        self.notice = QLabel()
+        self.notice.setWordWrap(True)
+        self.notice.setTextFormat(Qt.RichText)
+        v.addWidget(self.notice)
+        self.cats = table(["รหัส", "ประเภท (จำนวนรายการ)", "อายุการใช้งาน (ปี)", "หมายเหตุ"], stretch=3)
         from PySide6.QtWidgets import QAbstractItemView
         self.cats.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
-        v.addWidget(self.cats)
-        note = QLabel("ค่าเริ่มต้นแก้ไขได้ — ให้ตรวจกับหลักเกณฑ์อายุการใช้งานของกรมบัญชีกลางที่หน่วยงานใช้")
-        note.setObjectName("hint")
-        note.setWordWrap(True)
-        v.addWidget(note)
-        cols.addWidget(g, 1)
+        self.cats.cellDoubleClicked.connect(self._cat_click)
+        self.cats.setWordWrap(True)
+        v.addWidget(self.cats, 1)
+        legend = QLabel(f"<span style='background:#D3E8FB'>&nbsp;{T('ฟ้าอ่อน = มีในประกาศ (ปรับอายุให้ตรงแล้ว)')}&nbsp;</span> "
+                        f"<span style='background:#FFF3B0'>&nbsp;{T('เหลือง = ไม่มีในประกาศ')}&nbsp;</span> "
+                        f"<span style='background:#FDE3C8'>&nbsp;{T('ส้ม = เพิ่มตามประกาศ')}&nbsp;</span> · "
+                        f"{T('ดับเบิลคลิกชื่อประเภทเพื่อดูรายการ')}")
+        legend.setTextFormat(Qt.RichText)
+        legend.setWordWrap(True)
+        v.addWidget(legend)
+        row, _ = buttons(("ชนิดย่อย/อายุเฉพาะ…", self.items), ("แนบประกาศ…", self.attach), ("เปิดประกาศ", self.open_notice),
+                         ("ใช้ประกาศ อบต.ไม้ขาว 2565", self.apply_notice),
+                         ("ปรับอายุครุภัณฑ์ทุกรายการ", self.reapply))
+        v.addLayout(row)
+        cols.addWidget(g, 2)
 
     def refresh(self):
         st = self.win.store.settings()
         for k, e in self.e.items():
             e.setText(st.get(k, ""))
-        rows = self.win.store.categories("asset")
-        fill(self.cats, [[c["code"], c["name"], f"{c['life_years']:g}"] for c in rows], ids=[c["id"] for c in rows])
+        s = self.win.store
+        rows = s.categories("asset")
+        counts = {r["category_id"]: r["n"] for r in s.q("SELECT category_id, COUNT(*) AS n FROM assets "
+                                                        "WHERE status<>'จำหน่ายแล้ว' GROUP BY category_id")}
+        fill(self.cats, [[c["code"], f"{c['name']}  ({counts.get(c['id'], 0):,} {T('รายการ')})",
+                          f"{c['life_years']:g}", c["notice_note"] or T("แจ้งสถานะ: ยังไม่ได้เทียบกับประกาศ")]
+                         for c in rows], ids=[c["id"] for c in rows])
+        colors = {"match": "#D3E8FB", "missing": "#FFF3B0", "added": "#FDE3C8"}
+        from PySide6.QtGui import QColor as _C
+        for i, c in enumerate(rows):
+            col = colors.get(c["notice_status"] or "")
+            for j in range(4):
+                it = self.cats.item(i, j)
+                if j != 2:
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                if col:
+                    it.setBackground(_C(col))
+            self.cats.item(i, 1).setForeground(_C("#1A5FA6"))
+            self.cats.item(i, 1).setToolTip(T("ดับเบิลคลิกเพื่อดูรายการครุภัณฑ์ประเภทนี้"))
+        self.cats.resizeRowsToContents()
+        n = s.current_notice()
+        self.notice.setText((f"<b>{T('เกณฑ์ที่ใช้')}:</b> {n['title']} {T('ลงวันที่')} {TD.thai(n['notice_date'], False)}"
+                             f" · {T('แนบไว้')} {len(s.notices())} {T('ฉบับ')} ({T('ฉบับล่าสุดเป็นเกณฑ์')})") if n else
+                            T("ยังไม่ได้แนบประกาศกำหนดอายุการใช้งาน — กด «แนบประกาศ…»"))
+
+    def _cat_click(self, r, c):
+        if c == 1:
+            cid = self.cats.item(r, 0).data(Qt.UserRole)
+            self.win.go(self.win.pages.index(self.win.assets))
+            self.win.assets.show_state(None, cid)
+
+    def items(self):
+        cid = selected_id(self.cats)
+        if cid is None:
+            return need_selection(self)
+        if LifeItemsDialog(self, self.win.store, cid).exec():
+            self.refresh()
+
+    def attach(self):
+        path, _ = QFileDialog.getOpenFileName(self, T("แนบประกาศกำหนดอายุการใช้งาน"), "",
+                                              "PDF / รูปภาพ / Word (*.pdf *.png *.jpg *.jpeg *.doc *.docx)")
+        if not path:
+            return
+        dlg = FormDialog(self, T("ประกาศกำหนดอายุการใช้งานและค่าเสื่อมราคา"),
+                         [("title", "ชื่อประกาศ", "text"), ("date", "ลงวันที่", "date"), ("note", "หมายเหตุ", "text")],
+                         dict(title=Path(path).stem, note="ประกาศใหม่ — ใช้เป็นเกณฑ์แทนฉบับเดิม"))
+        if dlg.exec():
+            v = dlg.values()
+            self.win.store.attach_notice(v["title"], v["date"], path, note=v["note"])
+            QMessageBox.information(self, PRODUCT_TH, T("แนบประกาศแล้ว — แก้อายุการใช้งานในตารางให้ตรงกับประกาศใหม่ "
+                                                        "กด «บันทึกการตั้งค่า» แล้วกด «ปรับอายุครุภัณฑ์ทุกรายการ»"))
+            self.refresh()
+
+    def open_notice(self):
+        s = self.win.store
+        rows = s.notices()
+        if not rows:
+            return QMessageBox.information(self, PRODUCT_TH, T("ยังไม่ได้แนบประกาศ"))
+        n = rows[0]
+        import tempfile
+        out = Path(tempfile.gettempdir()) / (n["filename"] or f"notice_{n['id']}.pdf")
+        out.write_bytes(s.notice_data(n["id"]))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(out)))
+
+    def apply_notice(self):
+        if QMessageBox.question(self, PRODUCT_TH, T("ปรับประเภทและอายุการใช้งานตามประกาศ อบต.ไม้ขาว 3 ต.ค. 2565 "
+                                                    "และปรับอายุครุภัณฑ์ทุกรายการ?")) != QMessageBox.Yes:
+            return
+        s = self.win.store
+        s.apply_life_notice()
+        n = s.reapply_lives()
+        QMessageBox.information(self, PRODUCT_TH, T(f"ปรับแล้ว — ครุภัณฑ์เปลี่ยนอายุ {n:,} รายการ"))
+        self.win.refresh()
+
+    def reapply(self):
+        n = self.win.store.reapply_lives()
+        QMessageBox.information(self, PRODUCT_TH, T(f"ปรับอายุการใช้งานตามตารางแล้ว — เปลี่ยน {n:,} รายการ"))
+        self.win.refresh()
 
     def save(self):
         s = self.win.store
@@ -768,10 +967,70 @@ class SettingsPage(QWidget):
                 life = float(self.cats.item(r, 2).text())
             except ValueError:
                 life = 5
-            s.save_category("asset", self.cats.item(r, 0).text(), self.cats.item(r, 1).text(), life,
+            name = self.cats.item(r, 1).text().split("  (")[0]
+            s.save_category("asset", self.cats.item(r, 0).text(), name, life,
                             self.cats.item(r, 0).data(Qt.UserRole))
         QMessageBox.information(self, PRODUCT_TH, T("บันทึกแล้ว"))
         self.win.refresh()
+
+
+class LifeItemsDialog(QDialog):
+    """ชนิดย่อยที่ประกาศกำหนดอายุต่างจากประเภท (เช่น กล้องวงจรปิด 5 ปี ในครุภัณฑ์สำนักงาน) — คำค้นใช้จับคู่ชื่อรายการ."""
+
+    def __init__(self, parent, store, cid):
+        super().__init__(parent)
+        self.s, self.cid = store, cid
+        c = store.one("SELECT * FROM categories WHERE id=?", (cid,))
+        self.setWindowTitle(T("ชนิดย่อยและอายุเฉพาะ") + f" — {c['code']} {c['name']}")
+        lay = QVBoxLayout(self)
+        lab = QLabel(T(f"อายุทั่วไปของประเภทนี้ {c['life_years']:g} ปี · ชนิดย่อยด้านล่างใช้อายุของตัวเองเมื่อชื่อรายการมี "
+                       "«คำค้น» (คั่นด้วย ,)"))
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        self.t = table(["ชนิดย่อย/รายการ", "อายุ (ปี)", "คำค้น", "หมายเหตุ"], stretch=0)
+        lay.addWidget(self.t, 1)
+        row, _ = buttons(("เพิ่ม", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete))
+        lay.addLayout(row)
+        from PySide6.QtWidgets import QDialogButtonBox
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.button(QDialogButtonBox.Close).setText(T("ปิด"))
+        bb.rejected.connect(self.accept)
+        lay.addWidget(bb)
+        self.load()
+        fit_to_screen(self, px(1000), px(560))
+
+    def load(self):
+        rows = self.s.life_items(self.cid)
+        fill(self.t, [[r["name"], f"{r['life_years']:g}", r["keywords"], r["note"]] for r in rows],
+             ids=[r["id"] for r in rows])
+
+    def _dlg(self, v):
+        dlg = FormDialog(self, T("ชนิดย่อย"), [("name", "ชนิดย่อย/รายการ", "text"), ("life_years", "อายุ (ปี)", "num"),
+                                               ("keywords", "คำค้นในชื่อรายการ (คั่นด้วย ,)", "text"),
+                                               ("note", "หมายเหตุ", "text")], v)
+        return dlg.values() if dlg.exec() else None
+
+    def add(self):
+        v = self._dlg(dict(life_years=5))
+        if v:
+            self.s.save_life_item(dict(v, category_id=self.cid))
+            self.load()
+
+    def edit(self):
+        iid = selected_id(self.t)
+        if iid is None:
+            return need_selection(self)
+        r = self.s.one("SELECT * FROM life_items WHERE id=?", (iid,))
+        v = self._dlg(dict(r))
+        if v:
+            self.s.save_life_item(v, iid)
+            self.load()
+
+    def delete(self):
+        iid = selected_id(self.t)
+        if iid and QMessageBox.question(self, PRODUCT_TH, T("ลบชนิดย่อยนี้?")) == QMessageBox.Yes:
+            self.s.delete_life_item(iid)
+            self.load()
 
 
 # ============================================================ main window
@@ -872,6 +1131,10 @@ class MainWindow(QMainWindow):
             mp = self.store.ensure_manpower()
         except Exception:  # noqa: BLE001
             mp = {}
+        try:
+            self.store.ensure_lifecycle()
+        except Exception:  # noqa: BLE001
+            pass
         if mp.get("units") or mp.get("positions") or mp.get("standards"):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(300, lambda: QMessageBox.information(
