@@ -72,7 +72,7 @@ Single-file data: SQLite `.vsdb` (default `Documents\VenitSupply\พัสดุ
 | File | Lines | Purpose | Public names (methods) |
 |---|---:|---|---|
 | `venitsupply/venitsupply/__init__.py` | 8 | พัสดุเวนิช (VENIT SUPPLY) — โปรแกรมบริหารพัสดุภาครัฐ. |  |
-| `venitsupply/venitsupply/app.py` | 1256 | หน้าต่างหลักของ «พัสดุเวนิช» (VENIT SUPPLY). | asset_path, default_db, page, buttons, save_report, HomePage(2), AssetPage(12), MaterialPage(10), LoanPage(4), InspectPage(4), ReportPage(6), SettingsPage(7) |
+| `venitsupply/venitsupply/app.py` | 1258 | หน้าต่างหลักของ «พัสดุเวนิช» (VENIT SUPPLY). | asset_path, default_db, page, buttons, save_report, HomePage(2), AssetPage(12), MaterialPage(10), LoanPage(4), InspectPage(4), ReportPage(6), SettingsPage(7) |
 | `venitsupply/venitsupply/budget.py` | 426 | งบประมาณรายจ่ายตามข้อบัญญัติ (องค์กรปกครองส่วนท้องถิ่น). | BudgetMixin(19), read_table |
 | `venitsupply/venitsupply/db.py` | 475 | ฐานข้อมูลพัสดุ (SQLite ไฟล์เดียว .vsdb). | Store(37) |
 | `venitsupply/venitsupply/demo.py` | 185 | ข้อมูลตัวอย่างสำหรับทดลองใช้ (สมมติทั้งหมด). | fill, budget, hire_demo |

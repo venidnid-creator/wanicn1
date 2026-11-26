@@ -1,2 +1,3 @@
 PySide6>=6.6
 pdfminer.six>=20231228
+openpyxl>=3.1

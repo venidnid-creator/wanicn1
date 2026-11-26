@@ -18,7 +18,7 @@ a = Analysis(
         (str(ROOT / "venitsupply" / "data" / "*.pdf"), "venitsupply/data"),
         (str(ROOT / "assets" / "*"), "assets"),
     ],
-    hiddenimports=collect_submodules("pdfminer") + collect_submodules("venitsupply"),
+    hiddenimports=collect_submodules("pdfminer") + collect_submodules("venitsupply") + collect_submodules("openpyxl"),
     excludes=["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtQuick",
               "PySide6.QtQml", "PySide6.Qt3DCore", "PySide6.QtMultimedia", "PySide6.QtCharts",
               "PySide6.QtDataVisualization", "PySide6.QtBluetooth", "PySide6.QtNetworkAuth",

@@ -1226,6 +1226,8 @@ def selftest(out_dir) -> int:
     assert n > 1000, f"position standards not bundled ({n})"            # data/standards_maikhao.json
     from . import hire_reports as HR
     R.to_docx(HR.manpower_report(s), out / "manpower.docx")
+    importlib.import_module("openpyxl")                  # นำเข้าบัญชีผลการตรวจสอบพัสดุ (Excel)
+    assert s.ensure_lifecycle() is not None and s.current_notice() is not None, "useful-life notice not bundled"
     (out / "selftest-ok.txt").write_text(f"{PRODUCT_EN} {__version__} OK", encoding="utf-8")
     return 0
 
