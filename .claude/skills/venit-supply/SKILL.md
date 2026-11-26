@@ -59,6 +59,7 @@ Installer builds (test artifacts, not released):
 | 2026.11.13.4 | https://github.com/venidnid-creator/wanicn1/actions/runs/43438200110/artifacts/14044686182 |
 | 2026.11.13.5 | https://github.com/venidnid-creator/wanicn1/actions/runs/43457058784/artifacts/14052874536 |
 | 2026.11.24.2 | https://github.com/venidnid-creator/wanicn1/actions/runs/45335030604/artifacts/14893407725 |
+| 2026.11.26.1 | https://github.com/venidnid-creator/wanicn1/actions/runs/45733898686/artifacts/15078316754 |
 <!-- /AUTO:builds -->
 
 ## 3. Architecture
