@@ -1159,6 +1159,9 @@ def compute(data, gate: bool = False) -> dict:
     def _mep_add(group, desc, qty, unit, **kw):
         return bill.add(group, desc, qty, unit, **kw)
     MEP.bill(data, E, _mep_add, labour)
+    # วัตถุที่คัดลอกในโมเดล (owner, 27 Nov): more material and price, as built anew
+    from core import wanic_copies as CP
+    CP.copy_lines((data or {}).get("copies") or [], list(bill.lines), bill.add)
     from core import wanic_categories as CG
     for ln in bill.lines:
         ln["cat"] = CG.line_category(ln["group"], ln["desc"])

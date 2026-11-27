@@ -2183,6 +2183,7 @@ class BoqDialog(QDialog):
         from PySide6.QtWidgets import QTreeWidgetItem
         from core import wanic_obec as O
         from core import wanic_quantities as Q
+        self.panel.sync_copies()
         d = self.panel.data()
         self.result = Q.priced(d)
         if d.get("obec") and d.get("province"):
@@ -4464,7 +4465,7 @@ class BuildingPanel(QWidget):
                                     "วางห้องก่อน")
             return
         groups, count = B.build(d, parts)
-        old = B.generated(self.app.scene, parts)
+        old = B.generated(self.app.scene, parts, copies=False)   # the user's copies stay
         if not groups and not old:
             self.status.setText("ไม่มีอะไรให้สร้าง")
             return
@@ -4545,6 +4546,20 @@ class BuildingPanel(QWidget):
         self.status.setText(f"วัตถุที่ซ่อนกลับมาที่เดิมแล้ว {len(hidden)} ชิ้น · "
                             f"เปิดเลเยอร์ {layers_on} ชั้น")
 
+    def sync_copies(self) -> int:
+        """The copies in the model → ``data["copies"]`` (the BOQ bills them); written
+        only when they changed. Returns how many there are."""
+        from core import wanic_copies as CP
+        try:
+            recs = CP.records(self.app.scene)
+        except Exception:                             # noqa: BLE001 - no scene (tests)
+            return 0
+        d = self.data()
+        if (d.get("copies") or []) != recs:
+            d["copies"] = recs
+            self._write(d)
+        return len(recs)
+
     def open_toggles(self) -> None:
         """เปิด-ปิดโครงสร้าง: a switch for every kind of member (floor by floor)."""
         from PySide6.QtWidgets import QDialog, QHBoxLayout as _H, QListWidget, QListWidgetItem, QVBoxLayout as _V
@@ -4577,6 +4592,9 @@ class BuildingPanel(QWidget):
         def apply(item):
             if busy["on"]:
                 return
+            # fresh: copies made while the window is open are switched with their kind
+            now = B.view_categories(B.generated(self.app.scene), E["H"], B.floor_lift(E["settings"]), E["n"])
+            by.update({key: gs for key, _l, gs in now})
             gs = by.get(item.data(Qt.UserRole)) or []
             hide = item.checkState() != Qt.Checked
             self.app.viewport.history.execute(HideCommand(gs, hide))
@@ -4590,7 +4608,7 @@ class BuildingPanel(QWidget):
                     lst.item(i).setCheckState(Qt.Checked if on else Qt.Unchecked)
             finally:
                 busy["on"] = False
-            self.app.viewport.history.execute(HideCommand(groups, not on))
+            self.app.viewport.history.execute(HideCommand(B.generated(self.app.scene), not on))
             self.app.viewport.update()
         row = _H()
         b1 = QPushButton("แสดงทั้งหมด")

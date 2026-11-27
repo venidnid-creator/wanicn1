@@ -503,11 +503,14 @@ def node_mark(data, lib, x, y, role) -> str:
     return ROLE_DEFAULT[role]
 
 
-def beam_mark(data, lib, level, n, p0, p1) -> str:
+def beam_mark(data, lib, level, n, p0, p1, roof=None) -> str:
+    """``roof``: the span carries a roof, not a floor (the top of a lower,
+    separate part); by default only the top level does."""
     rec = ((data or {}).get("assign") or {}).get(span_key(level, p0, p1))
     if rec in lib and lib[rec].get("kind") == "beam":
         return rec
-    return ROLE_DEFAULT["GB" if level == 0 else "RB" if level == n else "B"]
+    roof = (level == n) if roof is None else roof
+    return ROLE_DEFAULT["GB" if level == 0 else "RB" if roof else "B"]
 
 
 def slab_mark(lib, room, floor, raised=False) -> str:
@@ -634,10 +637,14 @@ def elements(data) -> dict:
         if lvl > 0:
             rooms += rooms_of[lvl - 1]
         for p0, p1 in segments(rooms):
-            mark = beam_mark(data, lib, lvl, n, p0, p1)
+            # a span no room of this level stands on tops a lower part (a separate
+            # one-storey building beside a taller one): a roof beam
+            mid = ((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2)
+            roof = lvl == n or (lvl > 0 and not any(_on_edge(r, *mid) for r in rooms_of[lvl]))
+            mark = beam_mark(data, lib, lvl, n, p0, p1, roof)
             E["beams"].append({"mark": mark, "level": lvl, "p0": p0,
                                "p1": p1, "z": lvl * H, "ground": lvl == 0,
-                               "roof": lvl == n})
+                               "roof": roof})
             beam_at[(lvl, p0, p1)] = mark
     for cb in cantilevers(data):
         lvl = min(max(int(cb.get("level", 1)), 0), n)
@@ -1131,8 +1138,9 @@ def _tag(g, part, kind, mark, info=None, key=None):
     C 150×65×20×3.2» — the name members used to carry), and the
     ``info`` rows the Properties panel shows."""
     ext = dict(g.ext or {})
+    from core.wanic_copies import new_uid
     ext[EXT_KEY] = {"part": part, "kind": kind, "mark": mark,
-                    "key": key or mark}
+                    "key": key or mark, "uid": new_uid()}   # a copy shares it (wanic_copies)
     if info:
         ext[EXT_KEY]["info"] = [[str(k), str(v)] for k, v in info]
     g.ext = ext
@@ -3343,17 +3351,62 @@ def _roof_skirt(rect, z0, s, side, cols=(), lift=0.0):
     return out
 
 
+def _overlap(a, b) -> float:
+    w = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+    d = min(a["y"] + a["d"], b["y"] + b["d"]) - max(a["y"], b["y"])
+    return w * d if w > 0 and d > 0 else 0.0
+
+
+def roof_zones(data) -> list:
+    """[(rooms, storeys below the roof)] — the top floor, and every lower part
+    with no floor over it (a separate one-storey building beside a taller one:
+    owner, 27 Nov «สร้างอาคารแยกแล้วโครงหลังคาไม่สร้างตาม»). Rooms are roofed
+    at the floor they stand on when no room of the floor above covers them."""
+    floors, _skipped = stacked(data)
+    if not floors:
+        return []
+    zones = [(floors[-1]["rooms"], len(floors))]
+    for k in range(len(floors) - 1):
+        above = floors[k + 1]["rooms"]
+        bare = [r for r in floors[k]["rooms"]
+                if sum(_overlap(r, a) for a in above) < 0.05 * r["w"] * r["d"]]
+        if bare:
+            zones.append((bare, k + 1))
+    return zones
+
+
+_LIST_KEYS = ("ridge", "hip", "rafter", "purlin", "post", "skin", "eave", "barge", "rects", "gable",
+              "valleys", "tie", "plate", "rbeam", "strut", "brace")
+
+
 def roof_lines(data):
     """The roof frame as lines: {"ridge": [...], "hip": [...], "rafter":
     [...], "purlin": [{"path", "closed"}…], "post": [...], "skin":
     [polygons…], "rects": [...], "z0"} — 3D points in metres. ``None``
-    when there is no roof to make."""
+    when there is no roof to make. Every roof zone (``roof_zones``) adds its
+    frame; ``heads`` carry their own height (x, y, z)."""
     s = settings_of(data)
-    floors, _skipped = stacked(data)
-    if not floors or s.get("roof") not in ROOF_TYPES:
+    zones = roof_zones(data)
+    if not zones or s.get("roof") not in ROOF_TYPES:
         return None
-    top = floors[-1]["rooms"]
-    z0 = len(floors) * float(s["floor_h"])
+    out = None
+    for rooms, nfl in zones:
+        part = _roof_lines_of(data, s, rooms, nfl)
+        if part is None:
+            continue
+        if out is None:
+            out = part
+            continue
+        for k in _LIST_KEYS:
+            out[k] = list(out.get(k) or []) + list(part.get(k) or [])
+        out["heads"] = list(out.get("heads") or []) + list(part.get("heads") or [])
+        out["valley"] = float(out.get("valley") or 0.0) + float(part.get("valley") or 0.0)
+    return out
+
+
+def _roof_lines_of(data, s, top, nfl):
+    """The frame over ``top`` (rooms) standing ``nfl`` storeys up."""
+    z0 = nfl * float(s["floor_h"])
     if s.get("roof_mode") == "bbox":
         fp = footprint(top)
         rects = [fp]
@@ -3372,7 +3425,7 @@ def roof_lines(data):
             _f, prm_ = steel_lookup(s[key])
             ph = max(ph, float(prm_.get("H", prm_.get("D", prm_.get("A", 0.0)))) / 1000.0)
     out["plate_h"] = ph
-    out["heads"] = nodes(top)
+    out["heads"] = [(x, y, z0) for x, y in nodes(top)]
     if s.get("wall_plate"):
         segs = [[(a[0], a[1], z0 + ph), (b[0], b[1], z0 + ph)]
                 for a, b in outline_segments(top)]
@@ -4081,8 +4134,8 @@ def roof_members(data) -> tuple[list, dict]:
                 g = cut_member(g, path, [((a_[0], a_[1]), n_), ((b_[0], b_[1]), n_)])
             add(g, kind)
     if s.get("head_plate", True) and (lines.get("plate") or lines.get("tie")):
-        for (x, y) in lines.get("heads") or []:
-            add(head_plate(x, y, lines["z0"]), "headplate")
+        for h in lines.get("heads") or []:
+            add(head_plate(h[0], h[1], h[2] if len(h) > 2 else lines["z0"]), "headplate")
     if s.get("fish_plate", True):
         gf, _nf = fish_plates(lines, s)
         add(gf, "fishplate")
@@ -5302,12 +5355,16 @@ def summary(count) -> str:
     return " · ".join(parts) if parts else "ไม่มีชิ้นส่วน"
 
 
-def generated(scene, parts=("structure", "roof")):
-    """Top-level groups an earlier build made for ``parts``."""
+def generated(scene, parts=("structure", "roof"), copies=True):
+    """Top-level groups an earlier build made for ``parts`` — with the user's
+    copies of them unless ``copies`` is False (a rebuild keeps the copies)."""
+    if not copies:
+        from core.wanic_copies import mark_copies
+        mark_copies(scene)
     out = []
     for g in scene.groups:
         rec = ((getattr(g, "ext", None) or {}).get(EXT_KEY)) or {}
-        if rec.get("part") in parts:
+        if rec.get("part") in parts and (copies or not rec.get("copy")):
             out.append(g)
     return out
 
@@ -5473,7 +5530,7 @@ def view_categories(groups, H, lift=0.0, n=0) -> list:
 
 #: what does not move the structure: prices, the schedule, the stamp itself
 NOT_STRUCTURAL = {"prices", "price_src", "price_item", "labour", "labour_src", "obec", "schedule",
-                  "province", "calc_stamp", "calc_at", "boq", "boq_info"}
+                  "province", "calc_stamp", "calc_at", "boq", "boq_info", "copies"}
 
 
 def struct_stamp(data) -> str:

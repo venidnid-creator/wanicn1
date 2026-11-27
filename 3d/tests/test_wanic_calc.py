@@ -310,3 +310,23 @@ def test_the_book_fonts_keep_latin_digits():
     tags = {bytes(t.toString()).decode() if hasattr(t.toString(), "data") else str(t.toString())
             for t in f.featureTags()}
     assert "locl" in tags and f.featureValue(K.QFont.Tag("locl")) == 0
+
+
+def test_separate_buildings_are_calculated_apart():
+    """owner 27 Nov: a separate one-storey building beside a two-storey one — its beams are not
+    continuous with the other building's across the gap, and its top beams are roof beams."""
+    import copy as _c
+    d = B.default_data()
+    main = [dict(name="a", x=0, y=0, w=5, d=4), dict(name="b", x=5, y=0, w=5, d=4)]
+    f0 = _c.deepcopy(d["floors"][0])
+    f0["rooms"] = main + [dict(name="c", x=14, y=0, w=5, d=4)]
+    f1 = _c.deepcopy(d["floors"][0])
+    f1["rooms"] = _c.deepcopy(main)
+    d["floors"] = [f0, f1]
+    d["settings"]["roof"] = "hip"
+    beams = {m.name: m for m in C.analyse(d)["members"] if m.group == "beam"}
+    ground = [n for n in beams if n.startswith("GB1") and "y = 0.00" in n]
+    assert len(ground) == 2 and any("(x 14.00–19.00) · 1 ช่วง" in n for n in ground)
+    annex_top = [n for n in beams if "x 14.00–19.00" in n and not n.startswith("GB")]
+    assert annex_top and all("ชั้นหลังคา" in n for n in annex_top)
+    assert all(len(beams[n].diagram.spans) == 1 for n in annex_top)

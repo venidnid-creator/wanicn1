@@ -65,3 +65,24 @@ def test_timber_frame_members_are_timber_and_priced_by_volume():
     assert "ไม้" in rows["หน้าตัด"] and "โครงหลังคาไม้" in rows["ชนิด"]
     assert PP._qty(raft, "rafter", raft.ext[B.EXT_KEY]["info"])[0] == "timber"
     assert all(B.is_timber(v) for v in B.TIMBER_FRAME.values())
+
+
+def test_a_separate_lower_building_gets_its_own_roof():
+    """owner 27 Nov: «กรณีสร้างอาคารแยก แล้วโครงหลังคาไม่สร้างตาม» — a one-storey room beside a
+    two-storey building is roofed at its own height."""
+    import copy as _c
+    from core import wanic_building as B
+    d = B.default_data()
+    main = [dict(name="a", x=0, y=0, w=5, d=4), dict(name="b", x=5, y=0, w=5, d=4)]
+    f0 = _c.deepcopy(d["floors"][0])
+    f0["rooms"] = main + [dict(name="c", x=14, y=0, w=5, d=4)]
+    f1 = _c.deepcopy(d["floors"][0])
+    f1["rooms"] = _c.deepcopy(main)
+    d["floors"] = [f0, f1]
+    d["settings"]["roof"] = "hip"
+    assert [(len(r), n) for r, n in B.roof_zones(d)] == [(2, 2), (1, 1)]
+    L = B.roof_lines(d)
+    assert (14.0, 0.0, 19.0, 4.0) in L["rects"]
+    H = float(B.settings_of(d)["floor_h"])
+    assert any(abs(h[2] - H) < 1e-6 for h in L["heads"]) and any(abs(h[2] - 2 * H) < 1e-6 for h in L["heads"])
+    assert min(p[2] for seg in L["rafter"] for p in seg if 14 <= p[0] <= 19) < 2 * H

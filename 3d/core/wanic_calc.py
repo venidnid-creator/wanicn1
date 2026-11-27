@@ -921,12 +921,32 @@ def analyse(data) -> dict:
                                "disc": disc, "mark": sl["mark"]}
         slab_q[id(rm)] = (D_ * dead + L_ * b_["ll_floor"], dead, b_["ll_floor"])
     # -- beams: collinear runs on the same level, continuous over the columns
-    runs: dict = {}
+    runs0: dict = {}
     for e in E["beams"]:
         (x0, y0), (x1, y1) = e["p0"], e["p1"]
         horiz = abs(y1 - y0) < 1e-6
         key = (e["level"], e["mark"], "x" if horiz else "y", round(y0 if horiz else x0, 3))
-        runs.setdefault(key, []).append(e)
+        runs0.setdefault(key, []).append(e)
+    # a gap on the line (two separate buildings, owner 27 Nov) ends the continuous beam:
+    # each stretch is a beam of its own
+    runs = []
+    for key, segs in runs0.items():
+        ax = key[2]
+
+        def _lo(e, ax=ax):
+            return min(e["p0"][0], e["p1"][0]) if ax == "x" else min(e["p0"][1], e["p1"][1])
+
+        def _hi(e, ax=ax):
+            return max(e["p0"][0], e["p1"][0]) if ax == "x" else max(e["p0"][1], e["p1"][1])
+        segs = sorted(segs, key=_lo)
+        cur = [segs[0]]
+        for e in segs[1:]:
+            if _lo(e) > max(_hi(x) for x in cur) + 0.01:
+                runs.append((key, cur))
+                cur = []
+            cur.append(e)
+        runs.append((key, cur))
+    split = {k for k, _s in runs if sum(1 for k2, _ in runs if k2 == k) > 1}
     rooms_by_level = {i: (f.get("rooms") or []) for i, f in enumerate(floors)}
     walls = E["walls"]
     beams_out = {}
@@ -959,7 +979,7 @@ def analyse(data) -> dict:
     col_mom: dict = {}
     col_lv: dict = {}
     col_live: dict = {}                              # the factored live part, per column and level
-    for key, segs in runs.items():
+    for key, segs in runs:
         level, mark, axis, c = key
         segs.sort(key=lambda e: min(e["p0"][0], e["p1"][0]) if axis == "x" else min(e["p0"][1], e["p1"][1]))
         spec = lib.get(mark, {})
@@ -1008,6 +1028,11 @@ def analyse(data) -> dict:
                 # an eave-side ring beam takes the roof from its wall half way up
                 # to the struts plus the overhang
                 fl_ = floors[-1]["rooms"] if floors else []
+                mid_ = ((e["p0"][0] + e["p1"][0]) / 2, (e["p0"][1] + e["p1"][1]) / 2)
+                for zr_, _nz in B.roof_zones(data):          # the roof this beam carries
+                    if any(B._on_edge(r, *mid_) for r in zr_):
+                        fl_ = zr_
+                        break
                 half_ = min(max(r["x"] + r["w"] for r in fl_) - min(r["x"] for r in fl_),
                             max(r["y"] + r["d"] for r in fl_) - min(r["y"] for r in fl_)) / 2 if fl_ else 2.0
                 trib_ = (half_ / 2 + float(s["overhang"])) / math.cos(math.radians(float(s["pitch"])))
@@ -1082,9 +1107,16 @@ def analyse(data) -> dict:
         r = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
                 -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
                 res.Vmax / cap["V"] if cap["V"] else 9.9, rd)
-        lvl_name = ("ดิน" if segs[0].get("ground") else "หลังคา" if level >= n else f"{level + 1}")
-        name = (f"{mark} ชั้น{lvl_name} · " if lvl_name == "หลังคา" else f"{mark} ชั้น {lvl_name} · "
-                f"แนว{'นอน' if axis == 'x' else 'ตั้ง'} {'y' if axis == 'x' else 'x'} = {c:.2f} · "
+        lvl_name = ("ดิน" if segs[0].get("ground") else
+                    "หลังคา" if level >= n or all(e.get("roof") for e in segs) else f"{level + 1}")
+        if key in split or (lvl_name == "หลังคา" and level < n):    # which stretch of the line
+            a_ = min(min(e["p0"][0 if axis == "x" else 1], e["p1"][0 if axis == "x" else 1]) for e in segs)
+            b_r = max(max(e["p0"][0 if axis == "x" else 1], e["p1"][0 if axis == "x" else 1]) for e in segs)
+            where = f" ({'x' if axis == 'x' else 'y'} {a_:.2f}–{b_r:.2f})"
+        else:
+            where = ""
+        name = ((f"{mark} ชั้นหลังคา · " if lvl_name == "หลังคา" else f"{mark} ชั้น {lvl_name} · ") +
+                f"แนว{'นอน' if axis == 'x' else 'ตั้ง'} {'y' if axis == 'x' else 'x'} = {c:.2f}{where} · "
                 f"{len(spans) - sum(1 for sp_ in spans if sp_.cant)} ช่วง"
                 + (" + คานยื่น" if any(sp_.cant for sp_ in spans) else "")
                 + (" + น้ำหนักเพิ่ม" if any(sp_.P or sp_.U for sp_ in spans) else ""))
