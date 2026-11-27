@@ -929,10 +929,14 @@ def section_stairs(sh, E, P, U, C, at, rect):
                 poly = top + [P(ue, z0 + R * n - off), P(u0 + du * min(g, off * 1.7), z0)]
                 sh.fill(poly, "hatch", 0.72)
                 sh.poly(poly, "cut", 0.35)
-            elif beyond:
-                sh.poly(top, "wall", 0.18, closed=False)
+            else:
+                # beyond the plane: seen, in outline; in front of it (cut away): dashed — so the
+                # flight that leads on to the floor above always shows (owner, 27 Nov: «ตรวจจุด
+                # บันไดในรูปตัด» — the second flight of a U stair was missing)
+                lay_ = "wall" if beyond else "hidden"
+                sh.poly(top, lay_, 0.18, closed=False)
                 ue = u0 + du * g * n
-                sh.line(P(ue, z0 + R * n - t * 1.15), P(u0, z0 - t * 1.15), "wall", 0.18)
+                sh.line(P(ue, z0 + R * n - t * 1.15), P(u0, z0 - t * 1.15), lay_, 0.18)
         for ld in lay["landings"]:
             xs_ = [q[0] for q in ld["pts"]]
             ys_ = [q[1] for q in ld["pts"]]
@@ -941,8 +945,8 @@ def section_stairs(sh, E, P, U, C, at, rect):
             z = z_f + ld["z"]
             if c0 - 1e-6 <= at <= c1 + 1e-6:
                 rect(u_a, z - t, u_b, z, "cut", 0.35, 0.72)
-            elif c0 > at:
-                sh.rect(*P(u_a, z - t), *P(u_b, z), "wall", 0.18)
+            else:
+                sh.rect(*P(u_a, z - t), *P(u_b, z), "wall" if c0 > at else "hidden", 0.18)
         # the railing seen: the rail, the balusters
         rl = B.stair_railing(e["st"], s, B.floor_bounds(E, e.get("floor", 0)))
         for a_, b_ in rl["rails"]:
