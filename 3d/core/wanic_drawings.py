@@ -1885,12 +1885,16 @@ def _levels(sh, P, u, marks, left=False):
         last = ty
 
 
-def section_detail(sh, E, L, cut, box, sheets=None):
+def section_detail(sh, E, L, cut, box, sheets=None, simple=False):
     """One building section drawn in detail: footings, ground beams,
     slabs, cut walls (masonry hatched, plaster), cut beams, the doors and
     windows and columns beyond, ceilings, the roof frame (ties, posts,
     rafters, purlins cut), the skin, fascia, level marks, dimension
-    strings and grid bubbles, room names."""
+    strings and grid bubbles, room names.
+
+    ``simple`` (owner, 27 Nov, as family10 pages 18–19): the architects' section — the roof skin and
+    the wall plates only, the frame left to the structural set, two labels «หลังคา…» and «โครงหลังคา
+    ดูแบบวิศวกรรมโครงสร้าง»."""
     axis, at, name, _through = cut
     H, n, lib, s = E["H"], E["n"], E["lib"], E["settings"]
     xs, ys = grids(E)
@@ -2140,7 +2144,7 @@ def section_detail(sh, E, L, cut, box, sheets=None):
         cs = sorted({round(C(q[0], q[1]), 3) for a_, b_ in (L.get("post") or []) for q in (a_, b_)})
         beyond_c = [c_ for c_ in cs if c_ > at + 0.02] or [c_ for c_ in reversed(cs) if c_ < at - 0.02]
         frame = {}
-        if beyond_c:
+        if beyond_c and not simple:
             fc = beyond_c[0]
             for key, lay, w_ in (("rafter", "struct", 0.25), ("tie", "struct", 0.25), ("post", "struct", 0.3),
                                  ("strut", "struct", 0.18), ("brace", "struct", 0.18)):
@@ -2149,13 +2153,13 @@ def section_detail(sh, E, L, cut, box, sheets=None):
                         pa, pb = (U(a_[0], a_[1]), a_[2]), (U(b_[0], b_[1]), b_[2])
                         frame.setdefault(key, []).append((pa, pb))
                         sh.line(P(*pa), P(*pb), lay, w_)
-        for key in ("tie", "rbeam", "ridge", "plate"):
+        for key in (("rbeam", "plate") if simple else ("tie", "rbeam", "ridge", "plate")):
             for a_, b_ in L.get(key) or []:
                 ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
                 if min(ca, cb) - 1e-6 <= at <= max(ca, cb) + 1e-6 and abs(ca - cb) > 1e-6:
                     u = U(a_[0], a_[1])
                     rect(u - 0.03, a_[2] - 0.15, u + 0.03, a_[2], "struct", 0.25, 0.5)
-        for pl in L.get("purlin") or []:
+        for pl in ([] if simple else L.get("purlin") or []):
             a_, b_ = pl["path"][0], pl["path"][-1]
             ca, cb = C(a_[0], a_[1]), C(b_[0], b_[1])
             if min(ca, cb) - 1e-6 <= at <= max(ca, cb) + 1e-6 and abs(ca - cb) > 1e-6:
@@ -2179,7 +2183,7 @@ def section_detail(sh, E, L, cut, box, sheets=None):
     xr = P(umax - 0.3, 0)[0]
     if L:
         STD.section_roof_labels(sh, E, L, P, [sg for sg in (_cut_poly(q, axis, at) for q in L["skin"]) if sg],
-                                frame if "frame" in dir() else {}, xr)
+                                frame if "frame" in dir() else {}, xr, simple=simple)
     # under it: the eaves and the axes, the overall, then the bubbles
     _segs = [sg for sg in (_cut_poly(poly, axis, at) for poly in (L or {}).get("skin", [])) if sg]
     ru = [q[0] for sg in _segs for q in sg]
@@ -2275,10 +2279,10 @@ def roof_leaders(sh, E, L, P, U, C, axis, at, lx):
         sh.text((lx + 1.5, ty), text, 1.9, "left", "text")
 
 
-def a_section_one(sh, E, L, cut, sheets=None):
+def a_section_one(sh, E, L, cut, sheets=None, simple=False):
     """One section on its sheet at 1:100 (the standard sets)."""
     x0, y0, x1, y1 = drawing_area()
-    sc = section_detail(sh, E, L, cut, (x0, y0 + 14, x1, y1), sheets)
+    sc = section_detail(sh, E, L, cut, (x0, y0 + 14, x1, y1), sheets, simple)
     from core import wanic_std_sheets as STD
     STD.caption_marks(sh, ((x0 + x1) / 2 - 50, y0 + 10), f"รูปตัด {cut[2]}", f"1:{sc}", "section",
                       (cut[2].split("-")[0], sh.code))
@@ -2286,7 +2290,7 @@ def a_section_one(sh, E, L, cut, sheets=None):
     return sc
 
 
-def a_section_sheet(sh, E, L, k):
+def a_section_sheet(sh, E, L, k, simple=False):
     """Floor ``k``'s pair of sections, stacked as in the standard sets."""
     x0, y0, x1, y1 = drawing_area()
     cuts = section_cuts(E, k)
@@ -2294,7 +2298,7 @@ def a_section_sheet(sh, E, L, k):
     scales = []
     for i, cut in enumerate(cuts):
         box = (x0, midy + 2, x1, y1) if i == 0 else (x0, y0, x1, midy - 2)
-        sc = section_detail(sh, E, L, cut, box)
+        sc = section_detail(sh, E, L, cut, box, simple=simple)
         scales.append(sc)
         note = f" (ตัดผ่าน{cut[3]})" if i == 0 else ""
         caption(sh, (x0 + 60, box[1] + 8), f"รูปตัด {cut[2]}{note}", f"1:{sc}")
@@ -2783,8 +2787,10 @@ def s_roof_frame(sh, E, L):
              (dx0 + 0.05 * k20, dy0 + 0.62 * k20), (dx0 - 0.05 * k20, dy0 + 0.62 * k20)], "cut", 0.35, True)
     sh.line((dx0 + 0.10 * k20, dy0 + 0.56 * k20), (dx0 + 25, dy0 + 0.75 * k20), "text", 0.13)
     sh.text((dx0 + 26, dy0 + 0.75 * k20 + 0.6), "เหล็กหางปลาขนาด 50×300×6.00 มม. ผังในเสาคอนกรีต / เชื่อมรอบ", 2.0)
-    sh.line((dx0 - 0.45 * k20, dy0 + 0.35 * k20), (dx0 + 25, dy0 + 0.10 * k20), "text", 0.13)
-    sh.text((dx0 + 26, dy0 + 0.10 * k20 + 0.6), "จันทันเหล็ก เชื่อมติดกับเหล็กหางปลาตลอดแนวสัมผัส", 2.0)
+    q_ = (dx0 + 0.6 * c_ * 0.9 * k20 - s_ * rd * 0.5, dy0 + 0.60 * k20 - 0.6 * s_ * 0.9 * k20 - c_ * rd * 0.5)
+    sh.circle(q_, 0.45, "text", 0.18)
+    sh.line(q_, (dx0 + 46, dy0 - 2.0), "text", 0.13)                    # from the right rafter, below it
+    sh.text((dx0 + 47, dy0 - 2.0 + 0.6), "จันทันเหล็ก เชื่อมติดกับเหล็กหางปลาตลอดแนวสัมผัส", 2.0)
     sh.text((dx0 - 45, dy0 - 6), "ขยาย 1", 3.2, "left", "text", True)
     sh.text((dx0 - 26, dy0 - 6), "1:20", 2.4)
     caption(sh, ((x0 + x1) / 2, y0 + 6), "แปลนโครงหลังคา", f"1:{sc}")
@@ -3292,7 +3298,8 @@ def build_set(data, info=None,
                 lambda sh, _a, side=side: a_elevations(sh, E, L, [side]))
         for k in floors:                              # one section to a sheet, as the standard sets
             for cut in section_cuts(E, k):
-                add("A", f"รูปตัด {cut[2]}", lambda sh, _a, cut=cut: _set_scale(sh, a_section_one(sh, E, L, cut, _a)))
+                add("A", f"รูปตัด {cut[2]}", lambda sh, _a, cut=cut: _set_scale(
+                    sh, a_section_one(sh, E, L, cut, _a, info.get("simple_sections", True))))
         if info.get("axo_sections"):
             for title, paint in axo_sheets(data):
                 add("A", title, paint, "-")
@@ -5149,7 +5156,7 @@ def build_sections(data, info=None) -> list:
         sh = Sheet(f"A-S{k + 1}", " ".join(f"รูปตัด {c[2]}" for c in cuts) or "รูปตัด",
                    "-", "A")
         out.append(sh)
-    painters = [lambda sh, i=i: _set_scale(sh, a_section_sheet(sh, E, L, i))
+    painters = [lambda sh, i=i: _set_scale(sh, a_section_sheet(sh, E, L, i, info.get("simple_sections", True)))
                 for i in range(len(out))]
     if info.get("axo_sections"):
         for title, paint in axo_sheets(data):

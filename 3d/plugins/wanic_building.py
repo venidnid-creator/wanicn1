@@ -2697,6 +2697,9 @@ class DrawingDialog(QDialog):
         self.axo = QCheckBox("รูปตัดทัศนียภาพ 3 มิติ (ตัดอาคารเห็นโครงสร้างภายใน · ใช้เวลาเพิ่มเล็กน้อย)")
         self.axo.setChecked(True)
         f.addRow(self.axo)
+        self.simple_sec = QCheckBox("รูปตัดสถาปัตย์แบบเรียบง่าย (หลังคาไม่แสดงโครง · «โครงหลังคา ดูแบบวิศวกรรมโครงสร้าง»)")
+        self.simple_sec.setChecked(True)
+        f.addRow(self.simple_sec)
         self.pic3d = QCheckBox("ภาพทัศนียภาพ 3 มิติประกอบแผ่นอื่น ๆ (วางมุมที่ว่างของแผ่น)")
         self.pic3d.setChecked(self.with_3d)
         f.addRow(self.pic3d)
@@ -2783,6 +2786,7 @@ class DrawingDialog(QDialog):
         i["groups"] = [g for g, c in self.checks.items() if c.isChecked()]
         i["boq_prices"] = self.prices.isChecked()
         i["axo_sections"] = self.axo.isChecked() if hasattr(self, "axo") else True
+        i["simple_sections"] = self.simple_sec.isChecked() if hasattr(self, "simple_sec") else True
         st = self.panel.takeoff_data().get("settings") or {}
         i["preparer"] = st.get("preparer") or "นายเวนิช ธัมมะวงษ์"
         i["preparer_role"] = st.get("preparer_role") or "วิศวกรสำรวจ"

@@ -814,7 +814,7 @@ def slope_angle(sh, P, u, ze, pitch, side, k):
                 "dim", angle=-pitch / 2)
 
 
-def section_roof_labels(sh, E, L, P, segs, frame, x_right):
+def section_roof_labels(sh, E, L, P, segs, frame, x_right, simple=False):
     """The roof members named on a section, as the standard: a short,
     tidy leader to each — labels in one column right of the roof, in the
     order of their points (top first) so no two leaders cross — and only
@@ -828,7 +828,13 @@ def section_roof_labels(sh, E, L, P, segs, frame, x_right):
     apex = next(q for sg in segs for q in sg if abs(q[1] - zt) < 1e-6)
     right = [sg for sg in segs if max(sg[0][0], sg[1][0]) > apex[0] + 0.2]
     items = []
-    if right and max(abs(a[1] - b[1]) for a, b in right) > 0.2:      # a slope is cut
+    if simple:                                                     # family10 pp. 18–19: two labels
+        (ua, za), (ub, zb) = max(segs, key=lambda sg: max(sg[0][0], sg[1][0]))
+        if za < zb:
+            (ua, za), (ub, zb) = (ub, zb), (ua, za)
+        items.append(((ua + (ub - ua) * 0.35, za + (zb - za) * 0.35 + 0.08), f"หลังคา{tile[:30]}"))
+        items.append(((ua + (ub - ua) * 0.45, za + (zb - za) * 0.45 - 0.45), "โครงหลังคา ดูแบบวิศวกรรมโครงสร้าง"))
+    elif right and max(abs(a[1] - b[1]) for a, b in right) > 0.2:      # a slope is cut
         (ua, za), (ub, zb) = max(right, key=lambda sg: abs(sg[0][1] - sg[1][1]))
         if za < zb:
             (ua, za), (ub, zb) = (ub, zb), (ua, za)               # from the apex down to the eave

@@ -194,3 +194,14 @@ def test_the_book_ends_with_por4():
     S2 = D.build_set(d, dict(INFO, boq_prices=False), ("BOQ",))
     assert S2 and all(s.group == "BOQ" for s in S2)
     assert f"{total:,.2f}" not in " ".join(S2[0].texts())
+
+
+def test_simple_sections_leave_the_frame_to_the_structural_set():
+    """family10 pp. 18–19: the architects' sections name only the roof and refer the frame to the S set."""
+    d = house()
+    d["settings"]["roof"] = "gable"
+    for simple, want, gone in ((True, "โครงหลังคา ดูแบบวิศวกรรมโครงสร้าง", "แป "),
+                               (False, "แป ", "โครงหลังคา ดูแบบวิศวกรรมโครงสร้าง")):
+        S = D.build_set(d, dict(INFO, simple_sections=simple), ("A",))
+        t = " ".join(" ".join(s.texts()) for s in S if s.title.startswith("รูปตัด ก-ก"))
+        assert want in t and gone not in t, simple
