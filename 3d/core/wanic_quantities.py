@@ -1112,6 +1112,33 @@ def compute(data, gate: bool = False) -> dict:
                          basis="ความยาวตามแนวสัน/ตะเข้/ปั้นลม",
                          ref=f"ว480 {lc[:5]}")
 
+    # รั้วและประตูรั้ว (owner, 27 Nov — studied from the DPT house set): the same lines the 3-D
+    # and the fence sheet use (wanic_fence)
+    from core import wanic_fence as FE
+    fc = FE.fence_of(data)
+    if fc:
+        g = "external"
+        fq = FE.quantities(fc)
+        bill.add(g, "รั้ว: งานขุดดินฐานรากเสารั้ว และคานคอดินรั้ว", fq["dig"], "ลบ.ม.", lab_code="1.1.1",
+                 basis=f"ฐาน {fq['posts']} ต้น + คานยาว {fq['length']:.2f} ม.", ref="ว480 1.1")
+        concrete(g, "ฐานรากเสารั้ว", fq["conc_foot"], f"{fq['posts']} ฐาน × 0.60×0.60×0.20 ม.")
+        concrete(g, "เสารั้ว", fq["conc_post"], f"{fq['posts']} ต้น × 0.20×0.20 ม.")
+        concrete(g, "คานคอดินรั้ว", fq["conc_beam"], f"ยาวสุทธิ × 0.15×0.30 ม.")
+        formwork(g, "เสา ฐาน คานรั้ว", fq["form"], "ผิวข้างเสา ฐาน และคานรั้ว")
+        side = "ผนังเตี้ยรั้ว (ก่ออิฐครึ่งแผ่น ฉาบ 2 ด้าน)" if fc["kind"] == "steel" else \
+            "ผนังรั้วคอนกรีตบล็อก ฉาบเรียบ 2 ด้าน"
+        bill.add(g, f"รั้ว: {side}", fq["wall"], "ตร.ม.", mat_key=f"รั้ว: {side}",
+                 basis=f"ยาวสุทธิ × สูง {FE.LOW_WALL if fc['kind'] == 'steel' else fc['h']:.2f} ม.",
+                 ref="ว480 งานก่อ-ฉาบ", note="กรอกราคาต่อ ตร.ม. ในฐานข้อมูลราคา")
+        if fc["kind"] == "steel":
+            bill.add(g, "รั้ว: เหล็กกล่อง 1\"×1\" @0.15 ปลายตัด 45° + ราว 2\"×2\" 3.2 มม.", fq["steel_kg"], "กก.",
+                     mat_key="เหล็กรูปพรรณ (ทั่วไป)", lab_code="1.11.1",
+                     basis="ซี่เหล็กตลอดแนวรั้ว + ราวบน-ล่าง", ref="ว480 1.11.1")
+            bill.add(g, "รั้ว: ทาสีกันสนิม + สีน้ำมันเหล็กรั้ว", fq["paint"], "ตร.ม.",
+                     mat_key="รั้ว: ทาสีเหล็ก", basis="ผิวเหล็กโดยประมาณ")
+        bill.add(g, f"ประตูรั้วบานเลื่อน กว้าง {fq['gate_w']:.2f} ม. (เหล็กกล่อง + แผ่นเหล็ก 4 มม. + ล้อ Ø3\" + "
+                    "ราง + กลอน)", 1, "ชุด", mat_key="ประตูรั้วบานเลื่อน",
+                 basis=f"น้ำหนักเหล็กโดยประมาณ {fq['gate_kg']:.0f} กก.", note="กรอกราคาชุดในฐานข้อมูลราคา")
     # Formwork labour tier by the project's total formwork area.
     tier = "1.8.1a" if form_total[0] >= 5000 else "1.8.1b"
     for ln in bill.lines:
