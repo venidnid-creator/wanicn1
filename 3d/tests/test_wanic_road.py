@@ -212,7 +212,7 @@ def test_every_button_of_the_road_panel(tmp_path, monkeypatch):
     assert len(scene.groups) == groups and "สรุปการออกแบบ" in warned[-1]
     from plugins.wanic_road import PavementDesignDialog as _PD
     dlg = _PD(panel)
-    assert dlg.method() == "rn29" and not dlg.tabs.isTabVisible(0)          # คสล. → Road Note 29 only
+    assert dlg.method() == "rn29" and dlg.tabs.isTabVisible(0)              # คสล. opens on Road Note 29, AI still there
     for k, v in (("adt", 300), ("width", 6.0), ("heavy_pct", 5), ("cbr", 4)):
         dlg.f[("rn", k)].setValue(v)
     assert "6. สรุปการออกแบบ" in dlg.view.toPlainText()
@@ -279,7 +279,7 @@ def test_pavement_design_dialog_fills_the_layers_and_prints(tmp_path, monkeypatc
     panel = RoadPanel(app)
     panel.pavement.setCurrentIndex(panel.pavement.findData("drr-ac"))
     dlg = PavementDesignDialog(panel)
-    assert dlg.method() == "ai" and not dlg.tabs.isTabVisible(1)          # ลาดยาง → AI 1970 only
+    assert dlg.method() == "ai" and dlg.tabs.isTabVisible(1)              # ลาดยาง opens on AI 1970, RN29 still there
     # AI 1970: the manual's example traffic, the automatic layers
     for k, v in (("idt", 11014), ("heavy_pct", 13.94), ("lanes", 4), ("gross_t", 25.5),
                  ("growth_pct", 6.5), ("years", 15), ("cbr", 5)):

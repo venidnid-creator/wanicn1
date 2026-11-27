@@ -1817,10 +1817,14 @@ class PavementDesignDialog(QDialog):
         steps_note.setWordWrap(True)
         left.addWidget(steps_note)
         # จ ข้อ 30: ถนนลาดยาง → AI 1970 only, ถนน คสล. → Road Note 29 only (the road type of the panel)
+        # (owner, 27 Nov: «เอาวิธีเดิมกลับมา» — every method can be chosen again; the road type only
+        # picks the tab that opens first)
         idx = 1 if self.kind == "concrete" else 0
+        if saved.get("method") in ("ai", "rn29"):
+            idx = 1 if saved.get("method") == "rn29" else 0
         self.tabs.setCurrentIndex(idx)
-        self.tabs.setTabVisible(1 - idx, False)
-        which = QLabel(f"<b>{'ถนน คสล. → ออกแบบด้วย Road Note 29' if idx else 'ถนนลาดยาง → ออกแบบด้วย AI 1970'}</b>"
+        which = QLabel(f"<b>{'ถนน คสล.' if self.kind == 'concrete' else 'ถนนลาดยาง'}</b> — เลือกวิธีออกแบบได้ทุกแท็บ "
+                       "(ลาดยาง: AI 1970 · คสล.: Road Note 29)"
                        "<br><span style='color:#6b7280;font-size:11px'>เปลี่ยนชนิดถนนที่แผงออกแบบถนน ข้อ 3</span>")
         left.insertWidget(1, which)
         self.tabs.currentChanged.connect(lambda _i: self.refresh())
