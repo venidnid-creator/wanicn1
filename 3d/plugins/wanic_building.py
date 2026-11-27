@@ -1469,6 +1469,12 @@ class BoqDialog(QDialog):
                 text += (" — ขาด: " + ", ".join(missing[:4]) +
                          (f" และอีก {len(missing) - 4}" if len(missing) > 4
                           else ""))
+        st = Q.price_status(d, self.result)
+        if st["by"]:
+            text += ("<br><span style='font-size:11px'>ที่มา: " +
+                     " · ".join(f"{th} {n}" for th, n in sorted(st["by"].items(), key=lambda t: -t[1])) +
+                     ((" (จังหวัด" + ", ".join(f"{nb} {n}" for nb, n in st["neighbours"].items()) + ")")
+                      if st["neighbours"] else "") + " ชนิด</span>")
         left = len(Q.missing_lines(self.result))
         text += (f"<br><span style='background:#FDBA74;color:#7C2D12'>&nbsp;<b>ยังไม่มีราคา {left} รายการ "
                  "(แถวสีส้ม)</b> — พาณิชย์จังหวัดไม่มี → กด «🗺 เติมราคาจังหวัดข้างเคียง» แล้ว «🏛 ส่วนกลาง» "
@@ -2482,16 +2488,25 @@ class BoqDialog(QDialog):
             QMessageBox.information(self, TITLE, "บันทึก BOQ แล้ว" + note)
 
     def save_csv(self):
+        """บันทึก CSV — always (also before every price is in): on top, how the price search
+        stands — priced in the province, from which neighbouring provinces, central, typed in,
+        and how many materials and BOQ lines are still without a price (owner, 27 Nov)."""
         from PySide6.QtWidgets import QFileDialog
         from core import wanic_quantities as Q
-        if not self._ready_to_export():
-            return
+        self.recompute()
+        st = Q.price_status(self.panel.data(), self.result)
         path, _f = QFileDialog.getSaveFileName(self, "บันทึก CSV", "BOQ.csv",
                                                "CSV (*.csv)")
         if not path:
             return
         with open(path, "w", encoding="utf-8-sig", newline="") as fh:
-            fh.write(Q.csv_text(self.result))
+            fh.write(Q.csv_text(self.result, st))
+        left = len(st["missing"])
+        self.panel.status.setText(
+            f"บันทึก CSV แล้ว — มีราคา {st['priced']}/{st['need']} ชนิด"
+            + (f" · จังหวัดข้างเคียง {sum(st['neighbours'].values())} ชนิด" if st["neighbours"] else "")
+            + (f" · ยังขาด {left} ชนิด ({st['missing_lines']} บรรทัด BOQ)" if left or st["missing_lines"]
+               else " · ราคาครบทุกรายการ"))
         self._calc_note()
 
 

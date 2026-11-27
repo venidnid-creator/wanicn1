@@ -1335,21 +1335,82 @@ def to_rates(result) -> list[dict]:
     return out
 
 
-def csv_text(result) -> str:
+#: where a material price came from (``data["price_src"]``), in the words of the status
+SOURCE_TH = {"พาณิชย์": "พาณิชย์จังหวัดที่ก่อสร้าง", "ข้างเคียง": "พาณิชย์จังหวัดข้างเคียง",
+             "ส่วนกลาง": "ราคาส่วนกลาง (กรุงเทพมหานคร)", "สพฐ.": "บัญชีราคา สพฐ.",
+             "ท้องตลาด": "สืบราคาท้องตลาด/กรอกเอง", "กรอกเอง": "สืบราคาท้องตลาด/กรอกเอง",
+             "ตัวอย่าง": "ราคาตัวอย่าง (ไม่ใช่ราคาจริง)"}
+
+
+def price_status(data, result) -> dict:
+    """การหาราคาวัสดุตอนนี้ (owner, 27 Nov — «หลังจากนำข้อมูลเข้ามาทั้ง 2 กรณีแล้ว ยังมีอีกกี่รายการ
+    ที่ยังไม่ได้บันทึก»): of the materials the bill needs, how many are priced and from where
+    (the province, which neighbouring provinces, central, typed in) and how many are still
+    missing — as kinds of material and as BOQ lines (one line may need several materials,
+    one material may be in several lines)."""
+    data = data or {}
+    prices = prices_of(data)
+    src = data.get("price_src") or {}
+    item = data.get("price_item") or {}
+    need = list((result or {}).get("need") or {})
+    by: dict = {}
+    neighbours: dict = {}
+    missing = []
+    for k in need:
+        if not float(prices.get(k) or 0) > 0:
+            missing.append(k)
+            continue
+        th = SOURCE_TH.get(src.get(k), "สืบราคาท้องตลาด/กรอกเอง")
+        by[th] = by.get(th, 0) + 1
+        if src.get(k) == "ข้างเคียง":
+            nb = str(item.get(k, "")).split(":", 1)[0].replace("จ.", "").strip() or "ไม่ระบุ"
+            neighbours[nb] = neighbours.get(nb, 0) + 1
+    lines = missing_lines(result)
+    return {"province": str(data.get("province") or ""), "need": len(need), "priced": len(need) - len(missing),
+            "by": by, "neighbours": neighbours, "missing": missing, "lines": len((result or {}).get("lines") or []),
+            "missing_lines": len(lines), "missing_line_names": [ln["desc"] for ln in lines]}
+
+
+def status_rows(st: dict) -> list:
+    """The status as rows (for the CSV and the window)."""
+    rows = [["สถานะการหาราคาวัสดุ (ณ วันที่บันทึก)"],
+            ["จังหวัดที่ก่อสร้าง", st["province"] or "ยังไม่ได้เลือก"],
+            ["วัสดุที่ต้องมีราคา (ชนิด)", st["need"]],
+            ["มีราคาแล้ว (ชนิด)", st["priced"]]]
+    for th, n in sorted(st["by"].items(), key=lambda t: -t[1]):
+        rows.append(["  — " + th, n])
+    for nb, n in sorted(st["neighbours"].items(), key=lambda t: -t[1]):
+        rows.append(["      จังหวัด" + nb, n])
+    rows += [["ยังไม่มีราคา (ชนิด)", len(st["missing"])],
+             ["บรรทัด BOQ ทั้งหมด", st["lines"]],
+             ["บรรทัด BOQ ที่ยังไม่มีราคา (แถวสีส้ม)", st["missing_lines"]],
+             ["หมายเหตุ", "วัสดุ 1 ชนิดอาจอยู่หลายบรรทัด และ 1 บรรทัดอาจใช้วัสดุหลายชนิด — "
+                          "ตัวเลขชนิดกับบรรทัดจึงไม่เท่ากัน · บรรทัดจะหายจากสีส้มเมื่อวัสดุทุกชนิดของบรรทัดนั้นมีราคา"]]
+    if st["missing"]:
+        rows.append(["วัสดุที่ยังไม่มีราคา", " · ".join(st["missing"])])
+    return rows
+
+
+def csv_text(result, status: dict | None = None) -> str:
     import csv
     import io
     buf = io.StringIO()
     w = csv.writer(buf)
+    if status is not None:
+        for r in status_rows(status):
+            w.writerow(r)
+        w.writerow([])
     w.writerow(["หมวด", "ลำดับ", "รายการ", "ปริมาณสุทธิ", "เผื่อ %",
                 "ปริมาณ", "หน่วย", "ค่าวัสดุ/หน่วย", "ค่าวัสดุ",
-                "ค่าแรง/หน่วย", "ค่าแรง", "รวม", "ที่มา", "การคำนวณ"])
+                "ค่าแรง/หน่วย", "ค่าแรง", "รวม", "ที่มา", "การคำนวณ", "หมายเหตุ", "สถานะราคา"])
     for gi, (_k, th, rows) in enumerate(result["groups"], 1):
         for li, ln in enumerate(rows, 1):
             w.writerow([th, f"{gi}.{li}", ln["desc"], f"{ln['net']:.4f}",
                         f"{ln['waste']:g}", f"{ln['qty']:.2f}", ln["unit"],
                         f"{ln['mat']:.2f}", f"{ln['mat_total']:.2f}",
                         f"{ln['lab']:.2f}", f"{ln['lab_total']:.2f}",
-                        f"{ln['total']:.2f}", ln["ref"], ln["basis"]])
+                        f"{ln['total']:.2f}", ln["ref"], ln["basis"], ln.get("note", ""),
+                        ("ยังไม่มี" + "และ".join(ln["missing"])) if ln.get("missing") else "มีราคาแล้ว"])
     t = result["totals"]
     w.writerow(["", "", "รวมค่างานต้นทุน", "", "", "", "", "",
                 f"{t['mat']:.2f}", "", f"{t['lab']:.2f}", f"{t['total']:.2f}",

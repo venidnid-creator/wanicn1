@@ -413,3 +413,27 @@ def test_every_line_needs_both_prices_unless_one_sided():
     assert ln["missing"] == ["ค่าแรง"]                       # no labour code: still needs a labour price
     ln = b.add("roof", "ค่าแรงมุงกระเบื้อง", 3.0, "ตร.ม.", lab=50.0)
     assert ln["missing"] == [] and ln["note"] == "ค่าแรงอย่างเดียว"
+
+
+def test_the_price_search_status_counts_materials_and_lines():
+    """owner 27 Nov: after the province's and the neighbours' prices are in, how many are left —
+    as kinds of material and as BOQ lines (not the same numbers)."""
+    from core import wanic_building as B
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(name="a", x=0, y=0, w=4, d=4)]
+    d["province"] = "ขอนแก่น"
+    r0 = Q.priced(d)
+    need = list(r0["need"])
+    d["prices"] = {need[0]: 100.0, need[1]: 200.0, need[2]: 50.0}
+    d["price_src"] = {need[0]: "พาณิชย์", need[1]: "ข้างเคียง", need[2]: "ข้างเคียง"}
+    d["price_item"] = {need[1]: "จ.มหาสารคาม: x", need[2]: "จ.กาฬสินธุ์: y"}
+    r = Q.priced(d)
+    st = Q.price_status(d, r)
+    assert st["need"] == len(need) and st["priced"] >= 3
+    assert st["neighbours"] == {"มหาสารคาม": 1, "กาฬสินธุ์": 1}
+    assert st["by"]["พาณิชย์จังหวัดข้างเคียง"] == 2
+    assert len(st["missing"]) == st["need"] - st["priced"]
+    assert st["missing_lines"] == len(Q.missing_lines(r))
+    text = Q.csv_text(r, st)
+    assert text.splitlines()[0].startswith("สถานะการหาราคาวัสดุ")
+    assert "จังหวัดมหาสารคาม" in text and "บรรทัด BOQ ที่ยังไม่มีราคา" in text and "สถานะราคา" in text
