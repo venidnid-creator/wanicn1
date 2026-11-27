@@ -233,8 +233,310 @@ DECOR = {
     "FR": ("ตู้เย็น 2 ประตู", 0.65, 0.65, 0.0, 1.70),
     "WM": ("เครื่องซักผ้าฝาหน้า", 0.60, 0.60, 0.0, 0.85),
 }
+# the owner (27 Nov): every room type its full set — the office, the meeting room, the
+# recreation room and the hotel-style reception (shown, never billed in the construction BOQ)
+DECOR.update({
+    "PC": ("โต๊ะทำงานคอมพิวเตอร์ + จอ + เก้าอี้สำนักงาน + รางเดินสายไฟ", 1.40, 0.70, 0.0, 0.75),
+    "COF": ("มุมกาแฟ: เคาน์เตอร์ + เครื่องชงกาแฟ + ตู้เย็นเล็ก", 1.20, 0.55, 0.0, 0.90),
+    "SOF": ("โซฟา 3 ที่นั่ง", 2.00, 0.85, 0.0, 0.85),
+    "CT": ("โต๊ะกลางรับแขก", 1.00, 0.55, 0.0, 0.40),
+    "WCH": ("เก้าอี้นั่งรอ 3 ที่นั่ง", 1.70, 0.60, 0.0, 0.85),
+    "BS": ("ชั้นหนังสือ / ตู้เอกสาร", 1.00, 0.35, 0.0, 1.90),
+    "MT8": ("โต๊ะประชุม 8 ที่นั่ง พร้อมเก้าอี้ และช่องปลั๊ก/HDMI กลางโต๊ะ", 3.20, 2.10, 0.0, 0.75),
+    "MT12": ("โต๊ะประชุม 12 ที่นั่ง พร้อมเก้าอี้ และช่องปลั๊ก/HDMI กลางโต๊ะ", 4.40, 2.30, 0.0, 0.75),
+    "SCR": ("จอแสดงผล 86\" + ลำโพงซาวด์บาร์ + กล้องประชุมทางไกล", 2.40, 0.12, 0.0, 2.10),
+    "PJ": ("โปรเจกเตอร์ติดเพดาน", 0.40, 0.35, 2.45, 0.20),
+    "GT": ("โต๊ะพูล/โต๊ะเกม", 2.30, 1.30, 0.0, 0.80),
+    "RCP": ("เคาน์เตอร์ต้อนรับ (แบบโรงแรม) + ผนังโลโก้ด้านหลัง", 3.00, 1.40, 0.0, 2.40),
+    # the kitchen (owner, 27 Nov: «ห้องครัวด้วย สวยๆ»): a run of base cabinets under a stone top
+    # with wall cabinets over it, the hob with its hood, the dining table
+    "KB": ("ตู้ครัวล่าง + ท็อปหิน + ตู้แขวนด้านบน (ช่วง 0.60 ม.)", 0.60, 0.60, 0.0, 2.20),
+    "HOB": ("เตาแก๊ส 2 หัวฝังท็อป + เครื่องดูดควัน + ตู้ล่าง", 0.80, 0.60, 0.0, 2.20),
+    "MW": ("ตู้วางไมโครเวฟ/เตาอบ (สูง)", 0.60, 0.60, 0.0, 2.20),
+    "DT": ("โต๊ะรับประทานอาหาร 4 ที่นั่ง พร้อมเก้าอี้", 1.30, 1.50, 0.0, 0.75),
+    # ห้องอาบน้ำ (owner, 27 Nov): the shower's wet zone a step down behind a stone curb
+    "WZ": ("โซนเปียกฝักบัว พื้นลดระดับ 5 ซม. ขอบหินกันน้ำ + รางระบายน้ำ", 1.20, 1.20, 0.0, 0.05),
+    "BN": ("ม้านั่งไม้ในห้องอาบน้ำ + ชั้นวางผ้าเช็ดตัว", 1.00, 0.40, 0.0, 0.45),
+})
 #: the furniture / appliance codes (DECOR, not billed)
-FURNITURE = ("BED", "BED1", "NS", "WR", "ARM", "TB", "TV", "DK", "FR", "WM")
+FURNITURE = ("BED", "BED1", "NS", "WR", "ARM", "TB", "TV", "DK", "FR", "WM",
+             "PC", "COF", "SOF", "CT", "WCH", "BS", "MT8", "MT12", "SCR", "PJ", "GT", "RCP",
+             "KB", "HOB", "MW", "DT", "WZ", "BN")
+
+
+class _Placer:
+    """Lays furniture in a room ``w`` × ``d`` (local plan, corner at 0, 0): every piece back to a
+    wall (or free in the middle), never over a door's way in (its width + 0.30 m, 1.0 m into the
+    room) nor a tall piece in front of a window — the owner: «ไม่ให้ตรงกับประตูทางเข้าและหน้าต่าง»."""
+
+    def __init__(self, w, d, openings, wall=0.08):
+        self.w, self.d, self.wall = w, d, wall
+        self.busy = []                               # (x0, y0, x1, y1, tall_only)
+        self.walls_open = {"S": [], "N": [], "W": [], "E": []}
+        for kind, ox, oy, ow in openings or []:
+            side = min((("S", abs(oy)), ("N", abs(oy - d)), ("W", abs(ox)), ("E", abs(ox - w))),
+                       key=lambda t: t[1])[0]
+            c = ox if side in ("S", "N") else oy
+            self.walls_open[side].append((kind, c, ow))
+            half = ow / 2 + (0.15 if kind == "door" else 0.05)
+            deep = 1.00 if kind == "door" else 0.60
+            if side == "S":
+                r = (c - half, 0.0, c + half, deep)
+            elif side == "N":
+                r = (c - half, d - deep, c + half, d)
+            elif side == "W":
+                r = (0.0, c - half, deep, c + half)
+            else:
+                r = (w - deep, c - half, w, c + half)
+            self.busy.append(r + (kind != "door",))
+        self.out = []
+
+    def has_door(self, side):
+        return any(k == "door" for k, _c, _w in self.walls_open[side])
+
+    def free(self, r, tall):
+        x0, y0, x1, y1 = r
+        if x0 < self.wall - 1e-6 or y0 < self.wall - 1e-6 or x1 > self.w - self.wall + 1e-6 or \
+                y1 > self.d - self.wall + 1e-6:
+            return False
+        for b in self.busy:
+            if b[4] and not tall:
+                continue                             # under a window sill: low pieces may stand
+            if x0 < b[2] - 1e-6 and b[0] < x1 - 1e-6 and y0 < b[3] - 1e-6 and b[1] < y1 - 1e-6:
+                return False
+        return True
+
+    def place(self, code, sides=("N", "E", "W", "S"), at=0.5, gap=0.0, clear=0.0, tall=None):
+        """Back to the first wall of ``sides`` with room, as near ``at`` (fraction along it) as
+        it goes; ``clear``: the free space kept in front of it. Returns (x, y) or None."""
+        if code in DECOR:
+            _n, pw, pd, z0, ph = DECOR[code]
+        elif code in SANITARY:
+            _n, _i, _r, pw, pd, z0, ph = SANITARY[code]
+            pd = max(pd, 0.60) if code.startswith("SK") else pd     # a sink stands in a 0.60 counter
+            if code == "BT2":                                        # the freestanding bath as modelled,
+                pw, pd = 1.85, 1.05                                  # with its floor mixer
+        else:
+            return None
+        tall = (z0 + ph > 1.0 and z0 < 1.0) if tall is None else tall
+        for side in sides:
+            along = side in ("S", "N")
+            L = self.w if along else self.d
+            cands = []
+            k = 0.0
+            while k <= L:
+                cands.append(k)
+                k += 0.05
+            cands.sort(key=lambda v: abs(v - at * L))
+            for c in cands:
+                if along:
+                    x0, x1 = c - pw / 2, c + pw / 2
+                    y0, y1 = (self.wall + gap, self.wall + gap + pd) if side == "S" else \
+                        (self.d - self.wall - gap - pd, self.d - self.wall - gap)
+                    keep = (x0, y1, x1, y1 + clear) if side == "S" else (x0, y0 - clear, x1, y0)
+                    cx, cy, dir_ = c, (y0 + y1) / 2, 0
+                else:
+                    y0, y1 = c - pw / 2, c + pw / 2
+                    x0, x1 = (self.wall + gap, self.wall + gap + pd) if side == "W" else \
+                        (self.w - self.wall - gap - pd, self.w - self.wall - gap)
+                    keep = (x1, y0, x1 + clear, y1) if side == "W" else (x0 - clear, y0, x0, y1)
+                    cx, cy, dir_ = (x0 + x1) / 2, c, 1
+                if self.free((x0, y0, x1, y1), tall):
+                    self.busy.append((x0, y0, x1, y1, False))
+                    if clear > 0:
+                        self.busy.append(keep + (False,))
+                    self.out.append((code, round(cx, 3), round(cy, 3), dir_))
+                    return cx, cy
+        return None
+
+    def centre(self, code, dir_=0, at=(0.5, 0.5)):
+        """Free-standing (a meeting table, a game table) round ``at`` (fractions)."""
+        if code not in DECOR:
+            return None
+        _n, pw, pd, _z, _h = DECOR[code]
+        sx, sy = (pw, pd) if dir_ == 0 else (pd, pw)
+        best = None
+        for i in range(-12, 13):
+            for j in range(-12, 13):
+                cx, cy = self.w * at[0] + i * 0.05, self.d * at[1] + j * 0.05
+                r = (cx - sx / 2, cy - sy / 2, cx + sx / 2, cy + sy / 2)
+                if self.free(r, False):
+                    dist = abs(i) + abs(j)
+                    if best is None or dist < best[0]:
+                        best = (dist, cx, cy, r)
+        if best is None:
+            return None
+        self.busy.append(best[3] + (False,))
+        self.out.append((code, round(best[1], 3), round(best[2], 3), dir_))
+        return best[1], best[2]
+
+    def ceiling(self, code, x, y, dir_=0):
+        self.out.append((code, round(x, 3), round(y, 3), dir_))
+
+
+def _quiet_sides(pl, order=("N", "E", "W", "S")):
+    """The walls with no door first (the bed's head, the screen, the counter go there)."""
+    return tuple(sorted(order, key=lambda sd: (pl.has_door(sd), order.index(sd))))
+
+
+def furnish(name: str, w: float, d: float, openings=(), wall: float = 0.08) -> list:
+    """The furniture of a room by its type (its name), clear of its doors and windows:
+    [(code, x, y, dir)] from the room's corner. Each set only in its own room type —
+    beds only in a bedroom, the office set only in an office … (owner, 27 Nov)."""
+    n = str(name or "")
+    pl = _Placer(w, d, openings, wall)
+    quiet = _quiet_sides(pl)
+    if n.startswith("ห้องนอน"):
+        big = w >= 3.0 and d >= 3.0
+        bed = "BED" if big else "BED1"
+        head = quiet[0]
+        p = pl.place(bed, (head,) + tuple(sd for sd in quiet if sd != head), clear=0.6, tall=True)
+        if p:
+            _n, bw, _bd, _z, _h = DECOR[bed]
+            for sgn in (-1, 1):                      # the bedside tables each side of the head
+                side = pl.out[-1 if sgn < 0 else -1]
+                (_c, bx, by, bdir) = [o for o in pl.out if o[0] == bed][0]
+                if bdir == 0:
+                    at = (bx + sgn * (bw / 2 + 0.25)) / w
+                    pl.place("NS", (head,), at=at)
+                else:
+                    at = (by + sgn * (bw / 2 + 0.25)) / d
+                    pl.place("NS", (head,), at=at)
+                del side
+        pl.place("WR", quiet[1:] + quiet[:1], at=0.15, clear=0.6)
+        opp = {"N": "S", "S": "N", "E": "W", "W": "E"}[head]
+        pl.place("TV", (opp,) + quiet, at=0.5)
+        if big:
+            pl.place("DK", quiet[1:] + quiet[:1], at=0.85, clear=0.5)
+            pl.place("ARM", tuple(reversed(quiet)), at=0.1)
+        return pl.out
+    if n.startswith("ห้องทำงาน"):
+        for at in (0.25, 0.75, 0.25, 0.75):
+            if not pl.place("PC", quiet, at=at, clear=0.7):
+                break
+        pl.place("COF", tuple(reversed(quiet)), at=0.85)
+        pl.place("BS", quiet, at=0.05)
+        if pl.place("SOF", tuple(reversed(quiet)), at=0.4, clear=0.4):
+            pl.centre("CT", at=(0.5, 0.5))
+        pl.place("WCH", ("S", "W", "E", "N"), at=0.6)
+        pl.place("PL", ("E", "W", "N", "S"), at=0.02)
+        return pl.out
+    if n.startswith("ห้องประชุม"):
+        big = w * d >= 30.0 and max(w, d) >= 6.0
+        tb = "MT12" if big else "MT8"
+        long_x = w >= d
+        if not pl.centre(tb, 0 if long_x else 1):
+            pl.centre("MT8", 0 if long_x else 1)
+        short = ("E", "W") if long_x else ("N", "S")
+        side = next((sd for sd in short if not pl.has_door(sd)), short[0])
+        pl.place("SCR", (side,), at=0.5, tall=False)
+        pl.ceiling("PJ", w / 2 if long_x else w / 2, d / 2, 0 if long_x else 1)
+        pl.place("COF", tuple(sd for sd in ("N", "S", "E", "W") if sd not in short), at=0.9)
+        pl.place("PL", ("N", "S", "E", "W"), at=0.02)
+        return pl.out
+    if n.startswith("ห้องสันทนาการ"):
+        pl.place("TV", quiet, at=0.5)
+        if pl.place("SOF", tuple(reversed(quiet)), at=0.5, clear=0.45):
+            pl.centre("CT", at=(0.5, 0.45))
+        if w * d >= 18.0:
+            pl.centre("GT", 0 if w >= d else 1, at=(0.5, 0.75))
+        pl.place("BS", quiet[1:] + quiet[:1], at=0.1)
+        pl.place("ARM", quiet[1:] + quiet[:1], at=0.8)
+        pl.place("ARM", tuple(reversed(quiet)), at=0.15)
+        pl.place("PL", ("E", "W", "N", "S"), at=0.02)
+        return pl.out
+    if n.startswith(("ห้องต้อนรับ", "ล็อบบี้", "โถงต้อนรับ")):
+        pl.place("RCP", quiet, at=0.5, clear=0.9)
+        if pl.place("SOF", tuple(reversed(quiet)), at=0.5, clear=0.45):
+            pl.centre("CT", at=(0.5, 0.4))
+        pl.place("WCH", tuple(reversed(quiet)), at=0.2)
+        for _k in range(2):
+            pl.place("PL", ("E", "W", "N", "S"), at=0.02)
+        return pl.out
+    if n.startswith(("ห้องอาบน้ำ", "อาบน้ำ")):
+        # a bathing room without a WC: the shower in a stepped-down wet zone behind a glass
+        # screen in one corner, the bath (freestanding when there is room) on the quiet wall,
+        # the vanity with its mirror, a towel rail, a bench, a plant
+        side = quiet[0]
+        corner = 0.0 if side in ("N", "S") else 0.0
+        if pl.place("WZ", (side,), at=0.02, tall=False):
+            wz = pl.out[-1]
+            # the shower set on the wall behind the wet zone, the drain in it
+            sx_, sy_ = wz[1], wz[2]
+            if side == "N":
+                sy_ = d - wall - 0.10
+            elif side == "S":
+                sy_ = wall + 0.10
+            elif side == "E":
+                sx_ = w - wall - 0.10
+            else:
+                sx_ = wall + 0.10
+            pl.out.append(("SH", round(sx_, 3), round(sy_, 3), wz[3]))
+            pl.out.append(("FD", wz[1], wz[2], wz[3]))
+            # the glass screen along the wet zone's open side
+            _c, wx, wy, wd = wz
+            if wd == 0:
+                pl.out.append(("GP", round(wx + 0.62, 3), wy, 1))
+            else:
+                pl.out.append(("GP", wx, round(wy + 0.62, 3), 0))
+        bath = "BT2" if w * d >= 7.5 else "BT"
+        pl.place(bath, (side,) + quiet[1:], at=0.6, clear=0.5, tall=False)
+        lv = "LV2" if max(w, d) >= 3.0 else "LV"
+        if pl.place(lv, quiet[1:] + quiet[:1], at=0.5, clear=0.6, tall=False):
+            _c, lx, ly, ld = pl.out[-1]
+            # the mirror on the wall over the basin
+            if ld == 0:
+                ly = wall + 0.02 if ly < d / 2 else d - wall - 0.02
+            else:
+                lx = wall + 0.02 if lx < w / 2 else w - wall - 0.02
+            pl.out.append(("MR", round(lx, 3), round(ly, 3), ld))
+        pl.place("TR", quiet[1:] + quiet[:1], at=0.1, tall=False)
+        pl.place("BN", tuple(reversed(quiet)), at=0.5)
+        pl.place("PL", ("E", "W", "N", "S"), at=0.98)
+        del corner
+        return pl.out
+    if n.startswith("ห้องครัว"):
+        # one straight run on the quietest wall, as a kitchen designer lays it: the fridge at the
+        # end, a cabinet, the sink (under the window is fine: low), cabinets, the hob, a tall unit
+        side = quiet[0]
+        along = side in ("S", "N")
+        L = (w if along else d) - 2 * wall
+        run = [("FR", 0.65), ("KB", 0.60), ("SK1", 0.80), ("KB", 0.60), ("HOB", 0.80), ("KB", 0.60),
+               ("MW", 0.60)]
+        while sum(r[1] for r in run) > L - 0.05 and len(run) > 3:
+            run.pop(1 if run[1][0] == "KB" else -1)
+        pos = wall + 0.02
+        start = (L - sum(r[1] for r in run)) / 2 + wall
+        pos = start
+        for code, ln in run:
+            at = (pos + ln / 2) / (w if along else d)
+            # the wall cabinets / hood are tall: they keep off a window; the sink may stand under it
+            pl.place(code, (side,), at=at, tall=False if code == "SK1" else None)
+            pos += ln
+        # a floor drain (ตะแกรงกรองผง + ที่ดักกลิ่น) in front of the sink — the grey water of the
+        # sink and the floor run out through the drain system (wanic_mep: outside the building)
+        for c_, sx_, sy_, sd_ in list(pl.out):
+            if c_ == "SK1":
+                fx_ = sx_ if side in ("N", "S") else (sx_ + (0.75 if side == "W" else -0.75))
+                fy_ = sy_ if side in ("E", "W") else (sy_ + (0.75 if side == "S" else -0.75))
+                pl.out.append(("FD", round(fx_, 3), round(fy_, 3), sd_))
+        if w >= 2.8 and d >= 2.8:
+            pl.centre("DT", 0 if w >= d else 1, at=(0.5, 0.45))
+        pl.place("PL", ("E", "W", "N", "S"), at=0.02)
+        return pl.out
+    if n.startswith(("ห้องนั่งเล่น", "ห้องรับแขก")):
+        pl.place("TV", quiet, at=0.5)
+        if pl.place("SOF", tuple(reversed(quiet)), at=0.5, clear=0.45):
+            pl.centre("CT", at=(0.5, 0.5))
+        pl.place("ARM", quiet[1:] + quiet[:1], at=0.2)
+        pl.place("PL", ("E", "W", "N", "S"), at=0.02)
+        return pl.out
+    return []
+
+
+#: the room types that get a furniture set by ``furnish``
+FURNISHED = ("ห้องนอน", "ห้องครัว", "ห้องอาบน้ำ", "ห้องทำงาน", "ห้องประชุม", "ห้องสันทนาการ", "ห้องต้อนรับ", "ล็อบบี้",
+             "โถงต้อนรับ", "ห้องนั่งเล่น", "ห้องรับแขก")
 
 #: The fittings «ชุดห้องน้ำมาตรฐาน» puts into a bathroom, with where along
 #: the room (fractions of w, d) each goes.
@@ -336,6 +638,7 @@ def bathroom_layout(w: float, d: float, wall: float = 0.08) -> list:
 #: ceiling: True/False)
 ROOM_FINISH = {
     "ห้องน้ำ": ("9.26", "7.16", 2.00, True),
+    "ห้องอาบน้ำ": ("9.26", "7.16", 2.00, True),
     "ห้องครัว": ("9.30", "7.16", 0.60, True),
     "ห้องซักล้าง": ("9.26", "7.16", 1.20, True),
     "ระเบียง": ("9.26", "", 0.0, False),

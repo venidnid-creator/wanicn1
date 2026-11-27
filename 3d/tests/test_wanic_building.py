@@ -764,3 +764,49 @@ def test_the_vertical_bars_join_from_the_footing_to_the_roof():
     lift = B.floor_lift(B.settings_of(d))
     covered = sorted(set(round(z, 2) for z in co))
     assert covered[0] <= lift + 0.01 and covered[-1] >= lift + 2 * H - 0.1
+
+
+def test_every_room_type_gets_its_own_set_clear_of_doors_and_windows():
+    """owner 27 Nov: bedroom set only in bedrooms, sanitary only in bathrooms, an office with desks
+    and computers, a coffee corner and seats, a meeting room with its table, display and projector,
+    a hotel-style reception — never in front of the way in or a window."""
+    from core import wanic_catalog as CAT
+    cases = {"ห้องนอน": ({"BED", "NS", "WR"}, 4, 4), "ห้องทำงาน": ({"PC", "COF"}, 5, 4),
+             "ห้องประชุม": ({"MT12", "SCR", "PJ"}, 8, 5), "ห้องสันทนาการ": ({"TV", "GT"}, 6, 5),
+             "ห้องต้อนรับ": ({"RCP", "SOF"}, 5, 4)}
+    for name, (want, w, d) in cases.items():
+        ops = [("door", w - 0.6, 0.0, 0.9), ("window", w / 2, d, 1.2)]
+        got = CAT.furnish(name, w, d, ops)
+        codes = {c for c, *_ in got}
+        assert want <= codes, (name, codes)
+        if name != "ห้องนอน":
+            assert not codes & {"BED", "BED1", "NS"}                  # beds only in bedrooms
+        for c, x, y, dr in got:
+            _n, pw, pd, z0, ph = CAT.DECOR[c]
+            if z0 > 2.0:
+                continue                                              # on the ceiling
+            sx, sy = (pw, pd) if dr == 0 else (pd, pw)
+            # never on the door's way in (its width + 0.15 each side, 1.0 m deep)
+            assert not (x - sx / 2 < w - 0.6 + 0.6 and w - 0.6 - 0.6 < x + sx / 2 and y - sy / 2 < 1.0), (name, c)
+            if z0 + ph > 1.0 and c not in ("PJ",):                     # nothing tall before the window
+                assert not (x - sx / 2 < w / 2 + 0.65 and w / 2 - 0.65 < x + sx / 2 and y + sy / 2 > d - 0.6), (name, c)
+    assert CAT.furnish("ห้องน้ำ", 3, 2) == []
+    kit = {c for c, *_ in CAT.furnish("ห้องครัว", 4, 3.5, [("door", 0.6, 0.0, 0.9)])}
+    assert {"FR", "SK1", "HOB", "KB", "DT"} <= kit
+
+
+def test_a_bathing_room_without_a_wc_and_its_drains():
+    """owner 27 Nov: «ห้องอาบน้ำ ไม่รวมห้องส้วม … มีอ่างอาบน้ำ ฝักบัวมาตรฐาน มีระดับ» and «จัดช่องระบาย
+    น้ำดี น้ำเสียให้ด้วย» — bath, shower in a stepped-down wet zone with its drain, no WC; the
+    fittings take water and drain through the building's systems."""
+    from core import wanic_catalog as CAT
+    from core import wanic_mep as M
+    got = CAT.furnish("ห้องอาบน้ำ", 3.5, 2.5, [("door", 3.0, 0.0, 0.8), ("window", 1.75, 2.5, 0.6)])
+    codes = [c for c, *_ in got]
+    assert {"WZ", "SH", "FD", "GP", "MR"} <= set(codes) and ({"BT", "BT2"} & set(codes))
+    assert not {"WC1", "WC2", "UR"} & set(codes)
+    assert {"SH", "BT2", "LV2", "FD", "SK1"} <= set(M.GREY_TYPES)
+    assert {"SH", "BT2", "LV2", "SK1"} <= set(M.SUPPLY_TYPES)
+    kit = [c for c, *_ in CAT.furnish("ห้องครัว", 4, 3.5, [("door", 3.4, 0.0, 0.9)])]
+    assert "FD" in kit and "SK1" in kit
+    assert CAT.finish_of({"name": "ห้องอาบน้ำ"})["wall_tile"]

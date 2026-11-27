@@ -3942,9 +3942,8 @@ class BuildingPanel(QWidget):
         for rm in f.get("rooms") or []:
             name = rm.get("name") or ""
             bath = name.startswith("ห้องน้ำ")
-            bed = name.startswith("ห้องนอน")
-            kit = True if (bath or bed) else (CAT.KITCHEN_SET + [("FR", 0.12, 0.85)]) \
-                if name.startswith("ห้องครัว") else [("WM", 0.20, 0.85)] \
+            bed = name.startswith(CAT.FURNISHED)       # bedrooms, offices, meeting, recreation, reception …
+            kit = True if (bath or bed) else [("WM", 0.20, 0.85)] \
                 if name.startswith(("ห้องซักล้าง", "ซักล้าง", "ลานซักล้าง")) else None
             if not kit:
                 continue
@@ -3957,8 +3956,15 @@ class BuildingPanel(QWidget):
                 if not (relayout and bath):
                     continue
                 fx[:] = [it for it in fx if not inside(it)]
-            if bed:                                   # ห้องนอน: bed, tables, wardrobe, TV, armchair
-                for code, px, py, dir_ in CAT.bedroom_layout(w, dd):
+            if bed:                                   # its own set, clear of its doors and windows
+                st_ = B.settings_of(d)
+                ops = []
+                for op in f.get("openings") or []:
+                    ox, oy = float(op["x"]) - x0, float(op["y"]) - y0
+                    if -0.06 <= ox <= w + 0.06 and -0.06 <= oy <= dd + 0.06 and \
+                            (abs(ox) < 0.06 or abs(ox - w) < 0.06 or abs(oy) < 0.06 or abs(oy - dd) < 0.06):
+                        ops.append((op.get("type", "door"), ox, oy, B.opening_size(op, st_)[0]))
+                for code, px, py, dir_ in CAT.furnish(name, w, dd, ops):
                     fx.append({"id": self._item_id(d, "x"), "type": code,
                                "x": B._r(x0 + px), "y": B._r(y0 + py), "dir": dir_})
                     added += 1
@@ -3976,8 +3982,10 @@ class BuildingPanel(QWidget):
                 added += 1
         if added:
             self._write(d)
-        self.status.setText(f"วางสุขภัณฑ์ชุดมาตรฐาน {added} ชิ้น" if added else
-                            "ไม่มีห้องน้ำ/ห้องครัวที่ยังว่าง (ตั้งชื่อห้องว่า «ห้องน้ำ» หรือ «ห้องครัว»)")
+        self.status.setText(f"วางสุขภัณฑ์และเฟอร์นิเจอร์ชุดมาตรฐาน {added} ชิ้น (ตามประเภทห้อง หลบประตู-หน้าต่าง)"
+                            if added else
+                            "ไม่มีห้องที่ยังว่าง (ตั้งชื่อห้อง เช่น «ห้องน้ำ» «ห้องนอน» «ห้องทำงาน» «ห้องประชุม» "
+                            "«ห้องสันทนาการ» «ห้องต้อนรับ» «ห้องครัว»)")
         return added
 
     def room_pictures(self, save_dir=None):

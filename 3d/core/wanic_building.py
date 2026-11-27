@@ -353,6 +353,7 @@ def room_at(rooms, x, y):
 #: designers know): a type names the room, a size sets w × d.
 ROOM_TYPES = ["ห้องนอน", "ห้องนอนใหญ่", "ห้องนั่งเล่น", "ห้องรับแขก",
               "ห้องครัว", "ห้องรับประทานอาหาร", "ห้องน้ำ", "ห้องทำงาน",
+              "ห้องอาบน้ำ", "ห้องประชุม", "ห้องสันทนาการ", "ห้องต้อนรับ",
               "ห้องเก็บของ", "ห้องซักล้าง", "ห้องพระ", "โถงทางเดิน",
               "บันได", "ระเบียง", "ชานพัก", "ที่จอดรถ"]
 ROOM_SIZES = [(3.0, 3.0), (3.0, 2.0), (2.0, 3.0), (4.0, 4.0), (4.0, 3.0),
@@ -1995,13 +1996,218 @@ def fixture_member(fx, z, room=None):
         bx.box(-w / 2, w / 2, b, -b, 0.0, height, {"color": (0.95, 0.95, 0.96)})
         bx.frustum(0.0, -b + 0.005, 0.18, 0.005, 0.18, 0.005, 0.25, 0.27, dark)  # the door (approx.)
         bx.box(-0.18, 0.18, -b, -b + 0.01, 0.20, 0.56, {"color": (0.55, 0.65, 0.75)})
+    elif t == "PC":
+        # an office desk: top, two side panels, a modesty panel with the cable tray (รางเดินสายไฟ)
+        # under it, a monitor on a stand, keyboard, the PC tower, a mesh office chair
+        bx.box(-w / 2, w / 2, b, -b, 0.72, 0.75, wood)
+        for sx in (-1, 1):
+            bx.box(sx * w / 2 - (0.03 if sx > 0 else 0), sx * w / 2 + (0.0 if sx > 0 else 0.03), b, -b,
+                   0.0, 0.72, wood)
+        bx.box(-w / 2 + 0.03, w / 2 - 0.03, b + 0.02, b + 0.04, 0.30, 0.72, wood)
+        bx.box(-w / 2 + 0.05, w / 2 - 0.05, b + 0.05, b + 0.15, 0.62, 0.68, {"color": (0.55, 0.57, 0.60)})
+        bx.box(-0.04, 0.04, b + 0.12, b + 0.18, 0.75, 0.90, dark)                     # stand
+        bx.box(-0.30, 0.30, b + 0.10, b + 0.13, 0.88, 1.24, dark)                     # 27" screen
+        bx.box(-0.29, 0.29, b + 0.13, b + 0.132, 0.89, 1.23, {"color": (0.20, 0.35, 0.55)})
+        bx.box(-0.22, 0.22, b + 0.30, b + 0.45, 0.75, 0.77, dark)                     # keyboard
+        bx.box(w / 2 - 0.30, w / 2 - 0.10, b + 0.05, b + 0.50, 0.0, 0.45, dark)       # PC tower
+        chair = {"color": (0.18, 0.19, 0.22)}
+        bx.frustum(0.0, -b + 0.25, 0.28, 0.28, 0.28, 0.28, 0.0, 0.04, chair)          # star base
+        bx.frustum(0.0, -b + 0.25, 0.03, 0.03, 0.03, 0.03, 0.04, 0.44, chrome)
+        bx.box(-0.25, 0.25, -b + 0.02, -b + 0.48, 0.44, 0.52, chair)
+        bx.box(-0.24, 0.24, -b + 0.44, -b + 0.50, 0.52, 1.10, chair)
+    elif t == "COF":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, 0.86, wood)                                 # cabinet
+        bx.box(-w / 2 - 0.01, w / 2 + 0.01, b, -b + 0.02, 0.86, 0.90, stone)          # top
+        bx.box(-w / 2 + 0.05, -w / 2 + 0.55, b + 0.01, -b - 0.01, 0.05, 0.80, {"color": (0.88, 0.89, 0.90)})
+        bx.box(0.05, 0.37, b + 0.05, b + 0.40, 0.90, 1.28, dark)                      # espresso machine
+        bx.box(0.08, 0.34, b + 0.40, b + 0.42, 1.10, 1.24, chrome)
+        for k_ in range(4):                                                           # cups
+            bx.frustum(0.45 + k_ * 0.06, b + 0.25, 0.025, 0.025, 0.03, 0.03, 0.90, 0.98, white)
+        bx.box(-w / 2, w / 2, b, b + 0.30, 1.50, 1.52, wood)                          # a shelf above
+    elif t in ("SOF", "WCH"):
+        fab = {"color": (0.36, 0.43, 0.52)} if t == "SOF" else {"color": (0.22, 0.24, 0.28)}
+        seats = 3
+        if t == "SOF":
+            bx.box(-w / 2, w / 2, b, -b, 0.08, 0.42, fab)                             # base
+            bx.box(-w / 2, w / 2, b, b + 0.20, 0.42, height, fab)                     # back
+            for sx in (-1, 1):
+                bx.box(sx * w / 2 - (0.16 if sx > 0 else 0), sx * w / 2 + (0.0 if sx > 0 else 0.16), b, -b,
+                       0.42, 0.65, fab)                                               # arms
+            for k_ in range(seats):                                                   # cushions
+                x0_ = -w / 2 + 0.17 + (w - 0.34) * k_ / seats
+                bx.box(x0_ + 0.01, x0_ + (w - 0.34) / seats - 0.01, b + 0.20, -b - 0.02, 0.42, 0.52,
+                       {"color": (0.42, 0.50, 0.60)})
+            bx.box(-w / 2 + 0.03, w / 2 - 0.03, b + 0.03, -b - 0.03, 0.0, 0.08, dark)
+        else:
+            bx.box(-w / 2, w / 2, b + 0.05, -b - 0.05, 0.40, 0.43, chrome)            # the beam
+            for sx in (-1, 1):
+                bx.box(sx * (w / 2 - 0.05) - 0.03, sx * (w / 2 - 0.05) + 0.03, b + 0.05, -b - 0.05, 0.0, 0.40, chrome)
+            for k_ in range(seats):
+                x0_ = -w / 2 + 0.05 + (w - 0.10) * k_ / seats
+                x1_ = x0_ + (w - 0.10) / seats - 0.04
+                bx.box(x0_, x1_, b + 0.10, -b - 0.02, 0.43, 0.48, fab)
+                bx.box(x0_, x1_, b + 0.06, b + 0.12, 0.48, height, fab)
+    elif t == "CT":
+        glass = {"color": (0.75, 0.85, 0.88)}
+        bx.box(-w / 2, w / 2, b, -b, 0.36, 0.40, glass)
+        bx.box(-w / 2 + 0.05, w / 2 - 0.05, b + 0.05, -b - 0.05, 0.10, 0.12, wood)
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                bx.box(sx * (w / 2 - 0.05) - 0.02, sx * (w / 2 - 0.05) + 0.02,
+                       sy * (d / 2 - 0.05) - 0.02, sy * (d / 2 - 0.05) + 0.02, 0.0, 0.36, dark)
+    elif t == "BS":
+        bx.box(-w / 2, w / 2, b, -b, 0.0, 0.02, wood)
+        bx.box(-w / 2, -w / 2 + 0.02, b, -b, 0.0, height, wood)
+        bx.box(w / 2 - 0.02, w / 2, b, -b, 0.0, height, wood)
+        bx.box(-w / 2, w / 2, b, b + 0.01, 0.0, height, wood)
+        cols_ = [(0.60, 0.20, 0.18), (0.20, 0.35, 0.55), (0.80, 0.70, 0.30), (0.25, 0.50, 0.35)]
+        for k_ in range(5):
+            z_ = 0.02 + k_ * (height - 0.02) / 5
+            bx.box(-w / 2, w / 2, b, -b, z_, z_ + 0.02, wood)
+            if k_ < 4:
+                x_ = -w / 2 + 0.04
+                i_ = 0
+                while x_ < w / 2 - 0.10:
+                    bw_ = 0.035 + 0.01 * ((i_ * 7) % 3)
+                    bx.box(x_, x_ + bw_, b + 0.03, -b - 0.03, z_ + 0.02, z_ + 0.24 + 0.03 * (i_ % 3),
+                           {"color": cols_[(i_ + k_) % 4]})
+                    x_ += bw_ + 0.005
+                    i_ += 1
+    elif t in ("MT8", "MT12"):
+        # the table (an oval-ended top), a power/HDMI box in the middle, the chairs round it
+        nside = 4 if t == "MT8" else 6
+        tw, td = w - 0.80, d - 1.10
+        bx.frustum(0.0, 0.0, tw / 2, td / 2, tw / 2, td / 2, 0.72, 0.75, wood, n=32)
+        bx.box(-tw / 2 + 0.3, tw / 2 - 0.3, -0.10, 0.10, 0.0, 0.72, dark)              # pedestal
+        bx.box(-0.15, 0.15, -0.06, 0.06, 0.75, 0.77, {"color": (0.45, 0.47, 0.50)})   # the box
+        chair = {"color": (0.20, 0.22, 0.26)}
+        for sy in (-1, 1):
+            for k_ in range(nside):
+                cx_ = -tw / 2 + 0.35 + (tw - 0.70) * (k_ / (nside - 1) if nside > 1 else 0.5)
+                cy_ = sy * (td / 2 + 0.30)
+                bx.box(cx_ - 0.24, cx_ + 0.24, cy_ - 0.24, cy_ + 0.24, 0.44, 0.50, chair)
+                by0 = cy_ + sy * 0.20
+                bx.box(cx_ - 0.23, cx_ + 0.23, min(by0, by0 + sy * 0.06), max(by0, by0 + sy * 0.06), 0.50, 1.00, chair)
+                bx.frustum(cx_, cy_, 0.03, 0.03, 0.03, 0.03, 0.0, 0.44, chrome)
+        for sx in (-1, 1):                                                            # the two ends
+            cx_ = sx * (tw / 2 + 0.30)
+            bx.box(cx_ - 0.24, cx_ + 0.24, -0.24, 0.24, 0.44, 0.50, chair)
+            bx.frustum(cx_, 0.0, 0.03, 0.03, 0.03, 0.03, 0.0, 0.44, chrome)
+    elif t == "SCR":
+        bx.box(-1.00, 1.00, b, b + 0.06, 0.95, 2.10, dark)                            # 86" display
+        bx.box(-0.98, 0.98, b + 0.06, b + 0.062, 0.97, 2.08, {"color": (0.10, 0.22, 0.40)})
+        bx.box(-0.55, 0.55, b + 0.02, b + 0.10, 0.82, 0.90, dark)                     # soundbar
+        bx.box(-0.08, 0.08, b + 0.02, b + 0.08, 2.12, 2.18, dark)                     # camera
+        bx.box(-1.20, 1.20, b, b + 0.45, 0.0, 0.60, wood)                             # AV cabinet
+    elif t == "PJ":
+        bx.box(-w / 2, w / 2, b, -b, z0, z0 + 0.12, {"color": (0.92, 0.92, 0.93)})
+        bx.frustum(0.0, -b + 0.005, 0.05, 0.005, 0.05, 0.005, z0 + 0.03, z0 + 0.09, dark)
+        bx.box(-0.03, 0.03, -0.03, 0.03, z0 + 0.12, z0 + height + 0.30, chrome)       # ceiling mount
+    elif t == "GT":
+        felt = {"color": (0.10, 0.45, 0.25)}
+        bx.box(-w / 2, w / 2, b, -b, 0.70, 0.80, wood)
+        bx.box(-w / 2 + 0.10, w / 2 - 0.10, b + 0.10, -b - 0.10, 0.80, 0.81, felt)
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                bx.box(sx * (w / 2 - 0.20) - 0.06, sx * (w / 2 - 0.20) + 0.06,
+                       sy * (d / 2 - 0.20) - 0.06, sy * (d / 2 - 0.20) + 0.06, 0.0, 0.70, wood)
+    elif t in ("KB", "HOB", "MW"):
+        # a kitchen module: plinth, base cabinet with doors and handles, a stone top, the wall
+        # cabinets 0.60 m over the top (a hood instead over the hob), a tall unit for the oven
+        cab = {"color": (0.93, 0.92, 0.89)}
+        door = {"color": (0.38, 0.30, 0.24)}
+        bx.box(-w / 2, w / 2, b + 0.05, -b - 0.05, 0.0, 0.10, dark)                    # plinth
+        top = 0.86 if t != "MW" else 2.10
+        bx.box(-w / 2, w / 2, b, -b - 0.03, 0.10, top - (0.04 if t != "MW" else 0.0), cab)
+        bx.box(-w / 2 + 0.01, w / 2 - 0.01, -b - 0.03, -b - 0.01, 0.13, top - 0.06, door)
+        bx.box(-0.15, 0.15, -b - 0.01, -b + 0.01, top - 0.16, top - 0.14, chrome)      # handle
+        if t == "MW":
+            bx.box(-w / 2 + 0.05, w / 2 - 0.05, -b - 0.035, -b - 0.01, 0.95, 1.40, dark)  # the oven
+            bx.box(-w / 2 + 0.05, w / 2 - 0.05, -b - 0.035, -b - 0.01, 1.50, 1.80, dark)  # microwave
+        else:
+            bx.box(-w / 2, w / 2, b, -b, 0.82, 0.86, stone)                            # stone top
+            bx.box(-w / 2, w / 2, b, b + 0.02, 0.86, 1.45, {"color": (0.95, 0.95, 0.93)})  # backsplash
+            if t == "HOB":
+                for sx in (-0.18, 0.18):
+                    bx.frustum(sx, 0.0, 0.11, 0.11, 0.11, 0.11, 0.86, 0.875, dark)
+                    bx.frustum(sx, 0.0, 0.05, 0.05, 0.05, 0.05, 0.875, 0.89, {"color": (0.55, 0.20, 0.10)})
+                bx.box(-w / 2 + 0.05, w / 2 - 0.05, b, b + 0.45, 1.55, 1.68, chrome)     # the hood
+                bx.box(-0.15, 0.15, b, b + 0.25, 1.68, 2.20, chrome)                     # its chimney
+            else:
+                bx.box(-w / 2, w / 2, b, b + 0.35, 1.45, 2.15, cab)                      # wall cabinet
+                bx.box(-w / 2 + 0.01, w / 2 - 0.01, b + 0.35, b + 0.37, 1.48, 2.12, door)
+                bx.box(-0.12, 0.12, b + 0.37, b + 0.39, 1.50, 1.52, chrome)
+    elif t == "WZ":
+        # the wet zone: a dark anti-slip tile floor 5 cm down, a stone curb on its open sides,
+        # a linear drain along the back
+        tile = {"color": (0.36, 0.38, 0.40)}
+        bx.box(-w / 2, w / 2, b, -b, -0.05, -0.04, tile)
+        bx.box(-w / 2, w / 2, -b - 0.06, -b, -0.05, 0.03, stone)                      # front curb
+        bx.box(w / 2 - 0.06, w / 2, b, -b, -0.05, 0.03, stone)                        # side curb
+        bx.box(-w / 2 + 0.05, w / 2 - 0.10, b + 0.05, b + 0.12, -0.045, -0.04, chrome)  # linear drain
+    elif t == "BN":
+        teak = {"color": (0.62, 0.42, 0.25)}
+        for k_ in range(5):
+            y_ = b + 0.02 + k_ * (d - 0.04) / 5
+            bx.box(-w / 2, w / 2, y_, y_ + (d - 0.04) / 5 - 0.01, 0.42, 0.45, teak)
+        for sx in (-1, 1):
+            bx.box(sx * (w / 2 - 0.06) - 0.03, sx * (w / 2 - 0.06) + 0.03, b, -b, 0.0, 0.42, teak)
+        bx.box(-w / 2 + 0.08, w / 2 - 0.08, b + 0.04, -b - 0.04, 0.12, 0.14, teak)       # lower shelf
+        towel = {"color": (0.95, 0.94, 0.90)}
+        for k_ in range(3):
+            bx.box(-0.40 + k_ * 0.28, -0.18 + k_ * 0.28, b + 0.08, -b - 0.08, 0.14, 0.22, towel)
+    elif t == "DT":
+        bx.box(-0.60, 0.60, -0.40, 0.40, 0.72, 0.75, wood)                             # the top
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                bx.box(sx * 0.53 - 0.03, sx * 0.53 + 0.03, sy * 0.33 - 0.03, sy * 0.33 + 0.03, 0.0, 0.72, wood)
+        seat = {"color": (0.55, 0.42, 0.30)}
+        for sx in (-0.30, 0.30):
+            for sy in (-1, 1):
+                cy_ = sy * 0.62
+                bx.box(sx - 0.21, sx + 0.21, cy_ - 0.20, cy_ + 0.20, 0.43, 0.47, seat)
+                by0 = cy_ + sy * 0.17
+                bx.box(sx - 0.20, sx + 0.20, min(by0, by0 + sy * 0.04), max(by0, by0 + sy * 0.04), 0.47, 0.92, seat)
+                for lx in (-0.17, 0.17):
+                    for ly in (-0.16, 0.16):
+                        bx.box(sx + lx - 0.015, sx + lx + 0.015, cy_ + ly - 0.015, cy_ + ly + 0.015, 0.0, 0.43, seat)
+    elif t == "RCP":
+        # a hotel front desk: a curved-front counter with a stone top and a lower writing shelf,
+        # a lit logo wall behind, two computers, a bell
+        lam = {"color": (0.30, 0.22, 0.16)}
+        gold = {"color": (0.80, 0.66, 0.35)}
+        bx.box(-w / 2, w / 2, b, b + 0.08, 0.0, height, {"color": (0.42, 0.33, 0.26)})  # logo wall
+        bx.box(-0.60, 0.60, b + 0.08, b + 0.09, 1.50, 1.90, gold)                       # the logo
+        cy_ = b + 0.80
+        bx.box(-w / 2 + 0.20, w / 2 - 0.20, cy_, cy_ + 0.45, 0.0, 1.05, lam)          # front
+        bx.box(-w / 2 + 0.15, w / 2 - 0.15, cy_ - 0.05, cy_ + 0.55, 1.05, 1.10, stone)  # top
+        bx.box(-w / 2 + 0.20, w / 2 - 0.20, cy_ + 0.45, cy_ + 0.47, 0.30, 0.95, gold)   # trim
+        bx.box(-w / 2 + 0.25, w / 2 - 0.25, cy_ - 0.35, cy_, 0.72, 0.75, stone)        # work top
+        for sx in (-0.6, 0.6):
+            bx.box(sx - 0.22, sx + 0.22, cy_ - 0.30, cy_ - 0.27, 0.80, 1.10, dark)
+        bx.frustum(0.9, cy_ + 0.25, 0.05, 0.05, 0.02, 0.02, 1.10, 1.16, gold)
     elif t in ("TP", "SD"):
         bx.box(-w / 2, w / 2, b, b + d, z0, z0 + height, chrome)
     elif t == "FD":
         bx.box(-w / 2, w / 2, b, -b, -0.004, 0.002, chrome)
+    elif t.startswith("SK"):
+        # the sink in its own base cabinet under a stone top (one run with the kitchen modules)
+        cab = {"color": (0.93, 0.92, 0.89)}
+        door = {"color": (0.38, 0.30, 0.24)}
+        b6 = -0.30
+        bx.box(-w / 2, w / 2, b6 + 0.05, -b6 - 0.05, 0.0, 0.10, dark)
+        bx.box(-w / 2, w / 2, b6, -b6 - 0.03, 0.10, 0.82, cab)
+        bx.box(-w / 2 + 0.01, w / 2 - 0.01, -b6 - 0.03, -b6 - 0.01, 0.13, 0.80, door)
+        bx.box(-w / 2, w / 2, b6, -b6, 0.82, 0.86, stone)
+        bx.box(-w / 2, w / 2, b6, b6 + 0.02, 0.86, 1.45, {"color": (0.95, 0.95, 0.93)})
+        nb = 2 if t == "SK2" else 1
+        for k_ in range(nb):
+            cx_ = -w / 2 + w * (k_ + 0.5) / nb
+            bx.box(cx_ - 0.20, cx_ + 0.20, -0.20, 0.18, 0.70, 0.865, chrome)          # the bowl
+        bx.frustum(0.0, b6 + 0.08, 0.02, 0.02, 0.02, 0.02, 0.86, 1.15, chrome)        # the tap
+        bx.box(-0.015, 0.015, b6 + 0.08, b6 + 0.28, 1.12, 1.15, chrome)
     else:
-        bx.box(-w / 2, w / 2, b, -b, z0, z0 + max(height, 0.01),
-               chrome if t.startswith("SK") else white)
+        bx.box(-w / 2, w / 2, b, -b, z0, z0 + max(height, 0.01), white)
     from core.wanic_catalog import FURNITURE
     g = bx.group(name, "structure", "furniture" if t in FURNITURE else "fixture", t,
                  "IfcFurnishingElement" if t in FURNITURE else "IfcSanitaryTerminal")
