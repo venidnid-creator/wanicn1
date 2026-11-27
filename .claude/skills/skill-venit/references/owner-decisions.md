@@ -13,6 +13,8 @@ Quotes are the owner's words; dates are 2026 (Buddhist year 2569).
 - Ask when unsure; «ตามที่แนะนำ» / «อนุมัติ» = proceed.
 
 ## Structure and calculation
+- (27 Nov) «กำลังที่เหลือไม่น้อยกว่า 1 เท่าของที่ใช้ไป» = every member uses ≤ 50 % of its capacity.
+- (27 Nov) Tell the owner first which requested items are already done (avoid duplicates).
 - Basis: SDM วสท. (WSD กทม. 2522 optional), current seismic/wind standards with the old formulas optional.
 - «ห้ามลดเองตามประเภทอาคาร» — live-load reduction never automatic for the ข้อ 14 uses.
 - «หุ้มเสาอัตโนมัติ» — fire cover of columns set automatically.
@@ -30,6 +32,8 @@ Quotes are the owner's words; dates are 2026 (Buddhist year 2569).
 ## Roads
 - Cross sections «ตามมาตรฐาน ทช. หรือ ทล.»; no 3D model without «6. สรุปการออกแบบ»; layer table waits for the design.
 - THAI-PAVE manual (uploaded PDF) for the steps; Thai-Slope not ordered yet.
+- (27 Nov) Pavement methods: **only AI 1970 (asphalt) and Road Note 29 (concrete)**, both tabs selectable;
+  PCA 1984 cancelled — do not add it. The owner will send a new brief for the whole road part.
 - Curves smooth, PC/PT/R/V shown in survey and plan; tables explained in plain words for everyone.
 - «ปรับค่ากึ่งกลาง» — CL shots onto the line to be built, N E Z follow.
 - Site check from LandsMaps (done from parcel files — LandsMaps unreachable); «ใส่ค่าพิกัด E N และโซน» on the report.
