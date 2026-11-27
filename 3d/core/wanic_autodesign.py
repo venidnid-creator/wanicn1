@@ -70,10 +70,69 @@ def footing_side(P_service: float, qa_t: float, depth: float, conc: float = 2400
     return round(side, 2), t
 
 
-def design_footings(data, res) -> list:
-    """Size every spread footing for its load and group them into F1.. ;
-    returns the lines that say what changed."""
+def design_pile_footings(data, res) -> list:
+    """ฐานรากบนเสาเข็ม: every footing gets the piles its load needs (its cap's own weight
+    in), the cap sized for them; grouped into F1.. by pile count and pile type. The I pile
+    P1 first; more than 6 of them → the longer P2 (owner, 27 Nov: 3 storeys up on I piles)."""
     from core import wanic_building as B
+    from core import wanic_pile as PL
+    data["combined_footings"] = []
+    E = B.elements(data)
+    lib = B.library_of(data)
+    b_ = res["basis"]
+    D_, _L = C.factors(b_)
+    loads = dict(res["columns"])
+    base = dict(lib.get("F1") or {})
+    types = PL.types_of(data, b_)
+    conc = b_["concrete"]
+    need = {}
+    for f in E["footings"]:
+        k = (round(f["x"], 3), round(f["y"], 3))
+        P = loads.get(k, 0.0) / D_
+        for pt in ("P1", "P2"):
+            cap = PL.capacity(types[pt])
+            qa = cap["Qa"] * 1000.0
+            n = 1
+            for _ in range(12):
+                sz = B.pile_cap_size(n, cap["b"])
+                total = P + sz["w"] * sz["l"] * sz["t"] * conc
+                n2 = max(1, math.ceil(total / qa - 1e-9)) if qa > 0 else 99
+                if n2 <= n:
+                    break
+                n = n2
+            if n <= 6 or pt == "P2":
+                break
+        need[(f["x"], f["y"])] = (min(n, 9), pt, B.pile_cap_size(min(n, 9), cap["b"]))
+    if not need:
+        return []
+    kinds = sorted({(n, pt) for n, pt, _sz in need.values()}, key=lambda t: (t[1], t[0]))
+    new_lib = dict(data.get("library") or {})
+    for old in [m for m, v in lib.items() if v.get("kind") == "footing" and m != "F1"]:
+        new_lib.pop(old, None)
+    marks = {}
+    for i, (n, pt) in enumerate(kinds, 1):
+        sz = next(sz for nn, p_, sz in need.values() if (nn, p_) == (n, pt))
+        mark = f"F{i}"
+        new_lib[mark] = {**base, **({} if mark == "F1" else (new_lib.get(mark) or {})), "kind": "footing",
+                         "w": sz["w"], "l": sz["l"], "t": sz["t"], "piles": n, "pile": pt, "pile_e": round(sz["e"], 3)}
+        marks[(n, pt)] = mark
+    data["library"] = new_lib
+    counts = {}
+    for (x, y), (n, pt, _sz) in need.items():
+        _assign(data, x, y, "F", marks[(n, pt)])
+        counts[marks[(n, pt)]] = counts.get(marks[(n, pt)], 0) + 1
+    return [f"{m} (ขั้น 2 ฐานรากบนเสาเข็ม): เข็ม {pt} {n} ต้น · ฐาน {new_lib[m]['w']:.2f}×{new_lib[m]['l']:.2f} ม. "
+            f"หนา {new_lib[m]['t']:.2f} ม. · {counts.get(m, 0)} ฐาน" for (n, pt), m in sorted(marks.items(),
+                                                                                       key=lambda t: t[1])]
+
+
+def design_footings(data, res) -> list:
+    """Size every footing for its load — spread footings or footings on piles as the job is
+    set (``B.foundation_mode``) — and group them into F1.. ; returns the lines that say
+    what changed."""
+    from core import wanic_building as B
+    if B.foundation_mode(data) == "pile":
+        return design_pile_footings(data, res)
     had_cf = bool(data.get("combined_footings"))
     data["combined_footings"] = []                         # re-decided below from the single sizes
     E = B.elements(data)
@@ -82,10 +141,12 @@ def design_footings(data, res) -> list:
     D_, _L = C.factors(b_)
     loads = dict(res["columns"])
     base = dict(lib.get("F1") or {})
-    if int(base.get("piles") or 0):                       # piles: the pile count rule (advice) handles them
-        if had_cf:
+    if int(base.get("piles") or 0) and (data or {}).get("foundation") != "spread":
+        if had_cf:                                         # piles set by hand: the advice handles them
             data["combined_footings"] = []
         return []
+    base.update(piles=0)                                  # ฐานแผ่: no piles under any footing
+    base.pop("pile_e", None)
     need = {}
     for f in E["footings"]:
         k = (round(f["x"], 3), round(f["y"], 3))
@@ -107,6 +168,10 @@ def design_footings(data, res) -> list:
         new_lib[mark] = {**base, **(new_lib.get(mark) or {}), "kind": "footing", "w": side, "l": side,
                          "t": max(t, float((new_lib.get(mark) or {}).get("t", 0) if mark != "F1" else 0))}
         marks[side] = mark
+    if (data or {}).get("foundation") == "spread":          # chosen: spread footings, no piles left
+        for m_ in marks.values():
+            new_lib[m_] = {k: v for k, v in new_lib[m_].items() if k not in ("pile_e", "pile")}
+            new_lib[m_]["piles"] = 0
     data["library"] = new_lib
     for (x, y), (s, _t) in need.items():
         side = next(v for v in sizes if v >= s - 1e-9)
@@ -260,8 +325,8 @@ def design_columns(data, res) -> list:
         names = {}
         for i, (_a, n, d) in enumerate(picks, 1):
             mk = f"{prefix}{i}"
-            new_lib[mk] = dict(base, **{k: v for k, v in (new_lib.get(mk) or {}).items()},
-                               kind="column" if role == "C" else "stump", b=b, h=b, main=f"{n}-DB{d}")
+            new_lib[mk] = {**base, **(new_lib.get(mk) or {}),
+                           "kind": "column" if role == "C" else "stump", "b": b, "h": b, "main": f"{n}-DB{d}"}
             names[(n, d)] = mk
         cnt = {}
         for (x, y, r_), (_a, n, d) in bars.items():
@@ -306,6 +371,11 @@ def design(data, rounds: int = 8) -> dict:
         res = C.analyse(data)
         if not failing(res):
             break
+    if B.foundation_mode(data) == "pile":
+        # the pile caps once more on the final loads: the pile count and the cap's size agree
+        for line in design_pile_footings(data, res):
+            words[line.split(" ", 1)[0]] = line
+        res = C.analyse(data)
     after = B.library_of(data)
     changed = [mk for mk in after if before.get(mk) != after[mk]]
     lines = [words[mk] for mk in sorted(words) if mk in after and (mk in changed or mk not in before)]

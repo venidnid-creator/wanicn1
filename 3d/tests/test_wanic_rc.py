@@ -72,3 +72,33 @@ def test_report_workbook(tmp_path):
         assert len([n for n in z.namelist() if n.startswith("xl/worksheets/sheet")]) == 3
     for name in ("ตรวจเหล็กเสริม", "ปริมาณตามเบอร์", "เหล็กเสริมตามขนาด"):
         assert name in book
+
+
+def test_spread_footings_or_piles_both_designed_to_pass():
+    """owner 27 Nov: choose spread footings or piles — both designed to pass, the model follows;
+    3 storeys and up go on I piles by default."""
+    import copy as _c
+    from core import wanic_autodesign as AU
+    from core import wanic_building as B
+    d = B.default_data()
+    rooms = [dict(name="a", x=0, y=0, w=4, d=4), dict(name="b", x=4, y=0, w=4, d=4)]
+    d["floors"] = [dict(_c.deepcopy(d["floors"][0]), rooms=_c.deepcopy(rooms)) for _ in range(3)]
+    d["settings"]["roof"] = "hip"
+    assert B.foundation_mode(d) == "pile"
+    out = AU.design(d)
+    feet = {k: v for k, v in B.library_of(d).items() if v["kind"] == "footing"}
+    assert not out["failing"] and all(int(v["piles"]) >= 1 and v["pile"] == "P1" for v in feet.values())
+    for v in feet.values():                         # the cap fits its piles
+        sz = B.pile_cap_size(int(v["piles"]), 0.18)
+        assert (v["w"], v["l"]) == (sz["w"], sz["l"])
+        pts = B.pile_points(v, 0.0, 0.0)
+        assert len(pts) == int(v["piles"])
+        assert all(abs(x) <= v["w"] / 2 and abs(y) <= v["l"] / 2 for x, y in pts)
+    d["foundation"] = "spread"
+    out = AU.design(d)
+    feet = {k: v for k, v in B.library_of(d).items() if v["kind"] == "footing"}
+    assert not out["failing"] and all(int(v.get("piles") or 0) == 0 for v in feet.values())
+    assert max(v["w"] for v in feet.values()) > 2.0
+    two = B.default_data()
+    two["floors"][0]["rooms"] = _c.deepcopy(rooms)
+    assert B.foundation_mode(two) == "spread"

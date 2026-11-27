@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
@@ -84,6 +84,17 @@ class RCPanel(QWidget):
                                   "ฐานรากทุกฐานออกแบบตามค่านี้")
         self.soil_spin.editingFinished.connect(self._soil_changed)
         srow.addWidget(self.soil_spin)
+        # ฐานแผ่ หรือ เสาเข็ม (owner, 27 Nov): the user chooses; both are designed to pass
+        self.found_lbl = QLabel("ชนิดฐานราก")
+        self.found_lbl.setStyleSheet("font-weight: 700;")
+        srow.addWidget(self.found_lbl)
+        self.found_box = QComboBox()
+        for k_, th_ in B.FOUNDATION_MODES.items():
+            self.found_box.addItem(th_, k_)
+        self.found_box.setToolTip("เลือกแล้วโปรแกรมออกแบบฐานรากทุกฐานให้ผ่าน แล้วปรับโมเดลตามที่เลือก — "
+                                  "ฐานแผ่: ขยายขนาดฐานให้ดินรับได้ · เสาเข็ม: จำนวนเข็มและขนาดฐานตามน้ำหนัก")
+        self.found_box.activated.connect(lambda _i: self.set_foundation(self.found_box.currentData()))
+        srow.addWidget(self.found_box)
         srow.addStretch(1)
         col.addLayout(srow)
         self.checks = QTextEdit()
@@ -219,6 +230,25 @@ class RCPanel(QWidget):
         col.addWidget(self.status)
         lay.addLayout(col, 1)
         self.steps.setCurrentRow(1)
+
+    def set_foundation(self, mode: str) -> str:
+        """Use spread footings or footings on piles: every footing designed again to pass
+        (and the columns/beams the new loads need), the model rebuilt. Returns the words."""
+        from core import wanic_autodesign as AU
+        bp = self.building()
+        if bp is None:
+            return ""
+        d = bp.data()
+        d["foundation"] = mode
+        out = AU.design(d)
+        bp._write(d)
+        self._calc = None
+        f_lines = [ln for ln in out["lines"] if ln.startswith("F")]
+        what = (f"ฐานราก: {B.FOUNDATION_MODES.get(mode, mode)} — " +
+                (" · ".join(f_lines) if f_lines else "ออกแบบใหม่แล้ว") +
+                (f" · ยังไม่ผ่าน {len(out['failing'])} รายการ" if out["failing"] else ""))
+        self._rebuild_after_fix(what)
+        return what
 
     def _soil_changed(self):
         bp = self.building()
@@ -402,6 +432,11 @@ class RCPanel(QWidget):
         self.soil_spin.blockSignals(False)
         self.soil_spin.setVisible(self.step in ("footing", "calc"))
         self.soil_lbl.setVisible(self.step in ("footing", "calc"))
+        self.found_box.setVisible(self.step in ("footing", "calc"))
+        self.found_lbl.setVisible(self.step in ("footing", "calc"))
+        i_ = self.found_box.findData(str(self.data().get("foundation") or "auto"))
+        if i_ >= 0:
+            self.found_box.setCurrentIndex(i_)
         self.loads_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.cant_btn.setVisible(calc or self.step in ("upper", "ground"))
         self.check_btn.setVisible(calc)

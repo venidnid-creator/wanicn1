@@ -706,11 +706,68 @@ def elements(data) -> dict:
     return E
 
 
+#: ฐานราก (owner, 27 Nov): «ให้ผู้ใช้เลือก ใช้ฐานรากที่ขยายโตขึ้น หรือใช้เสาเข็ม» — auto: 3 storeys and up
+#: on piles (I-section), lower on spread footings
+FOUNDATION_MODES = {"auto": "อัตโนมัติ (3 ชั้นขึ้นไปใช้เสาเข็มตัวไอ · ต่ำกว่าใช้ฐานแผ่)",
+                    "spread": "ฐานแผ่ — ขยายฐานให้ดินรับได้", "pile": "ฐานรากบนเสาเข็ม — เพิ่มจำนวนเข็มให้รับได้"}
+
+
+def foundation_mode(data) -> str:
+    """'spread' or 'pile' as the job is set (``data["foundation"]``)."""
+    m = str((data or {}).get("foundation") or "auto")
+    if m in ("spread", "pile"):
+        return m
+    return "pile" if len(stacked(data)[0]) >= 3 else "spread"
+
+
+def pile_cap_size(n: int, b: float) -> dict:
+    """Pile cap for ``n`` piles of width ``b``: spacing ≥ 3b (≥ 0.60 m), the pile centre
+    ≥ b/2 + 0.15 m from the cap edge; {"w", "l", "t", "s", "e"} (m)."""
+    s = max(3.0 * b, 0.60)
+    e = max(b / 2 + 0.15, 0.25)
+    if n <= 1:
+        w = l_ = 2 * e
+    elif n == 2:
+        w, l_ = s + 2 * e, 2 * e
+    elif n == 3:
+        w, l_ = s + 2 * e, s * 0.866 + 2 * e
+    elif n == 4:
+        w = l_ = s + 2 * e
+    elif n == 5:
+        w = l_ = s * 1.415 + 2 * e
+    elif n == 6:
+        w, l_ = 2 * s + 2 * e, s + 2 * e
+    else:
+        w = l_ = 2 * s + 2 * e
+    t = 0.40 if n <= 1 else 0.50 if n <= 4 else 0.60 if n <= 6 else 0.75
+
+    def up(v):
+        return math.ceil(v * 20 - 1e-9) / 20
+    return {"w": up(w), "l": up(l_), "t": t, "s": s, "e": e}
+
+
 def pile_points(f, x, y):
-    """Pile centres under a footing (1–4 piles, else none)."""
+    """Pile centres under a footing (1–9 piles, else none)."""
     n = int(f.get("piles") or 0)
     if n <= 0:
         return []
+    e = f.get("pile_e")
+    if e:                                          # laid out by pile_cap_size
+        e = float(e)
+        hx, hy = float(f["w"]) / 2 - e, float(f["l"]) / 2 - e
+        if n == 1:
+            return [(x, y)]
+        if n == 2:
+            return [(x - hx, y), (x + hx, y)]
+        if n == 3:
+            return [(x - hx, y - hy), (x + hx, y - hy), (x, y + hy)]
+        if n == 4:
+            return [(x - hx, y - hy), (x + hx, y - hy), (x + hx, y + hy), (x - hx, y + hy)]
+        if n == 5:
+            return [(x - hx, y - hy), (x + hx, y - hy), (x + hx, y + hy), (x - hx, y + hy), (x, y)]
+        if n == 6:
+            return [(x + i * hx, y + j * hy) for j in (-1, 1) for i in (-1, 0, 1)]
+        return [(x + i * hx, y + j * hy) for j in (-1, 0, 1) for i in (-1, 0, 1)][:max(n, 7)]
     dx, dy = float(f["w"]) / 4, float(f["l"]) / 4
     if n == 1:
         return [(x, y)]
