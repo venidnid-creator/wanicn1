@@ -13,7 +13,11 @@ Quotes are the owner's words; dates are 2026 (Buddhist year 2569).
 - Ask when unsure; «ตามที่แนะนำ» / «อนุมัติ» = proceed.
 
 ## Structure and calculation
-- (27 Nov) «กำลังที่เหลือไม่น้อยกว่า 1 เท่าของที่ใช้ไป» = every member uses ≤ 50 % of its capacity.
+- (27 Nov) Reserve: first «กำลังที่เหลือ ≥ 1 เท่า» (≤ 50 %), then after seeing the cost (+80–90 % steel) the owner
+  ordered «แก้ไข ใช้มาตรฐาน วสท.» — default `max_use` 1.0 (วสท. alone); 50 % stays an option in the basis dialog.
+  Soil and piles keep their own FS; deflection/least thickness always 100 %.
+- (27 Nov) Foundations: user chooses spread or piles (`data["foundation"]`); auto = 3 storeys up on I piles.
+- (27 Nov) Separate buildings: calc book, BOQ and drawing set split per building (`B.building_data`).
 - (27 Nov) Tell the owner first which requested items are already done (avoid duplicates).
 - Basis: SDM วสท. (WSD กทม. 2522 optional), current seismic/wind standards with the old formulas optional.
 - «ห้ามลดเองตามประเภทอาคาร» — live-load reduction never automatic for the ข้อ 14 uses.

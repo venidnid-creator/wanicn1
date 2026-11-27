@@ -102,3 +102,26 @@ def test_spread_footings_or_piles_both_designed_to_pass():
     two = B.default_data()
     two["floors"][0]["rooms"] = _c.deepcopy(rooms)
     assert B.foundation_mode(two) == "spread"
+
+
+def test_the_code_alone_by_default_and_the_reserve_as_an_option():
+    """owner 27 Nov: «แก้ไข ใช้มาตรฐาน วสท.» — 100 % of the strength by default; 50 % (a reserve of
+    1×) only when chosen, then auto-design brings every member within it."""
+    import copy as _c
+    from core import wanic_autodesign as AU
+    from core import wanic_building as B
+    from core import wanic_calc as C
+    assert C.basis({})["max_use"] == 1.0
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(name="a", x=0, y=0, w=4, d=4), dict(name="b", x=4, y=0, w=4, d=4)]
+    d["settings"]["roof"] = "gable"
+    base = _c.deepcopy(d)
+    AU.design(base)
+    assert all(m.limit == 1.0 for m in C.analyse(base)["members"])
+    d["calc"] = {"max_use": 0.5}
+    out = AU.design(d)
+    assert not out["failing"]
+    for m in out["res"]["members"]:
+        if m.limit < 1.0:
+            assert (m.strength if m.strength is not None else m.ratio) <= 0.5 + 1e-9
+    assert "_design" not in d["calc"]

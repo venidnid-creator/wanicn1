@@ -57,9 +57,9 @@ DEFAULTS = {
     "soil": 5.0,                     # allowable soil pressure, t/m² (the owner: default 5, the user enters the site value)
     "pile_cap": 8.0,                 # safe load per pile, t
     "defl": 180.0,                   # roof member deflection limit L/…
-    #: กำลังสำรอง (owner, 27 Nov: «กำลังที่เหลือไม่น้อยกว่า 1 เท่าของกำลังที่ใช้ไป»): a member passes
-    #: when it uses at most this share of its capacity (0.5 = a reserve of 1×; 1.0 = the code alone)
-    "max_use": 0.5,
+    #: a member passes when it uses at most this share of its strength: 1.0 = วสท. alone (the
+    #: owner, 27 Nov: «ใช้มาตรฐาน วสท.»); 0.5 = a reserve of 1× more (an option)
+    "max_use": 1.0,
     # the booklet's signature (editable in «ค่าที่ใช้ออกแบบ…»)
     "engineer": "นายเวนิช ธัมมะวงษ์", "qualification": "วิศวกรสำรวจ",
     "project": "", "owner": "", "place": "",
