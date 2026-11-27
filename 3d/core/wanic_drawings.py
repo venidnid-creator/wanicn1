@@ -130,14 +130,28 @@ class View:
         return v * self.k
 
 
+#: «PDF แบบ 2D + ภาพ 3D»: the 2-D drawings at 1:100 (the owner, 27 Nov: «แก้ไขมาตราส่วนให้เป็น 1:100
+#: ทั้งหมด … ภาพที่ออกมาเล็กมาก») — never a larger scale than this while it is set
+_SCALE_FIX = None
+
+
 def fit_scale(extent_m, box_mm, choices=SCALES) -> int:
     """The largest standard scale whose drawing of ``extent_m`` (w, h in
-    metres) fits ``box_mm``."""
+    metres) fits ``box_mm`` (1:100 first while ``_SCALE_FIX`` is set)."""
+    global _LAST_SCALE
+    if _SCALE_FIX:
+        choices = tuple(c for c in choices if c >= _SCALE_FIX) or choices
     w, h = max(extent_m[0], 1e-6), max(extent_m[1], 1e-6)
     for s in choices:
         if w * 1000 / s <= box_mm[0] and h * 1000 / s <= box_mm[1]:
+            _LAST_SCALE = max(_LAST_SCALE or 0, s)
             return s
+    _LAST_SCALE = max(_LAST_SCALE or 0, choices[-1])
     return choices[-1]
+
+
+#: the largest scale denominator a sheet's drawing used (to tell 1:100 from smaller)
+_LAST_SCALE = None
 
 
 # ---------------------------------------------------------------------------
@@ -3201,20 +3215,31 @@ def build_set(data, info=None,
         s.number = i
     pic = info.get("plan_picture")
     side = Side3D(data, E) if info.get("side3d") else None
-    global _AREA_OVERRIDE
+    global _AREA_OVERRIDE, _SCALE_FIX, _LAST_SCALE
+    # «2D + 3D» (owner, 27 Nov): the 2-D drawing at 1:100 takes the room it needs on the left, the
+    # 3-D view the rest (smaller is fine)
+    xs_, ys_ = grids(E)
+    ext_w = (max(xs_) - min(xs_)) if xs_ else 10.0
+    ext_h = (max(ys_) - min(ys_)) if ys_ else 8.0
+    _SCALE_FIX = 100 if side is not None else None
     for s, fn in plan:
         view = side.view_for(s) if side is not None else None
         if view is not None:
             x0, y0, x1, y1 = drawing_area()
-            mid = (x0 + x1) / 2
+            W = x1 - x0
+            side_el = s.title.startswith(("รูปด้านซ้าย", "รูปด้านขวา"))
+            need = (ext_h if side_el else ext_w) * 10.0 + 55.0      # mm at 1:100 + the dimensions
+            mid = x0 + min(max(need, W * 0.45), W - 95.0)
             n0 = len(s.items)
             keep = dict(s.__dict__)
             _AREA_OVERRIDE = (x0, y0, mid - 3, y1)
+            _LAST_SCALE = None
             try:
                 fn(s, sheets)
             finally:
                 _AREA_OVERRIDE = None
-            if any(px > mid - 1.0 for px, _py in _item_points(_Items(s.items[n0:]))):
+            if (_LAST_SCALE or 100) > 100 or \
+                    any(px > mid - 1.0 for px, _py in _item_points(_Items(s.items[n0:]))):
                 # the 2-D work does not fit the left half (fixed-place
                 # details, tables): draw it full width as before, with the
                 # small 3-D picture in its corner — nothing rides over it
@@ -3239,6 +3264,7 @@ def build_set(data, info=None,
             if pic:
                 inset_picture(s, pic)
         frame(s, info, len(sheets))
+    _SCALE_FIX = None
     boq = build_boq(data, info) if "BOQ" in groups else []
     front = []
     if "G" in groups and (sheets or boq):
@@ -4871,9 +4897,12 @@ class Side3D:
                     "center", "dim", angle=ang)
         names = {"plan": "ภาพ 3 มิติ ตัดที่ระดับ +1.20 ม. เหนือพื้น", "cut": "รูปตัดทัศนียภาพ",
                  "whole": "ภาพทัศนียภาพ 3 มิติ"}
-        caption(sh, ((x0 + x1) / 2, y0 + 6),
-                names.get(view[0], "ภาพ 3 มิติ") if not (view[0] == "plan" and view[1] < 0)
-                else "ภาพ 3 มิติ ฐานราก คานคอดิน", "พร้อมเส้นระยะ (ม.)")
+        title_ = names.get(view[0], "ภาพ 3 มิติ") if not (view[0] == "plan" and view[1] < 0) \
+            else "ภาพ 3 มิติ ฐานราก คานคอดิน"
+        if x1 - x0 < 125:                     # a narrow 3-D box: a short title, never past its edges
+            title_ = {"plan": "ภาพ 3 มิติ (ตัด +1.20 ม.)", "cut": "รูปตัดทัศนียภาพ",
+                      "whole": "ภาพ 3 มิติ"}.get(view[0], "ภาพ 3 มิติ")
+        caption(sh, ((x0 + x1) / 2, y0 + 6), title_, "พร้อมเส้นระยะ (ม.)")
 
 
 class _NoCut:
