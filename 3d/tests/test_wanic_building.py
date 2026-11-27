@@ -711,3 +711,34 @@ def test_the_drawing_set_is_exported_for_every_building(monkeypatch, tmp_path):
     assert all(open(p, "rb").read(5) == b"%PDF-" for p in saved if p.endswith(".pdf"))
     dd.bldg_box.setCurrentIndex(1)                       # one set for the whole plan
     assert [os.path.basename(p) for p in dd.export()] == ["set.pdf", "set.dxf"]
+
+
+def test_the_rebar_button_shows_the_bars_of_the_marks_inside_see_through_concrete():
+    """owner 27 Nov: «ปุ่มแสดงเหล็กเสริม … คอนกรีตลดความเข้ม ให้เห็นเหล็กเสริม ตามโครงสร้างวิศวกรรม»."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from core import wanic_rebar3d as RB
+    from plugins.wanic_building import BuildingPanel
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(name="a", x=0, y=0, w=4, d=4)]
+    bars = RB.rebar_groups(d)
+    kinds = {g.ext[B.EXT_KEY]["kind"] for g in bars}
+    assert {"column_main", "column_tie", "beam_main", "beam_stir", "footing_mesh"} <= kinds
+    built, _c = B.build(d, ("structure",))
+    foot = next(g for g in built if g.ext[B.EXT_KEY]["kind"] == "footing")
+    zf = [v.position.z() for v in foot.mesh.vertices]
+    mesh = next(g for g in bars if g.ext[B.EXT_KEY]["kind"] == "footing_mesh")
+    zm = [v.position.z() for v in mesh.mesh.vertices]
+    assert min(zf) < min(zm) and max(zm) < max(zf)           # the mesh lies inside its footing
+    # the button: bars in, concrete see-through; off: bars out, concrete solid again
+    scene = Scene()
+    panel = BuildingPanel(_App(scene))
+    panel._write(d)
+    panel.build(("structure",))
+    assert panel.rebar_view(True) == len(bars)
+    assert B.generated(scene, ("rebar",))
+    conc = [g for g in B.generated(scene) if g.ext[B.EXT_KEY]["kind"] == "column"]
+    assert all(g.material and g.material.get("opacity", 1) < 0.5 for g in conc)
+    panel.rebar_view(False)
+    assert not B.generated(scene, ("rebar",))
+    assert all(not (g.material or {}).get("opacity") for g in conc)

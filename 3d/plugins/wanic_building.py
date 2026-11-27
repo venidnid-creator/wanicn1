@@ -3112,7 +3112,16 @@ class BuildingPanel(QWidget):
             "— กดอีกครั้งเพื่อกลับเป็นปกติ")
         self.frame_btn.toggled.connect(
             lambda on: _safe(self, lambda: self.frame_view(on)))
-        vl.addWidget(self.frame_btn, 0, 0, 1, 4)
+        vl.addWidget(self.frame_btn, 0, 0, 1, 2)
+        # แสดงเหล็กเสริม (owner, 27 Nov): the concrete see-through, the bars of the marks inside
+        self.rebar_btn = QPushButton("🔩 แสดงเหล็กเสริม")
+        self.rebar_btn.setCheckable(True)
+        self.rebar_btn.setToolTip(
+            "คอนกรีตโปร่งแสง เห็นเหล็กเสริมด้านใน — เสา ตอม่อ (เหล็กยืน + เหล็กปลอก) · คาน (เหล็กบน-ล่าง + ปลอก "
+            "ช่วง 2h ถี่) · ฐานราก (ตะแกรง 2 ทาง) · พื้น — ตามเบอร์ในรายการคำนวณ · กดอีกครั้งเพื่อซ่อน")
+        self.rebar_btn.toggled.connect(
+            lambda on: _safe(self, lambda: self.rebar_view(on)))
+        vl.addWidget(self.rebar_btn, 0, 2, 1, 2)
         for i, (key, text) in enumerate((("iso", "3D"), ("top", "2D (บน)"),
                                          ("front", "รูปด้านหน้า"),
                                          ("back", "รูปด้านหลัง"),
@@ -4538,6 +4547,11 @@ class BuildingPanel(QWidget):
             return
         groups, count = B.build(d, parts)
         old = B.generated(self.app.scene, parts, copies=False)   # the user's copies stay
+        old += B.generated(self.app.scene, ("rebar",))             # the bars of the old sizes go
+        if getattr(self, "rebar_btn", None) is not None and self.rebar_btn.isChecked():
+            self.rebar_btn.blockSignals(True)
+            self.rebar_btn.setChecked(False)
+            self.rebar_btn.blockSignals(False)
         if not groups and not old:
             self.status.setText("ไม่มีอะไรให้สร้าง")
             return
@@ -4743,6 +4757,49 @@ class BuildingPanel(QWidget):
         self.app.viewport.history.execute(CompoundCommand(cmds))
         self.app.viewport.update()
         self.status.setText(msg)
+
+    def rebar_view(self, on: bool) -> int:
+        """The bars inside the concrete (on) — or the concrete solid again and the bars gone.
+        Undoable; returns how many bar groups show."""
+        from core import wanic_rebar3d as RB
+        from core.history import (CompoundCommand, DeleteGroupCommand, InsertGroupCommand,
+                                  SetGroupMaterialCommand)
+        scene = self.app.scene
+        groups = B.generated(scene)
+        cmds = [DeleteGroupCommand(g) for g in B.generated(scene, (RB.PART,))]
+        conc = [g for g in groups if ((g.ext or {}).get(B.EXT_KEY) or {}).get("part") == "structure"
+                and ((g.ext or {}).get(B.EXT_KEY) or {}).get("kind") in RB.CONCRETE_KINDS]
+        n = 0
+        if on:
+            if not conc:
+                self.status.setText("ยังไม่มีโครงสร้างที่สร้างไว้ — กด «สร้าง/อัปเดตโมเดล» ก่อน")
+                return 0
+            bars = RB.rebar_groups(self.data())
+            for g in conc:
+                ext = dict(g.ext)
+                ext.setdefault("wanic_rebar_view", {"material": getattr(g, "material", None)})
+                g.ext = ext
+                mat = dict(getattr(g, "material", None) or {"color": (0.75, 0.75, 0.72)})
+                mat["opacity"] = RB.CONCRETE_OPACITY
+                cmds.append(SetGroupMaterialCommand(g, mat))
+            cmds += [InsertGroupCommand(g) for g in bars]
+            n = len(bars)
+            msg = (f"แสดงเหล็กเสริม {n} กลุ่ม — คอนกรีตโปร่งแสง · แดง เหล็กยืน/เหล็กบน-ล่าง · "
+                   "ส้ม เหล็กปลอก · น้ำตาล ตะแกรงฐานราก/พื้น (ตามเบอร์ในรายการคำนวณ)")
+        else:
+            for g in conc:
+                old = (g.ext or {}).get("wanic_rebar_view")
+                if old is not None:
+                    cmds.append(SetGroupMaterialCommand(g, old.get("material")))
+                    ext = dict(g.ext)
+                    ext.pop("wanic_rebar_view", None)
+                    g.ext = ext
+            msg = "ซ่อนเหล็กเสริมแล้ว — คอนกรีตทึบตามเดิม"
+        if cmds:
+            self.app.viewport.history.execute(CompoundCommand(cmds))
+        self.app.viewport.update()
+        self.status.setText(msg)
+        return n
 
     def look(self, key: str) -> None:
         """A standard view of the model; elevations and the plan in
