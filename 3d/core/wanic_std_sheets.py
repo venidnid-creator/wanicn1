@@ -859,20 +859,23 @@ def section_roof_labels(sh, E, L, P, segs, frame, x_right):
         items.append(((ua + (ub - ua) * 0.75, za + 0.18), "ครอบสันหลังคา"))
         items.append(((ua + (ub - ua) * 0.55, za - 0.6), f"หลังคา{tile[:30]}"))
     pts = [(P(*q), t) for q, t in items]
-    pts.sort(key=lambda it: -it[0][1])
+    # as the standard sections (owner, 27 Nov: «ปรับปรุงเส้นชี้ให้ดูสวยงาม … ตามตัวอย่าง»): the labels in
+    # rows ABOVE the roof, each next to its own member — the rightmost point on the lowest row, so
+    # a leader never runs through another's text, and none crosses the rooms below
+    pts.sort(key=lambda it: (-it[0][0], -it[0][1]))
     _x0, _y0, x1a, y1a = D.drawing_area()
-    width = max(len(t) for _p, t in pts) * 1.05 + 4
-    lx = min(max(x_right, max(p[0] for p, _t in pts) + 10), x1a - width - 2)
-    gap = 4.6
-    ys, last = [], None
-    for p, _t in pts:                    # the label at its point's height, pushed down to keep the gap
-        y = p[1] + 1.5 if last is None else min(p[1] + 1.5, last - gap)
-        ys.append(y)
-        last = y
-    for (p, text), y in zip(pts, ys):
+    top = max(p[1] for p, _t in pts)
+    gap = 4.4
+    room = (y1a - 4) - (top + 6)
+    if room < gap * len(pts):
+        gap = max(3.2, room / max(len(pts), 1))
+    for i, (p, text) in enumerate(pts):
+        y = top + 6 + i * gap
+        tw = len(text) * 1.02 + 1.5
+        lx = min(p[0] + 5.0 + i * 0.6, x1a - tw - 2)
         sh.circle(p, 0.45, "text", 0.18)
-        sh.line(p, (lx - 2.0, y), "text", 0.13)
-        sh.line((lx - 2.0, y), (lx + len(text) * 1.05 + 1.5, y), "text", 0.13)
+        sh.line(p, (lx - 1.0, y), "text", 0.13)                       # one straight leader up
+        sh.line((lx - 1.0, y), (lx + tw, y), "text", 0.13)            # the landing under the text
         sh.text((lx, y + 0.7), text, 2.0)
 
 

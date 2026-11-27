@@ -1860,9 +1860,29 @@ def section_detail(sh, E, L, cut, box, sheets=None):
             if c0 - 1e-6 <= at <= c1 + 1e-6:          # the stair opening: no slab there
                 spans = [q for sp in spans for q in ((sp[0], min(sp[1], u0)), (max(sp[0], u1), sp[1]))
                          if q[1] - q[0] > 0.01]
+        # เก็บมุมให้เรียบร้อย (owner, 27 Nov): the slab runs between the faces of the beams it sits
+        # on — it never overlaps a beam cut at the same level
+        lvl_ = sl["floor"]
+        faces = []
+        for bm in E["beams"]:
+            if bm["level"] != lvl_ or bm.get("cant"):
+                continue
+            (bx0, by0), (bx1, by1) = bm["p0"], bm["p1"]
+            crosses = (abs(by0 - by1) < 1e-6 and min(bx0, bx1) - 1e-6 <= at <= max(bx0, bx1) + 1e-6) \
+                if axis == "x" else (abs(bx0 - bx1) < 1e-6 and min(by0, by1) - 1e-6 <= at <= max(by0, by1) + 1e-6)
+            if crosses:
+                faces.append((U(bx0, by0), float(lib.get(bm["mark"], {}).get("b", 0.2)) / 2))
         for a_s, b_s in spans:
-            rect(a_s, top - t, b_s, top, fill=0.70)
-    # beams cut (running across the plane) and beams beyond (along it)
+            for uf, hb in faces:
+                if abs(uf - a_s) < 0.02:
+                    a_s = uf + hb
+                if abs(uf - b_s) < 0.02:
+                    b_s = uf - hb
+            if b_s - a_s > 0.01:
+                rect(a_s, top - t, b_s, top, fill=0.70)
+    # beams cut (running across the plane) and beams beyond (along it) — drawn after the walls,
+    # solid, so no wall or plaster line runs through a beam (the junctions kept clean)
+    late = []
     for bm in E["beams"]:
         (x0_, y0_), (x1_, y1_) = bm["p0"], bm["p1"]
         spec = lib.get(bm["mark"], {})
@@ -1873,7 +1893,7 @@ def section_detail(sh, E, L, cut, box, sheets=None):
             cross = abs(x0_ - x1_) < 1e-6 and min(y0_, y1_) - 1e-6 <= at <= max(y0_, y1_) + 1e-6
         if cross:
             u = U(x0_, y0_)
-            rect(u - b_ / 2, bm["z"] - h_, u + b_ / 2, bm["z"], fill=0.70)
+            late.append((u - b_ / 2, bm["z"] - h_, u + b_ / 2, bm["z"]))
     # columns beyond: the grid line just past the cut
     beyond = [g for g in (xs if axis == "x" else ys) if g > at + 1e-6]
     nxt = beyond[0] if beyond else None
@@ -1929,6 +1949,8 @@ def section_detail(sh, E, L, cut, box, sheets=None):
             rect(u - T, a_, u + T, b_, "cut", 0.5, 0.88)
             for d_ in (-T - sp["pi"], T + sp["po"]):
                 sh.line(P(u + d_, a_), P(u + d_, b_), "cut", 0.18)
+    for r_ in late:                                   # the beams cut, over the walls' ends
+        rect(*r_, fill=0.70)
     # rooms crossed: name, the doors / windows on the far wall, the ceiling
     for sl in E["slabs"]:
         rm, kf = sl["room"], sl["floor"]
