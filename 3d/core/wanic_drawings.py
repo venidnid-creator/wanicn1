@@ -2708,13 +2708,85 @@ def s_roof_frame(sh, E, L):
         for a, b in L.get("eave") or []:
             sh.line(v(a[0], a[1]), v(b[0], b[1]), "roof", 0.25)
     x0, y0, x1, y1 = drawing_area()
-    lines = [f"อกไก่ {s['ridge']}", f"ตะเข้สัน / ตะเข้ราง {s['hip']}",
-             f"จันทัน {s['rafter']} @ ไม่เกิน {float(s['rafter_sp']):.2f} ม.",
-             f"แป {s['purlin']} @ {float(s['purlin_sp']):.2f} ม.",
-             f"ความลาดหลังคา {float(s['pitch']):.0f}°  ชายคา "
-             f"{float(s['overhang']):.2f} ม."]
-    for i, t in enumerate(lines):
-        sh.text((x0, y0 + 30 - i * 4.5), t, 2.4)
+    # as the DPT house set's S-07 (owner, 27 Nov — family10): a leader to every kind of member with
+    # its section and its weight per metre, the rafter-to-ridge joint drawn large (ขยาย 1, 1:20)
+    from core import wanic_profiles as PF
+
+    def kgm(label):
+        try:
+            fam, prm = B.steel_lookup(label)
+            return PF.weight_per_m(fam, prm)
+        except Exception:                                  # noqa: BLE001 - timber / unknown
+            return 0.0
+
+    def wtxt(label):
+        w_ = kgm(label)
+        return f" (นน. {w_:.2f} กก./ม.)" if w_ > 0 else ""
+    marks = []
+    if L:
+        def at(seg, t):
+            a, b = seg[0], seg[-1]
+            return v(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        if L.get("ridge"):
+            marks.append((at(max(L["ridge"], key=lambda g_: abs(g_[1][0] - g_[0][0]) + abs(g_[1][1] - g_[0][1])),
+                             0.5), f"อกไก่ เหล็ก {s['ridge']}{wtxt(s['ridge'])}"))
+        if L.get("hip"):
+            marks.append((at(L["hip"][0], 0.55), f"ตะเข้สัน เหล็ก {s['hip']}{wtxt(s['hip'])}"))
+        if L.get("valleys"):
+            marks.append((at(L["valleys"][0], 0.5), f"ตะเข้ราง เหล็ก {s['hip']}{wtxt(s['hip'])}"))
+        if L.get("rafter"):
+            r_ = sorted(L["rafter"], key=lambda g_: -max(g_[0][0], g_[1][0]))[len(L["rafter"]) // 4]
+            marks.append((at(r_, 0.3), f"จันทัน เหล็ก {s['rafter']} @ ไม่เกิน {float(s['rafter_sp']):.2f} ม."
+                                        f"{wtxt(s['rafter'])}"))
+        if L.get("purlin"):
+            p_ = sorted(L["purlin"], key=lambda q: min(pt[1] for pt in q["path"]))[0]
+            marks.append((at(p_["path"], 0.7), f"แป เหล็ก {s['purlin']} @ {float(s['purlin_sp']):.2f} ม."
+                                               f"{wtxt(s['purlin'])}"))
+    if marks:
+        right = max(v(p_[0], p_[1])[0] for seg in (L.get("eave") or []) for p_ in seg) if L.get("eave") \
+            else max(q[0] for q, _t in marks)
+        lx = min(right + 14, x1 - 100)                 # the labels outside the roof's edge
+        marks.sort(key=lambda m_: -m_[0][1])
+        last = None
+        for (px, py), text in marks:
+            y_ = py if last is None else min(py, last - 6.0)
+            last = y_
+            sh.circle((px, py), 0.45, "text", 0.18)
+            sh.line((px, py), (lx - 2, y_), "text", 0.13)
+            sh.line((lx - 2, y_), (lx + len(text) * 1.0 + 1, y_), "text", 0.13)
+            sh.text((lx, y_ + 0.7), text, 2.2)
+        # the bubble «ดูขยาย 1» at the ridge
+        if L.get("ridge"):
+            q = next((m_[0] for m_ in marks if m_[1].startswith("อกไก่")), None)
+            if q is not None:
+                sh.circle((q[0] - 10, q[1] + 8), 3.0, "text", 0.25)
+                sh.text((q[0] - 10, q[1] + 7), "1", 2.6, "center")
+                sh.line((q[0] - 7.5, q[1] + 6.5), (q[0] - 0.8, q[1] + 0.6), "text", 0.13)
+    if marks:
+        sh.text((lx, last - 8.0), f"ความลาดหลังคา {float(s['pitch']):.0f}°  ชายคายื่น {float(s['overhang']):.2f} ม.",
+                2.2)
+    # ขยาย 1 (1:20): the rafters meeting the ridge, joined by a fish plate welded all round
+    k20 = 1000.0 / 20
+    dx0, dy0 = x0 + 70, y0 + 16
+    import math as _m
+    ang = _m.radians(float(s.get("pitch") or 30))
+    rd = 0.15 * k20
+    c_, s_ = _m.cos(ang), _m.sin(ang)
+    for sg in (-1, 1):
+        ax_, ay_ = dx0, dy0 + 0.60 * k20                        # the apex, top of the rafters
+        bx_, by_ = ax_ + sg * c_ * 0.9 * k20, ay_ - s_ * 0.9 * k20
+        nx_, ny_ = -sg * s_ * rd, -c_ * rd                      # the rafter's depth, square to it
+        sh.poly([(ax_, ay_), (bx_, by_), (bx_ + nx_, by_ + ny_), (ax_ + nx_, ay_ + ny_)], "struct", 0.35, True)
+    sh.rect(dx0 - 0.0325 * k20, dy0 + 0.60 * k20 - 0.15 * k20, dx0 + 0.0325 * k20, dy0 + 0.60 * k20,
+            "struct", 0.5)                                     # the ridge (C 150) seen end-on
+    sh.poly([(dx0 - 0.15 * k20, dy0 + 0.50 * k20), (dx0 + 0.15 * k20, dy0 + 0.50 * k20),
+             (dx0 + 0.05 * k20, dy0 + 0.62 * k20), (dx0 - 0.05 * k20, dy0 + 0.62 * k20)], "cut", 0.35, True)
+    sh.line((dx0 + 0.10 * k20, dy0 + 0.56 * k20), (dx0 + 25, dy0 + 0.75 * k20), "text", 0.13)
+    sh.text((dx0 + 26, dy0 + 0.75 * k20 + 0.6), "เหล็กหางปลาขนาด 50×300×6.00 มม. ผังในเสาคอนกรีต / เชื่อมรอบ", 2.0)
+    sh.line((dx0 - 0.45 * k20, dy0 + 0.35 * k20), (dx0 + 25, dy0 + 0.10 * k20), "text", 0.13)
+    sh.text((dx0 + 26, dy0 + 0.10 * k20 + 0.6), "จันทันเหล็ก เชื่อมติดกับเหล็กหางปลาตลอดแนวสัมผัส", 2.0)
+    sh.text((dx0 - 45, dy0 - 6), "ขยาย 1", 3.2, "left", "text", True)
+    sh.text((dx0 - 26, dy0 - 6), "1:20", 2.4)
     caption(sh, ((x0 + x1) / 2, y0 + 6), "แปลนโครงหลังคา", f"1:{sc}")
 
 
