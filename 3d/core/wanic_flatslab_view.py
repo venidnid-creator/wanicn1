@@ -26,7 +26,8 @@ def _font(px, bold=False):
     f.setFamilies(["TH Sarabun New", "TH SarabunPSK", "Laksaman", "Tahoma"])
     f.setPixelSize(max(1, int(px)))
     f.setBold(bold)
-    return f
+    from core.wanic_calc_book import latin_digits
+    return latin_digits(f)
 
 
 def draw_plan(p: QPainter, rect: QRectF, prm: dict, res: dict, px: float = 11.0):

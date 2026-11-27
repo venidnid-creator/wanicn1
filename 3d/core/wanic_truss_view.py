@@ -24,7 +24,8 @@ def _font(px, bold=False):
     f.setFamilies(["TH Sarabun New", "TH SarabunPSK", "Laksaman", "Tahoma"])
     f.setPixelSize(max(1, int(px)))
     f.setBold(bold)
-    return f
+    from core.wanic_calc_book import latin_digits
+    return latin_digits(f)
 
 
 def draw_truss(p: QPainter, rect: QRectF, d: T.Design, px: float = 11.0, forces: bool = True):

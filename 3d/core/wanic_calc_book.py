@@ -40,12 +40,24 @@ INK = QColor("#111827")
 FS = {"RB": 1200.0, "DB": 1700.0}
 
 
+def latin_digits(f):
+    """0-9 stay 0-9 beside Thai words: some Thai fonts (the bold of TH Sarabun on
+    Windows) swap them for ๐-๙ through their Thai-language glyph features
+    (owner, 27 Nov: «๔๕๗.๑ ตัน» in the Checkload heading)."""
+    for tag, on in (("locl", 0), ("calt", 0), ("liga", 0), ("lnum", 1)):
+        try:
+            f.setFeature(QFont.Tag(tag), on)
+        except Exception:                             # noqa: BLE001 — an older Qt
+            pass
+    return f
+
+
 def _font(px, bold=False):
     f = QFont()
     f.setFamilies(["TH Sarabun New", "TH SarabunPSK", "Laksaman", "Tahoma"])
     f.setPixelSize(int(px))
     f.setBold(bold)
-    return f
+    return latin_digits(f)
 
 
 class Book:
@@ -610,7 +622,7 @@ def beam_plain(res) -> tuple:
     return out, ok_all
 
 
-def beam_pages(bk: Book, res_all, b_, fc):
+def beam_pages(bk: Book, res_all, b_, fc, n_floors: int = 0):
     k = 0
     beams = [m for m in res_all["members"]
              if m.group == "beam" and m.diagram is not None and hasattr(m.diagram, "spec")]
@@ -619,7 +631,8 @@ def beam_pages(bk: Book, res_all, b_, fc):
     for m in beams:
         res = m.diagram
         k += 1
-        lvl = "ดิน (คานคอดิน)" if res.ground else f"{res.level}"
+        lvl = ("ดิน (คานคอดิน)" if res.ground else
+               "หลังคา (คานหลังคา)" if n_floors and int(res.level) >= n_floors else f"{int(res.level) + 1}")
         bk.page(f"คาน   ชั้น {lvl}", f"Beam{k}")
         bk.text(40, 40, 70, 7, "Load Diagram", 6.5)
         bk.text(40, 47, 70, 7, f"GridLine {'y' if res.axis == 'x' else 'x'} = {res.line:.2f}", 6.5)
@@ -1068,7 +1081,8 @@ def _write(res_all, data, path, info, critical, starts) -> dict:
             stair_page(bk, dz, b_)
     # 3 beams, 4 columns, 5 footings, 6 piles
     chapter("beam")
-    beam_pages(bk, res_all, b_, fc)
+    from core import wanic_building as B2
+    beam_pages(bk, res_all, b_, fc, B2.elements(data)["n"])
     chapter("column")
     column_pages(bk, res_all, b_, fc)
     chapter("footing")

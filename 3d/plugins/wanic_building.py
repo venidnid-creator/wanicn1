@@ -2498,7 +2498,7 @@ def render_pdf(sheets, path: str, paper: str = "A3") -> int:
             f.setStyleHint(QFont.SansSerif)
             # ฉ2: no contextual glyph swaps (+ - = beside digits): a PDF whose every glyph
             # is a character — read back into CAD (PDFIMPORT) or searched as text
-            for tag in ("calt", "case", "liga"):
+            for tag in ("calt", "case", "liga", "locl"):     # locl: 0-9 never become ๐-๙
                 try:
                     f.setFeature(QFont.Tag(tag), 0)
                 except Exception:                         # noqa: BLE001 — an older Qt

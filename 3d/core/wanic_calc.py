@@ -1082,7 +1082,8 @@ def analyse(data) -> dict:
         r = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
                 -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
                 res.Vmax / cap["V"] if cap["V"] else 9.9, rd)
-        name = (f"{mark} ชั้น {level + 1 if not segs[0].get('ground') else 'ดิน'} · "
+        lvl_name = ("ดิน" if segs[0].get("ground") else "หลังคา" if level >= n else f"{level + 1}")
+        name = (f"{mark} ชั้น{lvl_name} · " if lvl_name == "หลังคา" else f"{mark} ชั้น {lvl_name} · "
                 f"แนว{'นอน' if axis == 'x' else 'ตั้ง'} {'y' if axis == 'x' else 'x'} = {c:.2f} · "
                 f"{len(spans) - sum(1 for sp_ in spans if sp_.cant)} ช่วง"
                 + (" + คานยื่น" if any(sp_.cant for sp_ in spans) else "")

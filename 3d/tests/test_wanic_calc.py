@@ -293,3 +293,20 @@ def test_no_text_over_another_in_the_book(tmp_path, monkeypatch):
     bad = [(p1, s1, s2) for i, (p1, r1, s1) in enumerate(rec) for p2, r2, s2 in rec[i + 1:i + 60]
            if p1 == p2 and (lambda it: it.width() > 1.5 and it.height() > 1.5)(r1.intersected(r2))]
     assert not bad, bad[:5]
+
+
+def test_a_one_storey_house_has_roof_beams_not_a_second_floor():
+    """owner 27 Nov: «ในโมเดลเป็นอาคาร 1 ชั้น ในรายการคำนวณเป็น 2 ชั้น» — the beams on top of the
+    columns of the last storey are roof beams."""
+    d = _house([dict(name="a", x=0, y=0, w=4, d=4), dict(name="b", x=4, y=0, w=4, d=4)])
+    names = [m.name for m in C.analyse(d)["members"] if m.group == "beam"]
+    assert names and not any("ชั้น 2" in n for n in names)
+    assert any("ชั้นหลังคา" in n for n in names) and any("ชั้น ดิน" in n for n in names)
+
+
+def test_the_book_fonts_keep_latin_digits():
+    from core import wanic_calc_book as K
+    f = K._font(20, True)
+    tags = {bytes(t.toString()).decode() if hasattr(t.toString(), "data") else str(t.toString())
+            for t in f.featureTags()}
+    assert "locl" in tags and f.featureValue(K.QFont.Tag("locl")) == 0

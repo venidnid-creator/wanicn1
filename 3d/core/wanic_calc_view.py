@@ -562,7 +562,8 @@ def report_pdf(res, data, path) -> None:
     f = QFont("Laksaman")
     f.setFamilies(["TH Sarabun New", "TH SarabunPSK", "Laksaman", "Tahoma"])
     f.setPointSizeF(10)
-    p.setFont(f)
+    from core.wanic_calc_book import latin_digits
+    p.setFont(latin_digits(f))
     y = 0.0
 
     def text(t, bold=False, size=10.0, color="#111827"):
