@@ -687,3 +687,27 @@ def test_the_boq_window_bills_one_building_at_a_time():
     main = conc()
     assert 0 < annex < main < whole
     assert "อาคาร 1" in dlg.result["notes"][0]
+
+
+def test_the_drawing_set_is_exported_for_every_building(monkeypatch, tmp_path):
+    """owner 27 Nov: «ชุดแบบแปลน PDF/DXF แยกตามอาคาร»."""
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    QApplication.instance() or QApplication([])
+    from plugins.wanic_building import BuildingPanel, DrawingDialog
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(tmp_path / "set.pdf"), "")))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: 0))
+    panel = BuildingPanel(_App(Scene()))
+    panel._write(_two_buildings())
+    dd = DrawingDialog(panel)
+    for g, c in dd.checks.items():
+        c.setChecked(g in ("A", "S"))
+    dd.axo.setChecked(False)
+    dd.pic3d.setChecked(False)
+    assert dd.bldg_box.count() == 4 and dd.bldg_box.currentData() == "each"
+    saved = dd.export()
+    names = sorted(os.path.basename(p) for p in saved)
+    assert names == ["set_อาคาร1.dxf", "set_อาคาร1.pdf", "set_อาคาร2.dxf", "set_อาคาร2.pdf"]
+    assert all(open(p, "rb").read(5) == b"%PDF-" for p in saved if p.endswith(".pdf"))
+    dd.bldg_box.setCurrentIndex(1)                       # one set for the whole plan
+    assert [os.path.basename(p) for p in dd.export()] == ["set.pdf", "set.dxf"]

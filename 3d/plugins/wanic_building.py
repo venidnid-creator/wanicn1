@@ -2675,6 +2675,15 @@ class DrawingDialog(QDialog):
         self.pic3d = QCheckBox("ภาพทัศนียภาพ 3 มิติประกอบแผ่นอื่น ๆ (วางมุมที่ว่างของแผ่น)")
         self.pic3d.setChecked(self.with_3d)
         f.addRow(self.pic3d)
+        # อาคารแยก (owner, 27 Nov): «ชุดแบบแปลน PDF/DXF แยกตามอาคาร»
+        self.n_bldg = len(B.buildings(panel.data()))
+        if self.n_bldg > 1:
+            self.bldg_box = QComboBox()
+            self.bldg_box.addItem(f"แยกชุดละอาคาร — ทุกอาคาร ({self.n_bldg} ชุด)", "each")
+            self.bldg_box.addItem("รวมทุกอาคารเป็นชุดเดียว", "all")
+            for k in range(self.n_bldg):
+                self.bldg_box.addItem(f"อาคาร {k + 1} เท่านั้น", k)
+            f.addRow(f"แปลนมีอาคารแยก {self.n_bldg} อาคาร", self.bldg_box)
         self.pdf = QCheckBox("PDF (พิมพ์ A3)")
         self.pdf.setChecked(True)
         self.dxf = QCheckBox("DXF (เปิดใน WANICNSURVEY CAD / AutoCAD — ทุกแผ่นเรียงกัน)")
@@ -2777,6 +2786,15 @@ class DrawingDialog(QDialog):
             small = self._model_picture(1200, 672)
             if small:
                 info["plan_picture"] = small
+        # which jobs: the whole plan, or every building / one building alone
+        how = self.bldg_box.currentData() if getattr(self, "n_bldg", 1) > 1 else "all"
+        whole = self.panel.data()
+        if how == "all":
+            jobs = [("", None)]
+        elif how == "each":
+            jobs = [(f"_อาคาร{k + 1}", k) for k in range(self.n_bldg)]
+        else:
+            jobs = [(f"_อาคาร{int(how) + 1}", int(how))]
         if "BOQ" in info["groups"]:                    # ห้ามส่งออก ปร. จนราคาครบ
             from core import wanic_quantities as Q
             pd_ = self.panel.data()
@@ -2791,10 +2809,20 @@ class DrawingDialog(QDialog):
                     "เลือกจังหวัดและกรอกราคาในแถวสีส้มให้ครบก่อน")
         # the owner (25 พ.ย. 69): a changed model is calculated again, every item, before its drawings
         note = self.panel.calc_note() if hasattr(self.panel, "calc_note") else ""
-        sheets = D.build_set(self.panel.data(), info, info["groups"])
-        if not sheets:
+        whole = self.panel.data()
+        sets = []
+        for suffix, k in jobs:
+            dk = whole if k is None else B.building_data(whole, k)
+            info_k = dict(info)
+            if k is not None:
+                info_k["project"] = f"{info.get('project') or ''} — อาคาร {k + 1}".strip(" —")
+            sh_k = D.build_set(dk, info_k, info["groups"])
+            if sh_k:
+                sets.append((suffix, sh_k))
+        if not sets:
             QMessageBox.information(self, TITLE, "ยังไม่มีห้องในผัง")
             return []
+        sheets = [s_ for _sfx, sh_k in sets for s_ in sh_k]
         name = (info.get("project") or "แบบก่อสร้าง").replace(" ", "_")
         path, _f = QFileDialog.getSaveFileName(
             self, "บันทึกแบบก่อสร้าง", f"{name}_แบบ2D.pdf",
@@ -2805,13 +2833,14 @@ class DrawingDialog(QDialog):
         if self.with_3d:
             stem += "_3D"
         self.saved = []
-        if self.pdf.isChecked():
-            render_pdf(sheets, stem + ".pdf")
-            self.saved.append(stem + ".pdf")
-        if self.dxf.isChecked():
-            with open(stem + ".dxf", "wb") as fh:
-                fh.write(D.dxf_bytes(sheets))
-            self.saved.append(stem + ".dxf")
+        for suffix, sh_k in sets:
+            if self.pdf.isChecked():
+                render_pdf(sh_k, stem + suffix + ".pdf")
+                self.saved.append(stem + suffix + ".pdf")
+            if self.dxf.isChecked():
+                with open(stem + suffix + ".dxf", "wb") as fh:
+                    fh.write(D.dxf_bytes(sh_k))
+                self.saved.append(stem + suffix + ".dxf")
         groups = ", ".join(
             f"{'ปร.1' if g == 'BOQ' else g} "
             f"{sum(1 for s in sheets if s.group == g)} แผ่น"
