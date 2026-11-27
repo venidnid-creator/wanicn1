@@ -3138,7 +3138,9 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         on_beam = beam and sum(1 for c in cols
                                if abs((c[0] if swap else c[1]) - yc) < 1e-4 and
                                x0 + ov - 1e-4 <= (c[1] if swap else c[0]) <= x1 - ov + 1e-4) >= 2
-        zb = z0 if on_beam else z0 + (db if beam else 0.0)
+        # ดั้งยืนบนขื่อ (owner, 27 Nov — the standard gable truss: the post stands in the middle of the
+        # tie, the tie spans wall plate to wall plate): no flat beam between the tie and the post
+        zb = z0
         wb = _dim(s.get("tiebeam", s["ridge"]), "B") / 2
         # struts (ตุ๊กตา) from the tie up to the rafters half way to the ridge
         # and braces (ค้ำยัน) from the foot of the post to each strut — the
@@ -3251,8 +3253,6 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
         if on_beam:
             out["rbeam"].append([P3(x0 + ov + pw, yc, zb), P3(x1 - ov - pw, yc, zb)])
             out["rbeam_on_beam"] = True
-        elif beam:
-            out["rbeam"].append([P3(e0, yc, zb), P3(e1, yc, zb)])
     e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(0)),
          P3(x0, y1, h(0))]
     # Eave lines (เชิงชาย) and, on a gable end, the rakes (ปั้นลม).
@@ -4141,7 +4141,7 @@ def roof_members(data) -> tuple[list, dict]:
             ("wallplate", "wallplate", "อะเส",
              "อะเสเหล็กบนคานรัดรอบ รับจันทัน (ยึดเพลทฝังในคาน ค.ส.ล.)"),
             ("tiebeam", "tiebeam", "ขื่อ",
-             "ขื่อเหล็กพาดจากอะเสถึงอะเส ตามแนวเสา รับคานรับดั้ง"),
+             "ขื่อเหล็กพาดจากอะเสถึงอะเส ดั้งตั้งกลางขื่อ (โครงถักมาตรฐาน)"),
             ("rbeam", "tiebeam", "คานรับดั้ง",
              "คานรับดั้งวางบนขื่อตามแนวอกไก่ ดั้งทุกตัวตั้งบนคานนี้"),
             ("strut", "strut", "ตุ๊กตา",
