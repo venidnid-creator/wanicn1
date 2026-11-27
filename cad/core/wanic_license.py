@@ -7,8 +7,10 @@ developer, which opens another year.
 The year is kept in the settings folder, a backup copy in the local
 application data and (on Windows) the registry. An update, a reinstall over
 the old one or a cleaned settings folder therefore never starts a new year:
-the count goes on from the first installation. Only a computer with none of
-the three starts a new year.
+the count goes on from the first installation. A computer with none of the
+three but with folders of an earlier installation (one older than this
+licence) counts from the day those folders were made; only a computer with no
+trace at all starts a new year on the first start.
 
 The renewal code is ``HMAC-SHA256(key, "WANICNSURVEY:<id>:<n>")`` cut to 12
 hex digits: bound to this installation's ID, the renewal number and the
@@ -30,6 +32,7 @@ import hmac
 import json
 import os
 import secrets
+import sys
 from pathlib import Path
 
 PRODUCT = "WANICNSURVEY"
@@ -38,6 +41,7 @@ WARN_DAYS = 30
 CONTACT_PHONE = "093-5838348"
 CONTACT_LINE = "https://line.me/ti/p/E-p-C9tCEx"
 REG_KEY = r"Software\WANICNSURVEY"
+FIRST_RELEASE = dt.date(2026, 10, 28)  # no WANICNSURVEY existed before this day
 
 try:                                   # written by the build (in a package: cad/core, 3d/core)
     from ._wanic_license_key import KEY as _KEY  # type: ignore
@@ -94,6 +98,51 @@ def _reg_write(data: dict) -> None:
         pass
 
 
+def _born(path) -> "dt.date | None":
+    """The day a folder was created (Windows; a birth time elsewhere when the
+    system keeps one), None when unknown."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    t = getattr(st, "st_birthtime", None)
+    if t is None and os.name == "nt":
+        t = st.st_ctime                 # creation time on Windows
+    if not t:
+        return None
+    try:
+        return dt.date.fromtimestamp(t)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def trace_folders() -> list:
+    """Folders an earlier WANICNSURVEY leaves on the computer: the install
+    folder (its root above launcher/ cad/ 3d/, kept by an update or a
+    reinstall over the old one) and the settings folders of the start screen,
+    the 2D and the 3D program (kept even by an uninstall)."""
+    out = []
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve()
+        out += [exe.parent, exe.parent.parent]
+    for env, names in (("APPDATA", (PRODUCT, "IngeCAD", "IngeTrazo")),
+                       ("LOCALAPPDATA", (PRODUCT, "IngeCAD", "IngeTrazo"))):
+        base = os.environ.get(env)
+        if base:
+            out += [Path(base) / n for n in names]
+    return out
+
+
+def earliest_trace(folders=None, today: dt.date | None = None):
+    """The first day an earlier installation was on this computer (between the
+    first release and today), None when there is no trace."""
+    today = today or dt.date.today()
+    days = [d for d in (_born(f) for f in (trace_folders() if folders is None else folders)) if d]
+    if not days:
+        return None
+    return min(max(min(days), FIRST_RELEASE), today)
+
+
 def _valid(data) -> bool:
     return isinstance(data, dict) and {"id", "until", "n"} <= set(data)
 
@@ -119,7 +168,8 @@ def _clean(code: str) -> str:
 
 class License:
     def __init__(self, path: Path | None = None, today: dt.date | None = None, backups: list | None = None,
-                 registry: bool | None = None):
+                 registry: bool | None = None, traces: list | None = None):
+        self.traces = traces if traces is not None else (trace_folders() if path is None else [])
         self.backups = backups if backups is not None else (backup_files(state_file()) if path is None else [])
         self.registry = (path is None) if registry is None else registry
         self.path = path or state_file()
@@ -136,9 +186,21 @@ class License:
         if self.registry:
             records.append(_reg_read())
         data = _best(records)
+        first = earliest_trace(self.traces, self.today)
         if data is None:
-            data = {"id": secrets.token_hex(4).upper(), "start": self.today.isoformat(),
-                    "until": (self.today + dt.timedelta(days=PERIOD_DAYS)).isoformat(), "n": 0}
+            start = first or self.today
+            data = {"id": secrets.token_hex(4).upper(), "start": start.isoformat(),
+                    "until": (start + dt.timedelta(days=PERIOD_DAYS)).isoformat(), "n": 0}
+        elif first and int(data.get("n", 0)) == 0:
+            # A year started by an update of an installation older than the
+            # licence (or a lost record): count from the first installation.
+            try:
+                started = dt.date.fromisoformat(str(data.get("start", "")))
+            except ValueError:
+                started = None
+            if started is None or first < started:
+                data = dict(data, start=first.isoformat(),
+                            until=(first + dt.timedelta(days=PERIOD_DAYS)).isoformat())
         self._save(data)
         return data
 
