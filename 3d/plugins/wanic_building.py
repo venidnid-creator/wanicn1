@@ -1930,6 +1930,14 @@ class BoqDialog(QDialog):
             sp = _spin(0.0, 0.5, float(o[key]), 0.01)
             self.sand[key] = sp
             f.addRow(th, sp)
+        # เฟอร์นิเจอร์ → หมวด 16 ครุภัณฑ์ (owner, 27 Nov): no Factor F, VAT 7 %, labour ≤ 30 %
+        self.furn = QCheckBox("คิดเฟอร์นิเจอร์ในโมเดลเป็นครุภัณฑ์ (หมวด 16 — ไม่คูณ Factor F · บวกภาษี 7 %)")
+        self.furn.setChecked(bool(o.get("furniture", True)))
+        f.addRow(self.furn)
+        self.furn_pct = _spin(0.0, 30.0, float(o.get("furn_lab_pct", 30.0)), 1.0)
+        self.furn_pct.setSuffix(" %")
+        self.furn_pct.setToolTip("ค่าแรงติดตั้ง/ขนส่งเฟอร์นิเจอร์ คิดเป็นร้อยละของค่าวัสดุที่ซื้อ — ไม่เกิน 30 %")
+        f.addRow("ค่าแรงเฟอร์นิเจอร์ (% ของค่าวัสดุ ไม่เกิน 30)", self.furn_pct)
         b = QPushButton("💾 บันทึกตัวเลือกและคำนวณใหม่")
         b.clicked.connect(lambda _=False: _safe(self, self.save_options))
         f.addRow(b)
@@ -2432,6 +2440,8 @@ class BoqDialog(QDialog):
         o = {k: c.isChecked() for k, c in self.opt.items()}
         o.update({k: c.currentData() for k, c in self.recipe.items()})
         o.update({k: sp.value() for k, sp in self.sand.items()})
+        o["furniture"] = self.furn.isChecked()
+        o["furn_lab_pct"] = min(self.furn_pct.value(), 30.0)
         self._write("boq_options", o)
         self.recompute()
 

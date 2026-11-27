@@ -62,7 +62,12 @@ CONCRETE = "คอนกรีตผสมเสร็จ 240 กก./ตร.ซ
 DEFAULT_OPTIONS = {"finishes": True, "paint": True, "roofing": "tile",
                    "ready_mix": True, "wall_recipe": "6.1",
                    "plaster_recipe": "7.2", "floor_recipe": "9.30",
-                   "slab_sand": 0.05, "gb_sand": 0.05, "boq_by": "cat15"}
+                   "slab_sand": 0.05, "gb_sand": 0.05, "boq_by": "cat15",
+                   # เฟอร์นิเจอร์ (owner, 27 Nov): billed as ครุภัณฑ์ (หมวด 16 — no Factor F, + VAT 7 %),
+                   # labour (fitting, delivery) a share of the material bought, at most 30 %
+                   "furniture": True, "furn_lab_pct": 30.0}
+FURN_LAB_MAX = 30.0
+FURN_KEY = "ครุภัณฑ์: "                 # the price key of a furniture piece: «ครุภัณฑ์: <name>»
 
 
 def options_of(data) -> dict:
@@ -1181,6 +1186,29 @@ def compute(data, gate: bool = False) -> dict:
         if ln is not None:
             ln["cat"] = cat
             ln["extra_id"] = it.get("id", "")
+    # เฟอร์นิเจอร์และเครื่องใช้ในโมเดล → หมวด 16 ครุภัณฑ์: no Factor F, VAT 7 %, labour ≤ 30 % of
+    # the material (the owner — editable in the options)
+    if o.get("furniture", True):
+        from core import wanic_catalog as CATF
+        pct = min(max(float(o.get("furn_lab_pct", FURN_LAB_MAX) or 0.0), 0.0), FURN_LAB_MAX)
+        counts: dict = {}
+        for e in E["fixtures"]:
+            t = (e.get("fx") or {}).get("type")
+            if t in CATF.FURNITURE and t not in ("WZ",):
+                counts[t] = counts.get(t, 0) + 1
+        for t, n_ in sorted(counts.items(), key=lambda kv: CATF.DECOR[kv[0]][0]):
+            name = CATF.DECOR[t][0]
+            key = FURN_KEY + name
+            need.setdefault(key, "ชุด")                   # listed in the price table to be typed in
+            mp = 0.0 if zero else float(prices.get(key) or 0.0)
+            ln = bill.add("extra", f"ครุภัณฑ์: {name}", n_, "ชุด", mat=mp, mat_key=key,
+                          lab=round(mp * pct / 100.0, 2),
+                          basis=f"เฟอร์นิเจอร์ในโมเดล {n_} ชุด · ค่าแรงติดตั้ง/ขนส่ง {pct:g} % ของค่าวัสดุ",
+                          ref="หมวด 16 ครุภัณฑ์ — ไม่คูณ Factor F · บวกภาษีมูลค่าเพิ่ม 7 %",
+                          note="กรอกราคาในแท็บฐานข้อมูลราคา (ชื่อ «" + key + "»)")
+            if ln is not None:
+                ln["cat"] = 16
+                ln["furniture"] = t
     groups = []
     if o.get("boq_by", "cat15") == "cat15":
         # the 15 หมวดงาน (งานเตรียมพื้นที่ … งานอื่นๆ)

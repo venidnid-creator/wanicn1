@@ -391,8 +391,11 @@ def test_bedroom_set_is_furniture_not_billed():
     d["floors"] = [{"rooms": [dict(id="r1", name="ห้องนอน", x=0, y=0, w=4, d=4.5)], "openings": [], "stairs": [],
                     "fixtures": [{"id": f"x{i}", "type": c, "x": x, "y": y, "dir": dr}
                                  for i, (c, x, y, dr) in enumerate(items, 1)]}]
-    descs = " ".join(ln["desc"] for ln in Q.compute(d)["lines"])
-    assert "เตียง" not in descs and "ตู้เสื้อผ้า" not in descs
+    lines = Q.compute(d)["lines"]
+    # owner 27 Nov: never in the construction work (หมวด 1–15) — billed only as ครุภัณฑ์ (หมวด 16)
+    work = " ".join(ln["desc"] for ln in lines if ln.get("cat") != 16)
+    assert "เตียง" not in work and "ตู้เสื้อผ้า" not in work
+    assert all(ln.get("cat") == 16 for ln in lines if ln.get("furniture"))
     gs, count = B.build(d, ("structure",))
     assert count.get("furniture", 0) == len(items) or sum(
         1 for g in gs if (g.ext or {}).get(B.EXT_KEY, {}).get("kind") == "furniture") == len(items)
@@ -437,3 +440,30 @@ def test_the_price_search_status_counts_materials_and_lines():
     text = Q.csv_text(r, st)
     assert text.splitlines()[0].startswith("สถานะการหาราคาวัสดุ")
     assert "จังหวัดมหาสารคาม" in text and "บรรทัด BOQ ที่ยังไม่มีราคา" in text and "สถานะราคา" in text
+
+
+def test_furniture_is_billed_as_bought_equipment_with_vat_not_factor_f():
+    """owner 27 Nov: furniture in the BOQ — no Factor F, VAT 7 %, labour at most 30 % of the
+    material bought, editable."""
+    from core import wanic_building as B
+    from core import wanic_categories as CG
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(name="ห้องนอน", x=0, y=0, w=4, d=4)]
+    d["floors"][0]["fixtures"] = [{"id": "a", "type": "BED", "x": 2, "y": 3, "dir": 0},
+                                  {"id": "b", "type": "NS", "x": 0.9, "y": 3.7, "dir": 0},
+                                  {"id": "c", "type": "NS", "x": 3.1, "y": 3.7, "dir": 0}]
+    d["province"] = "ขอนแก่น"
+    name = "เตียงนอน 5 ฟุต พร้อมหัวเตียง"
+    d["prices"] = {Q.FURN_KEY + name: 10000.0}
+    r = Q.priced(d)
+    bed = next(ln for ln in r["lines"] if ln["desc"] == "ครุภัณฑ์: " + name)
+    assert bed["cat"] == 16 and 16 in CG.NO_F and 16 in CG.ADD_VAT
+    assert bed["mat"] == 10000.0 and bed["lab"] == 3000.0                 # 30 % by default
+    ns = next(ln for ln in r["lines"] if ln.get("furniture") == "NS")
+    assert ns["qty"] == 2 and ns["missing"]                                 # orange until priced
+    d["boq_options"] = {"furn_lab_pct": 50}                                 # never over 30 %
+    assert next(ln for ln in Q.priced(d)["lines"] if ln.get("furniture") == "BED")["lab"] == 3000.0
+    d["boq_options"] = {"furn_lab_pct": 10}
+    assert next(ln for ln in Q.priced(d)["lines"] if ln.get("furniture") == "BED")["lab"] == 1000.0
+    t = r["totals"]
+    assert t["equip"] >= bed["total"] and abs(t["equip_vat"] - round(t["equip"] * 0.07, 2)) < 0.02

@@ -29,6 +29,8 @@ Quotes are the owner's words; dates are 2026 (Buddhist year 2569).
 - Open question for the owner: should exports be **blocked** while items fail (now: warn only; the calc book is blocked)?
 
 ## Prices and BOQ
+- (27 Nov) Furniture in the model is billed as หมวด 16 ครุภัณฑ์จัดซื้อ: no Factor F, + VAT 7 %, labour ≤ 30 % of
+  the material (editable option); never in the construction categories 1–15.
 - Prices 0 until a province is chosen; sources ว480 labour → พาณิชย์จังหวัด → central → neighbouring province → orange
   rows to type; no ปร. export until every line is priced.
 - สพฐ. prices «เฉพาะงาน สพฐ.» — never in another job or the province book.
