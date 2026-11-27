@@ -1178,8 +1178,22 @@ class BoqDialog(QDialog):
         self.setWindowTitle("BOQ ตามหลักเกณฑ์กรมบัญชีกลาง พ.ศ. 2569 — WANIC ออกแบบอาคาร")
         self.resize(1180, 760)
         from core import wanic_quantities as Q
+        self.bldg = -1                                   # -1 = every building together
         self.result = Q.priced(panel.data())
         lay = QVBoxLayout(self)
+        # อาคารแยก (owner, 27 Nov): a BOQ of its own for every building
+        n_b = len(B.buildings(panel.data()))
+        if n_b > 1:
+            row_b = QHBoxLayout()
+            row_b.addWidget(QLabel(f"<b>แปลนนี้มี {n_b} อาคารแยกกัน</b> — BOQ ของ:"))
+            self.bldg_box = QComboBox()
+            self.bldg_box.addItem("ทุกอาคารรวมกัน", -1)
+            for k in range(n_b):
+                self.bldg_box.addItem(f"อาคาร {k + 1}", k)
+            self.bldg_box.currentIndexChanged.connect(lambda _i: self._pick_building())
+            row_b.addWidget(self.bldg_box)
+            row_b.addStretch(1)
+            lay.addLayout(row_b)
         # a newer labour list / Factor F table / rules from กรมบัญชีกลาง:
         # said here, at the top of the BOQ (checked in the background)
         self.std_note = QLabel()
@@ -2179,19 +2193,33 @@ class BoqDialog(QDialog):
             top = self.tree.topLevelItem(i)
             top.setHidden(bool(want) and top.text(1) != want)
 
+    def _scoped(self, d):
+        """The job, or one building of it (``self.bldg``)."""
+        if getattr(self, "bldg", -1) < 0:
+            return d
+        return B.building_data(d, self.bldg)
+
+    def _pick_building(self):
+        self.bldg = int(self.bldg_box.currentData())
+        self.recompute()
+        if self.bldg >= 0:
+            self.result.setdefault("notes", []).insert(
+                0, f"BOQ ของอาคาร {self.bldg + 1} เท่านั้น (แปลนมีอาคารแยก) — งานส่วนกลางของโครงการ "
+                   "(ครุภัณฑ์ที่กรอกเพิ่ม วัตถุคัดลอก) อยู่กับอาคาร 1")
+
     def recompute(self):
         from PySide6.QtWidgets import QTreeWidgetItem
         from core import wanic_obec as O
         from core import wanic_quantities as Q
         self.panel.sync_copies()
         d = self.panel.data()
-        self.result = Q.priced(d)
+        self.result = Q.priced(self._scoped(d))
         if d.get("obec") and d.get("province"):
             st = O.load_store()
             got = O.fill(d, self.result, st.get("items") or [])
             if got["mat"] or got["lab"]:            # only the empty items
                 self.panel._write(d)
-                self.result = Q.priced(d)
+                self.result = Q.priced(self._scoped(d))
                 if hasattr(self, "labour"):
                     self._fill_prices()
         self.tree.clear()

@@ -636,3 +636,54 @@ def test_no_stair_is_built_from_the_top_storey():
     E = B.elements(d)
     assert [st["floor"] for st in E["stairs"]] == [0]
     assert not B.stair_used(stair, {}, 2, 1) and B.stair_used(stair, {}, 2, 0)
+
+
+def _two_buildings():
+    d = B.default_data()
+    main = [dict(name="a", x=0, y=0, w=5, d=4), dict(name="b", x=5, y=0, w=5, d=4)]
+    f0 = copy.deepcopy(d["floors"][0])
+    f0["rooms"] = main + [dict(name="c", x=14, y=0, w=5, d=4)]
+    f0["openings"] = [{"type": "door", "x": 2.5, "y": 0.0}, {"type": "door", "x": 16.5, "y": 0.0}]
+    f1 = copy.deepcopy(d["floors"][0])
+    f1["rooms"] = copy.deepcopy(main)
+    d["floors"] = [f0, f1]
+    d["settings"]["roof"] = "hip"
+    return d
+
+
+def test_separate_buildings_are_split_into_jobs_of_their_own():
+    """owner 27 Nov: «กรณีแยกอาคาร ให้แยกรายการคำนวณ … ทั้ง BOQ ทุกอย่าง»."""
+    from core import wanic_calc as C
+    from core import wanic_quantities as Q
+    d = _two_buildings()
+    assert len(B.buildings(d)) == 2
+    a, b = B.building_data(d, 0), B.building_data(d, 1)
+    assert [len(f["rooms"]) for f in a["floors"]] == [2, 2]
+    assert [len(f["rooms"]) for f in b["floors"]] == [1, 0]
+    assert [len(f["openings"]) for f in a["floors"]][0] == 1 and b["floors"][0]["openings"][0]["x"] == 16.5
+    assert B.elements(b)["n"] == 1                               # the annex is a one-storey job
+    ca, cb = C.analyse(a), C.analyse(b)
+    assert all("x 14" not in m.name for m in ca["members"])
+    assert sum(1 for m in cb["members"] if m.group == "column" and "ตอม่อ" not in m.name) == 4
+    qa, qb, qall = Q.compute(a), Q.compute(b), Q.compute(d)
+    assert 0 < qb["totals"]["work"] < qa["totals"]["work"] <= qall["totals"]["work"]
+    assert B.buildings(B.default_data()) == [] or len(B.buildings(B.default_data())) <= 1
+
+
+def test_the_boq_window_bills_one_building_at_a_time():
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from plugins.wanic_building import BoqDialog, BuildingPanel
+    panel = BuildingPanel(_App(Scene()))
+    panel._write(_two_buildings())
+    dlg = BoqDialog(panel)
+    assert dlg.bldg_box.count() == 3                     # all · อาคาร 1 · อาคาร 2
+    def conc():                                          # no province yet: prices 0 — compare quantities
+        return sum(ln["qty"] for ln in dlg.result["lines"] if ln["desc"].startswith("คอนกรีตโครงสร้าง"))
+    whole = conc()
+    dlg.bldg_box.setCurrentIndex(2)
+    annex = conc()
+    dlg.bldg_box.setCurrentIndex(1)
+    main = conc()
+    assert 0 < annex < main < whole
+    assert "อาคาร 1" in dlg.result["notes"][0]

@@ -5560,3 +5560,71 @@ def recalc_all(data) -> tuple:
         data["calc_stamp"] = struct_stamp(data)
         data["calc_at"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
     return bad, res
+
+
+# -- อาคารแยก (owner, 27 พ.ย. 69): «กรณีแยกอาคาร ให้แยกรายการคำนวณ … ทั้ง BOQ ทุกอย่าง» --------
+
+def buildings(data) -> list:
+    """The separate buildings of the plan: [[(x0, y0, x1, y1), …], …] — rooms of any floor
+    that touch or overlap (within 1 cm) are one building. Ordered as the rooms first appear
+    on the lowest floor."""
+    rects = []
+    for f in (data or {}).get("floors") or []:
+        for rm in f.get("rooms") or []:
+            x0, y0 = float(rm["x"]), float(rm["y"])
+            rects.append((x0, y0, x0 + float(rm["w"]), y0 + float(rm["d"])))
+    parent = list(range(len(rects)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    tol = 0.01
+    for i, a in enumerate(rects):
+        for j in range(i + 1, len(rects)):
+            b = rects[j]
+            if a[0] <= b[2] + tol and b[0] <= a[2] + tol and a[1] <= b[3] + tol and b[1] <= a[3] + tol:
+                parent[find(i)] = find(j)
+    groups: dict = {}
+    for i, r in enumerate(rects):
+        groups.setdefault(find(i), []).append(r)
+    return list(groups.values())
+
+
+def building_at(clusters, x, y, tol=0.10) -> int:
+    """Which building a point stands in (index), -1 when none."""
+    for k, rs in enumerate(clusters):
+        if any(r[0] - tol <= x <= r[2] + tol and r[1] - tol <= y <= r[3] + tol for r in rs):
+            return k
+    return -1
+
+
+def building_data(data, k: int) -> dict:
+    """The job with building ``k`` alone — its rooms, openings, stairs, fixtures, its own
+    added loads — calculated and billed as a job of its own (every other setting, the
+    library, the prices are the same)."""
+    import copy as _copy
+    cl = buildings(data)
+    d = _copy.deepcopy(data)
+    if not (0 <= k < len(cl)):
+        return d
+
+    def here(x, y):
+        return building_at(cl, float(x), float(y)) == k
+    for f in d.get("floors") or []:
+        f["rooms"] = [rm for rm in f.get("rooms") or []
+                      if here(float(rm["x"]) + float(rm["w"]) / 2, float(rm["y"]) + float(rm["d"]) / 2)]
+        for key in ("openings", "stairs", "fixtures"):
+            f[key] = [it for it in f.get(key) or [] if "x" not in it or here(it["x"], it.get("y", 0.0))]
+    for key in ("cantilevers", "beam_loads"):
+        if isinstance(d.get(key), list):
+            d[key] = [it for it in d[key] if not isinstance(it, dict) or "x" not in it
+                      or here(it["x"], it.get("y", 0.0))]
+    if isinstance(d.get("combined_footings"), list):
+        d["combined_footings"] = [cf for cf in d["combined_footings"] if here(cf.get("cx", 0), cf.get("cy", 0))]
+    if k > 0:                                   # project-wide items once, with the first building
+        d["extra_items"] = []
+        d["copies"] = []
+    d["building_no"] = k + 1
+    return d

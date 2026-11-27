@@ -1241,6 +1241,21 @@ class RCPanel(QWidget):
             self, "รูปเล่มรายการคำนวณ",
             "พิมพ์เฉพาะชิ้นส่วนที่รับน้ำหนักมากที่สุดของแต่ละเบอร์ (คาน เสา พื้น ฐานราก)?\n"
             "«Yes» = เล่มสั้นสำหรับขออนุญาต · «No» = พิมพ์ทุกชิ้นส่วน") == QMessageBox.Yes
+        n_b = len(B.buildings(d))
+        if n_b > 1:
+            # อาคารแยก (owner, 27 Nov): one book per building, each a job of its own
+            import os
+            base, ext = os.path.splitext(path)
+            done = []
+            for k in range(n_b):
+                dk = B.building_data(d, k)
+                info_k = dict(info, project=f"{info.get('project', '')} — อาคาร {k + 1}".strip(" —"))
+                p_k = f"{base}_อาคาร{k + 1}{ext or '.pdf'}"
+                done.append((p_k, make_book(C.analyse(dk), dk, p_k, info_k, critical=crit)))
+            self.status.setText("แปลนมีอาคารแยก — บันทึกรายการคำนวณแยกอาคาร: " +
+                                " · ".join(f"อาคาร {i + 1} {n} หน้า" for i, (_p, n) in enumerate(done)) +
+                                f" ({os.path.dirname(path)})")
+            return
         n = make_book(C.analyse(d), d, path, info, critical=crit)
         self.status.setText(f"บันทึกรูปเล่มรายการคำนวณ {n} หน้าแล้ว: {path}")
 
