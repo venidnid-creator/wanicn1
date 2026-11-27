@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Optional
 
 from core import wanic_building as B
 from core import wanic_rc as R
@@ -56,6 +57,9 @@ DEFAULTS = {
     "soil": 5.0,                     # allowable soil pressure, t/m² (the owner: default 5, the user enters the site value)
     "pile_cap": 8.0,                 # safe load per pile, t
     "defl": 180.0,                   # roof member deflection limit L/…
+    #: กำลังสำรอง (owner, 27 Nov: «กำลังที่เหลือไม่น้อยกว่า 1 เท่าของกำลังที่ใช้ไป»): a member passes
+    #: when it uses at most this share of its capacity (0.5 = a reserve of 1×; 1.0 = the code alone)
+    "max_use": 0.5,
     # the booklet's signature (editable in «ค่าที่ใช้ออกแบบ…»)
     "engineer": "นายเวนิช ธัมมะวงษ์", "qualification": "วิศวกรสำรวจ",
     "project": "", "owner": "", "place": "",
@@ -147,11 +151,24 @@ def fs_of(bar, b_) -> float:
 
 
 def basis(data) -> dict:
-    return {**DEFAULTS, **((data or {}).get("calc") or {})}
+    b = {**DEFAULTS, **((data or {}).get("calc") or {})}
+    b["max_use"] = min(max(float(b.get("max_use") or 1.0), 0.2), 1.0)
+    if b.get("_design") and b["max_use"] < 1.0:
+        # designing for the reserve: every factored load × 1/max_use — what passes here uses at
+        # most max_use of its strength under the real loads (the soil and the piles: their own FS)
+        b["load_mult"] = 1.0 / b["max_use"]
+    return b
 
 
 def factors(b) -> tuple:
-    return (1.4, 1.7) if b["method"] == "SDM" else (1.0, 1.0)
+    k = float(b.get("load_mult") or 1.0)
+    return (1.4 * k, 1.7 * k) if b["method"] == "SDM" else (1.0 * k, 1.0 * k)
+
+
+def use_limit(b) -> float:
+    """The share of a member's capacity it may use: max_use (1.0 while designing for it —
+    the loads are already raised)."""
+    return 1.0 if float(b.get("load_mult") or 1.0) > 1.0 else float(b.get("max_use") or 1.0)
 
 
 # ---- section properties ------------------------------------------------------------
@@ -583,9 +600,16 @@ class Member:
     #: drawn by wanic_calc_view.draw_any — the beams and columns use ``diagram``
     picture: object = None
 
+    #: the share of the capacity it may use (basis «max_use»; set by analyse)
+    limit: float = 1.0
+    #: the strength part of ``ratio`` (moment, shear, axial) when ``ratio`` also holds a
+    #: serviceability check (deflection, least thickness) — the reserve applies to strength only
+    strength: Optional[float] = None
+
     @property
     def ok(self) -> bool:
-        return self.ratio <= 1.0 + 1e-9
+        s_ = self.ratio if self.strength is None else self.strength
+        return s_ <= self.limit + 1e-9 and self.ratio <= 1.0 + 1e-9
 
     @property
     def reserve(self) -> float:
@@ -709,13 +733,15 @@ def roof_checks(data, b_, out):
         Ei = b_["e_timber"] if sec["timber"] else E
         defl = 5 * w * span ** 4 / (384 * Ei * 1e4 * sec["I"]) if sec["I"] else 1e9
         lim = span / b_["defl"]
-        r = max(M / cap if cap else 9.9, defl / lim if lim else 0.0)
+        r_m = M / cap if cap else 9.9
+        r = max(r_m, defl / lim if lim else 0.0)
         res.caps = {"M+": cap, "M-": cap, "lab_M": "Ma = Fb·S", "defl": (defl, lim)}
         out.append(Member("roof", f"{th} {s[key]}",
                           f"M = {M:,.1f} กก.-ม. · แอ่น {defl * 1000:.1f} มม. (ช่วง {span:.2f} ม.)",
                           f"Ma = {cap:,.1f} กก.-ม. · ยอมให้ {lim * 1000:.1f} มม. (L/{b_['defl']:g})",
                           r, f"น้ำหนัก {w:,.1f} กก./ม. (ASD)", res,
                           qty=w / trib if trib else 0.0, qty_unit="กก./ตร.ม. ของหลังคา"))
+        out[-1].strength = r_m
         # D + W: the wind's suction on the slope (Cp 0.7) less the covering's
         # weight; ASD with the one-third increase for wind
         up = 0.7 * b_["wind"] - (tile + 0.0) * cosp
@@ -916,6 +942,7 @@ def analyse(data) -> dict:
                               f"wu = {wu:,.0f} กก./ตร.ม. · หนาขั้นต่ำ (กันแอ่น) {tmin * 100:.1f} ซม."
                               + (f" — บางกว่า ต้องหนา ≥ {math.ceil(tmin * 100 - 1e-6):.0f} ซม." if r_t > 1 else ""),
                               qty=wu, qty_unit="กก./ตร.ม. (คน/ของวางเพิ่ม)", qty_factor=L_))
+            out[-1].strength = Mu / cap if cap else 9.9
             out[-1].picture = {"kind": "slab", "a": a, "b": b2, "t": t, "qd": dead, "ql": b_["ll_floor"],
                                "qu": wu, "fd": D_, "fl": L_, "Mu": Mu, "cap": cap, "one_way": m_ < 0.5,
                                "disc": disc, "mark": sl["mark"]}
@@ -1104,9 +1131,10 @@ def analyse(data) -> dict:
                          f"(ยอมให้ L/240 = {lim * 1000:.1f})")
         if worst:
             res.caps["defl"] = worst
-        r = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
-                -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
-                res.Vmax / cap["V"] if cap["V"] else 9.9, rd)
+        r_str = max(res.Mmax / cap["bot"] if cap["bot"] else 9.9,
+                    -res.Mmin / cap["top"] if cap["top"] and res.Mmin < 0 else 0.0,
+                    res.Vmax / cap["V"] if cap["V"] else 9.9)
+        r = max(r_str, rd)
         lvl_name = ("ดิน" if segs[0].get("ground") else
                     "หลังคา" if level >= n or all(e.get("roof") for e in segs) else f"{level + 1}")
         if key in split or (lvl_name == "หลังคา" and level < n):    # which stretch of the line
@@ -1128,6 +1156,7 @@ def analyse(data) -> dict:
                           + ("".join(f" · {t}" for t in dnote)), res,
                           qty=max(sp.w for sp in spans) / ((D_ + L_) / 2.0),
                           qty_unit="กก. ต่อเมตรของคาน"))
+        out[-1].strength = r_str
         beams_out[name] = res
         # reactions to the columns at the supports
         x = 0.0
@@ -1339,6 +1368,19 @@ def analyse(data) -> dict:
                               f"ต้อง ≥ {need / 10:.0f} ซม. (ตาราง 17)", need / have if have else 9.9, txt))
     except Exception:                                # noqa: BLE001 - never stops the rest
         pass
+    lim_ = use_limit(b_)
+    kk_ = float(b_.get("load_mult") or 1.0)
+    for m in out:
+        # the soil and the piles keep their own safety factors (FS 2.5–3): the reserve is the
+        # members' strength (concrete, steel, timber)
+        geo = m.group == "footing" and ("ฐานแผ่" in m.name or "เข็ม" in m.name)
+        m.limit = 1.0 if geo else lim_
+        if kk_ > 1.0 and m.group == "roof":      # the roof is checked on service loads: raised here
+            if m.strength is not None:
+                m.strength *= kk_
+                m.ratio = max(m.ratio, m.strength)
+            else:
+                m.ratio *= kk_
     for m in out:
         if m.diagram is not None and m.qty:
             try:

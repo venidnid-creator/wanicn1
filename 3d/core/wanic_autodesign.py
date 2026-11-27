@@ -357,6 +357,25 @@ def design(data, rounds: int = 8) -> dict:
     changed (last word per mark), "failing": what still fails, "rounds"}."""
     from core import wanic_advice as AD
     from core import wanic_building as B
+    # กำลังสำรอง (owner, 27 Nov): designed with the loads raised to 1/max_use — under the real
+    # loads every member then uses at most max_use of its capacity
+    calc0 = data.get("calc")
+    data["calc"] = dict(calc0 or {}, _design=True)
+    try:
+        out = _design(data, rounds)
+    finally:
+        if calc0 is None:
+            data.pop("calc", None)
+        else:
+            data["calc"] = calc0
+    out["res"] = C.analyse(data)
+    out["failing"] = failing(out["res"])
+    return out
+
+
+def _design(data, rounds: int = 8) -> dict:
+    from core import wanic_advice as AD
+    from core import wanic_building as B
     before = copy.deepcopy(B.library_of(data))
     words = {}
     res = C.analyse(data)

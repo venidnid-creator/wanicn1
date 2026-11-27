@@ -337,12 +337,21 @@ class RCPanel(QWidget):
             self._calc = None
         return self._calc
 
-    @staticmethod
-    def _verdict(ratio):
+    def _lim(self) -> float:
+        """The share of the capacity a member may use (basis «max_use», owner 27 Nov)."""
+        from core import wanic_calc as C
+        try:
+            return C.use_limit(C.basis(self.data()))
+        except Exception:                            # noqa: BLE001
+            return 1.0
+
+    def _verdict(self, ratio):
         if ratio is None:
             return "— ยังไม่ได้ใช้"
-        return (f"✓ ผ่าน · ใช้ไป {ratio * 100:,.0f} %" if ratio <= 1.0 + 1e-9
-                else f"✗ ไม่ผ่าน · ใช้ไป {ratio * 100:,.0f} %")
+        lim = self._lim()
+        tail = f" (เกณฑ์ ≤ {lim * 100:.0f} %)" if lim < 1.0 else ""
+        return (f"✓ ผ่าน · ใช้ไป {ratio * 100:,.0f} %" if ratio <= lim + 1e-9
+                else f"✗ ไม่ผ่าน · ใช้ไป {ratio * 100:,.0f} %{tail}")
 
     @staticmethod
     def _step_members(step, ms):
@@ -542,7 +551,7 @@ class RCPanel(QWidget):
             sp = lib[m]
             res = R.check(m, sp)
             ratio = worst.get(m)
-            fails.append((ratio is not None and ratio > 1.0 + 1e-9) or not res.ok)
+            fails.append((ratio is not None and ratio > self._lim() + 1e-9) or not res.ok)
             rows.append([m, B.LIB_KINDS[sp["kind"]], count.get(m, 0)] +
                         [sp.get(k, "") for k, _t in fields] +
                         [self._verdict(ratio), "✓ ผ่าน" if res.ok else "✗ ไม่ผ่าน"])
@@ -587,7 +596,7 @@ class RCPanel(QWidget):
             if i < len(keys):
                 ws = [m.ratio for m in rm if m.name.startswith(row[0] + " ")]
                 ratio = max(ws) if ws else None
-            fails.append(ratio is not None and ratio > 1.0 + 1e-9)
+            fails.append(ratio is not None and ratio > self._lim() + 1e-9)
             out.append(tuple(row) + ((self._verdict(ratio),) if i < len(keys) else ("",)))
         self._fill(["ชิ้นส่วน", "ขนาด", "วัสดุ", "ผลคำนวณ (ผ่าน/ไม่ผ่าน)"], out)
         for r, bad in enumerate(fails):
@@ -869,6 +878,15 @@ class RCPanel(QWidget):
         fy.setValue(float(b_["fy_db"]))
         form.addRow("fy เหล็กข้ออ้อย (กก./ตร.ซม.)", fy)
         spins["fy_db"] = fy
+        # กำลังสำรอง (owner, 27 Nov): a member passes when it uses at most this much of its strength
+        mu = QDoubleSpinBox()
+        mu.setRange(20, 100)
+        mu.setDecimals(0)
+        mu.setSuffix(" %")
+        mu.setValue(float(b_.get("max_use", 0.5)) * 100)
+        mu.setToolTip("50 % = กำลังที่เหลือไม่น้อยกว่า 1 เท่าของกำลังที่ใช้ไป (ค่าเริ่มต้นตามเจ้าของโปรแกรม) · "
+                      "100 % = ตามมาตรฐานอย่างเดียว · ใช้กับกำลังของคอนกรีต เหล็ก ไม้ — ดินและเสาเข็มใช้ค่าปลอดภัยของตัวเอง")
+        form.addRow("ใช้กำลังได้ไม่เกิน (กำลังสำรอง)", mu)
 
         def apply_preset(_i=0):
             k = preset.currentData()
@@ -920,6 +938,7 @@ class RCPanel(QWidget):
             calc[k] = sp_.value()
         for k, ed in texts.items():
             calc[k] = ed.text().strip()
+        calc["max_use"] = round(mu.value() / 100.0, 3)
         d["calc"] = calc
         bp._write(d)
         self.refresh()
