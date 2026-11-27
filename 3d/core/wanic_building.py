@@ -4218,7 +4218,10 @@ def roof_members(data) -> tuple[list, dict]:
                           ("น้ำหนัก", f"{L * kgm:.2f} กก."),
                           ("รายการ BOQ", frame_boq(s["purlin"]))])
         if not pl["closed"] and len(pl["path"]) == 2:
-            g = cut_member(g, pl["path"], _end_planes(pl["path"], creases, widths))
+            # แปชนกันเข้ามุม 45° (owner, 27 Nov): a purlin lies ON the hip, so it runs to the hip's
+            # centre line and is cut along it — the purlins of the two slopes meet in a mitre over
+            # the hip and together cover its whole top (both flanges)
+            g = cut_member(g, pl["path"], _end_planes(pl["path"], creases, no_width))
         add(g, "purlin")
     if s.get("fascia", True):
         fp = dict(b=_mm(s.get("fascia_t", 0.025)), h=_mm(s.get("fascia_h", 0.20)))

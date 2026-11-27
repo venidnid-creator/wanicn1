@@ -135,9 +135,16 @@ def test_purlins_are_mitred_on_the_hips_and_rafters_stop_at_the_hip():
                     near = [v.position for v in g.mesh.vertices
                             if math.dist((v.position.x(), v.position.y(),
                                           v.position.z()), end) < reach]
-                    # it stops on the hip's face — never inside the hip (the owner)
-                    hw = B._profile_width(B.settings_of(d)["hip"])
-                    assert min(off_line((p.x(), p.y()), a, b) for p in near) >= hw / 2 - 1e-4
+                    # owner 27 Nov: the purlins lie on the hip and meet in a 45° mitre over its
+                    # centre line (together over its whole top) — they reach the line, never past it
+                    assert min(off_line((p.x(), p.y()), a, b) for p in near) < 1e-3
+                    side = [((p.x() - a[0]) * (b[1] - a[1]) - (p.y() - a[1]) * (b[0] - a[0])) for p in near]
+                    assert min(side) > -1e-4 or max(side) < 1e-4            # all on its own side
+                    # and above the hip, not into it: the hip's top there is under the purlin
+                    t = ((end[0] - a[0]) * (b[0] - a[0]) + (end[1] - a[1]) * (b[1] - a[1])) / \
+                        ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+                    z_hip = a[2] + t * (b[2] - a[2])
+                    assert min(p.z() for p in near) >= z_hip - 0.02
                     checked += 1
     assert checked > 20
 
