@@ -100,6 +100,8 @@ DEFAULT_SETTINGS = {
     # the spacings set on the panel are the most allowed: a span that does
     # not divide is shared out evenly a little closer (1.00 → 0.98 …)
     "purlin_auto": False, "rafter_auto": False, "purlin_face": "ridge", "shed_drain": "back",
+    # รั้วและประตูรั้วรอบที่ดิน (owner, 27 Nov — DPT house set A-24…A-26): none / steel / block
+    "fence": "none", "fence_h": 2.0, "gate_w": 4.0, "fence_sp": 3.0,
     "wall_plate": True, "wallplate": "C 150×65×20×3.2",
     "tie_beams": True, "tiebeam": "C 150×65×20×3.2",
     # column-head plate (เพลทหัวเสา) for the wall plate / tie beams:
@@ -5617,6 +5619,11 @@ def build(data, parts=("structure", "roof")):
         g, c = structure_members(data)
         groups += g
         count.update(c)
+        from core import wanic_fence as FE                 # รั้วและประตูรั้ว (when chosen)
+        fg = FE.members(data)
+        groups += fg
+        if fg:
+            count["fence"] = len(fg)
     if "roof" in parts:
         g, c = roof_members(data)
         groups += g

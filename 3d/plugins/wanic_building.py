@@ -3351,6 +3351,18 @@ class BuildingPanel(QWidget):
         pf.currentIndexChanged.connect(lambda _i: self._save_settings())
         self.combos["purlin_face"] = pf
         rff.addRow("การวางแป", pf)
+        # รั้วและประตูรั้วรอบที่ดิน (owner, 27 Nov)
+        from core import wanic_fence as FE_
+        fen = QComboBox()
+        for k_, th_ in FE_.KINDS.items():
+            fen.addItem(th_, k_)
+        fen.setToolTip("รั้วตามแนวเขตที่ดินของผังบริเวณ (ระยะร่นรอบอาคาร) — เสา คสล. ทุก 3 ม. คานคอดินรั้ว "
+                       "ประตูรั้วบานเลื่อนกลางด้านหน้า · คิดใน BOQ หมวดงานภายนอก และมีแผ่นแบบขยายรั้ว")
+        fen.currentIndexChanged.connect(lambda _i: self._save_settings())
+        self.combos["fence"] = fen
+        rff.addRow("รั้วรอบที่ดิน", fen)
+        num("fence_h", "ความสูงรั้ว", 1.0, 3.0, 0.1)
+        num("gate_w", "ประตูรั้วกว้าง", 2.0, 8.0, 0.1)
         sf = sf_backup
         labels = [lab for lab, _f, _p in B.steel_presets()]
         self.steel = {}

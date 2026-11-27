@@ -1226,6 +1226,95 @@ def storey_rules(E) -> list:
     return out
 
 
+def a_fence(sh, E, fc):
+    """แบบขยายรั้วและประตูรั้ว (studied from the DPT house set A-24…A-26, drawn our own way): the
+    fence bay in elevation and in section, the sliding gate in elevation, its latch — 1:25 / 1:10."""
+    from core import wanic_fence as FE
+    x0, y0, x1, y1 = drawing_area()
+    h = fc["h"]
+    sp = fc["sp"]
+    k = 1000.0 / 25                                     # mm per m at 1:25
+    steel = fc["kind"] == "steel"
+
+    def lab(p, q, text):
+        sh.line(p, q, "text", 0.13)
+        sh.line(q, (q[0] + len(text) * 1.0 + 2, q[1]), "text", 0.13)
+        sh.text((q[0] + 1, q[1] + 0.8), text, 2.0)
+    # 1) the fence bay, elevation 1:25
+    ox, oy = x0 + 20, y1 - 30 - h * k
+    gy = oy                                             # ground on the sheet
+    sh.line((ox - 10, gy), (ox + sp * k + 30, gy), "cut", 0.5)
+    for i in range(int((sp * k + 40) / 4)):
+        sh.line((ox - 10 + i * 4, gy), (ox - 6 + i * 4, gy - 3), "hatch", 0.13)
+    for s_ in (0.0, sp):                                 # two posts
+        px = ox + s_ * k
+        sh.rect(px - FE.POST / 2 * k, gy, px + FE.POST / 2 * k, gy + (h + 0.10) * k, "cut", 0.35)
+        sh.rect(px - (FE.POST / 2 + 0.02) * k, gy + (h + 0.10) * k, px + (FE.POST / 2 + 0.02) * k,
+                gy + (h + 0.15) * k, "cut", 0.25)
+    a, b = ox + FE.POST / 2 * k, ox + (sp - FE.POST / 2) * k
+    if steel:
+        sh.rect(a, gy, b, gy + FE.LOW_WALL * k, "wall", 0.25)
+        for z_ in (FE.LOW_WALL + 0.20, h - 0.25):
+            sh.rect(a, gy + z_ * k, b, gy + (z_ + FE.RAIL) * k, "wall", 0.25)
+        u = a + FE.PICKET_SP / 2 * k
+        while u < b - 2:
+            sh.line((u, gy + (FE.LOW_WALL + 0.04) * k), (u, gy + h * k - 1.0), "wall", 0.25)
+            sh.line((u - 0.5, gy + h * k - 1.0), (u + 0.5, gy + h * k), "wall", 0.25)   # 45° cut
+            u += FE.PICKET_SP * k
+        lab((a + 30, gy + h * k - 2), (a + 45, gy + h * k + 14), "เหล็ก □ 1\"x1\" LG. ปลายตัด 45° @ 0.15 ม.")
+        lab((a + 60, gy + (h - 0.23) * k), (a + 75, gy + h * k + 8), "เหล็ก □ 2\"x2\" LG. หนา 3.2 มม.")
+        lab((a + 20, gy + 0.3 * k), (b + 12, gy + 0.9 * k), "ผนังก่ออิฐครึ่งแผ่น ฉาบเรียบ 2 ด้าน สูง 0.50 ม.")
+    else:
+        sh.rect(a, gy, b, gy + h * k, "wall", 0.25)
+        lab((a + 20, gy + h * k / 2), (b + 12, gy + h * k / 2 + 6), "ผนังก่อคอนกรีตบล็อก ฉาบเรียบ 2 ด้าน")
+    lab((ox, gy + 1.0 * k), (ox - 15, gy + h * k + 20), "เสา คสล. 0.20x0.20 ม. 4-DB12 ปลอก RB6@0.15")
+    sh.line((ox, gy - 6), (ox + sp * k, gy - 6), "dim", 0.18)
+    sh.text((ox + sp * k / 2, gy - 9), f"{sp:.2f} (ระยะเสาไม่เกิน)", 2.2, "center", "dim")
+    sh.line((ox - 6, gy), (ox - 6, gy + h * k), "dim", 0.18)
+    sh.text((ox - 8, gy + h * k / 2), f"{h:.2f}", 2.2, "center", "dim", angle=90)
+    caption(sh, (ox + sp * k / 2, y0 + 8 + (oy - y0) * 0 + (y1 - y0) * 0.5 - 6), "รูปด้านรั้ว", "1:25")
+    # 2) the fence section 1:25, with the post footing
+    sx = ox + sp * k + 95
+    sh.rect(sx - FE.FOOT[0] / 2 * k, gy - FE.FOOT[2] * k, sx + FE.FOOT[0] / 2 * k,
+            gy - (FE.FOOT[2] - FE.FOOT[1]) * k, "cut", 0.35)
+    sh.rect(sx - FE.BEAM[0] / 2 * k, gy - FE.BEAM[1] * k, sx + FE.BEAM[0] / 2 * k, gy, "cut", 0.35)
+    if steel:
+        sh.rect(sx - 0.06 * k, gy, sx + 0.06 * k, gy + FE.LOW_WALL * k, "cut", 0.35)
+        sh.line((sx, gy + FE.LOW_WALL * k), (sx, gy + h * k), "wall", 0.35)
+    else:
+        sh.rect(sx - 0.07 * k, gy, sx + 0.07 * k, gy + h * k, "cut", 0.35)
+    sh.line((sx - 25, gy), (sx + 25, gy), "cut", 0.5)
+    lab((sx, gy - (FE.FOOT[2] - 0.1) * k), (sx + 15, gy - 0.4 * k), "ฐานราก คสล. 0.60x0.60x0.20 ม. "
+        "ตะแกรง DB12@0.15 ลึก 0.80 ม.")
+    lab((sx, gy - 0.15 * k), (sx + 15, gy + 0.2 * k), "คานคอดินรั้ว 0.15x0.30 ม. 4-DB12 ปลอก RB6@0.15")
+    caption(sh, (sx, gy - FE.FOOT[2] * k - 22), "รูปตัดรั้ว", "1:25")
+    # 3) the sliding gate 1:25 (bottom half of the sheet)
+    gw = fc["gate"][1] - fc["gate"][0]
+    gx, gy2 = x0 + 20, y0 + 30
+    sh.line((gx - 8, gy2), (gx + gw * k + 30, gy2), "cut", 0.5)
+    sh.rect(gx, gy2 + 0.08 * k, gx + gw * k, gy2 + (h - 0.20) * k, "wall", 0.35)
+    sh.rect(gx, gy2 + 0.13 * k, gx + gw * k, gy2 + 0.58 * k, "hatch", 0.18)
+    sh.line((gx, gy2 + 0.58 * k), (gx + gw * k, gy2 + 0.58 * k), "wall", 0.25)
+    u = gx + FE.PICKET_SP / 2 * k
+    while u < gx + gw * k - 2:
+        sh.line((u, gy2 + 0.63 * k), (u, gy2 + h * k), "wall", 0.25)
+        u += FE.PICKET_SP * k
+    for w_ in (0.35, gw / 2, gw - 0.35):
+        sh.circle((gx + w_ * k, gy2 + 0.04 * k), 0.038 * k, "wall", 0.25)
+    lab((gx + gw * k * 0.5, gy2 + 0.35 * k), (gx + gw * k + 8, gy2 + 0.3 * k), "แผ่นเหล็กทึบ หนา 4 มม.")
+    lab((gx + 0.35 * k, gy2 + 0.04 * k), (gx + gw * k + 8, gy2 - 0.2 * k), "ล้อเหล็ก Ø 3\" บนรางเหล็กฝังพื้น")
+    lab((gx + 3, gy2 + 1.0 * k), (gx + gw * k + 8, gy2 + 1.1 * k), "กลอนประตู + แผ่นเหล็ก 9 มม. เจาะรูคล้องกุญแจ")
+    sh.line((gx, gy2 - 6), (gx + gw * k, gy2 - 6), "dim", 0.18)
+    sh.text((gx + gw * k / 2, gy2 - 9), f"{gw:.2f}", 2.2, "center", "dim")
+    caption(sh, (gx + gw * k / 2, y0 + 8), "รูปด้านประตูรั้วบานเลื่อน", "1:25")
+    notes_block(sh, x1 - 95, y0 + 70, "หมายเหตุ", [
+        "1. เหล็กกล่องทุกชิ้นทาสีกันสนิม 1 เที่ยว สีน้ำมันทับหน้า 2 เที่ยว",
+        "2. เสาและคานรั้ว คอนกรีต fc′ 240 กก./ตร.ซม. หุ้มเหล็ก 3 ซม.",
+        "3. แนวรั้วตามแนวเขตที่ดินจริง — ระยะในแบบเป็นระยะสมมติของผังบริเวณ",
+        "4. รางประตูฝังในพื้นคอนกรีตทางเข้า ให้ระดับเสมอผิวพื้น",
+    ], 2.2, 50)
+
+
 def a_site(sh, E, info):
     x0, y0, x1, y1 = drawing_area()
     bx = bbox(E)
@@ -1242,6 +1331,18 @@ def a_site(sh, E, info):
                                         y0 + 20 + (y1 - y0 - 30 - h) / 2))
     sh.poly([v(lot[0], lot[1]), v(lot[2], lot[1]), v(lot[2], lot[3]),
              v(lot[0], lot[3])], "grid", 0.35, True, True)
+    fc = info.get("fence")
+    if fc:                                       # the fence on the lot line, its posts, the gate
+        for a_, b_ in fc["runs"]:
+            sh.line(v(*a_), v(*b_), "wall", 0.5)
+        for px, py in fc["posts"]:
+            q0, q1 = v(px - 0.10, py - 0.10), v(px + 0.10, py + 0.10)
+            sh.fill([q0, (q1[0], q0[1]), q1, (q0[0], q1[1])], "hatch", 0.30)
+        ga, gb, gy = fc["gate"]
+        sh.line(v(ga, gy - 0.25), v(gb, gy - 0.25), "dim", 0.25)
+        sh.text(v((ga + gb) / 2, gy - 0.9), f"ประตูรั้วบานเลื่อน {gb - ga:.2f} ม.", 2.2, "center")
+        sh.text(v(lot[2] - 1.0, lot[3] - 0.8), "รั้วรอบที่ดิน สูง "
+                f"{fc['h']:.2f} ม. (ดูแบบขยายรั้ว)", 2.0, "right")
     for rm in (r for f in E["floors"][:1] for r in f["rooms"]):
         pts = B.room_corners(rm)
         sh.fill([v(*p) for p in pts], "hatch", 0.85)
@@ -3074,6 +3175,8 @@ def build_set(data, info=None,
     E = B.elements(data)
     if not E["floors"] or not E["footings"]:
         return []
+    from core import wanic_fence as FE
+    info.setdefault("fence", FE.fence_of(data))
     L = B.roof_lines(data)
     info.setdefault("roof_rects", (L or {}).get("rects") or [])
     area = sum(sl["room"]["w"] * sl["room"]["d"] for sl in E["slabs"])
@@ -3156,6 +3259,8 @@ def build_set(data, info=None,
                     lambda sh, _a, rr=baths[i:i + 2]: a_bath_elevations(sh, E, rr), "1:50")
         if E["n"] >= 2 and E["stairs"]:                  # the guard rail round the stair opening
             add("A", "แบบขยายราวกันตก", lambda sh, _a: STD.a_guardrail(sh, E), "1:25")
+        if info.get("fence"):
+            add("A", "แบบขยายรั้วและประตูรั้ว", lambda sh, _a: a_fence(sh, E, info["fence"]), "1:25")
         if L:
             add("A", "แบบขยายเชิงชาย ฝ้าชายคา โครงถักหลังคา",
                 lambda sh, _a: detail_eave_truss(sh, E, L), "1:20")
@@ -4963,6 +5068,8 @@ def build_sections(data, info=None) -> list:
     E = B.elements(data)
     if not E["floors"] or not E["footings"]:
         return []
+    from core import wanic_fence as FE
+    info.setdefault("fence", FE.fence_of(data))
     L = B.roof_lines(data)
     out = []
     for k in range(E["n"]):

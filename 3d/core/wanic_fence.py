@@ -114,3 +114,77 @@ def quantities(fc) -> dict:
                            + gw * 0.5 * 0.004 * 7850, 1)
     out["gate_w"] = round(gw, 2)
     return out
+
+
+def members(data) -> list:
+    """The fence and the gate as 3-D groups (part «structure», kinds «fence» / «gate»), the ground
+    at −floor_lift as the building's (``B.build`` lifts them with the rest)."""
+    from core import wanic_building as B
+    fc = fence_of(data)
+    if not fc:
+        return []
+    lift = B.floor_lift(B.settings_of(data))
+    gz = -lift
+    conc = {"color": (0.80, 0.79, 0.76)}
+    plaster = {"color": (0.93, 0.91, 0.86)}
+    steel = {"color": (0.18, 0.19, 0.21)}
+    h = fc["h"]
+    out = []
+    # the posts on their footings
+    bx = B._Boxes((0.0, 0.0), (1.0, 0.0), gz)
+    for x, y in fc["posts"]:
+        bx.box(x - FOOT[0] / 2, x + FOOT[0] / 2, y - FOOT[0] / 2, y + FOOT[0] / 2,
+               -FOOT[2], -FOOT[2] + FOOT[1], conc)
+        bx.box(x - POST / 2, x + POST / 2, y - POST / 2, y + POST / 2, -FOOT[2] + FOOT[1], h + 0.10, plaster)
+        bx.box(x - POST / 2 - 0.02, x + POST / 2 + 0.02, y - POST / 2 - 0.02, y + POST / 2 + 0.02,
+               h + 0.10, h + 0.15, plaster)                                   # the cap
+    g = bx.group(f"เสารั้ว คสล. 0.20×0.20 ม. · {len(fc['posts'])} ต้น", "structure", "fence", "เสารั้ว",
+                 "IfcColumn")
+    if g is not None:
+        out.append(g)
+    # every run: ground beam, then the low wall + pickets, or the solid block wall
+    for a, b in fc["runs"]:
+        L = math.dist(a, b)
+        u = ((b[0] - a[0]) / L, (b[1] - a[1]) / L)
+        rb = B._Boxes(a, u, gz)
+        rb.box(0.0, L, -BEAM[0] / 2, BEAM[0] / 2, -BEAM[1], 0.0, conc)
+        if fc["kind"] == "steel":
+            rb.box(0.0, L, -0.06, 0.06, 0.0, LOW_WALL, plaster)
+            rb.box(-0.0, L, -0.08, 0.08, LOW_WALL, LOW_WALL + 0.04, plaster)         # its coping
+            top = h
+            for z_ in (LOW_WALL + 0.20, top - 0.25):                                  # the two rails
+                rb.box(0.0, L, -RAIL / 2, RAIL / 2, z_, z_ + RAIL, steel)
+            s_ = PICKET_SP / 2
+            while s_ < L - 0.05:
+                rb.box(s_ - PICKET / 2, s_ + PICKET / 2, -PICKET / 2, PICKET / 2, LOW_WALL + 0.04, top, steel)
+                s_ += PICKET_SP
+        else:
+            rb.box(0.0, L, -0.07, 0.07, 0.0, h, plaster)
+            rb.box(0.0, L, -0.10, 0.10, h, h + 0.05, plaster)
+        g = rb.group(f"รั้ว{'เหล็ก' if fc['kind'] == 'steel' else 'คอนกรีตบล็อก'} ยาว {L:.2f} ม.", "structure",
+                     "fence", "รั้ว", "IfcWall")
+        if g is not None:
+            out.append(g)
+    # the sliding gate, shut, on its rail
+    ga, gb, gy = fc["gate"]
+    gw = gb - ga
+    gt = B._Boxes((ga, gy), (1.0, 0.0), gz)
+    sheet = {"color": (0.22, 0.24, 0.27)}
+    gt.box(-0.3, gw + 0.3, -0.03, 0.03, -0.02, 0.0, steel)                              # the rail
+    for k_ in (0.35, gw / 2, gw - 0.35):                                               # the wheels
+        gt.frustum(k_, 0.0, 0.038, 0.012, 0.038, 0.012, 0.0, 0.076, steel)
+    gt.box(0.0, gw, -RAIL / 2, RAIL / 2, 0.08, 0.08 + RAIL, steel)                      # bottom rail
+    gt.box(0.0, gw, -RAIL / 2, RAIL / 2, h - 0.25, h - 0.25 + RAIL, steel)              # top rail
+    gt.box(0.0, gw, -RAIL / 2, RAIL / 2, 0.58, 0.58 + RAIL, steel)                      # mid rail
+    for s_ in (0.0, gw - RAIL):
+        gt.box(s_, s_ + RAIL, -RAIL / 2, RAIL / 2, 0.08, h - 0.20, steel)               # stiles
+    gt.box(RAIL, gw - RAIL, -0.004, 0.004, 0.13, 0.58, sheet)                           # 4 mm sheet
+    s_ = PICKET_SP / 2
+    while s_ < gw - 0.05:
+        gt.box(s_ - PICKET / 2, s_ + PICKET / 2, -PICKET / 2, PICKET / 2, 0.63, h, steel)
+        s_ += PICKET_SP
+    gt.box(-0.02, 0.06, -0.06, 0.06, 1.00, 1.08, {"color": (0.75, 0.65, 0.35)})       # the latch
+    g = gt.group(f"ประตูรั้วบานเลื่อน กว้าง {gw:.2f} ม.", "structure", "gate", "ประตูรั้ว", "IfcDoor")
+    if g is not None:
+        out.append(g)
+    return out
