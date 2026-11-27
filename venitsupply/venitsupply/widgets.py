@@ -258,6 +258,7 @@ class ThaiDateEdit(QWidget):
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("วัน/เดือน/ปี พ.ศ. เช่น 1/10/2569")
         self.edit.setToolTip(T("พิมพ์วันที่เป็น พ.ศ. เช่น 1/10/2569 หรือ 1/10/69 หรือกดปุ่มปฏิทิน"))
+        self.edit.setMinimumWidth(self.edit.fontMetrics().horizontalAdvance("30/12/25690") + 16)   # ไม่ให้ตัดเหลือ «69»
         self.btn = QToolButton()
         self.btn.setText("📅")
         self.btn.setToolTip(T("เลือกจากปฏิทิน"))

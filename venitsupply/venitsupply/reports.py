@@ -362,7 +362,10 @@ def proc_request(store, pid) -> Report:
             ("5. กำหนดเวลาที่ต้องการใช้", TD.thai(p["due_date"]) or "-"),
             ("6. วิธีจัดหาและเหตุผล", p["method"] or "-"),
             ("7. หลักเกณฑ์การพิจารณาคัดเลือก", "เกณฑ์ราคา"),
-            ("8. ผู้ตรวจรับพัสดุ / คณะกรรมการ", p["committee"] or "-")]
+            ("8. " + (p["inspect_mode"] if "inspect_mode" in p.keys() and p["inspect_mode"] else
+                      "ผู้ตรวจรับพัสดุ / คณะกรรมการ"), _members_text(p) or "-")]
+    if "installments" in p.keys() and (p["installments"] or 1) > 1:
+        info.append(("งวดงาน/งวดการจ่ายเงิน", f"{p['installments']} งวด"))
     if p["kind"] == "เช่า":
         info.append(("ระยะเวลาเช่า", f"{TD.thai(p['rent_from'])} ถึง {TD.thai(p['rent_to'])}"))
     if p["kind"] == "แลกเปลี่ยน" and p["exchange_asset_id"]:
@@ -376,6 +379,8 @@ def proc_request(store, pid) -> Report:
                 f"<table cellpadding=2 width='100%'>{cells}</table><br>{_budget_box(store, p)}"
                 "<p><b>รายละเอียดพัสดุ</b></p>")
     r.totals = ["", "รวมเป็นเงิน", "", "", "", tot]
+    if "preparer" in p.keys() and p["preparer"]:
+        r.signers = [("ผู้จัดทำ", p["preparer"], p["preparer_pos"] or "")] + list(r.signers)
     return r
 
 
@@ -404,8 +409,20 @@ def inspection_doc(store, pid) -> Report:
         late = f" ส่งมอบล่าช้า มีค่าปรับ {money(p['fine'])} บาท"
     r.before = (f"<p>ผู้ตรวจรับพัสดุได้ตรวจรับพัสดุจาก {_e(p['vendor'])} เมื่อวันที่ {_e(TD.thai(p['inspect_date']))} "
                 f"(กำหนดส่งมอบ {_e(TD.thai(p['due_date']) or '-')}) ถูกต้องครบถ้วนตามใบสั่ง/สัญญา{_e(late)} "
-                f"{_e(p['inspect_note'] or '')}</p><p>ผู้ตรวจรับ: {_e(p['committee'] or '-')}</p>")
+                f"{_e(p['inspect_note'] or '')}</p><p>ผู้ตรวจรับ: {_e(_members_text(p) or '-')}</p>")
+    from .procurement import parse_members
+    mem = parse_members(p["committee_members"]) if "committee_members" in p.keys() else []
+    if mem:
+        r.signers = [(role or "ผู้ตรวจรับพัสดุ", name, pos) for name, pos, role in mem]
     return r
+
+
+def _members_text(p) -> str:
+    from .procurement import parse_members
+    mem = parse_members(p["committee_members"]) if "committee_members" in p.keys() else []
+    if not mem:
+        return p["committee"] or ""
+    return " · ".join(f"{n}" + (f" {pos}" if pos else "") + (f" ({role})" if role else "") for n, pos, role in mem)
 
 
 def proc_register(store, fy) -> Report:

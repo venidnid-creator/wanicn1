@@ -604,6 +604,33 @@ class ProcDialog(QDialog):
         self.reason = QPlainTextEdit(p.get("reason") or "")
         self.reason.setFixedHeight(px(56))
         f.addRow(T("เหตุผลและความจำเป็น"), self.reason)
+        self.div = QComboBox()
+        self.div.addItem(T("— ทุกกอง —"), None)
+        for d in s.divisions():
+            self.div.addItem(d["name"], d["id"])
+        cur_div = p.get("division_id")
+        if not cur_div and p.get("budget_item_id"):
+            bi = s.budget_item(p["budget_item_id"])
+            cur_div = bi["division_id"] if bi is not None and "division_id" in bi.keys() else None
+        if cur_div:
+            top = s.top_division(cur_div)
+            cur_div = top["id"] if top else cur_div
+        if not cur_div and not pid and getattr(page, "div", None) is not None:
+            cur_div = page.div.currentData()
+        self.div.setCurrentIndex(max(0, self.div.findData(cur_div)))
+        self.preparer = QComboBox()
+        self.preparer.setEditable(True)
+        self.preparer.setMinimumContentsLength(30)
+        self.preparer.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._fill_staff(p.get("preparer"), p.get("preparer_pos"))
+        staff_btn = QPushButton(T("รายชื่อเจ้าหน้าที่…"))
+        staff_btn.clicked.connect(self._edit_staff)
+        dr = QHBoxLayout()
+        dr.addWidget(self.div, 1)
+        dr.addWidget(QLabel(T("ผู้จัดทำ")))
+        dr.addWidget(self.preparer, 2)
+        dr.addWidget(staff_btn)
+        f.addRow(T("กอง/สำนัก"), dr)
         fy = page.fy.value()
         if not pid and TD.fiscal_year(self.date.iso()) != fy:      # a request for another year
             start, end = TD.fiscal_range(fy)
@@ -614,6 +641,7 @@ class ProcDialog(QDialog):
         self.fy_label.setObjectName("hint")
         self._fill_items(p.get("budget_item_id"))
         self.date.dateChanged.connect(lambda *_: self._fill_items(self.bitem.currentData(), keep_name=True))
+        self.div.currentIndexChanged.connect(self._div_changed)
         br = QHBoxLayout()
         br.addWidget(self.bitem, 1)
         br.addWidget(self.fy_label)
@@ -654,8 +682,50 @@ class ProcDialog(QDialog):
         g.addRow(T("กำหนดเวลาที่ต้องการใช้/ส่งมอบ"), self.due)
         self.requester = QLineEdit(p.get("requester") or "")
         g.addRow(T("ผู้ขอ/หน่วยงานที่ขอ"), self.requester)
-        self.committee = QLineEdit(p.get("committee") or "")
-        g.addRow(T("ผู้ตรวจรับ/คณะกรรมการ"), self.committee)
+        self.inst = QSpinBox()
+        self.inst.setRange(1, 60)
+        self.inst.setSuffix(" " + T("งวด"))
+        self.inst.setValue(int(p.get("installments") or 1))
+        g.addRow(T("จำนวนงวดงาน/งวดเงิน"), self.inst)
+        self.mode = QComboBox()
+        for k, lab in ((P.INSPECT_MODES[0], "ผู้ตรวจรับพัสดุ (1 คน)"),
+                       (P.INSPECT_MODES[1], "คณะกรรมการตรวจรับพัสดุ (3–5 คน)")):
+            self.mode.addItem(T(lab), k)
+        members = P.parse_members(p.get("committee_members"))
+        if not members and (p.get("committee") or "").strip():
+            members = [(p["committee"].strip(), "", "")]
+        mode = p.get("inspect_mode") or (P.INSPECT_MODES[1] if len(members) > 1 else P.INSPECT_MODES[0])
+        self.mode.setCurrentIndex(max(0, self.mode.findData(mode)))
+        g.addRow(T("การตรวจรับ"), self.mode)
+        self.members = QTableWidget(0, 3)
+        self.members.setHorizontalHeaderLabels([T("ชื่อ-สกุล"), T("ตำแหน่ง"), T("หน้าที่")])
+        hh = self.members.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.Stretch)
+        self.members.verticalHeader().setVisible(False)
+        self.members.setMaximumHeight(px(190))
+        for mem in members:
+            self._add_member(*mem)
+        mb = QHBoxLayout()
+        mb.addWidget(self.members, 1)
+        mbv = QVBoxLayout()
+        for text, fn in (("เพิ่ม", lambda: self._add_member()), ("ลบ", self._del_member)):
+            b = QPushButton(T(text))
+            b.clicked.connect(fn)
+            mbv.addWidget(b)
+        mbv.addStretch(1)
+        mb.addLayout(mbv)
+        self.mem_hint = QLabel()
+        self.mem_hint.setObjectName("hint")
+        mw = QWidget()
+        mvl = QVBoxLayout(mw)
+        mvl.setContentsMargins(0, 0, 0, 0)
+        mvl.addLayout(mb)
+        mvl.addWidget(self.mem_hint)
+        g.addRow(T("ผู้ตรวจรับ/คณะกรรมการ"), mw)
+        self.mode.currentIndexChanged.connect(self._mode_changed)
+        if not members:
+            self._mode_changed()
+        self._member_hint()
         self.egp = QLineEdit(p.get("egp_no") or "")
         g.addRow(T("เลขที่โครงการ e-GP"), self.egp)
         self.rent_from = ThaiDateEdit(p.get("rent_from") or str(TD.today()))
@@ -681,6 +751,10 @@ class ProcDialog(QDialog):
         outer.addLayout(right, 2)
         self.box = BudgetBox()
         right.addWidget(self.box)
+        self.cat_label = QLabel()
+        self.cat_label.setTextFormat(Qt.RichText)
+        self.cat_label.setWordWrap(True)
+        right.addWidget(self.cat_label)
         right.addLayout(g)
         self.warn = QLabel("")
         self.warn.setWordWrap(True)
@@ -701,7 +775,8 @@ class ProcDialog(QDialog):
                     self.kind.currentIndexChanged):
             sig.connect(self.update_box)
         if self.locked:
-            for wdg in (self.kind, self.bitem, self.lines, self.amount, self.median, self.method, self.auto):
+            for wdg in (self.kind, self.bitem, self.lines, self.amount, self.median, self.method, self.auto, self.div,
+                        self.inst):
                 wdg.setEnabled(False)
             self.warn.setText(T("ออกใบสั่ง/ทำสัญญาแล้ว — แก้ไขได้เฉพาะหมายเหตุ ผู้ตรวจรับ กำหนดส่ง และเลข e-GP"))
         self.update_box()
@@ -714,7 +789,10 @@ class ProcDialog(QDialog):
         self.bitem.blockSignals(True)
         self.bitem.clear()
         self.bitem.addItem(T("— เลือกรายการงบประมาณ —"), None)
+        did = self.div.currentData() if hasattr(self, "div") else None
         for b in s.budget_items(fy, procurement_only=True):
+            if did and "division_id" in b.keys() and b["division_id"] and b["division_id"] != did:
+                continue
             self.bitem.addItem(f"{b['task']} › {b['type']} › {b['name'][:60]}", b["id"])
             self.bitem.setItemData(self.bitem.count() - 1, b["detail"][:400] if b["detail"] else "",
                                    Qt.ToolTipRole)
@@ -735,6 +813,121 @@ class ProcDialog(QDialog):
         self.fy_label.setText(f"{T('ข้อบัญญัติปี')} {fy}" + ("" if n else f" — {T('ยังไม่มีในโปรแกรม')}"))
         if hasattr(self, "box"):
             self.update_box()
+
+    # ---- กอง / ผู้จัดทำ / ผู้ตรวจรับ
+    def _div_changed(self, *_):
+        self._fill_items(self.bitem.currentData(), keep_name=True)
+        self._fill_staff(self.preparer.currentText())
+        if not self.requester.text().strip() and self.div.currentData():
+            self.requester.setText(self.div.currentText())
+
+    def _staff_rows(self, all_divisions=False):
+        did = None if all_divisions else self.div.currentData()
+        return self.store.staff(did)
+
+    def _fill_staff(self, current=None, pos=None):
+        self.preparer.blockSignals(True)
+        self.preparer.clear()
+        self.preparer.addItem("", ("", ""))
+        for r in self._staff_rows():
+            self.preparer.addItem(f"{r['name']} — {r['position']}" if r["position"] else r["name"],
+                                  (r["name"], r["position"] or ""))
+        if current:
+            i = next((k for k in range(self.preparer.count()) if (self.preparer.itemData(k) or ("",))[0] == current
+                      or self.preparer.itemText(k) == current), -1)
+            if i >= 0:
+                self.preparer.setCurrentIndex(i)
+            else:
+                self.preparer.setEditText(f"{current} — {pos}" if pos else current)
+        self.preparer.blockSignals(False)
+
+    def _prep(self):
+        txt = self.preparer.currentText().strip()
+        i = self.preparer.findText(txt)
+        if i >= 0 and self.preparer.itemData(i):
+            return self.preparer.itemData(i)
+        name, _, pos = txt.partition(" — ")
+        return name.strip(), pos.strip()
+
+    def _edit_staff(self):
+        from .pages_manpower import StaffDialog
+        did = self.div.currentData()
+        if not did:
+            return QMessageBox.information(self, PRODUCT_TH, T("เลือกกองก่อน แล้วจึงแก้รายชื่อเจ้าหน้าที่ของกอง"))
+        StaffDialog(self, self.store, did).exec()
+        self._fill_staff(self.preparer.currentText())
+
+    def _add_member(self, name="", pos="", role=""):
+        r = self.members.rowCount()
+        self.members.insertRow(r)
+        names = QComboBox()
+        names.setEditable(True)
+        names.addItem("", "")
+        for s_ in self._staff_rows(all_divisions=True):
+            names.addItem(s_["name"], s_["position"] or "")
+        names.setEditText(name)
+        names.activated.connect(lambda i, c=names, row=r: self._member_picked(c))
+        self.members.setCellWidget(r, 0, names)
+        self.members.setItem(r, 1, QTableWidgetItem(pos))
+        roles = QComboBox()
+        roles.setEditable(True)
+        roles.addItems([""] + P.COMMITTEE_ROLES + ["ผู้ตรวจรับพัสดุ"])
+        roles.setEditText(role)
+        self.members.setCellWidget(r, 2, roles)
+        self._member_hint()
+
+    def _member_picked(self, combo):
+        for r in range(self.members.rowCount()):
+            if self.members.cellWidget(r, 0) is combo:
+                pos = combo.currentData()
+                if pos and not (self.members.item(r, 1) and self.members.item(r, 1).text().strip()):
+                    self.members.setItem(r, 1, QTableWidgetItem(pos))
+
+    def _del_member(self):
+        r = self.members.currentRow()
+        if r < 0:
+            r = self.members.rowCount() - 1
+        if r >= 0:
+            self.members.removeRow(r)
+        self._member_hint()
+
+    def _mode_changed(self, *_):
+        committee = self.mode.currentData() == P.INSPECT_MODES[1]
+        want = 3 if committee else 1
+        while self.members.rowCount() < want:
+            self._add_member()
+        if not committee:
+            while self.members.rowCount() > 1:
+                self.members.removeRow(self.members.rowCount() - 1)
+        roles = ([P.COMMITTEE_ROLES[0]] + [P.COMMITTEE_ROLES[1]] * 4) if committee else ["ผู้ตรวจรับพัสดุ"]
+        for r in range(self.members.rowCount()):
+            c = self.members.cellWidget(r, 2)
+            if c is None:
+                continue
+            cur = c.currentText().strip()
+            if not committee or not cur or cur == "ผู้ตรวจรับพัสดุ":
+                c.setEditText(roles[min(r, len(roles) - 1)])
+        self._member_hint()
+
+    def _members(self):
+        out = []
+        for r in range(self.members.rowCount()):
+            name = self.members.cellWidget(r, 0).currentText().strip()
+            pos = self.members.item(r, 1).text().strip() if self.members.item(r, 1) else ""
+            role = self.members.cellWidget(r, 2).currentText().strip()
+            if name:
+                out.append((name, pos, role))
+        return out
+
+    def _member_hint(self, *_):
+        if not hasattr(self, "mem_hint"):
+            return
+        committee = self.mode.currentData() == P.INSPECT_MODES[1]
+        n = self.members.rowCount()
+        ok = (3 <= n <= 5) if committee else n == 1
+        self.mem_hint.setText(f"<span style='color:{GREEN if ok else RED}'>"
+                              + (T(f"คณะกรรมการ {n} คน (ต้อง 3–5 คน)") if committee else T(f"ผู้ตรวจรับ {n} คน (1 คน)"))
+                              + "</span>")
 
     def _del_line(self):
         r = self.lines.currentRow()
@@ -779,6 +972,14 @@ class ProcDialog(QDialog):
             self.method.setCurrentText(sug)
             self.method.blockSignals(False)
         after = self.box.show_for(self.store, self.bitem.currentData(), self.amount.value(), self.pid)
+        cb = self.store.category_balance(self.bitem.currentData()) if self.bitem.currentData() else {}
+        if cb:
+            who = f" {T('ของ')}{cb['division']}" if cb["division"] else ""
+            self.cat_label.setText(f"{T('เงินคงเหลือทั้งหมวด')}{cb['category']}{who} {T('ปี')} {cb['fy']}: "
+                                   f"<b>{m(cb['available'])}</b> {T('บาท')} "
+                                   f"({T('จากงบ')} {m(cb['budget'])} · {cb['items']} {T('รายการ')})")
+        else:
+            self.cat_label.setText("")
         if not self.locked:
             if after is not None and after < 0:
                 self.warn.setText(f"<b style='color:{RED}'>{T('งบประมาณไม่พอ')} — {T('ขาด')} {m(-after)} {T('บาท')}</b>")
@@ -797,7 +998,10 @@ class ProcDialog(QDialog):
                  reason=self.reason.toPlainText().strip(), budget_item_id=self.bitem.currentData(),
                  amount=self.amount.value(), median_price=self.median.value(),
                  method=self.method.currentText(), date_request=self.date.iso(), due_date=self.due.iso(),
-                 requester=self.requester.text().strip(), committee=self.committee.text().strip(),
+                 requester=self.requester.text().strip(),
+                 division_id=self.div.currentData(), installments=self.inst.value(),
+                 inspect_mode=self.mode.currentData(), committee_members=self._members(),
+                 preparer=self._prep()[0], preparer_pos=self._prep()[1],
                  egp_no=self.egp.text().strip(), note=self.note.text().strip(),
                  rent_from=self.rent_from.iso() if kind == "เช่า" else None,
                  rent_to=self.rent_to.iso() if kind == "เช่า" else None,

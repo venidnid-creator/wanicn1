@@ -48,7 +48,34 @@ CREATE TABLE IF NOT EXISTS payments(
 FIELDS = ("fy", "number", "kind", "method", "title", "reason", "budget_item_id", "amount",
           "median_price", "vendor", "vendor_tax_id", "vendor_vat", "egp_no", "date_request",
           "due_date", "rent_from", "rent_to", "exchange_asset_id", "committee", "requester", "note",
-          "division_id")
+          "division_id", "preparer", "preparer_pos", "installments", "inspect_mode", "committee_members")
+INSPECT_MODES = ["ผู้ตรวจรับพัสดุ", "คณะกรรมการตรวจรับพัสดุ"]
+COMMITTEE_ROLES = ["ประธานกรรมการ", "กรรมการ", "กรรมการและเลขานุการ"]
+
+
+def parse_members(text) -> list[tuple[str, str, str]]:
+    """«ชื่อ|ตำแหน่ง|หน้าที่» ทีละบรรทัด → [(ชื่อ, ตำแหน่ง, หน้าที่)]."""
+    out = []
+    for line in (text or "").splitlines():
+        parts = (line.split("|") + ["", "", ""])[:3]
+        if parts[0].strip():
+            out.append(tuple(x.strip() for x in parts))
+    return out
+
+
+def members_text(members) -> str:
+    return "\n".join("|".join(m) for m in members if m and str(m[0]).strip())
+
+
+def check_inspectors(mode, members):
+    """ผู้ตรวจรับพัสดุ 1 คน · คณะกรรมการตรวจรับพัสดุ 3–5 คน (ระเบียบฯ ข้อ 25 ข้อ 175 และกฎกระทรวงวงเงิน)."""
+    n = len(members)
+    if not n:
+        return
+    if mode == INSPECT_MODES[1] and not 3 <= n <= 5:
+        raise ValueError(f"คณะกรรมการตรวจรับพัสดุต้องมี 3–5 คน (ตอนนี้ {n} คน)")
+    if mode == INSPECT_MODES[0] and n != 1:
+        raise ValueError(f"ผู้ตรวจรับพัสดุมีได้ 1 คน (ตอนนี้ {n} คน) — ถ้ามากกว่าให้เลือก «คณะกรรมการตรวจรับพัสดุ»")
 
 
 def suggest_method(amount, limit=SPECIFIC_LIMIT) -> str:
@@ -66,6 +93,56 @@ class ProcurementMixin:
 
     def _proc_init(self):
         self.con.executescript(SQL)
+        self.con.executescript("""CREATE TABLE IF NOT EXISTS staff(
+  id INTEGER PRIMARY KEY, division_id INTEGER, name TEXT NOT NULL, position TEXT DEFAULT '', note TEXT DEFAULT '');""")
+        cols = [r[1] for r in self.con.execute("PRAGMA table_info(procurements)")]
+        for col, decl in (("preparer", "TEXT DEFAULT ''"), ("preparer_pos", "TEXT DEFAULT ''"),
+                          ("installments", "INTEGER DEFAULT 1"), ("inspect_mode", "TEXT DEFAULT 'ผู้ตรวจรับพัสดุ'"),
+                          ("committee_members", "TEXT DEFAULT ''"), ("division_id", "INTEGER")):
+            if col not in cols:
+                self.con.execute(f"ALTER TABLE procurements ADD COLUMN {col} {decl}")
+        self.con.commit()
+
+    # ----------------------------------------------------------- staff (รายชื่อเจ้าหน้าที่ในกอง)
+    def staff(self, division_id=None, include_sub=True):
+        if not division_id:
+            return self.q("SELECT s.*, d.name AS division FROM staff s LEFT JOIN divisions d ON d.id=s.division_id "
+                          "ORDER BY d.seq, s.id")
+        ids = self.descendants(division_id) if include_sub and hasattr(self, "descendants") else [division_id]
+        return self.q(f"SELECT s.*, d.name AS division FROM staff s LEFT JOIN divisions d ON d.id=s.division_id "
+                      f"WHERE s.division_id IN ({','.join('?' * len(ids))}) ORDER BY d.seq, s.id", ids)
+
+    def save_staff(self, data: dict, sid=None) -> int:
+        d = {k: data[k] for k in ("division_id", "name", "position", "note") if k in data}
+        if "name" in d and not str(d["name"]).strip():
+            raise ValueError("กรอกชื่อเจ้าหน้าที่")
+        if sid:
+            self.run(f"UPDATE staff SET {','.join(f'{k}=?' for k in d)} WHERE id=?", (*d.values(), sid))
+            return sid
+        return self.run(f"INSERT INTO staff({','.join(d)}) VALUES({','.join('?' * len(d))})", tuple(d.values()))
+
+    def delete_staff(self, sid):
+        self.run("DELETE FROM staff WHERE id=?", (sid,))
+
+    def category_balance(self, bid) -> dict:
+        """เงินคงเหลือทั้งหมวด (เช่น ค่าใช้สอย) ของกองเดียวกันในปีงบประมาณเดียวกับรายการงบ *bid*."""
+        b = self.budget_item(bid)
+        if b is None:
+            return {}
+        did = b["division_id"] if "division_id" in b.keys() else None
+        sql = "SELECT id FROM budget_items WHERE fy=? AND category=?"
+        args = [b["fy"], b["category"]]
+        if did:
+            sql += " AND division_id=?"
+            args.append(did)
+        t = dict(budget=0.0, available=0.0, items=0, category=b["category"], fy=b["fy"],
+                 division=(self.division(did)["name"] if did and hasattr(self, "division") and self.division(did) else ""))
+        for r in self.q(sql, args):
+            bal = self.balance(r["id"])
+            t["budget"] += bal["budget"]
+            t["available"] += bal["available"]
+            t["items"] += 1
+        return t
 
     # ----------------------------------------------------------- helpers
     def next_proc_number(self, kind, fy) -> str:
@@ -131,8 +208,18 @@ class ProcurementMixin:
         cur = self.procurement(pid) if pid else None
         if cur and cur["status"] not in ("ขออนุมัติ", "อนุมัติแล้ว"):
             # after the order only notes and dates may change
-            d = {k: v for k, v in d.items() if k in ("note", "committee", "due_date", "egp_no", "vendor_tax_id")}
+            d = {k: v for k, v in d.items() if k in ("note", "committee", "due_date", "egp_no", "vendor_tax_id",
+                                                     "committee_members", "inspect_mode", "preparer", "preparer_pos")}
             lines = None
+        if "committee_members" in d or "inspect_mode" in d:
+            mem = d.get("committee_members")
+            members = parse_members(mem) if isinstance(mem, str) else list(mem or [])
+            check_inspectors(d.get("inspect_mode") or INSPECT_MODES[0], members)
+            d["committee_members"] = members_text(members)
+            if members:
+                d["committee"] = ", ".join(f"{n} ({r or p})" if (r or p) else n for n, p, r in members)
+        if "installments" in d:
+            d["installments"] = max(1, int(d["installments"] or 1))
         if d.get("budget_item_id") and not d.get("division_id"):
             bi = self.budget_item(d["budget_item_id"])
             if bi is not None and "division_id" in bi.keys() and bi["division_id"]:

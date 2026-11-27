@@ -68,7 +68,7 @@ class OrgTab(QWidget):
         self.tree.itemDoubleClicked.connect(lambda *_: self.edit_div())
         ll.addWidget(self.tree, 1)
         row, _ = _buttons(("เพิ่มกอง", self.add_top, True), ("เพิ่มหน่วยงานย่อย", self.add_sub),
-                          ("แก้ไข", self.edit_div), ("ลบ", self.del_div))
+                          ("แก้ไข", self.edit_div), ("ลบ", self.del_div), ("รายชื่อเจ้าหน้าที่…", self.staff))
         ll.addLayout(row)
         sp.addWidget(left)
         right = QWidget()
@@ -197,6 +197,12 @@ class OrgTab(QWidget):
                          hints=dict(aliases="เช่น กองการศึกษาฯ, กองการศึกษา",
                                     head_pos="ว่าง = ไม่อยู่ในเส้นทางเสนอเอกสาร"))
         return dlg.values() if dlg.exec() else None
+
+    def staff(self):
+        did = self.cur()
+        if not did:
+            return need_selection(self)
+        StaffDialog(self, self.p.store, did).exec()
 
     def add_top(self):
         v = self._div_dialog(dict(kind="กอง", parent_id=None))
@@ -900,3 +906,56 @@ class AnalysisTab(QWidget):
 
     def print_(self):
         self.p.win.preview(HR.manpower_report(self.p.store, self.p.did()))
+
+
+class StaffDialog(QDialog):
+    """รายชื่อเจ้าหน้าที่ของกอง/หน่วยงาน (ผู้จัดทำ ผู้ตรวจรับ) — เพิ่ม แก้ไข ลบ; เก็บในไฟล์ของหน่วยงานเท่านั้น."""
+
+    def __init__(self, parent, store, did):
+        super().__init__(parent)
+        self.s, self.did = store, did
+        d = store.division(did)
+        self.setWindowTitle(T("รายชื่อเจ้าหน้าที่") + f" — {d['name']}")
+        lay = QVBoxLayout(self)
+        self.t = table(["ชื่อ-สกุล", "ตำแหน่ง", "หน่วยงาน", "หมายเหตุ"], stretch=0)
+        self.t.doubleClicked.connect(lambda *_: self.edit())
+        lay.addWidget(self.t, 1)
+        row, _ = _buttons(("เพิ่ม", self.add, True), ("แก้ไข", self.edit), ("ลบ", self.delete), (None, None))
+        lay.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.button(QDialogButtonBox.Close).setText(T("ปิด"))
+        bb.rejected.connect(self.accept)
+        lay.addWidget(bb)
+        self.load()
+        fit_to_screen(self, px(900), px(520))
+
+    def load(self):
+        rows = self.s.staff(self.did)
+        fill(self.t, [[r["name"], r["position"], r["division"], r["note"]] for r in rows], ids=[r["id"] for r in rows])
+
+    def _dlg(self, v):
+        units = [(u, self.s.division(u)["name"]) for u in self.s.descendants(self.did)]
+        titles = sorted({p["title"] for u, _ in units for p in self.s.positions(u)})
+        f = [("name", "ชื่อ-สกุล", "text"), ("position", "ตำแหน่ง", "edit-combo", [""] + titles),
+             ("division_id", "หน่วยงาน", "combo", units), ("note", "หมายเหตุ", "text")]
+        dlg = FormDialog(self, T("เจ้าหน้าที่"), f, v)
+        return dlg.values() if dlg.exec() else None
+
+    def add(self):
+        v = self._dlg(dict(division_id=self.did))
+        if v and _do(self, self.s.save_staff, v):
+            self.load()
+
+    def edit(self):
+        sid = selected_id(self.t)
+        if not sid:
+            return need_selection(self)
+        v = self._dlg(dict(self.s.one("SELECT * FROM staff WHERE id=?", (sid,))))
+        if v and _do(self, self.s.save_staff, v, sid):
+            self.load()
+
+    def delete(self):
+        sid = selected_id(self.t)
+        if sid and QMessageBox.question(self, PRODUCT_TH, T("ลบรายชื่อนี้?")) == QMessageBox.Yes:
+            self.s.delete_staff(sid)
+            self.load()

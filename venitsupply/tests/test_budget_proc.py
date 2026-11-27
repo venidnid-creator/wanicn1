@@ -290,3 +290,33 @@ def test_backfill_and_mixed_stages():
     assert st[0] == 1 and "รอตรวจรับ 1" in st[1] and "เบิกจ่ายแล้ว 1" in st[1]
     s.cancel(p2)
     assert s.proc_stage(FY)[eq][0] == 3
+
+
+def test_proc_division_staff_installments_committee():
+    """กองผู้จัดหา · ผู้จัดทำจากรายชื่อเจ้าหน้าที่ · จำนวนงวด · ผู้ตรวจรับ 1 คน / คณะกรรมการ 3–5 คน · เงินคงเหลือทั้งหมวด."""
+    import pytest
+    from venitsupply import procurement as P, reports as R
+    s = Store()
+    s.set_setting("org_name", "องค์การบริหารส่วนตำบลไม้ขาว")
+    s.import_ordinance(B.read_table(os.path.join(os.path.dirname(B.__file__), "data", "maikhao_2570.csv")))
+    s.ensure_manpower()
+    s.assign_divisions(2570)
+    fin = next(d for d in s.divisions() if d["name"] == "กองคลัง")
+    unit = next(d for d in s.divisions(all_levels=True) if d["name"] == "งานทะเบียนทรัพย์สินและพัสดุ")
+    s.save_staff(dict(division_id=unit["id"], name="นายหนึ่ง ทดสอบ", position="เจ้าพนักงานพัสดุ"))
+    assert [r["name"] for r in s.staff(fin["id"])] == ["นายหนึ่ง ทดสอบ"]          # รวมหน่วยงานย่อย
+    item = next(b for b in s.budget_items(2570) if b["division_id"] == fin["id"] and b["category"] == "ค่าวัสดุ")
+    cb = s.category_balance(item["id"])
+    assert cb["category"] == "ค่าวัสดุ" and cb["division"] == "กองคลัง" and cb["available"] >= item["amount"]
+    base = dict(kind="ซื้อ", title="x", budget_item_id=item["id"], amount=1000, date_request="2026-11-20",
+                division_id=fin["id"], preparer="นายหนึ่ง ทดสอบ", preparer_pos="เจ้าพนักงานพัสดุ", installments=3)
+    with pytest.raises(ValueError, match="3–5"):
+        s.save_procurement(dict(base, inspect_mode=P.INSPECT_MODES[1], committee_members=[("ก", "", "ประธานกรรมการ")]))
+    with pytest.raises(ValueError, match="1 คน"):
+        s.save_procurement(dict(base, inspect_mode=P.INSPECT_MODES[0], committee_members=[("ก", "", ""), ("ข", "", "")]))
+    mem = [("นายก", "นักวิชาการพัสดุ", "ประธานกรรมการ"), ("นายข", "", "กรรมการ"), ("นายค", "", "กรรมการ")]
+    pid = s.save_procurement(dict(base, inspect_mode=P.INSPECT_MODES[1], committee_members=mem))
+    p = s.procurement(pid)
+    assert p["installments"] == 3 and P.parse_members(p["committee_members"]) == mem and "นายก" in p["committee"]
+    html = R.proc_request(s, pid).html()
+    assert "คณะกรรมการตรวจรับพัสดุ" in html and "3 งวด" in html and "นายหนึ่ง ทดสอบ" in html
