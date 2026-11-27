@@ -75,8 +75,10 @@ def _group(mesh, kind, mark, label, color):
     return B._tag(g, PART, kind, mark, [("ชนิด", label)], key=label)
 
 
-def _col_bars(mesh_m, mesh_t, x, y, z0, z1, b, h, cover, main, tie):
-    """Main bars round the section, ties along the height."""
+def _col_bars(mesh_m, mesh_t, x, y, z0, z1, b, h, cover, main, tie, foot=None):
+    """Main bars round the section, ties along the height. ``foot`` = (z of the footing mesh,
+    hook length): the stump's bars run down into the footing onto its mesh and turn 90° outwards
+    there (the standard footing detail — owner, 27 Nov), with ties inside the footing too."""
     n = 0
     cx, cy = b / 2 - cover, h / 2 - cover
     if main and main.n:
@@ -95,10 +97,18 @@ def _col_bars(mesh_m, mesh_t, x, y, z0, z1, b, h, cover, main, tie):
             extra -= 1
             k += 1
         for px, py in per[:nb]:
-            n += _bar(mesh_m, (x + px, y + py, z0 + 0.05), (x + px, y + py, z1 - 0.02), main.d)
+            if foot is not None:
+                zf, hook = foot
+                zl = zf + main.d / 1000.0
+                n += _bar(mesh_m, (x + px, y + py, zl), (x + px, y + py, z1 - 0.02), main.d)
+                l_ = math.hypot(px, py) or 1.0
+                n += _bar(mesh_m, (x + px, y + py, zl),
+                          (x + px + px / l_ * hook, y + py + py / l_ * hook, zl), main.d)
+            else:
+                n += _bar(mesh_m, (x + px, y + py, z0 + 0.05), (x + px, y + py, z1 - 0.02), main.d)
     if tie:
         s = tie.s or 0.15
-        z = z0 + 0.05
+        z = (foot[0] + 0.10) if foot is not None else z0 + 0.05
         while z < z1 - 0.03:
             n += _ring(mesh_t, [(x - cx, y - cy, z), (x + cx, y - cy, z), (x + cx, y + cy, z),
                                 (x - cx, y + cy, z)], tie.d)
@@ -118,12 +128,20 @@ def rebar_groups(data) -> list:
     for role, items in (("column", E["columns"]), ("stump", E["stumps"])):
         mm, mt = Mesh(), Mesh()
         n = 0
+        feet = {(round(f["x"], 3), round(f["y"], 3)): f for f in E["footings"]}
         for c in items:
             sp = lib.get(c["mark"]) or {}
             b, h = float(sp.get("b", 0.2)), float(sp.get("h", sp.get("b", 0.2)))
             cv = R.cover_of(sp, "column" if role == "column" else "stump") + 0.006
+            main = R.parse_bar(sp.get("main"))
+            foot = None
+            f = feet.get((round(c["x"], 3), round(c["y"], 3))) if role == "stump" else None
+            if f is not None and main:
+                fb = R.parse_bar((lib.get(f["mark"]) or {}).get("bars"))
+                zf = float(f["z0"]) + R.COVER["footing"] + 2 * ((fb.d if fb else 12) / 1000.0)
+                foot = (zf, max(12 * main.d / 1000.0, 0.15))         # 90° hook ≥ 12 d on the mesh
             n += _col_bars(mm, mt, c["x"], c["y"], float(c["z0"]), float(c["z1"]), b, h, cv,
-                           R.parse_bar(sp.get("main")), R.parse_bar(sp.get("tie")))
+                           main, R.parse_bar(sp.get("tie")), foot)
         if n:
             th = "เสา" if role == "column" else "ตอม่อ"
             out.append(_group(mm, role + "_main", th, f"เหล็กยืน{th}", COLORS["main"]))
@@ -179,12 +197,26 @@ def rebar_groups(data) -> list:
         x, y = float(f["x"]), float(f["y"])
         nx_ = R.mesh_count(w, bar.s)
         ny_ = R.mesh_count(l_, bar.s)
+        t_ = float(sp.get("t", 0.3))
+        up = max(t_ - 2 * cv, 0.05)                 # the mesh bars turn up at the sides (standard detail)
         for i in range(nx_):
             px = x - w / 2 + cv + (w - 2 * cv) * (i / (nx_ - 1) if nx_ > 1 else 0.5)
-            n += _bar(mm, (px, y - l_ / 2 + cv, z), (px, y + l_ / 2 - cv, z), bar.d)
+            ya, yb = y - l_ / 2 + cv, y + l_ / 2 - cv
+            n += _bar(mm, (px, ya, z), (px, yb, z), bar.d)
+            n += _bar(mm, (px, ya, z), (px, ya, z + up), bar.d)
+            n += _bar(mm, (px, yb, z), (px, yb, z + up), bar.d)
+        z2 = z + bar.d / 1000.0
         for j in range(ny_):
             py = y - l_ / 2 + cv + (l_ - 2 * cv) * (j / (ny_ - 1) if ny_ > 1 else 0.5)
-            n += _bar(mm, (x - w / 2 + cv, py, z + bar.d / 1000.0), (x + w / 2 - cv, py, z + bar.d / 1000.0), bar.d)
+            xa, xb = x - w / 2 + cv, x + w / 2 - cv
+            n += _bar(mm, (xa, py, z2), (xb, py, z2), bar.d)
+            n += _bar(mm, (xa, py, z2), (xa, py, z2 + up), bar.d)
+            n += _bar(mm, (xb, py, z2), (xb, py, z2 + up), bar.d)
+        # เหล็กรัดรอบ (as S-09): a ring round the turned-up ends, half way up
+        rc = cv - 0.012
+        zr = z + up * 0.6
+        n += _ring(mm, [(x - w / 2 + rc, y - l_ / 2 + rc, zr), (x + w / 2 - rc, y - l_ / 2 + rc, zr),
+                        (x + w / 2 - rc, y + l_ / 2 - rc, zr), (x - w / 2 + rc, y + l_ / 2 - rc, zr)], 9)
     if n:
         out.append(_group(mm, "footing_mesh", "ฐานราก", "เหล็กตะแกรงฐานราก", COLORS["mesh"]))
     # slabs: both ways at the cover above the soffit
