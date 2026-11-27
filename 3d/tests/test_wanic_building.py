@@ -3,6 +3,7 @@
 """WANIC ออกแบบอาคาร: plan → frame → roof → takeoff, and the panel."""
 from __future__ import annotations
 
+import copy
 import math
 import os
 
@@ -622,3 +623,16 @@ def test_a_changed_model_is_calculated_again():
     d["calc_stamp"] = B.struct_stamp(d)
     d["library"] = {"B1": {"stir": "RB6@0.10"}}      # a member changed
     assert not B.calc_current(d)
+
+
+def test_no_stair_is_built_from_the_top_storey():
+    """owner 27 Nov: «บันไดจะไม่สร้างชั้นบนสุด» — a stair left on the top floor (copied with the
+    floor, or drawn there) is neither built, drawn nor billed."""
+    d = B.default_data()
+    room = dict(name="a", x=0, y=0, w=6, d=6)
+    stair = {"id": "s1", "x": 1.0, "y": 1.0, "type": "U"}
+    d["floors"] = [dict(copy.deepcopy(d["floors"][0]), rooms=[dict(room)], stairs=[dict(stair)])
+                   for _ in range(2)]
+    E = B.elements(d)
+    assert [st["floor"] for st in E["stairs"]] == [0]
+    assert not B.stair_used(stair, {}, 2, 1) and B.stair_used(stair, {}, 2, 0)

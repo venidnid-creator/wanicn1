@@ -296,7 +296,7 @@ class PlanCanvas(QWidget):
         storeys = len(B.stacked(self.panel.data())[0])
         for stp in self.panel.items("stairs"):
             sel = stp["id"] == self.selected
-            if not B.stair_used(stp, st, storeys):
+            if not B.stair_used(stp, st, storeys, self.panel.floor):
                 continue            # one storey: no flight is built, none drawn
             pl = B.stair_plan(stp, st)
             p.setPen(QPen(SEL if sel else NAVY, 2 if sel else 1.2))
@@ -3632,7 +3632,7 @@ class BuildingPanel(QWidget):
                 return fx
         storeys = len(B.stacked(self.data())[0])
         for stp in self.items("stairs"):
-            if not B.stair_used(stp, s, storeys):
+            if not B.stair_used(stp, s, storeys, self.floor):
                 continue
             xs = [q[0] for q in B.stair_rect(stp, s)]
             ys = [q[1] for q in B.stair_rect(stp, s)]

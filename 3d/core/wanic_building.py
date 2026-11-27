@@ -690,7 +690,7 @@ def elements(data) -> dict:
                                   "sill": sill, "type": op.get("type", "door"),
                                   "name": opening_name(op, s)})
         for stp in f["stairs"]:
-            if stair_used(stp, s, n):
+            if stair_used(stp, s, n, k):
                 E["stairs"].append({"floor": k, "st": stp})
         for fx in f.get("fixtures") or []:
             E["fixtures"].append({"floor": k, "fx": fx})
@@ -1002,9 +1002,13 @@ def stair_width(st, s) -> float:
     return float(st.get("w") or s.get("stair_w") or STAIR_W_AUTO)
 
 
-def stair_used(st, s, storeys) -> bool:
+def stair_used(st, s, storeys, floor=None) -> bool:
     """Whether a flight is built: always with two storeys or more; on one
-    storey only when a width is set (the default 0 means none)."""
+    storey only when a width is set (the default 0 means none). Never from
+    the top storey of a building of two storeys or more — there is no floor
+    above it (owner, 27 Nov: «บันไดจะไม่สร้างชั้นบนสุด»)."""
+    if floor is not None and storeys >= 2 and floor >= storeys - 1:
+        return False
     return storeys >= 2 or bool(st.get("w") or s.get("stair_w"))
 
 
@@ -5351,7 +5355,7 @@ def takeoff_rates(data) -> list[dict]:
                   for f in floors for op in f["openings"]})
     for i, (kind, label) in enumerate(ops):
         add("งานประตู-หน้าต่าง", f"3.{i + 3}", label, label, "count", "ชุด")
-    if any(stair_used(stp, s, len(floors)) for f in floors for stp in f["stairs"]):
+    if any(stair_used(stp, s, len(floors), k) for k, f in enumerate(floors) for stp in f["stairs"]):
         add("งานโครงสร้าง", "2.7", "คอนกรีตบันได", "บันได คสล.", "volume",
             "ลบ.ม.")
     names = {"ridge": "อกไก่", "hip": "ตะเฆ่สัน", "rafter": "จันทัน",

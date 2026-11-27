@@ -97,7 +97,7 @@ class StairDialog(QDialog):
         storeys = len(B.stacked(self.data)[0])
         for k, f in enumerate(self.data.get("floors") or []):
             for stp in f.get("stairs") or []:
-                if not B.stair_used(stp, s, storeys):
+                if not B.stair_used(stp, s, storeys, k):
                     continue
                 r = self.table.rowCount()
                 self.table.insertRow(r)
