@@ -75,10 +75,13 @@ def _group(mesh, kind, mark, label, color):
     return B._tag(g, PART, kind, mark, [("ชนิด", label)], key=label)
 
 
-def _col_bars(mesh_m, mesh_t, x, y, z0, z1, b, h, cover, main, tie, foot=None):
+def _col_bars(mesh_m, mesh_t, x, y, z0, z1, b, h, cover, main, tie, foot=None, up=None):
     """Main bars round the section, ties along the height. ``foot`` = (z of the footing mesh,
     hook length): the stump's bars run down into the footing onto its mesh and turn 90° outwards
-    there (the standard footing detail — owner, 27 Nov), with ties inside the footing too."""
+    there (the standard footing detail — owner, 27 Nov), with ties inside the footing too.
+    ``up``: the bars go on into the column above by the lap length (a float, m), or — at the top
+    of the building (``-hook``) — stop under the roof beam's top bars and turn 90° inwards: the bars
+    of every storey join (owner, 27 Nov: «เหล็กยืนต้องเชื่อมต่อกันทุกชุด»)."""
     n = 0
     cx, cy = b / 2 - cover, h / 2 - cover
     if main and main.n:
@@ -97,15 +100,23 @@ def _col_bars(mesh_m, mesh_t, x, y, z0, z1, b, h, cover, main, tie, foot=None):
             extra -= 1
             k += 1
         for px, py in per[:nb]:
-            if foot is not None:
+            l_ = math.hypot(px, py) or 1.0
+            if foot is not None:                      # down onto the footing mesh, 90° outwards
                 zf, hook = foot
-                zl = zf + main.d / 1000.0
-                n += _bar(mesh_m, (x + px, y + py, zl), (x + px, y + py, z1 - 0.02), main.d)
-                l_ = math.hypot(px, py) or 1.0
-                n += _bar(mesh_m, (x + px, y + py, zl),
-                          (x + px + px / l_ * hook, y + py + py / l_ * hook, zl), main.d)
+                zb = zf + main.d / 1000.0
+                n += _bar(mesh_m, (x + px, y + py, zb),
+                          (x + px + px / l_ * hook, y + py + py / l_ * hook, zb), main.d)
             else:
-                n += _bar(mesh_m, (x + px, y + py, z0 + 0.05), (x + px, y + py, z1 - 0.02), main.d)
+                zb = z0
+            zt = z1 - 0.02
+            if up is not None and up > 0:
+                zt = z1 + up                          # lapped into the column above
+            elif up is not None and up < 0:
+                zt = z1 - 0.05                        # under the roof beam's top bars
+            n += _bar(mesh_m, (x + px, y + py, zb), (x + px, y + py, zt), main.d)
+            if up is not None and up < 0:             # the top: 90° hook inwards into the beam
+                n += _bar(mesh_m, (x + px, y + py, zt),
+                          (x + px - px / l_ * (-up), y + py - py / l_ * (-up), zt), main.d)
     if tie:
         s = tie.s or 0.15
         z = (foot[0] + 0.10) if foot is not None else z0 + 0.05
@@ -129,6 +140,7 @@ def rebar_groups(data) -> list:
         mm, mt = Mesh(), Mesh()
         n = 0
         feet = {(round(f["x"], 3), round(f["y"], 3)): f for f in E["footings"]}
+        cols_at = {(round(c["x"], 3), round(c["y"], 3), int(c["floor"])) for c in E["columns"]}
         for c in items:
             sp = lib.get(c["mark"]) or {}
             b, h = float(sp.get("b", 0.2)), float(sp.get("h", sp.get("b", 0.2)))
@@ -140,8 +152,13 @@ def rebar_groups(data) -> list:
                 fb = R.parse_bar((lib.get(f["mark"]) or {}).get("bars"))
                 zf = float(f["z0"]) + R.COVER["footing"] + 2 * ((fb.d if fb else 12) / 1000.0)
                 foot = (zf, max(12 * main.d / 1000.0, 0.15))         # 90° hook ≥ 12 d on the mesh
+            up = None
+            if main:
+                above = (role == "stump" and (round(c["x"], 3), round(c["y"], 3), 0) in cols_at) or \
+                    (role == "column" and (round(c["x"], 3), round(c["y"], 3), int(c["floor"]) + 1) in cols_at)
+                up = R.lap_length(main) if above else -max(12 * main.d / 1000.0, 0.15)
             n += _col_bars(mm, mt, c["x"], c["y"], float(c["z0"]), float(c["z1"]), b, h, cv,
-                           main, R.parse_bar(sp.get("tie")), foot)
+                           main, R.parse_bar(sp.get("tie")), foot, up)
         if n:
             th = "เสา" if role == "column" else "ตอม่อ"
             out.append(_group(mm, role + "_main", th, f"เหล็กยืน{th}", COLORS["main"]))

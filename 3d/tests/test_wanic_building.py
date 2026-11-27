@@ -742,3 +742,25 @@ def test_the_rebar_button_shows_the_bars_of_the_marks_inside_see_through_concret
     panel.rebar_view(False)
     assert not B.generated(scene, ("rebar",))
     assert all(not (g.material or {}).get("opacity") for g in conc)
+
+
+def test_the_vertical_bars_join_from_the_footing_to_the_roof():
+    """owner 27 Nov: «เหล็กยืนต้องเชื่อมต่อกันทุกชุด» — the stump's bars run on into the column by
+    the lap, the column's into the one above, the top ones turn into the roof beam."""
+    from core import wanic_rebar3d as RB
+    d = B.default_data()
+    room = dict(name="a", x=0, y=0, w=4, d=4)
+    d["floors"] = [dict(copy.deepcopy(d["floors"][0]), rooms=[dict(room)]) for _ in range(2)]
+    bars = {g.ext[B.EXT_KEY]["kind"]: g for g in RB.rebar_groups(d)}
+    H = B.elements(d)["H"]
+
+    def zs_at(g, x, y):
+        return sorted(v.position.z() for v in g.mesh.vertices
+                      if abs(v.position.x() - x) < 0.2 and abs(v.position.y() - y) < 0.2)
+    st = zs_at(bars["stump_main"], 0, 0)
+    co = zs_at(bars["column_main"], 0, 0)
+    assert max(st) > min(co) + 0.25                      # stump bars lap into the ground-floor column
+    # the column bars cover every storey without a gap
+    lift = B.floor_lift(B.settings_of(d))
+    covered = sorted(set(round(z, 2) for z in co))
+    assert covered[0] <= lift + 0.01 and covered[-1] >= lift + 2 * H - 0.1
