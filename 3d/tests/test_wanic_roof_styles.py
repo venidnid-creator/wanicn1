@@ -86,3 +86,44 @@ def test_a_separate_lower_building_gets_its_own_roof():
     H = float(B.settings_of(d)["floor_h"])
     assert any(abs(h[2] - H) < 1e-6 for h in L["heads"]) and any(abs(h[2] - 2 * H) < 1e-6 for h in L["heads"])
     assert min(p[2] for seg in L["rafter"] for p in seg if 14 <= p[0] <= 19) < 2 * H
+
+
+def test_the_soffit_of_each_roof_part_at_its_own_eave():
+    """owner 27 Nov: «ปรับฝ้าภายนอกใหม่» — a lower separate building has its soffit under its own
+    eave, not hanging at the other roof's level; none inside the taller building's walls."""
+    import copy as _c
+    from core import wanic_building as B
+    d = B.default_data()
+    main = [dict(name="a", x=0, y=0, w=5, d=4), dict(name="b", x=5, y=0, w=5, d=4)]
+    f0 = _c.deepcopy(d["floors"][0])
+    f0["rooms"] = main + [dict(name="c", x=14, y=0, w=5, d=4)]
+    f1 = _c.deepcopy(d["floors"][0])
+    f1["rooms"] = _c.deepcopy(main)
+    d["floors"] = [f0, f1]
+    d["settings"]["roof"] = "hip"
+    parts = B.soffit_parts(d)
+    assert len(parts) == 2
+    (hi_cells, z_hi), (lo_cells, z_lo) = sorted(parts, key=lambda p: -p[1])
+    H = float(B.settings_of(d)["floor_h"])
+    assert z_hi > z_lo + H * 0.8
+    assert all(c[0] >= 13 for c in lo_cells) and all(c[2] <= 11 for c in hi_cells)
+
+
+def test_a_lean_to_drains_to_the_chosen_side_in_one_plane():
+    """owner 27 Nov: «น้ำฝนจะต้องไหลออกไปด้านหลังอาคาร ด้านข้างซ้าย ด้านข้างขวา»."""
+    from core import wanic_building as B
+    d = B.default_data()
+    d["floors"][0]["rooms"] = [dict(name="a", x=0, y=0, w=5, d=4), dict(name="b", x=5, y=0, w=5, d=4),
+                               dict(name="c", x=0, y=4, w=5, d=4)]
+    d["settings"]["roof"] = "shed"
+    for drain, axis, low_at_max in (("back", 1, True), ("front", 1, False), ("left", 0, False),
+                                    ("right", 0, True)):
+        d["settings"]["shed_drain"] = drain
+        L = B.roof_lines(d)
+        pts = [p for poly in L["skin"] for p in poly]
+        lo = min(pts, key=lambda p: p[2])
+        hi = max(pts, key=lambda p: p[2])
+        assert (lo[axis] > hi[axis]) == low_at_max, drain
+        # one plane: z is a function of that axis alone
+        k = (hi[2] - lo[2]) / (hi[axis] - lo[axis])
+        assert all(abs(p[2] - (lo[2] + k * (p[axis] - lo[axis]))) < 1e-6 for p in pts), drain

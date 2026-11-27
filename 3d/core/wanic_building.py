@@ -99,7 +99,7 @@ DEFAULT_SETTINGS = {
     # under every king post (ดั้ง)
     # the spacings set on the panel are the most allowed: a span that does
     # not divide is shared out evenly a little closer (1.00 → 0.98 …)
-    "purlin_auto": False, "rafter_auto": False, "purlin_face": "ridge",
+    "purlin_auto": False, "rafter_auto": False, "purlin_face": "ridge", "shed_drain": "back",
     "wall_plate": True, "wallplate": "C 150×65×20×3.2",
     "tie_beams": True, "tiebeam": "C 150×65×20×3.2",
     # column-head plate (เพลทหัวเสา) for the wall plate / tie beams:
@@ -3286,60 +3286,98 @@ def _roof_rect(rect, z0, s, others=(), cols=(), lift=0.0, purlin_step=0.0,
     return out
 
 
-def _roof_shed(rect, z0, s, cols=(), lift=0.0, purlin_step=0.0):
-    """A เพิงหมาแหงน (shed / lean-to): one slope across the short side,
-    low eave on one side, high on the other; rafters wall to wall, purlins
-    across the slope, a tie and a post on the high wall at every column
-    line, a strut half way."""
+#: เพิงหมาแหงน: where the rain runs off (owner, 27 Nov: «น้ำฝนจะต้องไหลออกไปด้านหลังอาคาร
+#: ด้านข้างซ้าย ด้านข้างขวา») — the side of the low eave; front = the plan's −y side
+SHED_DRAIN = {"back": "ด้านหลังอาคาร", "left": "ด้านข้างซ้าย", "right": "ด้านข้างขวา",
+              "front": "ด้านหน้าอาคาร"}
+
+
+def _shed_frame(drain):
+    """(swap, flip) that bring a plan point into the shed's own frame: x along the eave, y up
+    the slope from the low eave."""
+    drain = drain if drain in SHED_DRAIN else "back"
+    swap = drain in ("left", "right")              # the slope runs along x
+    flip = drain in ("back", "right")              # the low eave on the max side
+    return swap, flip
+
+
+def _shed_low(rects, s) -> float:
+    """The low eave line of the whole roof in the shed's frame (one plane for every part)."""
+    swap, flip = _shed_frame(s.get("shed_drain", "back"))
+    ov = float(s["overhang"])
+    vals = []
+    for r in rects:
+        lo, hi = (r[0], r[2]) if swap else (r[1], r[3])
+        vals.append(-hi if flip else lo)
+    return min(vals) - ov
+
+
+def _roof_shed(rect, z0, s, cols=(), lift=0.0, purlin_step=0.0, low=None):
+    """A เพิงหมาแหงน (shed / lean-to): one slope, the low eave on the side the rain is to run off
+    (``s["shed_drain"]``: back · left · right · front), high on the opposite wall; every part of
+    an L / T plan in ONE plane from the roof's one low eave line (``low``), so no water runs
+    onto another part. Rafters eave to eave, purlins across the slope, a tie and a post on the
+    high wall at every column line, a strut half way."""
     ov = float(s["overhang"])
     tan = math.tan(math.radians(float(s["pitch"])))
-    x0, y0, x1, y1 = rect[0] - ov, rect[1] - ov, rect[2] + ov, rect[3] + ov
-    swap = (y1 - y0) > (x1 - x0)
-    if swap:
-        x0, y0, x1, y1 = y0, x0, y1, x1
-    W = y1 - y0
+    swap, flip = _shed_frame(s.get("shed_drain", "back"))
+    r = (rect[1], rect[0], rect[3], rect[2]) if swap else tuple(rect)
+    if flip:
+        r = (r[0], -r[3], r[2], -r[1])
+    x0, y0, x1, y1 = r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov
+    YL = y0 if low is None else low
 
-    def h(dist):
-        return z0 + lift + (dist - ov) * tan
+    def hy(y):                                      # height of the plane at local y
+        return z0 + lift + (y - YL - ov) * tan
 
     def P3(x, y, z):
+        y = -y if flip else y
         return (y, x, z) if swap else (x, y, z)
     out = {"ridge": [], "hip": [], "rafter": [], "purlin": [], "post": [],
            "skin": [], "eave": [], "barge": [], "tie": [], "rbeam": [],
            "strut": [], "brace": []}
-    _axis, xs, stations = _rafter_stations(rect, dict(s, roof="gable"), cols)
-    for x in xs:
-        out["rafter"].append([P3(x, y0, h(0)), P3(x, y1, h(W))])
+    # rafters along the slope: at the column lines and between them at no more than the spacing
     sp, psp_slope = roof_spacing(s)
+    lines_ = sorted({round((c[1] if swap else c[0]), 4) for c in cols
+                     if (r[0] - 1e-4 <= (c[1] if swap else c[0]) <= r[2] + 1e-4)})
+    stations = [v for v in lines_]
+    marks = sorted({x0 + 0.05, x1 - 0.05} | set(lines_))
+    xs = []
+    for a, b in zip(marks, marks[1:]):
+        k = max(int(math.ceil((b - a) / sp - 1e-9)), 1)
+        xs += [a + (b - a) * t / k for t in range(k)]
+    xs.append(marks[-1])
+    for x in xs:
+        out["rafter"].append([P3(x, y0, hy(y0)), P3(x, y1, hy(y1))])
     psp = psp_slope * math.cos(math.radians(float(s["pitch"])))
     step = purlin_step or psp
+    W = y1 - y0
     n_ = max(int(math.ceil((W - 0.10) / step - 1e-9)), 1)
     for i in range(n_ + 1):
-        d = 0.05 + (W - 0.10) * i / n_
-        out["purlin"].append({"closed": False, "path": [P3(x0, y0 + d, h(d)),
-                                                         P3(x1, y0 + d, h(d))]})
-    e = [P3(x0, y0, h(0)), P3(x1, y0, h(0)), P3(x1, y1, h(W)), P3(x0, y1, h(W))]
+        y = y0 + 0.05 + (W - 0.10) * i / n_
+        out["purlin"].append({"closed": False, "path": [P3(x0, y, hy(y)), P3(x1, y, hy(y))]})
+    e = [P3(x0, y0, hy(y0)), P3(x1, y0, hy(y0)), P3(x1, y1, hy(y1)), P3(x0, y1, hy(y1))]
     out["eave"] = [[e[0], e[1]], [e[3], e[2]]]
     out["barge"] = [[e[0], e[3]], [e[1], e[2]]]
-    out["skin"] = [[e[0], e[1], e[2], e[3]]]
+    out["skin"] = [[e[0], e[1], e[2], e[3]] if not (swap ^ flip) else [e[0], e[3], e[2], e[1]]]
     dra = _dim(s["rafter"])
     cosp = math.cos(math.radians(float(s["pitch"])))
     pw = _dim(s["wallplate"], "B") / 2 if s.get("wall_plate") else 0.0
     hs = _dim(s.get("strut", s["post"]))
+    z_w = z0 + lift                                  # the wall top (tie level) — every part alike
     for st in stations:
-        if not (x0 + ov - 1e-6 <= st <= x1 - ov + 1e-6):
-            continue
         yh = y1 - ov                                   # the high wall
-        zt = h(W - ov - _dim(s["post"]) / 2) - dra / cosp
+        zt = hy(yh - _dim(s["post"]) / 2) - dra / cosp
         if zt - z0 < 0.2:
             continue
         out["tie"].append([[P3(st, y0 + ov + pw, z0), P3(st, yh - pw, z0)]])
         out["post"].append([P3(st, yh - pw - _dim(s["post"]) / 2, z0),
                             P3(st, yh - pw - _dim(s["post"]) / 2, zt)])
         q = y0 + ov + (W - 2 * ov) / 2
-        zq = h(q - y0 - hs / 2) - dra / cosp
+        zq = hy(q - hs / 2) - dra / cosp
         out["strut"].append([[P3(st, q, z0), P3(st, q, zq)]] if zq - z0 > 0.3 else [])
         out["brace"].append([])
+    del z_w
     return out
 
 
@@ -3517,7 +3555,8 @@ def _roof_lines_of(data, s, top, nfl):
         ax_, xs_, _st = _rafter_stations(rect, s, cols)
         grid[ax_] += xs_
     if s.get("roof") == "shed":
-        parts = [_roof_shed(rect, z0, s, cols, lift, pstep) for rect in rects]
+        low_ = _shed_low(rects, s)
+        parts = [_roof_shed(rect, z0, s, cols, lift, pstep, low_) for rect in rects]
     elif s.get("roof") == "thai":
         # ทรงไทย: a steep gable over the walls (a short overhang) and a
         # gentler ปีกนก on both long sides, tucked under its eave
@@ -5053,56 +5092,79 @@ def valley_gutter(path, skin, lift, width=0.20):
 # Eave soffit (ฝ้าชายคา) with its frame
 # ---------------------------------------------------------------------------
 
-def soffit_cells(data, lines=None, s=None):
-    """The eave soffit as plan rectangles between the outer face of the
-    roof beams and the fascia, and its level: ``(cells, z)`` with cells
-    ``[(x0, y0, x1, y1)]`` (each long side along the eave), or ``([],
-    None)``. Pure: the BOQ bills the same area the 3D shows."""
+def soffit_parts(data, lines=None, s=None) -> list:
+    """The eave soffit of every roof part (the top floor's roof, and the roof of each lower
+    part with no floor over it — a separate lower building): ``[(cells, z)]``, each its plan
+    rectangles between the outer face of the roof beams of the rooms standing at that height
+    and the fascia, at that part's own eave level (owner, 27 Nov: «ปรับฝ้าภายนอกใหม่»)."""
     s = s or settings_of(data)
     lines = lines if lines is not None else roof_lines(data)
     if not lines or not lines.get("eave"):
-        return [], None
+        return []
     floors, _sk = stacked(data)
-    top = floors[-1]["rooms"]
     lib = library_of(data)
     rb = float(lib.get("RB1", {}).get("b", 0.2)) / 2.0
     ov = float(s["overhang"])
     if ov <= rb + 0.02:
-        return [], None
-    eaves = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov) for r in lines["rects"]]
-    walls = [(float(rm["x"]) - rb, float(rm["y"]) - rb,
-              float(rm["x"]) + float(rm["w"]) + rb,
-              float(rm["y"]) + float(rm["d"]) + rb) for rm in top]
-    xs = sorted({round(v, 6) for b in eaves + walls for v in (b[0], b[2])})
-    ys = sorted({round(v, 6) for b in eaves + walls for v in (b[1], b[3])})
+        return []
+    out = []
+    for rooms, nfl in roof_zones(data):
+        rects = [r for r in lines["rects"]
+                 if any(r[0] - 1e-6 <= float(rm["x"]) + float(rm["w"]) / 2 <= r[2] + 1e-6 and
+                        r[1] - 1e-6 <= float(rm["y"]) + float(rm["d"]) / 2 <= r[3] + 1e-6 for rm in rooms)]
+        if not rects:
+            continue
+        eaves = [(r[0] - ov, r[1] - ov, r[2] + ov, r[3] + ov) for r in rects]
+        standing = [rm for f in floors[max(nfl - 1, 0):] for rm in f["rooms"]]
+        walls = [(float(rm["x"]) - rb, float(rm["y"]) - rb,
+                  float(rm["x"]) + float(rm["w"]) + rb,
+                  float(rm["y"]) + float(rm["d"]) + rb) for rm in standing]
+        xs = sorted({round(v, 6) for b in eaves + walls for v in (b[0], b[2])})
+        ys = sorted({round(v, 6) for b in eaves + walls for v in (b[1], b[3])})
 
-    def inside(boxes, x, y):
-        return any(b[0] - 1e-9 <= x <= b[2] + 1e-9 and b[1] - 1e-9 <= y <= b[3] + 1e-9
-                   for b in boxes)
-    cells = []
-    for i in range(len(xs) - 1):
-        for j in range(len(ys) - 1):
-            cx, cy = (xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2
-            if inside(eaves, cx, cy) and not inside(walls, cx, cy):
-                cells.append([xs[i], ys[j], xs[i + 1], ys[j + 1]])
-    # merge runs along x, then along y, into long strips
-    def merge(cs, axis):
-        cs = sorted(cs, key=lambda c: (c[1 - axis], c[3 - axis], c[axis]))
-        out = []
-        for c in cs:
-            if out:
-                p = out[-1]
-                same = abs(p[1 - axis] - c[1 - axis]) < 1e-9 and \
-                    abs(p[3 - axis] - c[3 - axis]) < 1e-9
-                if same and abs(p[2 + axis] - c[axis]) < 1e-9:
-                    p[2 + axis] = c[2 + axis]
-                    continue
-            out.append(list(c))
-        return out
-    cells = merge(merge(cells, 0), 1)
-    z_e = min(a[2] for a, _b in lines["eave"])
-    z = z_e - float(s.get("fascia_h", 0.20) if s.get("fascia", True) else 0.0)
-    return [tuple(c) for c in cells], z
+        def inside(boxes, x, y):
+            return any(b[0] - 1e-9 <= x <= b[2] + 1e-9 and b[1] - 1e-9 <= y <= b[3] + 1e-9
+                       for b in boxes)
+        cells = []
+        for i_ in range(len(xs) - 1):
+            for j_ in range(len(ys) - 1):
+                cx, cy = (xs[i_] + xs[i_ + 1]) / 2, (ys[j_] + ys[j_ + 1]) / 2
+                if inside(eaves, cx, cy) and not inside(walls, cx, cy):
+                    cells.append([xs[i_], ys[j_], xs[i_ + 1], ys[j_ + 1]])
+
+        def merge(cs, axis):
+            cs = sorted(cs, key=lambda c: (c[1 - axis], c[3 - axis], c[axis]))
+            res = []
+            for c in cs:
+                if res:
+                    p_ = res[-1]
+                    same = abs(p_[1 - axis] - c[1 - axis]) < 1e-9 and abs(p_[3 - axis] - c[3 - axis]) < 1e-9
+                    if same and abs(p_[2 + axis] - c[axis]) < 1e-9:
+                        p_[2 + axis] = c[2 + axis]
+                        continue
+                res.append(list(c))
+            return res
+        cells = merge(merge(cells, 0), 1)
+        if not cells:
+            continue
+        # this part's eaves: the eave lines lying on its own eave boxes
+        own = [min(a[2], b[2]) for a, b in lines["eave"]
+               if inside([(e[0] - 0.02, e[1] - 0.02, e[2] + 0.02, e[3] + 0.02) for e in eaves],
+                         (a[0] + b[0]) / 2, (a[1] + b[1]) / 2)]
+        z_e = min(own) if own else min(a[2] for a, _b in lines["eave"])
+        z = z_e - float(s.get("fascia_h", 0.20) if s.get("fascia", True) else 0.0)
+        out.append(([tuple(c) for c in cells], z))
+    return out
+
+
+def soffit_cells(data, lines=None, s=None):
+    """Every soffit cell of the roof and the lowest soffit level: ``(cells, z)`` (``([], None)``
+    when there is none). Pure: the BOQ bills the same area the 3D shows."""
+    parts = soffit_parts(data, lines, s)
+    cells = [c for cs, _z in parts for c in cs]
+    if not cells:
+        return [], None
+    return cells, min(z for _cs, z in parts)
 
 
 def soffit_area(data) -> float:
@@ -5143,8 +5205,15 @@ class _UnderRafters(_Boxes):
 def soffit_members(data, lines, s):
     """The soffit boards (ระแนงไม้เทียม 0.15 ม. เว้นร่อง) and the galvanised
     steel frame above them (โครงคร่าวเหล็กชุบสังกะสี: runners across the
-    eave every ``soffit_sp`` m and along both edges) — สูตรวัสดุ 5.41."""
-    cells, z = soffit_cells(data, lines, s)
+    eave every ``soffit_sp`` m and along both edges) — สูตรวัสดุ 5.41 — for every roof part
+    at its own eave level."""
+    out = []
+    for cells, z in soffit_parts(data, lines, s):
+        out += _soffit_part(data, lines, s, cells, z)
+    return out
+
+
+def _soffit_part(data, lines, s, cells, z):
     if not cells:
         return []
     from core.wanic_catalog import COLORS  # noqa: F401  (palette parity)

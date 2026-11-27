@@ -3317,6 +3317,14 @@ class BuildingPanel(QWidget):
         self.roof_mode.currentIndexChanged.connect(
             lambda _i: self._save_settings())
         rff.addRow("รูปหลังคา", self.roof_mode)
+        # เพิงหมาแหงน: which side the rain runs off (owner, 27 Nov)
+        self.shed_drain = QComboBox()
+        for k_, th_ in B.SHED_DRAIN.items():
+            self.shed_drain.addItem(f"น้ำฝนไหลออก{th_}", k_)
+        self.shed_drain.setToolTip("หลังคาเพิงหมาแหงน (ลาดเดียว): ชายคาต่ำอยู่ด้านที่เลือก ทุกส่วนของหลังคาเป็นระนาบเดียว "
+                                   "น้ำไม่ไหลลงหลังคาส่วนอื่น")
+        self.shed_drain.currentIndexChanged.connect(lambda _i: self._save_settings())
+        rff.addRow("ทิศน้ำฝน (ลาดเดียว)", self.shed_drain)
         sf_backup = sf
         sf = rff
         num("pitch", "ความชัน", 5.0, 60.0, 1.0, 1, "°")
@@ -4415,6 +4423,7 @@ class BuildingPanel(QWidget):
         s["tiles_3d"] = self.tiles_3d.isChecked()
         s["roof"] = self.roof.currentData()
         s["roof_mode"] = self.roof_mode.currentData()
+        s["shed_drain"] = self.shed_drain.currentData()
         for k, c in self.steel.items():
             s[k] = c.currentText()
         for k, c in self.combos.items():
@@ -4468,6 +4477,8 @@ class BuildingPanel(QWidget):
             self.roof.setCurrentIndex(max(self.roof.findData(s["roof"]), 0))
             self.roof_mode.setCurrentIndex(
                 max(self.roof_mode.findData(s.get("roof_mode", "plan")), 0))
+            self.shed_drain.setCurrentIndex(max(self.shed_drain.findData(s.get("shed_drain", "back")), 0))
+            self.shed_drain.setEnabled(s.get("roof") == "shed")
             for k, c in self.steel.items():
                 i = c.findText(s[k])
                 c.setCurrentIndex(max(i, 0))
