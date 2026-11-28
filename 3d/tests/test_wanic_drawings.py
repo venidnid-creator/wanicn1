@@ -205,3 +205,17 @@ def test_simple_sections_leave_the_frame_to_the_structural_set():
         S = D.build_set(d, dict(INFO, simple_sections=simple), ("A",))
         t = " ".join(" ".join(s.texts()) for s in S if s.title.startswith("รูปตัด ก-ก"))
         assert want in t and gone not in t, simple
+
+
+def test_riser_and_load_schedule_match_the_panel():
+    """family10 p. 65: the riser and the load schedule, the same circuits as the panel sheet."""
+    from core import wanic_std_ee as EES
+    S = D.build_set(house(), INFO, ("EE",))
+    sh = next(s for s in S if s.title == "ไดอะแกรมไฟฟ้าแนวดิ่งและตารางโหลด")
+    t = " ".join(sh.texts())
+    E = D.elements(house()) if hasattr(D, "elements") else B.elements(house())
+    P = EES.circuits(E)
+    assert f"{P['va']:,}" in t and P["main"] in t
+    assert len(EES.floor_loads(E)) == E["n"]
+    assert sum(f["lights"] for f in EES.floor_loads(E)) == sum(int(c["load"].split()[0]) for c in P["circuits"]
+                                                               if c["kind"] == "light")

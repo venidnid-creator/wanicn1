@@ -627,3 +627,120 @@ def ee_power_plan(sh, E, k):
         "5. วงจรเต้ารับ ห้องน้ำ และเครื่องทำน้ำอุ่น มีเครื่องตัดไฟรั่ว (RCBO) 30 mA"])
     STD.caption_marks(sh, ((x0 + x1 - 70) / 2 - 50, y0 + 12), f"แปลนเต้ารับไฟฟ้า ชั้น {k + 1}", f"1:{sc}",
                       None, None, 100.0)
+
+
+# -- the riser diagram and the load schedule (owner, 27 Nov — studied from family10 p. 65) ------
+
+def floor_loads(E) -> list:
+    """Per floor: {"floor", "lights", "outlets", "ac": [BTU], "heater": [W]} from the same room
+    plan as ``circuits`` (one source)."""
+    from core import wanic_mep as MEP
+    out = [{"floor": k, "lights": 0, "outlets": 0, "ac": [], "heater": []} for k in range(E["n"])]
+    for r in MEP.plan({}, E):
+        f = out[min(max(int(r["floor"]), 0), E["n"] - 1)]
+        f["lights"] += r["lights"]
+        f["outlets"] += r["outlets"]
+        if r["ac"]:
+            f["ac"].append(int(r["ac"]))
+        if r["heater"]:
+            f["heater"].append(int(r.get("heater_w") or MEP.HEATER_W))
+    return out
+
+
+def ee_riser_std(sh, E):
+    """«ไดอะแกรมไฟฟ้าแนวดิ่งและตารางโหลด»: left, the riser — the utility pole, the service drop,
+    the kWh meter, the main cable into LP on the ground floor, the earth rod, and the risers up to
+    each floor with what each feeds; right, the load schedule of LP circuit by circuit (the same
+    circuits as «รายละเอียดแผงเมนสวิตช์»), the total, the demand, the current and the main."""
+    x0, y0, x1, y1 = D.drawing_area()
+    P = circuits(E)
+    FL = floor_loads(E)
+    n = E["n"]
+    # -- the riser ------------------------------------------------------------------------------
+    gx0, gx1 = x0 + 30, x0 + 110                     # the building, in elevation
+    gy = y0 + 70                                     # the ground
+    fh = min(42.0, (y1 - 40 - gy) / (n + 0.6))
+    sh.line((x0 + 6, gy), (x0 + 166, gy), "cut", 0.5)
+    for i in range(0, 160, 4):
+        sh.line((x0 + 6 + i, gy), (x0 + 4 + i, gy - 2), "cut", 0.13)
+    sh.rect(gx0, gy, gx1, gy + fh * n + 6, "wall", 0.35)
+    for k in range(n + 1):
+        y_ = gy + fh * k
+        sh.line((gx0, y_), (gx1, y_), "wall", 0.25)
+        lab = f"พื้นชั้น {k + 1}" if k < n else "ใต้หลังคา"
+        sh.text((gx0 - 2, y_ + 1.0), lab, 2.2, "right")
+    # the pole, the drop and the meter
+    px = x0 + 158
+    sh.rect(px - 1.2, gy, px + 1.2, gy + fh * n + 18, "elec", 0.35)
+    sh.line((px - 6, gy + fh * n + 14), (px + 6, gy + fh * n + 14), "elec", 0.4)
+    sh.text((px, gy + fh * n + 21), "เสาไฟฟ้า กฟภ./กฟน.", 2.4, "center", "text", True)
+    ym = gy + min(fh * 0.55, 22)                    # the meter on the outside wall
+    mx = gx1 + 10
+    sh.line((px, gy + fh * n + 12), (mx, ym + 8), "elec", 0.35)
+    sh.text((mx + 6, ym - 7.0), "สายเข้าจากการไฟฟ้า", 2.0)
+    sh.rect(mx - 4, ym, mx + 4, ym + 8, "elec", 0.4)
+    sh.text((mx, ym + 3.0), "kWh", 2.2, "center", "elec", True)
+    sh.text((mx + 6, ym + 1.0), f"มิเตอร์ {P['meter']}", 2.2)
+    sh.text((mx + 6, ym - 3.0), "1 เฟส 2 สาย", 2.0)
+    # the main into LP
+    lx = gx1 - 22
+    ly = gy + fh * 0.30
+    sh.line((mx - 4, ym + 4), (lx + 6, ym + 4), "elec", 0.45)
+    sh.line((lx + 6, ym + 4), (lx + 6, ly + 10), "elec", 0.45)
+    sh.text((lx + 8, ym + 5.4), f"2-{P['main_wire']} ตร.มม.", 1.9)
+    sh.rect(lx, ly, lx + 12, ly + 10, "elec", 0.45)
+    sh.text((lx + 6, ly + 3.4), "LP", 2.8, "center", "elec", True)
+    sh.text((lx + 6, ly - 3.2), f"เมน {P['main']}", 2.0, "center")
+    # the earth rod
+    sh.line((lx + 2, ly), (lx + 2, gy - 14), "elec", 0.35)
+    for i, w in enumerate((6, 4, 2)):
+        sh.line((lx + 2 - w / 2, gy - 14 - i * 1.4), (lx + 2 + w / 2, gy - 14 - i * 1.4), "elec", 0.35)
+    sh.text((lx + 6, gy - 12), f"สายดิน 1-{P['earth']} ตร.มม. → หลักดิน Ø14.2 มม. ยาว 2.40 ม.", 2.0)
+    # the risers: one line up the building, a box at each floor with what it feeds
+    rx = lx - 10
+    sh.line((lx, ly + 5), (rx, ly + 5), "elec", 0.45)
+    top = gy + fh * (n - 1) + fh * 0.55
+    sh.line((rx, ly + 5), (rx, top), "elec", 0.45)
+    for k, f in enumerate(FL):
+        y_ = gy + fh * k + fh * 0.55
+        sh.rect(rx - 2, y_ - 2, rx + 2, y_ + 2, "elec", 0.35)
+        sh.line((rx - 2, y_), (gx0 + 6, y_), "elec", 0.25)
+        lines = [f"แสงสว่าง {f['lights']} จุด · เต้ารับ {f['outlets']} จุด"]
+        if f["ac"]:
+            lines.append(f"เครื่องปรับอากาศ {len(f['ac'])} เครื่อง ({', '.join(f'{b:,}' for b in f['ac'])} BTU)")
+        if f["heater"]:
+            lines.append(f"เครื่องทำน้ำอุ่น {len(f['heater'])} เครื่อง ({', '.join(f'{w:,}' for w in f['heater'])} W)")
+        for i, t in enumerate(lines):                # over the feed line, not through it
+            sh.text((gx0 + 6, y_ + 1.4 + (len(lines) - 1 - i) * 3.6), t, 2.1)
+    sh.text((rx + 3, top - 1.0), "ท่อร้อยสายแนวดิ่ง", 1.9)
+    from core import wanic_std_sheets as STD
+    STD.caption_marks(sh, (x0 + 30, y0 + 30), "ไดอะแกรมไฟฟ้าแนวดิ่ง", "ไม่ตามมาตราส่วน", None, None, 100.0)
+    # -- the load schedule ---------------------------------------------------------------------
+    tx = x1 - 150
+    sh.text((tx, y1 - 6), "ตารางโหลดแผงย่อย LP (1 เฟส 2 สาย 220 V)", 3.4, "left", "text", True)
+    rows = []
+    for c in P["circuits"]:
+        what = c["name"] + (f" {c['room']}" if c.get("room") else "")
+        rows.append((str(c["no"]), what[:24], c["load"], f"{c['va']:,}",
+                     ("RCBO " if c["rcbo"] else "") + c["breaker"], f"2-{c['wire']:g}/G{c['wire']:g}",
+                     f"Ø{c['conduit']}"))
+    spare = max(2, (4 - len(P["circuits"]) % 4) % 4 + 2)
+    for i in range(spare):
+        rows.append((str(len(P["circuits"]) + i + 1), "ว่าง (สำรอง)", "-", "-", "16AT,1P", "-", "-"))
+    cols = [("วงจร", 10, "center"), ("รายการ", 40, "left"), ("โหลด", 20, "center"), ("VA", 14, "right"),
+            ("เบรกเกอร์", 25, "center"), ("สาย ตร.มม.", 22, "center"), ("ท่อ มม.", 13, "center")]
+    rh = max(4.4, min(6.0, (y1 - 70 - y0) / (len(rows) + 6)))
+    yy = D.table(sh, tx, y1 - 10, cols, rows, 2.0, rh, 6.5)
+    W = sum(c[1] for c in cols)
+    yy = D.table(sh, tx, yy, [("", 70, "right"), ("", 25, "right"), ("", W - 95, "left")],
+                 [("รวมโหลดติดตั้ง (Connected load)", f"{P['va']:,}", "VA"),
+                  ("ค่าดีมานด์แฟกเตอร์", "0.8", ""),
+                  ("กระแสโหลด", f"{P['amp']:.1f}", "A"),
+                  ("เมนเบรกเกอร์ / สายเมน", P["main"], f"2-{P['main_wire']} ตร.มม."),
+                  ("ขนาดมิเตอร์", P["meter"], "1 เฟส 2 สาย")], 2.1, rh, 0)
+    notes = ["1. วงจรเต้ารับ เครื่องทำน้ำอุ่น ใช้ RCBO Idn 30 mA ตามมาตรฐานการติดตั้งทางไฟฟ้า วสท.",
+             "2. สายไฟเป็นสาย IEC 01 เดินในท่อ uPVC ภายในอาคาร ภายนอกอาคารเดินในท่อโลหะ",
+             "3. ขนาดมิเตอร์และสายเมนให้ยื่นขอกับการไฟฟ้าตามโหลดรวมนี้",
+             "4. ตารางนี้ตรงกับแผ่น «รายละเอียดแผงเมนสวิตช์» ทุกวงจร"]
+    for i, t in enumerate(notes):
+        sh.text((tx, yy - 6 - i * 4.6), t, 2.1)
